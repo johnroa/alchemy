@@ -1,0 +1,15 @@
+{
+  "name": "alchemy-monorepo",
+  "private": true,
+  "packageManager": "pnpm@9.1.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "pnpm -r build",
+    "dev:admin": "pnpm --filter @alchemy/admin dev",
+    "dev:mobile": "pnpm --filter @alchemy/mobile start",
+    "contracts:generate": "pnpm --filter @alchemy/contracts generate"
+  }
+}

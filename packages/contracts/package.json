@@ -1,0 +1,13 @@
+{
+  "name": "@alchemy/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "generate": "openapi-typescript openapi.yaml --output src/generated.ts",
+    "check": "openapi-typescript openapi.yaml --output /tmp/alchemy-openapi-check.ts"
+  },
+  "devDependencies": {
+    "openapi-typescript": "^7.3.0"
+  }
+}

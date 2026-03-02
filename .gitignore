@@ -1,0 +1,27 @@
+# macOS
+.DS_Store
+
+# Node / monorepo
+node_modules
+.pnpm-store
+.next
+dist
+build
+coverage
+
+# Expo / React Native
+.expo
+.expo-shared
+web-build
+android
+ios
+
+# Env files
+.env
+.env.*
+
+# Supabase local
+.supabase
+
+# Local browser automation traces
+.playwright-cli

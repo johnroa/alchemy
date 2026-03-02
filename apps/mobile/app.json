@@ -1,0 +1,18 @@
+{
+  "expo": {
+    "name": "Alchemy",
+    "slug": "alchemy-mobile",
+    "scheme": "alchemy",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.cookwithalchemy.mobile"
+    },
+    "plugins": ["expo-router"],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}

@@ -1,0 +1,652 @@
+openapi: 3.1.0
+info:
+  title: Alchemy API
+  version: 1.0.0
+  description: API contract for the Alchemy mobile app and admin UI.
+servers:
+  - url: https://api.cookwithalchemy.com/v1
+security:
+  - bearerAuth: []
+paths:
+  /recipes/generate:
+    post:
+      summary: Generate a recipe from user intent and preferences
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GenerateRecipeRequest'
+      responses:
+        '200':
+          description: Generated recipe
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenerateRecipeResponse'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /recipes/{id}/tweak:
+    post:
+      summary: Tweak an existing recipe and create a new version
+      parameters:
+        - $ref: '#/components/parameters/RecipeId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TweakRecipeRequest'
+      responses:
+        '200':
+          description: Tweaked recipe version
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TweakRecipeResponse'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /recipes/{id}:
+    get:
+      summary: Get a recipe by id
+      parameters:
+        - $ref: '#/components/parameters/RecipeId'
+      responses:
+        '200':
+          description: Recipe
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Recipe'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /recipes/feed:
+    get:
+      summary: Personalized explore feed
+      parameters:
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+      responses:
+        '200':
+          description: Feed response
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Recipe'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /recipes/{id}/save:
+    post:
+      summary: Save a recipe
+      parameters:
+        - $ref: '#/components/parameters/RecipeId'
+      responses:
+        '200':
+          description: Save status
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [saved]
+                properties:
+                  saved:
+                    type: boolean
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+    delete:
+      summary: Unsave a recipe
+      parameters:
+        - $ref: '#/components/parameters/RecipeId'
+      responses:
+        '200':
+          description: Save status
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [saved]
+                properties:
+                  saved:
+                    type: boolean
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /collections:
+    get:
+      summary: List user collections
+      responses:
+        '200':
+          description: Collections
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Collection'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+    post:
+      summary: Create collection
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+      responses:
+        '200':
+          description: Created collection
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Collection'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /collections/{id}/items:
+    post:
+      summary: Add recipe to collection
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [recipe_id]
+              properties:
+                recipe_id:
+                  type: string
+                  format: uuid
+      responses:
+        '200':
+          description: Item add status
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok]
+                properties:
+                  ok:
+                    type: boolean
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /preferences:
+    get:
+      summary: Get user preferences
+      responses:
+        '200':
+          description: Preferences
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PreferenceProfile'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+    patch:
+      summary: Update user preferences
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PreferenceProfile'
+      responses:
+        '200':
+          description: Updated preferences
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PreferenceProfile'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /recipe-drafts:
+    post:
+      summary: Start a new recipe draft chat session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message]
+              properties:
+                message:
+                  type: string
+      responses:
+        '200':
+          description: Draft created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecipeDraft'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /recipe-drafts/{id}:
+    get:
+      summary: Get recipe draft thread
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Draft
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecipeDraft'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /recipe-drafts/{id}/messages:
+    post:
+      summary: Add a message to recipe draft thread
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message]
+              properties:
+                message:
+                  type: string
+      responses:
+        '200':
+          description: Updated draft
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecipeDraft'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /recipe-drafts/{id}/finalize:
+    post:
+      summary: Finalize draft into persisted recipe + version
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Finalized recipe
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecipeFinalizeResponse'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /recipes/{id}/categories/override:
+    post:
+      summary: Add a user category override
+      parameters:
+        - $ref: '#/components/parameters/RecipeId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [category]
+              properties:
+                category:
+                  type: string
+      responses:
+        '200':
+          description: Override status
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok]
+                properties:
+                  ok:
+                    type: boolean
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /recipes/{id}/categories/override/{category}:
+    delete:
+      summary: Remove category override
+      parameters:
+        - $ref: '#/components/parameters/RecipeId'
+        - in: path
+          name: category
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Remove status
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok]
+                properties:
+                  ok:
+                    type: boolean
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /recipes/{id}/graph:
+    get:
+      summary: Fetch graph entities and edges related to a recipe
+      parameters:
+        - $ref: '#/components/parameters/RecipeId'
+      responses:
+        '200':
+          description: Recipe graph
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [entities, edges]
+                properties:
+                  entities:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/GraphEntity'
+                  edges:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/GraphEdge'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    RecipeId:
+      in: path
+      name: id
+      required: true
+      schema:
+        type: string
+        format: uuid
+  responses:
+    ErrorResponse:
+      description: Error envelope
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+  schemas:
+    ErrorEnvelope:
+      type: object
+      required: [code, message, request_id]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        details: {}
+        request_id:
+          type: string
+    Ingredient:
+      type: object
+      required: [name, amount, unit]
+      properties:
+        name:
+          type: string
+        amount:
+          type: number
+        unit:
+          type: string
+        preparation:
+          type: string
+    Step:
+      type: object
+      required: [index, instruction]
+      properties:
+        index:
+          type: integer
+        instruction:
+          type: string
+        timer_seconds:
+          type: integer
+        notes:
+          type: string
+    Recipe:
+      type: object
+      required: [id, title, servings, ingredients, steps, updated_at, visibility]
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        description:
+          type: string
+        summary:
+          type: string
+        image_url:
+          type: string
+          format: uri
+        servings:
+          type: integer
+        ingredients:
+          type: array
+          items:
+            $ref: '#/components/schemas/Ingredient'
+        steps:
+          type: array
+          items:
+            $ref: '#/components/schemas/Step'
+        notes:
+          type: string
+        pairings:
+          type: array
+          items:
+            type: string
+        visibility:
+          type: string
+          enum: [public, private]
+        updated_at:
+          type: string
+          format: date-time
+    RecipeVersion:
+      type: object
+      required: [version_id, recipe_id, created_at]
+      properties:
+        version_id:
+          type: string
+          format: uuid
+        recipe_id:
+          type: string
+          format: uuid
+        parent_version_id:
+          type: string
+          format: uuid
+        diff_summary:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    PreferenceProfile:
+      type: object
+      required: [dietary_preferences, skill_level, equipment]
+      properties:
+        dietary_preferences:
+          type: array
+          items:
+            type: string
+        dietary_restrictions:
+          type: array
+          items:
+            type: string
+        skill_level:
+          type: string
+        equipment:
+          type: array
+          items:
+            type: string
+        cuisines:
+          type: array
+          items:
+            type: string
+        aversions:
+          type: array
+          items:
+            type: string
+        cooking_for:
+          type: string
+        max_difficulty:
+          type: integer
+          minimum: 1
+          maximum: 5
+    GenerateRecipeRequest:
+      type: object
+      required: [prompt]
+      properties:
+        prompt:
+          type: string
+        vibe:
+          type: string
+        preference_context:
+          $ref: '#/components/schemas/PreferenceProfile'
+    GenerateRecipeResponse:
+      type: object
+      required: [recipe, version]
+      properties:
+        recipe:
+          $ref: '#/components/schemas/Recipe'
+        version:
+          $ref: '#/components/schemas/RecipeVersion'
+    TweakRecipeRequest:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string
+    TweakRecipeResponse:
+      type: object
+      required: [recipe, version]
+      properties:
+        recipe:
+          $ref: '#/components/schemas/Recipe'
+        version:
+          $ref: '#/components/schemas/RecipeVersion'
+    RecipeDraftMessage:
+      type: object
+      required: [id, role, content, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        role:
+          type: string
+          enum: [user, assistant, system]
+        content:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    RecipeDraft:
+      type: object
+      required: [id, messages, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/RecipeDraftMessage'
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    RecipeFinalizeResponse:
+      type: object
+      required: [recipe, version]
+      properties:
+        recipe:
+          $ref: '#/components/schemas/Recipe'
+        version:
+          $ref: '#/components/schemas/RecipeVersion'
+    Collection:
+      type: object
+      required: [id, name, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    GraphEntity:
+      type: object
+      required: [id, entity_type, label]
+      properties:
+        id:
+          type: string
+          format: uuid
+        entity_type:
+          type: string
+        label:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+    GraphEdge:
+      type: object
+      required: [id, from_entity_id, to_entity_id, relation_type, confidence]
+      properties:
+        id:
+          type: string
+          format: uuid
+        from_entity_id:
+          type: string
+          format: uuid
+        to_entity_id:
+          type: string
+          format: uuid
+        relation_type:
+          type: string
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+        source:
+          type: string
