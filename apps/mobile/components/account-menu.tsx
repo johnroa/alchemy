@@ -1,15 +1,18 @@
 import { useState } from "react";
 import { Modal, Pressable, StyleSheet, Text, View } from "react-native";
 import { useRouter } from "expo-router";
+import { useAuth } from "@/lib/auth";
 
 export function AccountMenu(): React.JSX.Element {
   const [visible, setVisible] = useState(false);
   const router = useRouter();
+  const { session, signOut } = useAuth();
+  const displayName = session?.user?.email?.split("@")[0] ?? "Chef";
 
   return (
     <>
       <Pressable style={styles.trigger} onPress={() => setVisible(true)}>
-        <Text style={styles.triggerText}>Chef</Text>
+        <Text style={styles.triggerText}>{displayName}</Text>
       </Pressable>
 
       <Modal animationType="fade" transparent visible={visible} onRequestClose={() => setVisible(false)}>
@@ -32,7 +35,14 @@ export function AccountMenu(): React.JSX.Element {
             >
               <Text style={styles.item}>Settings</Text>
             </Pressable>
-            <Text style={styles.item}>Sign Out</Text>
+            <Pressable
+              onPress={() => {
+                setVisible(false);
+                void signOut();
+              }}
+            >
+              <Text style={styles.item}>Sign Out</Text>
+            </Pressable>
           </View>
         </Pressable>
       </Modal>
