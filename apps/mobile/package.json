@@ -6,6 +6,8 @@
   "scripts": {
     "start": "expo start",
     "ios": "expo start --ios",
+    "ios:clear": "expo start --ios --clear",
+    "ios:logs": "./scripts/ios-logs.sh",
     "android": "expo start --android",
     "web": "expo start --web",
     "typecheck": "tsc --noEmit"

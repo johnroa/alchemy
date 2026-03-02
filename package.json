@@ -10,6 +10,9 @@
     "build": "pnpm -r build",
     "dev:admin": "pnpm --filter @alchemy/admin dev",
     "dev:mobile": "pnpm --filter @alchemy/mobile start",
+    "dev:mobile:ios": "pnpm --filter @alchemy/mobile ios",
+    "dev:mobile:ios:clear": "pnpm --filter @alchemy/mobile ios:clear",
+    "logs:mobile:ios": "pnpm --filter @alchemy/mobile ios:logs",
     "contracts:generate": "pnpm --filter @alchemy/contracts generate"
   }
 }
