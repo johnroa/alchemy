@@ -5,6 +5,7 @@ import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 
 type Section = {
   title: string;
@@ -12,7 +13,12 @@ type Section = {
 };
 
 export default function MyCookbookScreen(): React.JSX.Element {
-  const query = useQuery({ queryKey: ["recipes", "cookbook"], queryFn: () => api.getCookbook() });
+  const { isAuthenticated } = useAuth();
+  const query = useQuery({
+    queryKey: ["recipes", "cookbook"],
+    queryFn: () => api.getCookbook(),
+    enabled: isAuthenticated
+  });
   const [selectedRecipeId, setSelectedRecipeId] = useState<string | null>(null);
   const [overrideCategory, setOverrideCategory] = useState("");
 

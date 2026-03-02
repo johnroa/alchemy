@@ -18,7 +18,7 @@ export default function RootLayout(): React.JSX.Element {
 }
 
 function RootNavigator(): React.JSX.Element {
-  const { initialized, session, authError } = useAuth();
+  const { initialized, isAuthenticated, authError } = useAuth();
 
   if (!initialized) {
     return (
@@ -38,7 +38,7 @@ function RootNavigator(): React.JSX.Element {
     );
   }
 
-  if (!session) {
+  if (!isAuthenticated) {
     return (
       <Stack>
         <Stack.Screen name="sign-in" options={{ headerShown: false }} />
@@ -51,7 +51,6 @@ function RootNavigator(): React.JSX.Element {
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
       <Stack.Screen name="preferences" options={{ presentation: "modal", title: "Preferences" }} />
       <Stack.Screen name="settings" options={{ presentation: "modal", title: "Settings" }} />
-      <Stack.Screen name="sign-in" options={{ headerShown: false }} />
     </Stack>
   );
 }

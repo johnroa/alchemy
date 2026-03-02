@@ -6,7 +6,7 @@ import { useAuth } from "@/lib/auth";
 type AuthMode = "sign-in" | "sign-up";
 
 export default function SignInScreen(): React.JSX.Element {
-  const { session, signInWithPassword, signUpWithPassword } = useAuth();
+  const { isAuthenticated, signInWithPassword, signUpWithPassword } = useAuth();
   const [mode, setMode] = useState<AuthMode>("sign-in");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -14,7 +14,7 @@ export default function SignInScreen(): React.JSX.Element {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-  if (session) {
+  if (isAuthenticated) {
     return <Redirect href="/(tabs)/my-cookbook" />;
   }
 

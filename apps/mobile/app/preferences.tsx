@@ -3,6 +3,7 @@ import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, 
 import { useMutation, useQuery } from "@tanstack/react-query";
 import * as Haptics from "expo-haptics";
 import { api, type PreferenceProfile } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 
 const emptyPreferences: PreferenceProfile = {
   free_form: "",
@@ -17,7 +18,12 @@ const emptyPreferences: PreferenceProfile = {
 };
 
 export default function PreferencesScreen(): React.JSX.Element {
-  const query = useQuery({ queryKey: ["preferences"], queryFn: () => api.getPreferences() });
+  const { isAuthenticated } = useAuth();
+  const query = useQuery({
+    queryKey: ["preferences"],
+    queryFn: () => api.getPreferences(),
+    enabled: isAuthenticated
+  });
   const [form, setForm] = useState<PreferenceProfile>(emptyPreferences);
 
   useEffect(() => {

@@ -22,16 +22,32 @@ export type PreferenceProfile = {
 
 const API_URL = process.env["EXPO_PUBLIC_API_URL"] ?? "https://api.cookwithalchemy.com/v1";
 
-const request = async <T>(path: string, options?: RequestInit): Promise<T> => {
+const getAccessToken = async (): Promise<string> => {
   const {
-    data: { session }
+    data: { session },
+    error
   } = await supabase.auth.getSession();
 
+  if (error) {
+    throw new Error(`Unable to load auth session: ${error.message}`);
+  }
+
+  if (session?.access_token) {
+    return session.access_token;
+  }
+
+  const { data, error: refreshError } = await supabase.auth.refreshSession();
+  if (refreshError || !data.session?.access_token) {
+    throw new Error("You are not signed in. Please sign in to continue.");
+  }
+
+  return data.session.access_token;
+};
+
+const request = async <T>(path: string, options?: RequestInit): Promise<T> => {
   const headers = new Headers(options?.headers ?? {});
   headers.set("content-type", "application/json");
-  if (session?.access_token) {
-    headers.set("authorization", `Bearer ${session.access_token}`);
-  }
+  headers.set("authorization", `Bearer ${await getAccessToken()}`);
 
   const response = await fetch(`${API_URL}${path}`, {
     ...options,

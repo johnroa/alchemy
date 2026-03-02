@@ -17,6 +17,7 @@ export default function TabsLayout(): React.JSX.Element {
         headerTitleStyle: { fontWeight: "700" }
       }}
     >
+      <Tabs.Screen name="index" options={{ href: null }} />
       <Tabs.Screen name="my-cookbook" options={{ title: "My Cookbook" }} />
       <Tabs.Screen name="generate" options={{ title: "Generate Recipe" }} />
       <Tabs.Screen name="explore" options={{ title: "Explore" }} />

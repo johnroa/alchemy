@@ -4,9 +4,15 @@ import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 
 export default function ExploreScreen(): React.JSX.Element {
-  const query = useQuery({ queryKey: ["recipes", "feed"], queryFn: () => api.getExploreFeed() });
+  const { isAuthenticated } = useAuth();
+  const query = useQuery({
+    queryKey: ["recipes", "feed"],
+    queryFn: () => api.getExploreFeed(),
+    enabled: isAuthenticated
+  });
 
   if (query.isPending) {
     return (

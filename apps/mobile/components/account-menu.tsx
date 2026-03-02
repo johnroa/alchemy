@@ -6,8 +6,8 @@ import { useAuth } from "@/lib/auth";
 export function AccountMenu(): React.JSX.Element {
   const [visible, setVisible] = useState(false);
   const router = useRouter();
-  const { session, signOut } = useAuth();
-  const displayName = session?.user?.email?.split("@")[0] ?? "Chef";
+  const { user, signOut } = useAuth();
+  const displayName = user?.email?.split("@")[0] ?? "Account";
 
   return (
     <>
@@ -38,7 +38,9 @@ export function AccountMenu(): React.JSX.Element {
             <Pressable
               onPress={() => {
                 setVisible(false);
-                void signOut();
+                void signOut().finally(() => {
+                  router.replace("/sign-in");
+                });
               }}
             >
               <Text style={styles.item}>Sign Out</Text>

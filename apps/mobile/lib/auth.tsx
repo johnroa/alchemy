@@ -1,10 +1,12 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import type { Session } from "@supabase/supabase-js";
+import type { Session, User } from "@supabase/supabase-js";
 import { supabase, supabaseConfigError } from "@/lib/supabase";
 
 type AuthContextValue = {
   initialized: boolean;
   session: Session | null;
+  user: User | null;
+  isAuthenticated: boolean;
   authError: string | null;
   signInWithPassword: (email: string, password: string) => Promise<string | null>;
   signUpWithPassword: (email: string, password: string) => Promise<string | null>;
@@ -38,7 +40,14 @@ export function AuthProvider({ children }: { children: ReactNode }): React.JSX.E
       if (error) {
         setAuthError(error.message);
       }
-      setSession(data.session ?? null);
+
+      const nextSession = data.session ?? null;
+      if (nextSession && !nextSession.user?.email) {
+        await supabase.auth.signOut({ scope: "local" });
+        setSession(null);
+      } else {
+        setSession(nextSession);
+      }
       setInitialized(true);
     };
 
@@ -48,6 +57,12 @@ export function AuthProvider({ children }: { children: ReactNode }): React.JSX.E
       data: { subscription }
     } = supabase.auth.onAuthStateChange((_event, nextSession) => {
       if (!mounted) {
+        return;
+      }
+
+      if (nextSession && !nextSession.user?.email) {
+        void supabase.auth.signOut({ scope: "local" });
+        setSession(null);
         return;
       }
 
@@ -64,6 +79,8 @@ export function AuthProvider({ children }: { children: ReactNode }): React.JSX.E
     () => ({
       initialized,
       session,
+      user: session?.user ?? null,
+      isAuthenticated: Boolean(session?.user?.email),
       authError,
       signInWithPassword: async (email: string, password: string): Promise<string | null> => {
         if (supabaseConfigError) {
@@ -90,7 +107,7 @@ export function AuthProvider({ children }: { children: ReactNode }): React.JSX.E
         return null;
       },
       signOut: async (): Promise<void> => {
-        await supabase.auth.signOut();
+        await supabase.auth.signOut({ scope: "local" });
         setSession(null);
       }
     }),
