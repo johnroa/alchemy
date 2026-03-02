@@ -21,4 +21,5 @@ Production API is expected at:
 
 - `https://api.cookwithalchemy.com/v1/*`
 
-Use a Cloudflare DNS/proxy mapping from `api.cookwithalchemy.com` to Supabase Edge endpoint.
+Use the Cloudflare API gateway worker in `infra/cloudflare/api-gateway` to front Supabase functions.
+Direct proxied CNAME mapping to `*.functions.supabase.co` can fail with Cloudflare error `1014`.

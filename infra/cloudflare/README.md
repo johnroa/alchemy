@@ -6,12 +6,24 @@
 - Admin UI: `admin.cookwithalchemy.com`
 - API domain: `api.cookwithalchemy.com`
 
-## Admin UI deployment
+## Admin UI deployment (Cloudflare Workers Builds)
 
-1. Create a Cloudflare Pages project for `apps/admin`.
-2. Build command: `pnpm --filter @alchemy/admin build`.
-3. Output directory: `.next` (via Pages Next.js support).
-4. Attach custom domain: `admin.cookwithalchemy.com`.
+1. Create/connect a Cloudflare Worker build to this repo.
+2. Set root directory to repository root (or keep as-is).
+3. Build command:
+   - `corepack enable && pnpm install --frozen-lockfile && pnpm --filter @alchemy/admin cf:build`
+4. Deploy command:
+   - `pnpm --filter @alchemy/admin exec opennextjs-cloudflare deploy`
+5. Version command:
+   - `pnpm --filter @alchemy/admin exec opennextjs-cloudflare upload`
+6. Attach custom domain: `admin.cookwithalchemy.com`.
+
+### Required admin runtime variables/secrets
+
+- `NEXT_PUBLIC_SUPABASE_URL` = `https://<project-ref>.supabase.co`
+- `SUPABASE_SECRET_KEY` = Supabase project secret key
+
+Note: in Cloudflare Workers UI, these can be added as `Secret` entries.
 
 ## Cloudflare Access gating (admin only)
 
@@ -21,9 +33,19 @@
 
 ## API domain mapping
 
-1. Create `api.cookwithalchemy.com` DNS record.
-2. Point to Supabase Edge Function entrypoint with proxy enabled.
-3. Route requests to `v1` edge function so paths resolve under `/v1/*`.
+Do not proxy a CNAME from `api.cookwithalchemy.com` to `*.functions.supabase.co` through Cloudflare. That causes `1014 CNAME Cross-User Banned`.
+
+Use a dedicated Cloudflare Worker as gateway:
+
+1. Deploy worker in `infra/cloudflare/api-gateway`.
+2. Add worker secret:
+   - `SUPABASE_FUNCTIONS_BASE_URL=https://dwptbjcxrsmmgjmnumpg.functions.supabase.co`
+3. Attach custom domain `api.cookwithalchemy.com` directly to the worker.
+4. Remove any existing proxied CNAME for `api` that points to Supabase.
+
+The worker forwards `/v1/*` to Supabase Edge Functions, so mobile/admin keep using:
+
+- `https://api.cookwithalchemy.com/v1/*`
 
 ## Security notes
 

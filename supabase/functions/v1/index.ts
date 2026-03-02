@@ -296,14 +296,23 @@ Deno.serve(async (request) => {
   const requestId = crypto.randomUUID();
 
   try {
+    const url = new URL(request.url);
+    const segments = normalizePath(url.pathname);
+    const method = request.method.toUpperCase();
+
+    if (segments.length === 1 && segments[0] === "healthz" && method === "GET") {
+      return jsonResponse(200, {
+        status: "ok",
+        service: "alchemy-api",
+        timestamp: new Date().toISOString(),
+        request_id: requestId
+      });
+    }
+
     const auth = await requireAuth(request);
     const client = createUserClient(auth.authHeader);
     const serviceClient = createServiceClient();
     await ensureUserProfile(client, auth.userId);
-
-    const url = new URL(request.url);
-    const segments = normalizePath(url.pathname);
-    const method = request.method.toUpperCase();
 
     // /v1/preferences
     if (segments.length === 1 && segments[0] === "preferences") {
