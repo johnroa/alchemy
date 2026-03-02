@@ -42,7 +42,9 @@ export function AuthProvider({ children }: { children: ReactNode }): React.JSX.E
       }
 
       const nextSession = data.session ?? null;
-      if (nextSession && !nextSession.user?.email) {
+      const hasValidIdentity = Boolean(nextSession?.user?.email && nextSession?.access_token);
+
+      if (nextSession && !hasValidIdentity) {
         await supabase.auth.signOut({ scope: "local" });
         setSession(null);
       } else {
@@ -60,7 +62,8 @@ export function AuthProvider({ children }: { children: ReactNode }): React.JSX.E
         return;
       }
 
-      if (nextSession && !nextSession.user?.email) {
+      const hasValidIdentity = Boolean(nextSession?.user?.email && nextSession?.access_token);
+      if (nextSession && !hasValidIdentity) {
         void supabase.auth.signOut({ scope: "local" });
         setSession(null);
         return;
@@ -80,7 +83,7 @@ export function AuthProvider({ children }: { children: ReactNode }): React.JSX.E
       initialized,
       session,
       user: session?.user ?? null,
-      isAuthenticated: Boolean(session?.user?.email),
+      isAuthenticated: Boolean(session?.user?.email && session?.access_token),
       authError,
       signInWithPassword: async (email: string, password: string): Promise<string | null> => {
         if (supabaseConfigError) {
