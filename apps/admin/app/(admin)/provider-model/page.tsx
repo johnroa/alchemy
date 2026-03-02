@@ -4,20 +4,23 @@ import { PageHeader } from "@/components/admin/page-header";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { getLlmConfigData } from "@/lib/admin-data";
 
-export default async function PromptsPage(): Promise<React.JSX.Element> {
+export default async function ProviderModelPage(): Promise<React.JSX.Element> {
   const config = await getLlmConfigData();
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Prompts" description="Version and manage all LLM instruction templates." />
+      <PageHeader
+        title="Provider & Model"
+        description="Configure model routing for generate, tweak, classify, and image workflows."
+      />
       <LlmSubnav />
       <Alert>
-        <AlertTitle>Single source of LLM behavior</AlertTitle>
+        <AlertTitle>Server-controlled model behavior</AlertTitle>
         <AlertDescription>
-          Runtime gateway reads active provider/model route, active prompt template, and active rules from database records.
+          Runtime routing is read from database records and applied in the gateway at request time.
         </AlertDescription>
       </Alert>
-      <LlmConfigPanel mode="prompts" routes={config.routes} prompts={config.prompts} rules={config.rules} />
+      <LlmConfigPanel mode="routing" routes={config.routes} prompts={config.prompts} rules={config.rules} />
     </div>
   );
 }

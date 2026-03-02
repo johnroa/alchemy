@@ -7,7 +7,6 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 
 type LlmRoute = {
@@ -38,7 +37,10 @@ type Rule = {
   is_active: boolean;
 };
 
+type LlmPanelMode = "routing" | "prompts" | "rules";
+
 export function LlmConfigPanel(props: {
+  mode: LlmPanelMode;
   routes: LlmRoute[];
   prompts: Prompt[];
   rules: Rule[];
@@ -178,15 +180,9 @@ export function LlmConfigPanel(props: {
     toast.success("Rule created");
   };
 
-  return (
-    <Tabs defaultValue="routing" className="space-y-4">
-      <TabsList>
-        <TabsTrigger value="routing">Provider & Model</TabsTrigger>
-        <TabsTrigger value="prompts">Prompts</TabsTrigger>
-        <TabsTrigger value="rules">Rules</TabsTrigger>
-      </TabsList>
-
-      <TabsContent value="routing" className="space-y-4">
+  if (props.mode === "routing") {
+    return (
+      <div className="space-y-4">
         {(["generate", "tweak", "classify", "image"] as const).map((scope) => {
           const active = activeByScope[scope];
           return (
@@ -211,9 +207,13 @@ export function LlmConfigPanel(props: {
             </Card>
           );
         })}
-      </TabsContent>
+      </div>
+    );
+  }
 
-      <TabsContent value="prompts" className="space-y-4">
+  if (props.mode === "prompts") {
+    return (
+      <div className="space-y-4">
         <Card>
           <CardHeader>
             <CardTitle>Create Prompt Version</CardTitle>
@@ -265,62 +265,64 @@ export function LlmConfigPanel(props: {
             </CardContent>
           </Card>
         ))}
-      </TabsContent>
+      </div>
+    );
+  }
 
-      <TabsContent value="rules" className="space-y-4">
-        <Card>
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader>
+          <CardTitle>Create Rule Version</CardTitle>
+          <CardDescription>Rules are data-driven and activated per scope.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="grid gap-3 md:grid-cols-[180px,1fr]">
+            <Select value={newRuleScope} onValueChange={setNewRuleScope}>
+              <SelectTrigger>
+                <SelectValue placeholder="Scope" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="generate">generate</SelectItem>
+                <SelectItem value="tweak">tweak</SelectItem>
+                <SelectItem value="classify">classify</SelectItem>
+                <SelectItem value="image">image</SelectItem>
+              </SelectContent>
+            </Select>
+            <Input value={newRuleName} onChange={(event) => setNewRuleName(event.target.value)} placeholder="Rule name" />
+          </div>
+          <Textarea
+            value={newRuleBody}
+            onChange={(event) => setNewRuleBody(event.target.value)}
+            className="min-h-[140px] font-mono text-xs"
+            placeholder='{"allowed_domains": ["recipe"]}'
+          />
+          <div className="flex justify-end">
+            <Button onClick={() => void createRule()}>Create Rule</Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {rules.map((rule) => (
+        <Card key={rule.id}>
           <CardHeader>
-            <CardTitle>Create Rule Version</CardTitle>
-            <CardDescription>Rules are data-driven and activated per scope.</CardDescription>
+            <CardTitle className="flex items-center gap-2">
+              <span>{rule.name}</span>
+              <Badge variant={rule.is_active ? "default" : "outline"}>{rule.scope}</Badge>
+              <Badge variant={rule.is_active ? "secondary" : "outline"}>v{rule.version}</Badge>
+            </CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
-            <div className="grid gap-3 md:grid-cols-[180px,1fr]">
-              <Select value={newRuleScope} onValueChange={setNewRuleScope}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Scope" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="generate">generate</SelectItem>
-                  <SelectItem value="tweak">tweak</SelectItem>
-                  <SelectItem value="classify">classify</SelectItem>
-                  <SelectItem value="image">image</SelectItem>
-                </SelectContent>
-              </Select>
-              <Input value={newRuleName} onChange={(event) => setNewRuleName(event.target.value)} placeholder="Rule name" />
-            </div>
-            <Textarea
-              value={newRuleBody}
-              onChange={(event) => setNewRuleBody(event.target.value)}
-              className="min-h-[140px] font-mono text-xs"
-              placeholder='{\"allowed_domains\": [\"recipe\"]}'
-            />
+            <Textarea readOnly value={JSON.stringify(rule.rule, null, 2)} className="min-h-[140px] font-mono text-xs" />
             <div className="flex justify-end">
-              <Button onClick={() => void createRule()}>Create Rule</Button>
+              <Button variant="secondary" onClick={() => activateRule(rule.id)}>
+                Set Active
+              </Button>
             </div>
           </CardContent>
         </Card>
-
-        {rules.map((rule) => (
-          <Card key={rule.id}>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <span>{rule.name}</span>
-                <Badge variant={rule.is_active ? "default" : "outline"}>{rule.scope}</Badge>
-                <Badge variant={rule.is_active ? "secondary" : "outline"}>v{rule.version}</Badge>
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <Textarea readOnly value={JSON.stringify(rule.rule, null, 2)} className="min-h-[140px] font-mono text-xs" />
-              <div className="flex justify-end">
-                <Button variant="secondary" onClick={() => activateRule(rule.id)}>
-                  Set Active
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        ))}
-      </TabsContent>
-    </Tabs>
+      ))}
+    </div>
   );
 }
 
