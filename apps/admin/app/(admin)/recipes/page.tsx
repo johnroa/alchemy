@@ -1,6 +1,8 @@
 import Link from "next/link";
+import { AlertCircle, BookOpen, GitBranch, ImageIcon, Link2, UserCircle2 } from "lucide-react";
 import { PageHeader } from "@/components/admin/page-header";
 import { RevertVersionDialog } from "@/components/admin/revert-version-dialog";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -92,6 +94,24 @@ const buildRecipesHref = (params: { q?: string; recipe?: string }): string => {
   return queryString.length > 0 ? `/recipes?${queryString}` : "/recipes";
 };
 
+const shortId = (value: string): string => {
+  if (value.length < 14) {
+    return value;
+  }
+
+  return `${value.slice(0, 8)}…${value.slice(-6)}`;
+};
+
+const imageStatusBadgeClass = (status: string): string => {
+  if (status === "ready") {
+    return "border-emerald-300/60 bg-emerald-50 text-emerald-700";
+  }
+  if (status === "failed") {
+    return "border-red-300/60 bg-red-50 text-red-700";
+  }
+  return "border-amber-300/60 bg-amber-50 text-amber-700";
+};
+
 export default async function RecipesPage({
   searchParams
 }: {
@@ -104,6 +124,7 @@ export default async function RecipesPage({
   const { rows, totals } = await getRecipeAuditIndexData(q);
   const selectedRecipeId = requestedRecipeId || rows[0]?.id;
   const detail = selectedRecipeId ? await getRecipeAuditDetail(selectedRecipeId) : null;
+  const unresolvedOwners = rows.filter((row) => !row.owner_email).length;
 
   return (
     <div className="space-y-6">
@@ -112,33 +133,48 @@ export default async function RecipesPage({
         description="Full operational audit: recipe inventory, version lineage, user prompts/messages, attachment graph, and request-linked mutation history."
       />
 
+      {unresolvedOwners > 0 ? (
+        <Alert className="border-amber-300/60 bg-amber-50/70">
+          <AlertCircle className="h-4 w-4 text-amber-700" />
+          <AlertTitle className="text-amber-900">Owner profiles need backfill</AlertTitle>
+          <AlertDescription className="text-amber-800">
+            {unresolvedOwners} recipes are owned by user IDs that do not yet have email metadata in `users`.
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
       <div className="grid gap-4 md:grid-cols-5">
         <Card>
           <CardHeader className="pb-2">
+            <BookOpen className="h-4 w-4 text-muted-foreground" />
             <CardDescription>Total Recipes</CardDescription>
             <CardTitle className="text-3xl">{totals.recipes}</CardTitle>
           </CardHeader>
         </Card>
         <Card>
           <CardHeader className="pb-2">
+            <GitBranch className="h-4 w-4 text-muted-foreground" />
             <CardDescription>Total Versions</CardDescription>
             <CardTitle className="text-3xl">{totals.versions}</CardTitle>
           </CardHeader>
         </Card>
         <Card>
           <CardHeader className="pb-2">
+            <Link2 className="h-4 w-4 text-muted-foreground" />
             <CardDescription>Attached Recipes</CardDescription>
             <CardTitle className="text-3xl">{totals.attachments}</CardTitle>
           </CardHeader>
         </Card>
         <Card>
           <CardHeader className="pb-2">
+            <BookOpen className="h-4 w-4 text-muted-foreground" />
             <CardDescription>Cookbook Saves</CardDescription>
             <CardTitle className="text-3xl">{totals.saves}</CardTitle>
           </CardHeader>
         </Card>
         <Card>
           <CardHeader className="pb-2">
+            <UserCircle2 className="h-4 w-4 text-muted-foreground" />
             <CardDescription>Draft-Backed Recipes</CardDescription>
             <CardTitle className="text-3xl">{totals.draftBacked}</CardTitle>
           </CardHeader>
@@ -193,22 +229,41 @@ export default async function RecipesPage({
                     </TableCell>
                     <TableCell>
                       <div className="space-y-1">
-                        <p>{row.owner_email ?? "unknown user"}</p>
-                        <p className="font-mono text-xs text-muted-foreground">{row.owner_user_id}</p>
+                        <p className="font-medium">{row.owner_email ?? "Profile unresolved"}</p>
+                        <p className="font-mono text-xs text-muted-foreground">{shortId(row.owner_user_id)}</p>
+                        {!row.owner_email ? (
+                          <Badge variant="outline" className="border-amber-300/60 bg-amber-50 text-amber-800">
+                            Missing email metadata
+                          </Badge>
+                        ) : null}
                       </div>
                     </TableCell>
-                    <TableCell className="space-x-1">
-                      <Badge variant="outline">{row.visibility}</Badge>
-                      <Badge variant="secondary">{row.image_status}</Badge>
-                      {row.source_draft_id ? <Badge>draft</Badge> : null}
+                    <TableCell>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <Badge variant="outline">{row.visibility}</Badge>
+                        <Badge variant="outline" className={imageStatusBadgeClass(row.image_status)}>
+                          <ImageIcon className="mr-1 h-3 w-3" />
+                          {row.image_status}
+                        </Badge>
+                        <Badge variant={row.source_draft_id ? "default" : "secondary"}>
+                          {row.source_draft_id ? "draft-backed" : "direct"}
+                        </Badge>
+                      </div>
                     </TableCell>
-                    <TableCell className="text-sm">
-                      {row.version_count} versions · {row.attachment_count} attachments · {row.save_count} saves
+                    <TableCell>
+                      <div className="flex flex-wrap gap-1.5">
+                        <Badge variant="secondary">{row.version_count} versions</Badge>
+                        <Badge variant="secondary">{row.attachment_count} attachments</Badge>
+                        <Badge variant="secondary">{row.save_count} saves</Badge>
+                      </div>
                     </TableCell>
                     <TableCell>
                       <div className="space-y-1">
-                        <p className="font-mono text-xs">{row.current_version_id ?? "n/a"}</p>
+                        <p className="font-mono text-xs">{row.current_version_id ? shortId(row.current_version_id) : "n/a"}</p>
                         <p className="text-xs text-muted-foreground">{truncate(row.latest_diff_summary ?? "n/a", 90)}</p>
+                        {row.latest_request_id ? (
+                          <p className="font-mono text-[10px] text-muted-foreground">req {shortId(row.latest_request_id)}</p>
+                        ) : null}
                       </div>
                     </TableCell>
                     <TableCell>{new Date(row.updated_at).toLocaleString()}</TableCell>

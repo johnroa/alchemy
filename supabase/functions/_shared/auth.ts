@@ -4,6 +4,9 @@ import { createUserClient } from "./db.ts";
 export type AuthContext = {
   userId: string;
   authHeader: string;
+  email: string | null;
+  fullName: string | null;
+  avatarUrl: string | null;
 };
 
 export const requireAuth = async (request: Request): Promise<AuthContext> => {
@@ -21,6 +24,17 @@ export const requireAuth = async (request: Request): Promise<AuthContext> => {
 
   return {
     userId: data.user.id,
-    authHeader
+    authHeader,
+    email: data.user.email ?? null,
+    fullName:
+      typeof data.user.user_metadata?.full_name === "string"
+        ? data.user.user_metadata.full_name
+        : typeof data.user.user_metadata?.name === "string"
+          ? data.user.user_metadata.name
+          : null,
+    avatarUrl:
+      typeof data.user.user_metadata?.avatar_url === "string"
+        ? data.user.user_metadata.avatar_url
+        : null
   };
 };
