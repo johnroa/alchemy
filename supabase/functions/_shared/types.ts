@@ -73,6 +73,7 @@ export type RecipePayload = {
     name: string;
     amount: number;
     unit: string;
+    display_amount?: string;
     preparation?: string;
     category?: string;
   }>;
@@ -109,7 +110,7 @@ export type RecipeAssistantEnvelope = {
   };
 };
 
-export type DraftAssistantEnvelope = {
+export type ChatAssistantEnvelope = {
   assistant_reply: AssistantReply;
   recipe?: RecipePayload;
   response_context?: {
@@ -121,6 +122,7 @@ export type DraftAssistantEnvelope = {
 };
 
 export type GatewayScope =
+  | "chat"
   | "generate"
   | "tweak"
   | "classify"
@@ -137,6 +139,8 @@ export type GatewayConfig = {
   provider: string;
   model: string;
   modelConfig: Record<string, JsonValue>;
+  inputCostPer1m: number;
+  outputCostPer1m: number;
 };
 
 export type MemoryRecord = {

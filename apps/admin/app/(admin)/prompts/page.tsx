@@ -1,6 +1,5 @@
 import { Info } from "lucide-react";
 import { LlmConfigPanel } from "@/components/admin/llm-config-panel";
-import { LlmSubnav } from "@/components/admin/llm-subnav";
 import { PageHeader } from "@/components/admin/page-header";
 import { Card, CardContent } from "@/components/ui/card";
 import { getLlmConfigData } from "@/lib/admin-data";
@@ -16,8 +15,6 @@ export default async function PromptsPage(): Promise<React.JSX.Element> {
         title="Prompts"
         description="Version and manage all LLM instruction templates. Each scope has one active prompt at a time."
       />
-      <LlmSubnav />
-
       <Card className="border-blue-200 bg-blue-50/40">
         <CardContent className="flex items-start gap-3 py-4">
           <Info className="mt-0.5 h-4 w-4 flex-none text-blue-600" />
@@ -31,7 +28,7 @@ export default async function PromptsPage(): Promise<React.JSX.Element> {
         </CardContent>
       </Card>
 
-      <LlmConfigPanel mode="prompts" routes={config.routes} prompts={config.prompts} rules={config.rules} />
+      <LlmConfigPanel mode="prompts" routes={config.routes} prompts={config.prompts} rules={config.rules} models={config.models} />
     </div>
   );
 }

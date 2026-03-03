@@ -46,7 +46,7 @@ export default async function SimulationsPage(): Promise<React.JSX.Element> {
         />
       </div>
 
-      <SimulationRunnerCard />
+      <SimulationRunnerCard registryModels={data.registryModels} />
 
       <Card>
         <CardHeader className="flex flex-row items-center justify-between pb-3">

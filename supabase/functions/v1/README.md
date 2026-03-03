@@ -16,10 +16,10 @@ Edge function implementing `/v1/*` routes.
 - `GET /v1/preferences`
 - `GET /v1/onboarding/state`
 - `POST /v1/onboarding/chat`
-- `POST /v1/recipe-drafts`
-- `POST /v1/recipe-drafts/{id}/messages`
-- `GET /v1/recipe-drafts/{id}`
-- `POST /v1/recipe-drafts/{id}/finalize`
+- `POST /v1/chat`
+- `POST /v1/chat/{id}/messages`
+- `GET /v1/chat/{id}`
+- `POST /v1/chat/{id}/generate`
 - `POST /v1/recipes/{id}/categories/override`
 - `DELETE /v1/recipes/{id}/categories/override/{category}`
 - `GET /v1/recipes/{id}/graph`

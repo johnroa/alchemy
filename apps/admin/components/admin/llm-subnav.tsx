@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 
 const llmNavItems = [
   { href: "/provider-model", label: "Provider & Model" },
+  { href: "/models", label: "Models" },
   { href: "/prompts", label: "Prompts" },
   { href: "/rules", label: "Rules" },
   { href: "/memory", label: "Memory" }

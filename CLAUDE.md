@@ -25,7 +25,7 @@ packages/shared/      Shared utilities
 ## Mobile Stack (`apps/mobile/`)
 - **Expo Router** — file-based routing
 - **TanStack Query v5** — all server state, caching, retries
-- **Zustand v5** — UI-only state (toggles, ephemeral drafts); never server data
+- **Zustand v5** — UI-only state (toggles, ephemeral chat input); never server data
 - **React Native Reanimated 3 + Gesture Handler** — animations and gestures
 - **Supabase JS** — auth session via `lib/auth.tsx` and `lib/supabase.ts`
 - **Custom design system** — `components/alchemy/primitives.tsx` + `theme.ts`
@@ -43,7 +43,7 @@ Query keys:
 ['search', query, filters]
 ```
 
-Zustand (`lib/ui-store.ts`) is for: measurement display mode, servings scaling, ephemeral draft text, temporary filter state. Not for recipes or preferences.
+Zustand (`lib/ui-store.ts`) is for: measurement display mode, servings scaling, ephemeral chat text, temporary filter state. Not for recipes or preferences.
 
 Route structure:
 ```
@@ -86,6 +86,38 @@ Admin route structure: `app/(admin)/` — dashboard, moderation, provider-model,
 - No secrets in client code
 - Tokens in platform secure storage only
 - LLM prompts not logged client-side
+
+## Deployment
+
+All commands run from repo root. Always deploy after making changes — never tell the user to run commands.
+
+### One-time auth
+```bash
+supabase login
+npx wrangler login
+```
+
+### Push Supabase (schema + edge function)
+```bash
+supabase db push --project-ref dwptbjcxrsmmgjmnumpg
+supabase functions deploy v1 --project-ref dwptbjcxrsmmgjmnumpg
+```
+
+### Push Cloudflare API gateway
+```bash
+npx wrangler deploy --config infra/cloudflare/api-gateway/wrangler.jsonc
+```
+
+### Push Cloudflare admin worker
+```bash
+pnpm --filter @alchemy/admin cf:build
+pnpm --filter @alchemy/admin exec opennextjs-cloudflare deploy
+```
+
+### Quick verify
+```bash
+curl https://api.cookwithalchemy.com/v1/healthz
+```
 
 ## When Blocked
 State what is missing, give the smallest set of options, default to the simplest option that preserves API-first correctness and premium UI feel.

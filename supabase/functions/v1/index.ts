@@ -3216,45 +3216,55 @@ Deno.serve(async (request) => {
         throw new ApiError(400, "chat_empty", "Chat session does not contain any messages");
       }
 
-      const consolidatedPrompt = messages
-        .map((message) => `[${message.role}] ${renderChatMessageForPrompt(message)}`)
-        .join("\n");
+      // Try to extract the recipe already generated during chat (no LLM call needed)
+      const existingRecipe = extractLatestAssistantRecipe(messages);
+      const existingReply = extractLatestAssistantReply(messages);
 
       const contextPack = await buildContextPack({
         userClient: client,
         serviceClient,
         userId: auth.userId,
         requestId,
-        prompt: consolidatedPrompt,
+        prompt: messages.map((m) => `[${m.role}] ${renderChatMessageForPrompt(m)}`).join("\n"),
         context: {
           chat_context: (chatSession.context as Record<string, JsonValue>) ?? {},
           thread_size: messages.length
-        }
+        },
+        selectionMode: "fast"
       });
 
-      const finalizedGeneration = await llmGateway.generateRecipe({
-        client: serviceClient,
-        userId: auth.userId,
-        requestId,
-        prompt: consolidatedPrompt,
-        context: {
-          chat_context: (chatSession.context as Record<string, JsonValue>) ?? {},
-          thread: messages,
-          preferences: contextPack.preferences,
-          memory_snapshot: contextPack.memorySnapshot,
-          selected_memories: contextPack.selectedMemories
-        },
-        modelOverrides
-      });
-      const recipePayload = finalizedGeneration.recipe;
-      const effectivePreferences = await applyModelPreferenceUpdates({
-        client,
-        serviceClient,
-        userId: auth.userId,
-        requestId,
-        currentPreferences: contextPack.preferences,
-        preferenceUpdates: finalizedGeneration.response_context?.preference_updates
-      });
+      let recipePayload: RecipePayload;
+      let assistantReply: AssistantReply;
+
+      if (existingRecipe) {
+        // Fast path: reuse the recipe from chat — no LLM generation call
+        recipePayload = existingRecipe;
+        assistantReply = existingReply ?? { text: "Saved to your cookbook!" };
+      } else {
+        // Fallback: no recipe in chat, generate one via LLM
+        const consolidatedPrompt = messages
+          .map((message) => `[${message.role}] ${renderChatMessageForPrompt(message)}`)
+          .join("\n");
+
+        const finalizedGeneration = await llmGateway.generateRecipe({
+          client: serviceClient,
+          userId: auth.userId,
+          requestId,
+          prompt: consolidatedPrompt,
+          context: {
+            chat_context: (chatSession.context as Record<string, JsonValue>) ?? {},
+            thread: messages,
+            preferences: contextPack.preferences,
+            memory_snapshot: contextPack.memorySnapshot,
+            selected_memories: contextPack.selectedMemories
+          },
+          modelOverrides
+        });
+        recipePayload = finalizedGeneration.recipe;
+        assistantReply = finalizedGeneration.assistant_reply;
+      }
+
+      const effectivePreferences = contextPack.preferences;
       const effectiveContextPack: ContextPack = {
         ...contextPack,
         preferences: effectivePreferences
@@ -3314,21 +3324,21 @@ Deno.serve(async (request) => {
         throw new ApiError(500, "chat_generate_update_failed", "Could not update chat session status", chatStatusError.message);
       }
 
-      await updateMemoryFromInteraction({
+      // Fire-and-forget: memory + changelog
+      updateMemoryFromInteraction({
         userClient: client,
         serviceClient,
         userId: auth.userId,
         requestId,
         interactionContext: {
           chat_id: chatId,
-          consolidated_prompt: consolidatedPrompt,
           finalized_recipe: recipePayload,
           preferences: effectivePreferences,
           selected_memory_ids: contextPack.selectedMemoryIds
         }
       });
 
-      await logChangelog({
+      logChangelog({
         serviceClient,
         actorUserId: auth.userId,
         scope: "chat",
@@ -3345,7 +3355,7 @@ Deno.serve(async (request) => {
       return jsonResponse(200, {
         recipe,
         version: recipe.version,
-        assistant_reply: finalizedGeneration.assistant_reply
+        assistant_reply: assistantReply
       });
     }
 

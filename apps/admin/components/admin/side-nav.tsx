@@ -4,7 +4,9 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   Activity,
+  BarChart3,
   Bot,
+  Database,
   FlaskConical,
   FolderGit2,
   History,
@@ -32,7 +34,9 @@ const navGroups = [
   {
     category: "Intelligence",
     items: [
-      { href: "/provider-model", label: "Provider & Model", icon: Bot },
+      { href: "/provider-model", label: "Model Assignments", icon: Bot },
+      { href: "/model-usage", label: "Model Usage", icon: BarChart3 },
+      { href: "/models", label: "Models", icon: Database },
       { href: "/prompts", label: "Prompts", icon: Bot },
       { href: "/rules", label: "Rules", icon: ScrollText },
       { href: "/memory", label: "Memory", icon: Sparkles }

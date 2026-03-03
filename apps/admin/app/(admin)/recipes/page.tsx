@@ -35,7 +35,7 @@ const normalizeAssistantReply = (value: unknown): string | null => {
   return null;
 };
 
-const draftMessagePreview = (role: string, content: string): string => {
+const chatMessagePreview = (role: string, content: string): string => {
   if (role !== "assistant") return truncate(content, 200);
   try {
     const parsed = JSON.parse(content) as unknown;
@@ -221,10 +221,10 @@ export default async function RecipesPage({
                       )}
                     </div>
                   </div>
-                  {detail.recipe.source_draft_id && (
+                  {detail.recipe.source_chat_id && (
                     <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
                       <span>
-                        Draft: <span className="font-mono">{shortId(detail.recipe.source_draft_id)}</span>
+                        Chat: <span className="font-mono">{shortId(detail.recipe.source_chat_id)}</span>
                       </span>
                       {detail.recipe.current_version_id && (
                         <span>
@@ -241,10 +241,10 @@ export default async function RecipesPage({
                 <TabsList className="grid w-full grid-cols-4">
                   <TabsTrigger value="timeline">Timeline</TabsTrigger>
                   <TabsTrigger value="prompts">
-                    Prompts
-                    {detail.draft_messages.length > 0 && (
+                    Chat Thread
+                    {detail.chat_messages.length > 0 && (
                       <Badge variant="secondary" className="ml-1.5 text-[10px]">
-                        {detail.draft_messages.length}
+                        {detail.chat_messages.length}
                       </Badge>
                     )}
                   </TabsTrigger>
@@ -320,13 +320,13 @@ export default async function RecipesPage({
                   </Card>
                 </TabsContent>
 
-                {/* Prompts */}
+                {/* Chat Thread */}
                 <TabsContent value="prompts">
                   <Card>
                     <CardContent className="p-0">
-                      {detail.draft_messages.length === 0 ? (
+                      {detail.chat_messages.length === 0 ? (
                         <div className="py-10 text-center text-sm text-muted-foreground">
-                          No draft messages captured for this recipe.
+                          No chat messages captured for this recipe.
                         </div>
                       ) : (
                         <Table>
@@ -338,7 +338,7 @@ export default async function RecipesPage({
                             </TableRow>
                           </TableHeader>
                           <TableBody>
-                            {detail.draft_messages.map((message) => (
+                            {detail.chat_messages.map((message) => (
                               <TableRow key={message.id}>
                                 <TableCell className="text-xs text-muted-foreground">
                                   {new Date(message.created_at).toLocaleString()}
@@ -352,7 +352,7 @@ export default async function RecipesPage({
                                   </Badge>
                                 </TableCell>
                                 <TableCell className="text-sm">
-                                  {draftMessagePreview(message.role, message.content)}
+                                  {chatMessagePreview(message.role, message.content)}
                                 </TableCell>
                               </TableRow>
                             ))}

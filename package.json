@@ -14,6 +14,7 @@
     "dev:mobile:ios:clear": "pnpm --filter @alchemy/mobile ios:clear",
     "logs:mobile:ios": "pnpm --filter @alchemy/mobile ios:logs",
     "contracts:generate": "pnpm --filter @alchemy/contracts generate",
-    "simulate:api": "node ./scripts/simulate-api-ux.mjs"
+    "simulate:api": "node ./scripts/simulate-api-ux.mjs",
+    "sim:reload": "xcrun simctl terminate booted host.exp.Exponent 2>/dev/null; xcrun simctl openurl booted \"exp://$(ipconfig getifaddr en0):8081\""
   }
 }

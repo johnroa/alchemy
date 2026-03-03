@@ -45,6 +45,54 @@ Complete redesign and expansion of the admin dashboard at `apps/admin/`.
 
 ---
 
+### LLM Model Registry
+
+New `llm_model_registry` table as the single source of truth for all known AI models — pricing, context window, availability.
+
+#### Database
+- **`0010_model_registry`** — `llm_model_registry` table: `provider`, `model`, `display_name`, `input_cost_per_1m_tokens`, `output_cost_per_1m_tokens`, `context_window_tokens`, `max_output_tokens`, `is_available`, `notes`; `unique(provider, model)`
+- **`0011_seed_model_registry`** — 9 seeded models: GPT-4.1, GPT-4.1 Mini, GPT-4o, GPT-4o Mini, o3, o4-mini, Claude Opus 4.6, Claude Sonnet 4.6, Claude Haiku 4.5
+
+#### Admin Console
+- **Models page** (`/models`) — full CRUD: add/remove models, toggle availability, edit cost fields inline
+- **`GET/POST/PATCH/DELETE /api/admin/llm/models`** — model registry CRUD API
+- **DB-driven dropdowns** — provider/model selects in Model Assignments and simulation overrides now derive from registry; zero hardcoded values
+- **Navigation** — "Provider & Model" renamed to "Model Assignments"; "Models" added to side nav; `LlmSubnav` tab bar removed (all pages now use left nav)
+
+#### Gateway Token & Cost Tracking
+- `TokenAccum` — mutable `{ input, output, costUsd }` accumulator threaded through all gateway calls
+- `ProviderResult<T>` — new `callProvider` return type that extracts token counts from provider API responses
+- `addTokens` helper — accumulates counts and computes `costUsd` via per-model pricing from registry
+- `GatewayConfig` extended with `inputCostPer1m` and `outputCostPer1m` loaded from `llm_model_registry`
+- `logLlmEvent` writes `token_input`, `token_output`, `token_total`, `cost_usd` on every LLM call
+
+---
+
+### Admin Console — Prompt & Rule Inline Editing
+
+- Edit button on active and inactive prompt/rule versions pre-fills an inline textarea with the current content
+- "Save as New Version" POSTs with `auto_activate: true` — deactivates the current active version and immediately activates the new one
+- `auto_activate?: boolean` added to both `/api/admin/llm/prompts` and `/api/admin/llm/rules` create action
+
+---
+
+### Simulation Auto-Token
+
+- Simulation runner no longer requires `ADMIN_SIMULATION_BEARER_TOKEN` to be pre-set as a secret
+- `getSimToken()` generates a fresh magic-link OTP for the sim user (`sim-1772428603705@cookwithalchemy.com`), verifies it to obtain a short-lived access token; falls back to password sign-in
+- Uses existing `SUPABASE_SECRET_KEY` — no new secrets needed
+- `ADMIN_SIMULATION_BEARER_TOKEN` still works as an override if present
+
+---
+
+### Deployment Documentation
+
+- `README.md` — added full Deployment section with all four deploy commands, one-time auth, and migration history table updated through `0011`
+- `CLAUDE.md` — deployment commands added before "When Blocked"
+- `AGENTS.md` (new) — project overview, monorepo structure, deployment commands, non-negotiables
+
+---
+
 ### Mobile App — Major Feature Build
 
 #### New Screens
@@ -63,7 +111,7 @@ Complete redesign and expansion of the admin dashboard at `apps/admin/`.
 - Removed `/explore` tab; tabs simplified to Generate + My Cookbook
 - `lib/api.ts` — full API client covering all v1 endpoints
 - `lib/auth.tsx` — hardened: real access token required for authenticated state, local sign-out on failure
-- `lib/ui-store.ts` — measurement display mode, servings scaling, ephemeral draft state
+- `lib/ui-store.ts` — measurement display mode, servings scaling, ephemeral chat input state
 
 ---
 

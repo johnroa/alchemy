@@ -1,5 +1,18 @@
 import { getAdminClient, toRecord } from "@/lib/supabase-admin";
 
+export type RegistryModel = {
+  id: string;
+  provider: string;
+  model: string;
+  display_name: string;
+  input_cost_per_1m_tokens: number;
+  output_cost_per_1m_tokens: number;
+  context_window_tokens: number | null;
+  max_output_tokens: number | null;
+  is_available: boolean;
+  notes: string | null;
+};
+
 type LlmRoute = {
   id: string;
   scope: string;
@@ -123,10 +136,11 @@ export const getLlmConfigData = async (): Promise<{
   routes: LlmRoute[];
   prompts: Prompt[];
   rules: Rule[];
+  models: RegistryModel[];
 }> => {
   const client = getAdminClient();
 
-  const [{ data: routes }, { data: prompts }, { data: rules }] = await Promise.all([
+  const [{ data: routes }, { data: prompts }, { data: rules }, { data: models }] = await Promise.all([
     client
       .from("llm_model_routes")
       .select("id,scope,route_name,provider,model,config,is_active,created_at")
@@ -140,7 +154,12 @@ export const getLlmConfigData = async (): Promise<{
       .from("llm_rules")
       .select("id,scope,version,name,rule,is_active,created_at")
       .order("scope", { ascending: true })
-      .order("version", { ascending: false })
+      .order("version", { ascending: false }),
+    client
+      .from("llm_model_registry")
+      .select("id,provider,model,display_name,input_cost_per_1m_tokens,output_cost_per_1m_tokens,context_window_tokens,max_output_tokens,is_available,notes")
+      .order("provider")
+      .order("display_name")
   ]);
 
   return {
@@ -152,7 +171,8 @@ export const getLlmConfigData = async (): Promise<{
     rules: (rules ?? []).map((rule) => ({
       ...rule,
       rule: toRecord(rule.rule as never) as Record<string, unknown>
-    })) as Rule[]
+    })) as Rule[],
+    models: (models ?? []) as RegistryModel[]
   };
 };
 
@@ -161,7 +181,7 @@ type RecipeAuditIndexRow = {
   title: string;
   owner_user_id: string;
   owner_email: string | null;
-  source_draft_id: string | null;
+  source_chat_id: string | null;
   current_version_id: string | null;
   visibility: string;
   image_status: string;
@@ -170,7 +190,7 @@ type RecipeAuditIndexRow = {
   version_count: number;
   save_count: number;
   attachment_count: number;
-  draft_message_count: number;
+  chat_message_count: number;
   latest_diff_summary: string | null;
   latest_request_id: string | null;
 };
@@ -181,7 +201,7 @@ type RecipeAuditDetail = {
     title: string;
     owner_user_id: string;
     owner_email: string | null;
-    source_draft_id: string | null;
+    source_chat_id: string | null;
     current_version_id: string | null;
     visibility: string;
     hero_image_url: string | null;
@@ -189,7 +209,7 @@ type RecipeAuditDetail = {
     created_at: string;
     updated_at: string;
   };
-  draft: {
+  chat: {
     id: string;
     status: string;
     created_at: string;
@@ -209,7 +229,7 @@ type RecipeAuditDetail = {
     request_id: string | null;
     event_metadata: Record<string, unknown> | null;
   }>;
-  draft_messages: Array<{
+  chat_messages: Array<{
     id: string;
     role: string;
     content: string;
@@ -266,13 +286,13 @@ export const getRecipeAuditIndexData = async (
     versions: number;
     attachments: number;
     saves: number;
-    draftBacked: number;
+    chatBacked: number;
   };
 }> => {
   const client = getAdminClient();
   const preferredRecipesQuery = await client
     .from("recipes")
-    .select("id,title,owner_user_id,source_draft_id,current_version_id,visibility,image_status,created_at,updated_at")
+    .select("id,title,owner_user_id,source_chat_id,current_version_id,visibility,image_status,created_at,updated_at")
     .order("updated_at", { ascending: false })
     .limit(250);
 
@@ -280,7 +300,7 @@ export const getRecipeAuditIndexData = async (
     id: string;
     title: string;
     owner_user_id: string;
-    source_draft_id: string | null;
+    source_chat_id: string | null;
     current_version_id: string | null;
     visibility: string;
     image_status: string;
@@ -295,7 +315,7 @@ export const getRecipeAuditIndexData = async (
 
     const legacyRecipesQuery = await client
       .from("recipes")
-      .select("id,title,owner_user_id,source_draft_id,current_version_id,visibility,created_at,updated_at")
+      .select("id,title,owner_user_id,source_chat_id,current_version_id,visibility,created_at,updated_at")
       .order("updated_at", { ascending: false })
       .limit(250);
 
@@ -312,7 +332,7 @@ export const getRecipeAuditIndexData = async (
       id: string;
       title: string;
       owner_user_id: string;
-      source_draft_id: string | null;
+      source_chat_id: string | null;
       current_version_id: string | null;
       visibility: string;
       image_status: string;
@@ -330,7 +350,7 @@ export const getRecipeAuditIndexData = async (
             recipe.id,
             recipe.title,
             recipe.owner_user_id,
-            recipe.source_draft_id ?? "",
+            recipe.source_chat_id ?? "",
             recipe.current_version_id ?? ""
           ]
             .join(" ")
@@ -340,7 +360,7 @@ export const getRecipeAuditIndexData = async (
 
   const recipeIds = filteredRecipes.map((recipe) => recipe.id);
   const ownerIds = Array.from(new Set(filteredRecipes.map((recipe) => recipe.owner_user_id)));
-  const draftIds = Array.from(new Set(filteredRecipes.map((recipe) => recipe.source_draft_id).filter((id): id is string => Boolean(id))));
+  const chatIds = Array.from(new Set(filteredRecipes.map((recipe) => recipe.source_chat_id).filter((id): id is string => Boolean(id))));
   const currentVersionIds = Array.from(
     new Set(filteredRecipes.map((recipe) => recipe.current_version_id).filter((id): id is string => Boolean(id)))
   );
@@ -350,7 +370,7 @@ export const getRecipeAuditIndexData = async (
     { data: versions },
     { data: saves },
     { data: attachments },
-    { data: draftMessages },
+    { data: chatMessages },
     { data: currentVersions },
     { data: versionEvents }
   ] = await Promise.all([
@@ -366,9 +386,9 @@ export const getRecipeAuditIndexData = async (
     recipeIds.length === 0
       ? Promise.resolve({ data: [] as Array<{ parent_recipe_id: string }> })
       : client.from("recipe_links").select("parent_recipe_id").in("parent_recipe_id", recipeIds),
-    draftIds.length === 0
-      ? Promise.resolve({ data: [] as Array<{ draft_id: string }> })
-      : client.from("recipe_draft_messages").select("draft_id").in("draft_id", draftIds),
+    chatIds.length === 0
+      ? Promise.resolve({ data: [] as Array<{ chat_id: string }> })
+      : client.from("chat_messages").select("chat_id").in("chat_id", chatIds),
     currentVersionIds.length === 0
       ? Promise.resolve({ data: [] as Array<{ id: string; diff_summary: string | null }> })
       : client.from("recipe_versions").select("id,diff_summary").in("id", currentVersionIds),
@@ -397,9 +417,9 @@ export const getRecipeAuditIndexData = async (
     attachmentCountByRecipe.set(row.parent_recipe_id, (attachmentCountByRecipe.get(row.parent_recipe_id) ?? 0) + 1);
   }
 
-  const draftMessageCountByDraft = new Map<string, number>();
-  for (const row of draftMessages ?? []) {
-    draftMessageCountByDraft.set(row.draft_id, (draftMessageCountByDraft.get(row.draft_id) ?? 0) + 1);
+  const chatMessageCountByChat = new Map<string, number>();
+  for (const row of chatMessages ?? []) {
+    chatMessageCountByChat.set(row.chat_id, (chatMessageCountByChat.get(row.chat_id) ?? 0) + 1);
   }
 
   const diffByVersion = new Map((currentVersions ?? []).map((row) => [row.id, row.diff_summary]));
@@ -415,7 +435,7 @@ export const getRecipeAuditIndexData = async (
     title: recipe.title,
     owner_user_id: recipe.owner_user_id,
     owner_email: ownerById.get(recipe.owner_user_id) ?? null,
-    source_draft_id: recipe.source_draft_id,
+    source_chat_id: recipe.source_chat_id,
     current_version_id: recipe.current_version_id,
     visibility: recipe.visibility,
     image_status: recipe.image_status,
@@ -424,7 +444,7 @@ export const getRecipeAuditIndexData = async (
     version_count: versionCountByRecipe.get(recipe.id) ?? 0,
     save_count: saveCountByRecipe.get(recipe.id) ?? 0,
     attachment_count: attachmentCountByRecipe.get(recipe.id) ?? 0,
-    draft_message_count: recipe.source_draft_id ? draftMessageCountByDraft.get(recipe.source_draft_id) ?? 0 : 0,
+    chat_message_count: recipe.source_chat_id ? chatMessageCountByChat.get(recipe.source_chat_id) ?? 0 : 0,
     latest_diff_summary: recipe.current_version_id ? diffByVersion.get(recipe.current_version_id) ?? null : null,
     latest_request_id: recipe.current_version_id ? requestByVersion.get(recipe.current_version_id) ?? null : null
   }));
@@ -435,12 +455,12 @@ export const getRecipeAuditIndexData = async (
       acc.versions += row.version_count;
       acc.attachments += row.attachment_count;
       acc.saves += row.save_count;
-      if (row.source_draft_id) {
-        acc.draftBacked += 1;
+      if (row.source_chat_id) {
+        acc.chatBacked += 1;
       }
       return acc;
     },
-    { recipes: 0, versions: 0, attachments: 0, saves: 0, draftBacked: 0 }
+    { recipes: 0, versions: 0, attachments: 0, saves: 0, chatBacked: 0 }
   );
 
   return { rows, totals };
@@ -451,7 +471,7 @@ export const getRecipeAuditDetail = async (recipeId: string): Promise<RecipeAudi
 
   const preferredRecipeQuery = await client
     .from("recipes")
-    .select("id,title,owner_user_id,source_draft_id,current_version_id,visibility,hero_image_url,image_status,created_at,updated_at")
+    .select("id,title,owner_user_id,source_chat_id,current_version_id,visibility,hero_image_url,image_status,created_at,updated_at")
     .eq("id", recipeId)
     .maybeSingle();
 
@@ -459,7 +479,7 @@ export const getRecipeAuditDetail = async (recipeId: string): Promise<RecipeAudi
     id: string;
     title: string;
     owner_user_id: string;
-    source_draft_id: string | null;
+    source_chat_id: string | null;
     current_version_id: string | null;
     visibility: string;
     hero_image_url: string | null;
@@ -475,7 +495,7 @@ export const getRecipeAuditDetail = async (recipeId: string): Promise<RecipeAudi
 
     const legacyRecipeQuery = await client
       .from("recipes")
-      .select("id,title,owner_user_id,source_draft_id,current_version_id,visibility,hero_image_url,created_at,updated_at")
+      .select("id,title,owner_user_id,source_chat_id,current_version_id,visibility,hero_image_url,created_at,updated_at")
       .eq("id", recipeId)
       .maybeSingle();
 
@@ -497,7 +517,7 @@ export const getRecipeAuditDetail = async (recipeId: string): Promise<RecipeAudi
     return null;
   }
 
-  const [{ data: owner }, { data: versions, error: versionsError }, { data: draft }, { data: draftMessages }, { data: links }] =
+  const [{ data: owner }, { data: versions, error: versionsError }, { data: chat }, { data: chatMessages }, { data: links }] =
     await Promise.all([
       client.from("users").select("id,email").eq("id", recipe.owner_user_id).maybeSingle(),
       client
@@ -505,14 +525,14 @@ export const getRecipeAuditDetail = async (recipeId: string): Promise<RecipeAudi
         .select("id,parent_version_id,diff_summary,created_at,created_by,payload")
         .eq("recipe_id", recipe.id)
         .order("created_at", { ascending: true }),
-      recipe.source_draft_id
-        ? client.from("recipe_drafts").select("id,status,context,created_at,updated_at").eq("id", recipe.source_draft_id).maybeSingle()
+      recipe.source_chat_id
+        ? client.from("chat_sessions").select("id,status,context,created_at,updated_at").eq("id", recipe.source_chat_id).maybeSingle()
         : Promise.resolve({ data: null }),
-      recipe.source_draft_id
+      recipe.source_chat_id
         ? client
-            .from("recipe_draft_messages")
+            .from("chat_messages")
             .select("id,role,content,metadata,created_at")
-            .eq("draft_id", recipe.source_draft_id)
+            .eq("chat_id", recipe.source_chat_id)
             .order("created_at", { ascending: true })
         : Promise.resolve({ data: [] as Array<{ id: string; role: string; content: string; metadata: Record<string, unknown>; created_at: string }> }),
       client
@@ -591,7 +611,7 @@ export const getRecipeAuditDetail = async (recipeId: string): Promise<RecipeAudi
     )
   );
 
-  const [recipeChanges, draftChanges, requestChanges] = await Promise.all([
+  const [recipeChanges, chatChanges, requestChanges] = await Promise.all([
     client
       .from("changelog_events")
       .select("id,scope,entity_type,entity_id,action,request_id,created_at,metadata")
@@ -599,12 +619,12 @@ export const getRecipeAuditDetail = async (recipeId: string): Promise<RecipeAudi
       .eq("entity_id", recipe.id)
       .order("created_at", { ascending: false })
       .limit(200),
-    recipe.source_draft_id
+    recipe.source_chat_id
       ? client
           .from("changelog_events")
           .select("id,scope,entity_type,entity_id,action,request_id,created_at,metadata")
-          .eq("entity_type", "recipe_draft")
-          .eq("entity_id", recipe.source_draft_id)
+          .eq("entity_type", "chat_session")
+          .eq("entity_id", recipe.source_chat_id)
           .order("created_at", { ascending: false })
           .limit(200)
       : Promise.resolve({ data: [] as Array<Record<string, unknown>> }),
@@ -619,7 +639,7 @@ export const getRecipeAuditDetail = async (recipeId: string): Promise<RecipeAudi
   ]);
 
   const changelogById = new Map<string, RecipeAuditDetail["changelog"][number]>();
-  for (const row of [...(recipeChanges.data ?? []), ...(draftChanges.data ?? []), ...(requestChanges.data ?? [])]) {
+  for (const row of [...(recipeChanges.data ?? []), ...(chatChanges.data ?? []), ...(requestChanges.data ?? [])]) {
     const id = String(row.id);
     if (changelogById.has(id)) {
       continue;
@@ -682,7 +702,7 @@ export const getRecipeAuditDetail = async (recipeId: string): Promise<RecipeAudi
       title: recipe.title,
       owner_user_id: recipe.owner_user_id,
       owner_email: owner?.email ?? null,
-      source_draft_id: recipe.source_draft_id,
+      source_chat_id: recipe.source_chat_id,
       current_version_id: recipe.current_version_id,
       visibility: recipe.visibility,
       hero_image_url: recipe.hero_image_url,
@@ -690,20 +710,20 @@ export const getRecipeAuditDetail = async (recipeId: string): Promise<RecipeAudi
       created_at: recipe.created_at,
       updated_at: recipe.updated_at
     },
-    draft: draft
+    chat: chat
       ? {
-          id: String(draft.id),
-          status: String(draft.status),
-          created_at: String(draft.created_at),
-          updated_at: String(draft.updated_at),
+          id: String(chat.id),
+          status: String(chat.status),
+          created_at: String(chat.created_at),
+          updated_at: String(chat.updated_at),
           context:
-            draft.context && typeof draft.context === "object" && !Array.isArray(draft.context)
-              ? (draft.context as Record<string, unknown>)
+            chat.context && typeof chat.context === "object" && !Array.isArray(chat.context)
+              ? (chat.context as Record<string, unknown>)
               : {}
         }
       : null,
     versions: versionsWithMetrics,
-    draft_messages: (draftMessages ?? []).map((message) => ({
+    chat_messages: (chatMessages ?? []).map((message) => ({
       id: message.id,
       role: message.role,
       content: message.content,
@@ -913,23 +933,393 @@ export const getVersionCausalityData = async (): Promise<{
   };
 };
 
-export const getSimulationData = async (): Promise<{
-  recentRuns: Array<{ created_at: string; request_id: string | null; event_type: string; event_payload: Record<string, unknown> }>;
+const toFiniteNumber = (value: unknown): number => {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : 0;
+};
+
+const scopeLabel = (scope: string): string => {
+  const known: Record<string, string> = {
+    generate: "Generating",
+    chat: "Chat",
+    tweak: "Tweaking",
+    image: "Image Generation",
+    classify: "Classification",
+    onboarding: "Onboarding",
+    memory_extract: "Memory Extract",
+    memory_select: "Memory Select",
+    memory_summarize: "Memory Summarize",
+    memory_conflict_resolve: "Memory Conflict Resolve"
+  };
+
+  if (scope in known) {
+    return known[scope] ?? scope;
+  }
+
+  return scope
+    .split("_")
+    .filter((part) => part.length > 0)
+    .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
+    .join(" ");
+};
+
+export const getModelUsageData = async (): Promise<{
+  windowStart: string;
+  windowEnd: string;
+  totals: {
+    calls: number;
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    totalCostUsd: number;
+    avgLatencyMs: number;
+  };
+  byAction: Array<{
+    scope: string;
+    label: string;
+    calls: number;
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    costUsd: number;
+    avgLatencyMs: number;
+    callShare: number;
+    tokenShare: number;
+  }>;
+  byModel: Array<{
+    provider: string;
+    model: string;
+    displayName: string;
+    calls: number;
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    costUsd: number;
+    avgLatencyMs: number;
+    callShare: number;
+    tokenShare: number;
+    scopes: string[];
+  }>;
+  hourly: Array<{
+    bucketStart: string;
+    label: string;
+    calls: number;
+    tokens: number;
+    costUsd: number;
+  }>;
+  daily: Array<{
+    bucketStart: string;
+    label: string;
+    calls: number;
+    tokens: number;
+    costUsd: number;
+  }>;
 }> => {
   const client = getAdminClient();
-  const { data } = await client
-    .from("events")
-    .select("created_at,request_id,event_type,event_payload")
-    .in("event_type", ["simulation_run_started", "simulation_run_completed", "simulation_run_failed"])
-    .order("created_at", { ascending: false })
-    .limit(100);
+  const windowEnd = new Date();
+  const windowStart = new Date(windowEnd.getTime() - 14 * 24 * 60 * 60 * 1000);
+  const hourlyStart = new Date(windowEnd.getTime() - 24 * 60 * 60 * 1000);
+
+  const [{ data: rows, error }, { data: routes }, { data: registry }] = await Promise.all([
+    client
+      .from("events")
+      .select("created_at,token_input,token_output,token_total,cost_usd,latency_ms,event_payload")
+      .eq("event_type", "llm_call")
+      .gte("created_at", windowStart.toISOString())
+      .order("created_at", { ascending: false })
+      .limit(5000),
+    client
+      .from("llm_model_routes")
+      .select("scope,provider,model,is_active")
+      .eq("is_active", true),
+    client.from("llm_model_registry").select("provider,model,display_name")
+  ]);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  const routeByScope = new Map<string, { provider: string; model: string }>();
+  for (const route of routes ?? []) {
+    const scope = String(route.scope ?? "").trim();
+    if (!scope) {
+      continue;
+    }
+
+    routeByScope.set(scope, {
+      provider: String(route.provider ?? "unknown"),
+      model: String(route.model ?? "unknown")
+    });
+  }
+
+  const modelDisplayByKey = new Map<string, string>();
+  for (const row of registry ?? []) {
+    const provider = String(row.provider ?? "unknown");
+    const model = String(row.model ?? "unknown");
+    const key = `${provider}/${model}`;
+    modelDisplayByKey.set(key, String(row.display_name ?? model));
+  }
+
+  const actionMap = new Map<
+    string,
+    {
+      scope: string;
+      label: string;
+      calls: number;
+      inputTokens: number;
+      outputTokens: number;
+      totalTokens: number;
+      costUsd: number;
+      latencyMsSum: number;
+      latencyCount: number;
+    }
+  >();
+  const modelMap = new Map<
+    string,
+    {
+      provider: string;
+      model: string;
+      displayName: string;
+      calls: number;
+      inputTokens: number;
+      outputTokens: number;
+      totalTokens: number;
+      costUsd: number;
+      latencyMsSum: number;
+      latencyCount: number;
+      scopes: Set<string>;
+    }
+  >();
+
+  const totals = {
+    calls: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    totalTokens: 0,
+    totalCostUsd: 0,
+    latencyMsSum: 0,
+    latencyCount: 0
+  };
+
+  const hourlyBuckets = new Map<string, { bucketStart: string; label: string; calls: number; tokens: number; costUsd: number }>();
+  const dailyBuckets = new Map<string, { bucketStart: string; label: string; calls: number; tokens: number; costUsd: number }>();
+
+  for (let index = 23; index >= 0; index -= 1) {
+    const bucketDate = new Date(windowEnd.getTime() - index * 60 * 60 * 1000);
+    bucketDate.setMinutes(0, 0, 0);
+    const key = bucketDate.toISOString();
+    hourlyBuckets.set(key, {
+      bucketStart: key,
+      label: bucketDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+      calls: 0,
+      tokens: 0,
+      costUsd: 0
+    });
+  }
+
+  for (let index = 13; index >= 0; index -= 1) {
+    const bucketDate = new Date(windowEnd);
+    bucketDate.setHours(0, 0, 0, 0);
+    bucketDate.setDate(bucketDate.getDate() - index);
+    const key = bucketDate.toISOString();
+    dailyBuckets.set(key, {
+      bucketStart: key,
+      label: bucketDate.toLocaleDateString([], { month: "short", day: "numeric" }),
+      calls: 0,
+      tokens: 0,
+      costUsd: 0
+    });
+  }
+
+  for (const row of rows ?? []) {
+    const payload = toRecord(row.event_payload as never) as Record<string, unknown>;
+    const scope = typeof payload["scope"] === "string" && payload["scope"].trim().length > 0 ? payload["scope"].trim() : "unknown";
+    const activeRoute = routeByScope.get(scope);
+    const provider =
+      typeof payload["provider"] === "string" && payload["provider"].trim().length > 0
+        ? payload["provider"].trim()
+        : (activeRoute?.provider ?? "unknown");
+    const model =
+      typeof payload["model"] === "string" && payload["model"].trim().length > 0
+        ? payload["model"].trim()
+        : (activeRoute?.model ?? "unknown");
+
+    const inputTokens = toFiniteNumber(row.token_input);
+    const outputTokens = toFiniteNumber(row.token_output);
+    const tokenTotal = Math.max(toFiniteNumber(row.token_total), inputTokens + outputTokens);
+    const costUsd = toFiniteNumber(row.cost_usd);
+    const latencyMs = toFiniteNumber(row.latency_ms);
+
+    totals.calls += 1;
+    totals.inputTokens += inputTokens;
+    totals.outputTokens += outputTokens;
+    totals.totalTokens += tokenTotal;
+    totals.totalCostUsd += costUsd;
+    if (latencyMs > 0) {
+      totals.latencyMsSum += latencyMs;
+      totals.latencyCount += 1;
+    }
+
+    const actionRecord = actionMap.get(scope) ?? {
+      scope,
+      label: scopeLabel(scope),
+      calls: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      costUsd: 0,
+      latencyMsSum: 0,
+      latencyCount: 0
+    };
+
+    actionRecord.calls += 1;
+    actionRecord.inputTokens += inputTokens;
+    actionRecord.outputTokens += outputTokens;
+    actionRecord.totalTokens += tokenTotal;
+    actionRecord.costUsd += costUsd;
+    if (latencyMs > 0) {
+      actionRecord.latencyMsSum += latencyMs;
+      actionRecord.latencyCount += 1;
+    }
+    actionMap.set(scope, actionRecord);
+
+    const modelKey = `${provider}/${model}`;
+    const modelRecord = modelMap.get(modelKey) ?? {
+      provider,
+      model,
+      displayName: modelDisplayByKey.get(modelKey) ?? model,
+      calls: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      costUsd: 0,
+      latencyMsSum: 0,
+      latencyCount: 0,
+      scopes: new Set<string>()
+    };
+
+    modelRecord.calls += 1;
+    modelRecord.inputTokens += inputTokens;
+    modelRecord.outputTokens += outputTokens;
+    modelRecord.totalTokens += tokenTotal;
+    modelRecord.costUsd += costUsd;
+    modelRecord.scopes.add(scope);
+    if (latencyMs > 0) {
+      modelRecord.latencyMsSum += latencyMs;
+      modelRecord.latencyCount += 1;
+    }
+    modelMap.set(modelKey, modelRecord);
+
+    const createdAt = new Date(String(row.created_at));
+    if (Number.isFinite(createdAt.getTime()) && createdAt >= hourlyStart) {
+      const bucketDate = new Date(createdAt);
+      bucketDate.setMinutes(0, 0, 0);
+      const bucket = hourlyBuckets.get(bucketDate.toISOString());
+      if (bucket) {
+        bucket.calls += 1;
+        bucket.tokens += tokenTotal;
+        bucket.costUsd += costUsd;
+      }
+    }
+
+    if (Number.isFinite(createdAt.getTime()) && createdAt >= windowStart) {
+      const bucketDate = new Date(createdAt);
+      bucketDate.setHours(0, 0, 0, 0);
+      const bucket = dailyBuckets.get(bucketDate.toISOString());
+      if (bucket) {
+        bucket.calls += 1;
+        bucket.tokens += tokenTotal;
+        bucket.costUsd += costUsd;
+      }
+    }
+  }
 
   return {
-    recentRuns: (data ?? []).map((row) => ({
+    windowStart: windowStart.toISOString(),
+    windowEnd: windowEnd.toISOString(),
+    totals: {
+      calls: totals.calls,
+      inputTokens: totals.inputTokens,
+      outputTokens: totals.outputTokens,
+      totalTokens: totals.totalTokens,
+      totalCostUsd: totals.totalCostUsd,
+      avgLatencyMs: totals.latencyCount === 0 ? 0 : Math.round(totals.latencyMsSum / totals.latencyCount)
+    },
+    byAction: Array.from(actionMap.values())
+      .sort((a, b) => b.totalTokens - a.totalTokens)
+      .map((row) => ({
+        scope: row.scope,
+        label: row.label,
+        calls: row.calls,
+        inputTokens: row.inputTokens,
+        outputTokens: row.outputTokens,
+        totalTokens: row.totalTokens,
+        costUsd: row.costUsd,
+        avgLatencyMs: row.latencyCount === 0 ? 0 : Math.round(row.latencyMsSum / row.latencyCount),
+        callShare: totals.calls === 0 ? 0 : row.calls / totals.calls,
+        tokenShare: totals.totalTokens === 0 ? 0 : row.totalTokens / totals.totalTokens
+      })),
+    byModel: Array.from(modelMap.values())
+      .sort((a, b) => b.totalTokens - a.totalTokens)
+      .map((row) => ({
+        provider: row.provider,
+        model: row.model,
+        displayName: row.displayName,
+        calls: row.calls,
+        inputTokens: row.inputTokens,
+        outputTokens: row.outputTokens,
+        totalTokens: row.totalTokens,
+        costUsd: row.costUsd,
+        avgLatencyMs: row.latencyCount === 0 ? 0 : Math.round(row.latencyMsSum / row.latencyCount),
+        callShare: totals.calls === 0 ? 0 : row.calls / totals.calls,
+        tokenShare: totals.totalTokens === 0 ? 0 : row.totalTokens / totals.totalTokens,
+        scopes: Array.from(row.scopes).sort()
+      })),
+    hourly: Array.from(hourlyBuckets.values()),
+    daily: Array.from(dailyBuckets.values())
+  };
+};
+
+export const getSimulationData = async (): Promise<{
+  recentRuns: Array<{ created_at: string; request_id: string | null; event_type: string; event_payload: Record<string, unknown> }>;
+  routes: Array<{ scope: string; provider: string; model: string; is_active: boolean }>;
+  registryModels: RegistryModel[];
+}> => {
+  const client = getAdminClient();
+  const [{ data: events }, { data: routes }, { data: registry }] = await Promise.all([
+    client
+      .from("events")
+      .select("created_at,request_id,event_type,event_payload")
+      .in("event_type", ["simulation_run_started", "simulation_run_completed", "simulation_run_failed"])
+      .order("created_at", { ascending: false })
+      .limit(100),
+    client
+      .from("llm_model_routes")
+      .select("scope,provider,model,is_active")
+      .in("scope", ["generate", "tweak", "classify"])
+      .order("scope")
+      .order("is_active", { ascending: false }),
+    client
+      .from("llm_model_registry")
+      .select("id,provider,model,display_name,input_cost_per_1m_tokens,output_cost_per_1m_tokens,context_window_tokens,max_output_tokens,is_available,notes")
+      .eq("is_available", true)
+      .order("provider")
+      .order("display_name")
+  ]);
+
+  return {
+    recentRuns: (events ?? []).map((row) => ({
       created_at: row.created_at as string,
       request_id: (row.request_id as string | null) ?? null,
       event_type: row.event_type as string,
       event_payload: toRecord(row.event_payload as never) as Record<string, unknown>
-    }))
+    })),
+    routes: (routes ?? []).map((r) => ({
+      scope: r.scope as string,
+      provider: r.provider as string,
+      model: r.model as string,
+      is_active: Boolean(r.is_active)
+    })),
+    registryModels: (registry ?? []) as RegistryModel[]
   };
 };

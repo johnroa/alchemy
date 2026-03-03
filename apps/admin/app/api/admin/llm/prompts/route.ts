@@ -3,7 +3,7 @@ import { getAdminClient, requireCloudflareAccess } from "@/lib/supabase-admin";
 
 type PromptActionBody =
   | { action: "activate"; prompt_id: string }
-  | { action: "create"; scope: string; name: string; template: string };
+  | { action: "create"; scope: string; name: string; template: string; auto_activate?: boolean };
 
 export async function GET(): Promise<NextResponse> {
   await requireCloudflareAccess();
@@ -69,12 +69,16 @@ export async function POST(request: Request): Promise<NextResponse> {
 
     const nextVersion = (latest?.version ?? 0) + 1;
 
+    if (body.auto_activate) {
+      await client.from("llm_prompts").update({ is_active: false }).eq("scope", body.scope).eq("is_active", true);
+    }
+
     const { error: insertError } = await client.from("llm_prompts").insert({
       scope: body.scope,
       version: nextVersion,
       name: body.name,
       template: body.template,
-      is_active: false
+      is_active: body.auto_activate ?? false
     });
 
     if (insertError) {

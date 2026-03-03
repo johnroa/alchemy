@@ -1,6 +1,5 @@
 import { Bot, Info } from "lucide-react";
 import { LlmConfigPanel } from "@/components/admin/llm-config-panel";
-import { LlmSubnav } from "@/components/admin/llm-subnav";
 import { PageHeader } from "@/components/admin/page-header";
 import { Card, CardContent } from "@/components/ui/card";
 import { getLlmConfigData } from "@/lib/admin-data";
@@ -13,10 +12,9 @@ export default async function ProviderModelPage(): Promise<React.JSX.Element> {
   return (
     <div className="space-y-6">
       <PageHeader
-        title="Provider & Model"
+        title="Model Assignments"
         description="Configure model routing for recipe generation, image, classification, onboarding, and memory scopes."
       />
-      <LlmSubnav />
 
       <Card className="border-blue-200 bg-blue-50/40">
         <CardContent className="flex items-start gap-3 py-4">
@@ -32,7 +30,7 @@ export default async function ProviderModelPage(): Promise<React.JSX.Element> {
         </CardContent>
       </Card>
 
-      <LlmConfigPanel mode="routing" routes={config.routes} prompts={config.prompts} rules={config.rules} />
+      <LlmConfigPanel mode="routing" routes={config.routes} prompts={config.prompts} rules={config.rules} models={config.models} />
     </div>
   );
 }
