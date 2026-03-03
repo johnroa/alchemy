@@ -2,11 +2,31 @@ import SwiftUI
 
 @Observable
 final class CookbookViewModel {
+    static let fallbackInsight = "You’ve been putting together a great cookbook."
+    static let emptyCookbookInsight = "Start your first recipe on the Generate tab and build your cookbook."
+
     var recipes: [RecipeCard] = []
     var searchText = ""
     var selectedCategory = "All"
+    private var apiCookbookInsight: String?
     var isLoading = false
     var error: String?
+
+    var cookbookInsight: String {
+        if recipes.isEmpty {
+            return Self.emptyCookbookInsight
+        }
+
+        if let apiCookbookInsight {
+            return apiCookbookInsight
+        }
+
+        if recipes.count == 1 {
+            return "Great start. You’ve saved your first recipe."
+        }
+
+        return "You’ve saved \(recipes.count) recipes. Keep building your cookbook."
+    }
 
     var categories: [String] {
         var cats = Set(recipes.compactMap(\.category))
@@ -39,6 +59,7 @@ final class CookbookViewModel {
         do {
             let response = try await api.getCookbook()
             recipes = response.items
+            apiCookbookInsight = normalizedInsight(response.cookbookInsight)
         } catch {
             self.error = error.localizedDescription
         }
@@ -50,8 +71,17 @@ final class CookbookViewModel {
         do {
             let response = try await api.getCookbook()
             recipes = response.items
+            apiCookbookInsight = normalizedInsight(response.cookbookInsight)
         } catch {
             self.error = error.localizedDescription
         }
+    }
+
+    private func normalizedInsight(_ candidate: String?) -> String {
+        guard let candidate else {
+            return Self.fallbackInsight
+        }
+        let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? Self.fallbackInsight : trimmed
     }
 }

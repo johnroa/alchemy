@@ -57,6 +57,9 @@ type LlmPanelMode = "routing" | "prompts" | "rules" | "models";
 
 const ALL_SCOPES = [
   "chat",
+  "chat_ideation",
+  "chat_generation",
+  "chat_iteration",
   "generate",
   "tweak",
   "classify",

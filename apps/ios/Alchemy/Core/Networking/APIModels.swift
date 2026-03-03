@@ -447,6 +447,12 @@ struct RecipeHistoryResponse: Codable {
 
 struct CookbookResponse: Codable {
     let items: [RecipeCard]
+    var cookbookInsight: String?
+
+    enum CodingKeys: String, CodingKey {
+        case items
+        case cookbookInsight = "cookbook_insight"
+    }
 }
 
 struct ChangelogResponse: Codable {

@@ -113,6 +113,8 @@ export type RecipeAssistantEnvelope = {
 export type ChatAssistantEnvelope = {
   assistant_reply: AssistantReply;
   recipe?: RecipePayload;
+  trigger_recipe?: boolean;
+  candidate_recipe_set?: CandidateRecipeSet;
   response_context?: {
     mode?: string;
     changed_sections?: string[];
@@ -121,8 +123,29 @@ export type ChatAssistantEnvelope = {
   };
 };
 
+export type ChatLoopState = "ideation" | "candidate_presented" | "iterating";
+
+export type CandidateRecipeRole = "main" | "side" | "appetizer" | "dessert" | "drink";
+
+export type CandidateRecipeComponent = {
+  component_id: string;
+  role: CandidateRecipeRole;
+  title: string;
+  recipe: RecipePayload;
+};
+
+export type CandidateRecipeSet = {
+  candidate_id: string;
+  revision: number;
+  active_component_id: string;
+  components: CandidateRecipeComponent[];
+};
+
 export type GatewayScope =
   | "chat"
+  | "chat_ideation"
+  | "chat_generation"
+  | "chat_iteration"
   | "generate"
   | "tweak"
   | "classify"

@@ -7,7 +7,11 @@ struct SkeletonRect: View {
 
     var body: some View {
         RoundedRectangle(cornerRadius: radius)
-            .fill(AlchemyColors.elevated)
+            .fill(AlchemyColors.elevated.opacity(0.52))
+            .overlay(
+                RoundedRectangle(cornerRadius: radius)
+                    .stroke(AlchemyColors.borderMuted.opacity(0.45), lineWidth: 0.6)
+            )
             .frame(width: width, height: height)
             .shimmer()
     }
@@ -18,7 +22,11 @@ struct SkeletonCircle: View {
 
     var body: some View {
         Circle()
-            .fill(AlchemyColors.elevated)
+            .fill(AlchemyColors.elevated.opacity(0.5))
+            .overlay(
+                Circle()
+                    .stroke(AlchemyColors.borderMuted.opacity(0.42), lineWidth: 0.6)
+            )
             .frame(width: size, height: size)
             .shimmer()
     }

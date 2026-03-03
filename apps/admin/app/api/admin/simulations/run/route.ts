@@ -173,14 +173,13 @@ export async function POST(request: Request): Promise<NextResponse> {
 
   try {
     const chatPrompts = {
-      start: "chicken parm for a romantic dinner for 2",
-      refine: "What can I add to make it spicy?",
-      attachments: "Attach one side and one appetizer to this meal.",
-      tweak: "Make it slightly spicier and shorten prep time if possible."
+      start: "I want dinner for two that's cozy and Italian.",
+      refine: "Let's do spicy chicken parm with a simple side.",
+      iterate: "Make the main a little lighter and keep total time under 45 minutes."
     } as const;
 
     const chat = await runStep("chat_start", async () => {
-      const response = await requestJson<{ id: string; messages: unknown[] }>({
+      const response = await requestJson<{ id: string; messages: unknown[]; loop_state?: string; candidate_recipe_set?: { components?: unknown[] } | null }>({
         apiBase,
         token,
         path: "/chat",
@@ -192,12 +191,18 @@ export async function POST(request: Request): Promise<NextResponse> {
       assertCondition(Array.isArray(response.messages) && response.messages.length >= 2, "Chat start response missing thread");
       return {
         chat_id: response.id,
-        message_count: response.messages.length
+        loop_state: response.loop_state ?? "unknown",
+        message_count: response.messages.length,
+        component_count: Array.isArray(response.candidate_recipe_set?.components) ? response.candidate_recipe_set?.components.length : 0
       };
     });
 
-    await runStep("chat_refine", async () => {
-      const response = await requestJson<{ messages: unknown[] }>({
+    const refine = await runStep("chat_refine", async () => {
+      const response = await requestJson<{
+        messages: unknown[];
+        loop_state?: string;
+        candidate_recipe_set?: { components?: unknown[]; active_component_id?: string | null } | null;
+      }>({
         apiBase,
         token,
         path: `/chat/${chat.chat_id}/messages`,
@@ -206,121 +211,130 @@ export async function POST(request: Request): Promise<NextResponse> {
         modelOverrides
       });
       assertCondition(Array.isArray(response.messages) && response.messages.length >= 4, "Chat refine response missing messages");
+      const componentCount = Array.isArray(response.candidate_recipe_set?.components) ? response.candidate_recipe_set.components.length : 0;
       return {
-        message_count: response.messages.length
+        loop_state: response.loop_state ?? "unknown",
+        message_count: response.messages.length,
+        component_count: componentCount,
+        has_candidate: componentCount > 0,
+        active_component_id: response.candidate_recipe_set?.active_component_id ?? null
       };
     });
 
-    await runStep("chat_attachment_request", async () => {
-      const response = await requestJson<{ messages: unknown[] }>({
+    const ensuredCandidate = await runStep("chat_generation_trigger", async () => {
+      if (refine.has_candidate) {
+        return {
+          loop_state: refine.loop_state,
+          component_count: refine.component_count,
+          active_component_id: refine.active_component_id
+        };
+      }
+      const response = await requestJson<{
+        messages: unknown[];
+        loop_state?: string;
+        candidate_recipe_set?: { components?: unknown[]; active_component_id?: string | null } | null;
+      }>({
         apiBase,
         token,
         path: `/chat/${chat.chat_id}/messages`,
         method: "POST",
-        body: { message: chatPrompts.attachments },
+        body: { message: "Generate a complete recipe now with one side dish." },
         modelOverrides
       });
       assertCondition(
-        Array.isArray(response.messages) && response.messages.length >= 6,
-        "Attachment request response missing messages"
+        Array.isArray(response.candidate_recipe_set?.components) && response.candidate_recipe_set.components.length > 0,
+        "Generation trigger did not produce a candidate recipe set"
       );
       return {
-        message_count: response.messages.length
+        loop_state: response.loop_state ?? "unknown",
+        component_count: response.candidate_recipe_set?.components?.length ?? 0,
+        active_component_id: response.candidate_recipe_set?.active_component_id ?? null
       };
     });
 
-    const generated = await runStep("generate_recipe", async () => {
+    const iterated = await runStep("chat_iterate_candidate", async () => {
       const response = await requestJson<{
-        recipe?: {
-          id?: string;
-          title?: string;
-          description?: string;
-          notes?: string;
-          image_status?: string;
-          attachments?: unknown[];
-          ingredients?: unknown[];
-          steps?: unknown[];
+        messages: unknown[];
+        loop_state?: string;
+        candidate_recipe_set?: { components?: unknown[]; active_component_id?: string | null } | null;
+      }>({
+        apiBase,
+        token,
+        path: `/chat/${chat.chat_id}/messages`,
+        method: "POST",
+        body: { message: chatPrompts.iterate },
+        modelOverrides
+      });
+      assertCondition(Array.isArray(response.messages) && response.messages.length >= 6, "Iteration response missing messages");
+      const componentCount = Array.isArray(response.candidate_recipe_set?.components) ? response.candidate_recipe_set.components.length : 0;
+      assertCondition(componentCount > 0, "Iteration response lost candidate recipe set");
+      return {
+        loop_state: response.loop_state ?? "unknown",
+        message_count: response.messages.length,
+        component_count: componentCount,
+        active_component_id: response.candidate_recipe_set?.active_component_id ?? ensuredCandidate.active_component_id
+      };
+    });
+
+    await runStep("candidate_set_active_component", async () => {
+      if (!iterated.active_component_id) {
+        return { skipped: true };
+      }
+      const response = await requestJson<{
+        loop_state?: string;
+        candidate_recipe_set?: { active_component_id?: string | null; components?: unknown[] } | null;
+      }>({
+        apiBase,
+        token,
+        path: `/chat/${chat.chat_id}/candidate`,
+        method: "PATCH",
+        body: {
+          action: "set_active_component",
+          component_id: iterated.active_component_id
+        },
+        modelOverrides
+      });
+      return {
+        loop_state: response.loop_state ?? "unknown",
+        active_component_id: response.candidate_recipe_set?.active_component_id ?? null,
+        component_count: Array.isArray(response.candidate_recipe_set?.components) ? response.candidate_recipe_set.components.length : 0
+      };
+    });
+
+    const committed = await runStep("commit_candidate_set", async () => {
+      const response = await requestJson<{
+        loop_state?: string;
+        commit?: {
+          committed_count?: number;
+          recipes?: Array<{ recipe_id?: string; role?: string }>;
+          links?: unknown[];
         };
       }>({
         apiBase,
         token,
-        path: `/chat/${chat.chat_id}/generate`,
-        method: "POST",
-        modelOverrides
-      });
-
-      const recipeId = response.recipe?.id;
-      assertCondition(typeof recipeId === "string" && recipeId.length > 0, "Generate did not return recipe id");
-      const ingredientCount = Array.isArray(response.recipe?.ingredients) ? response.recipe.ingredients.length : 0;
-      const stepCount = Array.isArray(response.recipe?.steps) ? response.recipe.steps.length : 0;
-      return {
-        recipe_id: recipeId,
-        image_status: response.recipe?.image_status ?? "unknown",
-        attachment_count: Array.isArray(response.recipe?.attachments) ? response.recipe.attachments.length : 0,
-        ingredient_count: ingredientCount,
-        step_count: stepCount,
-        has_title: Boolean(response.recipe?.title),
-        has_notes: Boolean(response.recipe?.notes),
-        quality_score: Math.round(
-          ([
-            Boolean(response.recipe?.title),
-            ingredientCount >= 4,
-            stepCount >= 3,
-            Boolean(response.recipe?.description),
-            Boolean(response.recipe?.notes)
-          ].filter(Boolean).length / 5) * 100
-        )
-      };
-    });
-
-    const tweaked = await runStep("tweak_recipe", async () => {
-      const response = await requestJson<{
-        recipe?: {
-          id?: string;
-          ingredients?: unknown[];
-          steps?: unknown[];
-          attachments?: unknown[];
-        };
-      }>({
-        apiBase,
-        token,
-        path: `/recipes/${generated.recipe_id}/tweak`,
-        method: "POST",
-        body: { message: chatPrompts.tweak },
-        modelOverrides
-      });
-
-      const recipeId = response.recipe?.id;
-      assertCondition(typeof recipeId === "string" && recipeId.length > 0, "Tweak did not return recipe id");
-      return {
-        recipe_id: recipeId,
-        ingredient_count: Array.isArray(response.recipe?.ingredients) ? response.recipe.ingredients.length : 0,
-        step_count: Array.isArray(response.recipe?.steps) ? response.recipe.steps.length : 0,
-        attachment_count: Array.isArray(response.recipe?.attachments) ? response.recipe.attachments.length : 0
-      };
-    });
-
-    await runStep("save_recipe", async () => {
-      const response = await requestJson<{ saved: boolean }>({
-        apiBase,
-        token,
-        path: `/recipes/${tweaked.recipe_id}/save`,
+        path: `/chat/${chat.chat_id}/commit`,
         method: "POST"
       });
-      assertCondition(response.saved === true, "Save endpoint did not return saved=true");
+      const recipes = response.commit?.recipes ?? [];
+      assertCondition(Array.isArray(recipes) && recipes.length > 0, "Commit did not return persisted recipe ids");
       return {
-        saved: response.saved
+        loop_state: response.loop_state ?? "unknown",
+        committed_count: Number(response.commit?.committed_count ?? recipes.length),
+        recipe_ids: recipes.map((recipe) => String(recipe.recipe_id ?? "")).filter((id) => id.length > 0),
+        link_count: Array.isArray(response.commit?.links) ? response.commit?.links.length : 0
       };
     });
 
     await runStep("history", async () => {
+      const primaryRecipeId = committed.recipe_ids[0];
+      assertCondition(typeof primaryRecipeId === "string" && primaryRecipeId.length > 0, "No committed recipe id available for history check");
       const response = await requestJson<{
         versions?: unknown[];
         chat_messages?: unknown[];
       }>({
         apiBase,
         token,
-        path: `/recipes/${tweaked.recipe_id}/history`
+        path: `/recipes/${primaryRecipeId}/history`
       });
 
       const versions = Array.isArray(response.versions) ? response.versions.length : 0;

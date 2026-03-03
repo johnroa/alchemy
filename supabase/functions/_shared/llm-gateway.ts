@@ -62,6 +62,8 @@ type ConflictResolution = {
   }>;
 };
 
+const DEFAULT_OUT_OF_SCOPE_FALLBACK_TEXT = "i didnt understand that";
+
 const getActiveConfig = async (
   client: SupabaseClient,
   scope: GatewayScope,
@@ -1005,17 +1007,24 @@ const normalizeRecipeShape = (candidate: unknown): RecipePayload | null => {
         return null;
       }
 
+      const rawInlineMeasurements = Array.isArray(step.inline_measurements)
+        ? step.inline_measurements
+        : Array.isArray(step.inlineMeasurements)
+          ? step.inlineMeasurements
+          : null;
+
       return {
         index,
         instruction,
         timer_seconds: Number.isFinite(Number(step.timer_seconds ?? step.timer)) ? Number(step.timer_seconds ?? step.timer) : undefined,
         notes: typeof step.notes === "string" && step.notes.trim().length > 0 ? step.notes.trim() : undefined,
-        inline_measurements: Array.isArray(step.inline_measurements ?? step.inlineMeasurements)
-          ? (step.inline_measurements ?? step.inlineMeasurements)
-              .map((measurement) => {
-                const ingredient = typeof measurement.ingredient === "string" ? measurement.ingredient.trim() : "";
-                const amount = Number((measurement as Record<string, unknown>).amount);
-                const unit = typeof measurement.unit === "string" ? measurement.unit.trim() : "";
+        inline_measurements: rawInlineMeasurements
+          ? rawInlineMeasurements
+              .map((measurement: unknown) => {
+                const record = measurement as Record<string, unknown>;
+                const ingredient = typeof record.ingredient === "string" ? record.ingredient.trim() : "";
+                const amount = Number(record.amount);
+                const unit = typeof record.unit === "string" ? record.unit.trim() : "";
                 if (!ingredient || !Number.isFinite(amount) || !unit) {
                   return null;
                 }
@@ -1206,6 +1215,69 @@ const normalizeOnboardingEnvelope = (candidate: unknown): OnboardingAssistantEnv
   };
 };
 
+const normalizeCandidateRecipeSet = (candidate: unknown): ChatAssistantEnvelope["candidate_recipe_set"] | undefined => {
+  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+    return undefined;
+  }
+
+  const raw = candidate as Record<string, unknown>;
+  const rawComponents = Array.isArray(raw.components) ? raw.components : [];
+  const components = rawComponents
+    .map((component) => {
+      if (!component || typeof component !== "object" || Array.isArray(component)) {
+        return null;
+      }
+      const value = component as Record<string, unknown>;
+      const recipe = normalizeRecipeShape(value.recipe);
+      if (!recipe) {
+        return null;
+      }
+
+      const role = typeof value.role === "string" ? value.role.trim().toLowerCase() : "main";
+      const normalizedRole =
+        role === "main" || role === "side" || role === "appetizer" || role === "dessert" || role === "drink"
+          ? role
+          : "main";
+
+      return {
+        component_id:
+          typeof value.component_id === "string" && value.component_id.trim().length > 0
+            ? value.component_id.trim()
+            : crypto.randomUUID(),
+        role: normalizedRole,
+        title:
+          typeof value.title === "string" && value.title.trim().length > 0
+            ? value.title.trim()
+            : recipe.title,
+        recipe
+      };
+    })
+    .filter((component): component is NonNullable<ChatAssistantEnvelope["candidate_recipe_set"]>["components"][number] => Boolean(component))
+    .slice(0, 3);
+
+  if (components.length === 0) {
+    return undefined;
+  }
+
+  const activeComponentId =
+    typeof raw.active_component_id === "string" &&
+    components.some((component) => component.component_id === raw.active_component_id)
+      ? raw.active_component_id
+      : components[0].component_id;
+
+  const revision = Number(raw.revision);
+
+  return {
+    candidate_id:
+      typeof raw.candidate_id === "string" && raw.candidate_id.trim().length > 0
+        ? raw.candidate_id.trim()
+        : crypto.randomUUID(),
+    revision: Number.isFinite(revision) && revision >= 1 ? Math.trunc(revision) : 1,
+    active_component_id: activeComponentId,
+    components
+  };
+};
+
 const normalizeResponseContext = (candidate: unknown): RecipeAssistantEnvelope["response_context"] | undefined => {
   if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
     return undefined;
@@ -1300,6 +1372,11 @@ const normalizeChatEnvelope = (candidate: unknown): ChatAssistantEnvelope | null
     ((payload.result as Record<string, unknown> | undefined)?.recipe as unknown);
 
   const recipe = normalizeRecipeShape(nestedRecipe);
+  const triggerRecipe = typeof payload.trigger_recipe === "boolean" ? payload.trigger_recipe : undefined;
+  const candidateRecipeSet =
+    normalizeCandidateRecipeSet(payload.candidate_recipe_set) ??
+    normalizeCandidateRecipeSet((payload.data as Record<string, unknown> | undefined)?.candidate_recipe_set) ??
+    normalizeCandidateRecipeSet((payload.result as Record<string, unknown> | undefined)?.candidate_recipe_set);
 
   const nestedResponseContext =
     payload.response_context ??
@@ -1309,6 +1386,8 @@ const normalizeChatEnvelope = (candidate: unknown): ChatAssistantEnvelope | null
   return {
     assistant_reply: assistantReply,
     recipe: recipe ?? undefined,
+    trigger_recipe: triggerRecipe,
+    candidate_recipe_set: candidateRecipeSet,
     response_context: normalizeResponseContext(nestedResponseContext)
   };
 };
@@ -1344,7 +1423,7 @@ const composeAssistantReply = async (params: {
       rule: params.config.rule,
       prompt: params.prompt,
       context: params.context,
-      recipe: params.recipe
+      recipe: params.recipe as unknown as JsonValue
     }
   });
 
@@ -1521,38 +1600,39 @@ const generateRecipePayload = async (
 
 const generateChatConversationPayload = async (
   client: SupabaseClient,
-  scope: Extract<GatewayScope, "chat" | "tweak">,
+  scope: Extract<GatewayScope, "chat" | "chat_ideation" | "chat_generation" | "chat_iteration" | "tweak">,
   input: GatewayInput,
   overrides?: ModelOverrideMap,
   accum?: TokenAccum
 ): Promise<ChatAssistantEnvelope> => {
-  const config = await getActiveConfig(client, scope, overrides?.[scope]);
-
-  // Detect whether the user has named a specific dish (back-and-forth with 2+ user messages)
-  const thread = input.context.thread;
-  const userMsgCount = Array.isArray(thread)
-    ? (thread as Array<Record<string, unknown>>).filter((m) => m.role === "user").length
-    : 0;
-  const shouldExpectRecipe = userMsgCount >= 2 && !input.context.active_recipe;
-
-  // Append recipe requirement to system prompt so the model sees it at system-level,
-  // not buried in JSON metadata where it gets deprioritized
-  const systemPrompt = shouldExpectRecipe
-    ? `${config.promptTemplate}\n\nCRITICAL INSTRUCTION FOR THIS MESSAGE: The user has named a specific dish. You MUST include the "recipe" key in your JSON response with a complete recipe object (title, description, servings, prep_time_minutes, cook_time_minutes, ingredients, steps). Do NOT omit the recipe. Do NOT ask follow-up questions. Generate the recipe NOW.`
-    : config.promptTemplate;
+  const config = await (async () => {
+    try {
+      return await getActiveConfig(client, scope, overrides?.[scope]);
+    } catch (error) {
+      if (
+        scope !== "chat" &&
+        (scope === "chat_ideation" || scope === "chat_generation" || scope === "chat_iteration") &&
+        error instanceof ApiError &&
+        ["gateway_prompt_missing", "gateway_rule_missing", "gateway_route_missing"].includes(error.code)
+      ) {
+        return await getActiveConfig(client, "chat", overrides?.chat);
+      }
+      throw error;
+    }
+  })();
 
   const { result, inputTokens, outputTokens } = await callProvider<Record<string, JsonValue>>({
     provider: config.provider,
     model: config.model,
     modelConfig: config.modelConfig,
-    systemPrompt,
+    systemPrompt: config.promptTemplate,
     userInput: {
       task: "chat_conversation",
       rule: config.rule,
       contract: {
         format: "json_object",
-        required_keys: shouldExpectRecipe ? ["assistant_reply", "recipe"] : ["assistant_reply"],
-        optional_keys: shouldExpectRecipe ? ["response_context"] : ["recipe", "response_context"]
+        required_keys: ["assistant_reply"],
+        optional_keys: ["recipe", "candidate_recipe_set", "trigger_recipe", "response_context"]
       },
       prompt: input.userPrompt,
       context: input.context
@@ -1562,27 +1642,6 @@ const generateChatConversationPayload = async (
 
   const directChatEnvelope = normalizeChatEnvelope(result);
   if (directChatEnvelope) {
-    // Main call returned assistant_reply but no recipe — fast Haiku fallback
-    if (shouldExpectRecipe && !directChatEnvelope.recipe) {
-      try {
-        const { result: recipeResult, inputTokens: ri, outputTokens: ro } = await callProvider<Record<string, JsonValue>>({
-          provider: "anthropic",
-          model: "claude-haiku-4-5-20251001",
-          modelConfig: { temperature: 0.4, max_tokens: 2048 },
-          systemPrompt: "Generate a recipe as a JSON object. Keys: title (string), description (string), servings (number), prep_time_minutes (number), cook_time_minutes (number), ingredients (array of {name, amount, unit, display_amount}), steps (array of {instruction}). amount is a number for math. display_amount is the human-readable cooking fraction (e.g. \"¾\", \"1 ½\", \"2\"). Use standard fractions, never decimals in display_amount. Output ONLY valid JSON, no markdown.",
-          userInput: { dish: input.userPrompt, assistant_context: directChatEnvelope.assistant_reply.text }
-        });
-        if (accum) {
-          accum.input += ri;
-          accum.output += ro;
-          accum.costUsd += (ri * 0.8 + ro * 4.0) / 1_000_000;
-        }
-        const fallbackRecipe = normalizeRecipeShape(recipeResult);
-        if (fallbackRecipe) {
-          return { ...directChatEnvelope, recipe: fallbackRecipe };
-        }
-      } catch { /* fallback failed — return envelope without recipe */ }
-    }
     return directChatEnvelope;
   }
 
@@ -1627,7 +1686,7 @@ const generateChatConversationPayload = async (
     provider: config.provider,
     model: config.model,
     modelConfig: config.modelConfig,
-    systemPrompt: `${config.promptTemplate}\n\nYou are in strict schema normalization mode for chat. Return one valid JSON object with keys assistant_reply, optional recipe, and optional response_context. No markdown or prose.`,
+    systemPrompt: `${config.promptTemplate}\n\nYou are in strict schema normalization mode for chat. Return one valid JSON object with keys assistant_reply, optional recipe, optional candidate_recipe_set, optional trigger_recipe, and optional response_context. No markdown or prose.`,
     userInput: {
       task: "repair_chat_schema",
       rule: config.rule,
@@ -1681,6 +1740,68 @@ const generateChatConversationPayload = async (
   }
 
   throw new ApiError(422, "chat_schema_invalid", "Chat reply did not match required envelope schema");
+};
+
+const generateOutOfScopeAssistantReply = async (
+  client: SupabaseClient,
+  scope: Extract<GatewayScope, "chat" | "chat_ideation" | "chat_generation" | "chat_iteration" | "tweak">,
+  input: GatewayInput,
+  classification: ClassificationResult,
+  overrides?: ModelOverrideMap,
+  accum?: TokenAccum
+): Promise<AssistantReply> => {
+  const config = await (async () => {
+    try {
+      return await getActiveConfig(client, scope, overrides?.[scope]);
+    } catch (error) {
+      if (
+        scope !== "chat" &&
+        (scope === "chat_ideation" || scope === "chat_generation" || scope === "chat_iteration") &&
+        error instanceof ApiError &&
+        ["gateway_prompt_missing", "gateway_rule_missing", "gateway_route_missing"].includes(error.code)
+      ) {
+        return await getActiveConfig(client, "chat", overrides?.chat);
+      }
+      throw error;
+    }
+  })();
+  const { result, inputTokens, outputTokens } = await callProvider<Record<string, JsonValue>>({
+    provider: config.provider,
+    model: config.model,
+    modelConfig: config.modelConfig,
+    systemPrompt: `${config.promptTemplate}
+
+The user's message is outside recipe scope or too unclear to act on.
+Respond with one short, natural line that redirects back to recipe help.
+Do not mention classification, safety rules, policy, or internal reasoning.
+Ask what they are in the mood for.
+Return strict JSON with only an "assistant_reply" object.`,
+    userInput: {
+      task: "chat_out_of_scope_redirect",
+      rule: config.rule,
+      prompt: input.userPrompt,
+      context: {
+        classification_label: classification.label,
+        classification_reason: classification.reason ?? null
+      }
+    }
+  });
+  if (accum) addTokens(accum, inputTokens, outputTokens, config);
+
+  const envelope = normalizeChatEnvelope(result);
+  if (envelope?.assistant_reply) {
+    return envelope.assistant_reply;
+  }
+
+  const payload = result as Record<string, unknown>;
+  const assistantReply = normalizeAssistantReply(payload.assistant_reply ?? payload);
+  if (assistantReply) {
+    return assistantReply;
+  }
+
+  return {
+    text: DEFAULT_OUT_OF_SCOPE_FALLBACK_TEXT
+  };
 };
 
 const generateOnboardingInterviewEnvelope = async (
@@ -1789,8 +1910,11 @@ export const llmGateway = {
       }, params.modelOverrides, accum);
 
       if (!classification.isAllowed) {
-        await logLlmEvent(params.client, params.userId, params.requestId, "generate", Date.now() - startedAt, "out_of_scope", undefined, accum);
-        throw new ApiError(422, "request_out_of_scope", classification.reason ?? "Request is outside active cooking scope");
+        await logLlmEvent(params.client, params.userId, params.requestId, "generate", Date.now() - startedAt, "out_of_scope", {
+          classification_label: classification.label,
+          classification_reason: classification.reason ?? null
+        }, accum);
+        throw new ApiError(422, "request_out_of_scope", DEFAULT_OUT_OF_SCOPE_FALLBACK_TEXT);
       }
 
       const recipeEnvelope = await generateRecipePayload(params.client, "generate", {
@@ -1827,8 +1951,11 @@ export const llmGateway = {
       }, params.modelOverrides, accum);
 
       if (!classification.isAllowed) {
-        await logLlmEvent(params.client, params.userId, params.requestId, "tweak", Date.now() - startedAt, "out_of_scope", undefined, accum);
-        throw new ApiError(422, "request_out_of_scope", classification.reason ?? "Request is outside active cooking scope");
+        await logLlmEvent(params.client, params.userId, params.requestId, "tweak", Date.now() - startedAt, "out_of_scope", {
+          classification_label: classification.label,
+          classification_reason: classification.reason ?? null
+        }, accum);
+        throw new ApiError(422, "request_out_of_scope", DEFAULT_OUT_OF_SCOPE_FALLBACK_TEXT);
       }
 
       const recipeEnvelope = await generateRecipePayload(params.client, "tweak", {
@@ -1853,6 +1980,7 @@ export const llmGateway = {
     requestId: string;
     prompt: string;
     context: Record<string, JsonValue>;
+    scopeHint?: Extract<GatewayScope, "chat" | "chat_ideation" | "chat_generation" | "chat_iteration" | "tweak">;
     modelOverrides?: ModelOverrideMap;
   }): Promise<ChatAssistantEnvelope> {
     const startedAt = Date.now();
@@ -1860,7 +1988,8 @@ export const llmGateway = {
     const hasActiveRecipe = Boolean(
       params.context.active_recipe && typeof params.context.active_recipe === "object" && !Array.isArray(params.context.active_recipe)
     );
-    const scope: Extract<GatewayScope, "chat" | "tweak"> = hasActiveRecipe ? "tweak" : "chat";
+    const scope: Extract<GatewayScope, "chat" | "chat_ideation" | "chat_generation" | "chat_iteration" | "tweak"> =
+      params.scopeHint ?? (hasActiveRecipe ? "chat_iteration" : "chat_ideation");
 
     try {
       const classification = await classifyScope(params.client, {
@@ -1869,8 +1998,27 @@ export const llmGateway = {
       }, params.modelOverrides, accum);
 
       if (!classification.isAllowed) {
-        await logLlmEvent(params.client, params.userId, params.requestId, scope, Date.now() - startedAt, "out_of_scope", undefined, accum);
-        throw new ApiError(422, "request_out_of_scope", classification.reason ?? "Request is outside active cooking scope");
+        const outOfScopeReply = await generateOutOfScopeAssistantReply(
+          params.client,
+          scope,
+          {
+            userPrompt: params.prompt,
+            context: params.context
+          },
+          classification,
+          params.modelOverrides,
+          accum
+        );
+        await logLlmEvent(params.client, params.userId, params.requestId, scope, Date.now() - startedAt, "out_of_scope", {
+          classification_label: classification.label,
+          classification_reason: classification.reason ?? null
+        }, accum);
+        return {
+          assistant_reply: outOfScopeReply,
+          response_context: {
+            mode: "out_of_scope"
+          }
+        };
       }
 
       const envelope = await generateChatConversationPayload(params.client, scope, {
@@ -1911,7 +2059,7 @@ export const llmGateway = {
         userInput: {
           task: "infer_categories",
           rule: config.rule,
-          recipe: params.recipe,
+          recipe: params.recipe as unknown as JsonValue,
           context: params.context
         }
       });
@@ -1935,6 +2083,103 @@ export const llmGateway = {
         error_code: errorCode
       }, accum);
       throw error;
+    }
+  },
+
+  async normalizePreferenceList(params: {
+    client: SupabaseClient;
+    userId: string;
+    requestId: string;
+    field: string;
+    entries: string[];
+  }): Promise<string[]> {
+    const cleanedEntries = params.entries
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0);
+    if (cleanedEntries.length === 0) {
+      return [];
+    }
+
+    const startedAt = Date.now();
+    const accum: TokenAccum = { input: 0, output: 0, costUsd: 0 };
+    try {
+      const config = await getActiveConfig(params.client, "classify");
+      const { result, inputTokens, outputTokens } = await callProvider<{ items?: unknown }>({
+        provider: config.provider,
+        model: config.model,
+        modelConfig: config.modelConfig,
+        systemPrompt: `You normalize user profile inputs for a recipe app.
+Return ONLY a JSON object with a single key: "items" (array of strings).
+
+Requirements:
+- Convert natural language to clear list items.
+- Split combined statements into multiple concise items when appropriate.
+- Keep user intent; do not invent facts.
+- Preserve important qualifiers like "no", "without", "allergy", "intolerance", and dietary styles.
+- Remove duplicates.
+- Maximum 32 items.
+- No markdown, no commentary.`,
+        userInput: {
+          task: "normalize_preference_list",
+          field: params.field,
+          entries: cleanedEntries
+        }
+      });
+      addTokens(accum, inputTokens, outputTokens, config);
+
+      const rawItems = result.items;
+      const normalized = Array.isArray(rawItems)
+        ? rawItems
+            .filter((item): item is string => typeof item === "string")
+            .map((item) => item.trim())
+            .filter((item) => item.length > 0)
+        : [];
+
+      const seen = new Set<string>();
+      const unique: string[] = [];
+      for (const item of normalized) {
+        const key = item.toLocaleLowerCase();
+        if (seen.has(key)) {
+          continue;
+        }
+        seen.add(key);
+        unique.push(item);
+      }
+
+      const safeOutput = (unique.length > 0 ? unique : cleanedEntries).slice(0, 32);
+      await logLlmEvent(
+        params.client,
+        params.userId,
+        params.requestId,
+        "classify",
+        Date.now() - startedAt,
+        "ok",
+        {
+          task: "normalize_preference_list",
+          field: params.field,
+          input_count: cleanedEntries.length,
+          output_count: safeOutput.length
+        },
+        accum
+      );
+      return safeOutput;
+    } catch (error) {
+      const errorCode = error instanceof ApiError ? error.code : "unknown_error";
+      await logLlmEvent(
+        params.client,
+        params.userId,
+        params.requestId,
+        "classify",
+        Date.now() - startedAt,
+        "error",
+        {
+          task: "normalize_preference_list",
+          field: params.field,
+          error_code: errorCode
+        },
+        accum
+      );
+      return cleanedEntries.slice(0, 32);
     }
   },
 

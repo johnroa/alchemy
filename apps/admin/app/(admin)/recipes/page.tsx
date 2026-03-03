@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { AlertCircle, BookOpen, GitBranch, ImageIcon, Link2, UserCircle2 } from "lucide-react";
+import { AlertCircle, BookOpen, GitBranch, ImageIcon, Link2, Network, UserCircle2 } from "lucide-react";
 import { PageHeader } from "@/components/admin/page-header";
 import { RevertVersionDialog } from "@/components/admin/revert-version-dialog";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -40,9 +40,20 @@ const chatMessagePreview = (role: string, content: string): string => {
   try {
     const parsed = JSON.parse(content) as unknown;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return truncate(content, 200);
-    const envelope = parsed as { assistant_reply?: unknown; recipe?: { title?: unknown } };
+    const envelope = parsed as {
+      assistant_reply?: unknown;
+      recipe?: { title?: unknown };
+      candidate_recipe_set?: { components?: unknown[] };
+      loop_state?: unknown;
+    };
     const assistantReply = normalizeAssistantReply(envelope.assistant_reply);
     const recipeTitle = typeof envelope.recipe?.title === "string" ? envelope.recipe.title.trim() : "";
+    const componentCount = Array.isArray(envelope.candidate_recipe_set?.components)
+      ? envelope.candidate_recipe_set.components.length
+      : 0;
+    if (assistantReply && componentCount > 0) {
+      return truncate(`${assistantReply} (candidate tabs: ${componentCount})`, 200);
+    }
     if (assistantReply && recipeTitle) return truncate(`${assistantReply} (recipe: ${recipeTitle})`, 200);
     if (assistantReply) return truncate(assistantReply, 200);
     if (recipeTitle) return truncate(`Updated recipe: ${recipeTitle}`, 200);
@@ -71,6 +82,28 @@ const imageStatusBadgeClass = (status: string): string => {
   return "border-amber-300/60 bg-amber-50 text-amber-700";
 };
 
+const getContextLoopState = (context: Record<string, unknown> | undefined): string | null => {
+  const value = context?.["loop_state"];
+  return typeof value === "string" && value.length > 0 ? value : null;
+};
+
+const getContextCandidateSummary = (context: Record<string, unknown> | undefined): { revision: number; components: number } | null => {
+  const candidate = context?.["candidate_recipe_set"];
+  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+    return null;
+  }
+
+  const revision = Number((candidate as { revision?: unknown }).revision);
+  const components = Array.isArray((candidate as { components?: unknown[] }).components)
+    ? (candidate as { components: unknown[] }).components.length
+    : 0;
+
+  return {
+    revision: Number.isFinite(revision) ? Math.trunc(revision) : 0,
+    components
+  };
+};
+
 export default async function RecipesPage({
   searchParams
 }: {
@@ -84,6 +117,8 @@ export default async function RecipesPage({
   const selectedRecipeId = requestedRecipeId || rows[0]?.id;
   const detail = selectedRecipeId ? await getRecipeAuditDetail(selectedRecipeId) : null;
   const unresolvedOwners = rows.filter((row) => !row.owner_email).length;
+  const loopState = detail?.chat ? getContextLoopState(detail.chat.context) : null;
+  const candidateSummary = detail?.chat ? getContextCandidateSummary(detail.chat.context) : null;
 
   return (
     <div className="space-y-4">
@@ -211,6 +246,12 @@ export default async function RecipesPage({
                       <p className="mt-1 font-mono text-[11px] text-muted-foreground">{detail.recipe.id}</p>
                     </div>
                     <div className="flex flex-wrap gap-1.5">
+                      <Link href={`/graph?recipe=${detail.recipe.id}`}>
+                        <Button variant="outline" size="sm" className="h-7 gap-1.5 text-xs">
+                          <Network className="h-3 w-3" />
+                          Open in Graph
+                        </Button>
+                      </Link>
                       <Badge variant="outline" className={imageStatusBadgeClass(detail.recipe.image_status)}>
                         <ImageIcon className="mr-1 h-3 w-3" />
                         {detail.recipe.image_status}
@@ -226,6 +267,16 @@ export default async function RecipesPage({
                       <span>
                         Chat: <span className="font-mono">{shortId(detail.recipe.source_chat_id)}</span>
                       </span>
+                      {loopState && (
+                        <span>
+                          Loop: <span className="font-medium">{loopState}</span>
+                        </span>
+                      )}
+                      {candidateSummary && (
+                        <span>
+                          Candidate: <span className="font-medium">rev {candidateSummary.revision || 0} · {candidateSummary.components} tabs</span>
+                        </span>
+                      )}
                       {detail.recipe.current_version_id && (
                         <span>
                           Current: <span className="font-mono">{shortId(detail.recipe.current_version_id)}</span>
@@ -238,7 +289,7 @@ export default async function RecipesPage({
 
               {/* Tabs */}
               <Tabs defaultValue="timeline" className="w-full">
-                <TabsList className="grid w-full grid-cols-4">
+                <TabsList className="grid w-full grid-cols-5">
                   <TabsTrigger value="timeline">Timeline</TabsTrigger>
                   <TabsTrigger value="prompts">
                     Chat Thread
@@ -249,6 +300,7 @@ export default async function RecipesPage({
                     )}
                   </TabsTrigger>
                   <TabsTrigger value="causality">Revision Map</TabsTrigger>
+                  <TabsTrigger value="canonical">Canonical Ingredients</TabsTrigger>
                   <TabsTrigger value="changes">
                     Changelog
                     {detail.changelog.length > 0 && (
@@ -440,6 +492,89 @@ export default async function RecipesPage({
                       </CardContent>
                     </Card>
                   </div>
+                </TabsContent>
+
+                {/* Canonical Ingredients */}
+                <TabsContent value="canonical">
+                  <Card>
+                    <CardHeader className="flex flex-row items-center justify-between pb-3">
+                      <div>
+                        <CardTitle className="text-sm">Canonical Ingredient Rows</CardTitle>
+                        <CardDescription>
+                          Source and normalized measurements persisted for current recipe version.
+                        </CardDescription>
+                      </div>
+                      <Badge variant="outline" className="font-mono text-xs">
+                        {detail.canonical_ingredients.length} rows
+                      </Badge>
+                    </CardHeader>
+                    <CardContent className="p-0">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>#</TableHead>
+                            <TableHead>Source</TableHead>
+                            <TableHead>Canonical</TableHead>
+                            <TableHead>Normalized (SI)</TableHead>
+                            <TableHead>Status</TableHead>
+                            <TableHead>Grouping</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {detail.canonical_ingredients.length === 0 ? (
+                            <TableRow>
+                              <TableCell colSpan={6} className="py-8 text-center text-muted-foreground">
+                                No canonical ingredient rows for current version.
+                              </TableCell>
+                            </TableRow>
+                          ) : (
+                            detail.canonical_ingredients.map((row) => (
+                              <TableRow key={row.id}>
+                                <TableCell>
+                                  <Badge variant="secondary" className="text-[10px]">#{row.position + 1}</Badge>
+                                </TableCell>
+                                <TableCell className="text-xs">
+                                  <p className="font-medium">{row.source_name}</p>
+                                  <p className="text-muted-foreground">
+                                    {row.source_amount ?? "?"} {row.source_unit ?? ""}
+                                  </p>
+                                </TableCell>
+                                <TableCell className="text-xs">
+                                  {row.canonical_name ?? <span className="text-muted-foreground">Unresolved</span>}
+                                </TableCell>
+                                <TableCell className="text-xs">
+                                  {row.normalized_amount_si != null ? (
+                                    <span>
+                                      {row.normalized_amount_si} {row.normalized_unit}
+                                    </span>
+                                  ) : (
+                                    <span className="text-muted-foreground">needs retry</span>
+                                  )}
+                                </TableCell>
+                                <TableCell>
+                                  <Badge
+                                    variant="outline"
+                                    className={
+                                      row.normalized_status === "normalized"
+                                        ? "border-emerald-300/60 bg-emerald-50 text-emerald-700 text-[10px]"
+                                        : "border-amber-300/60 bg-amber-50 text-amber-700 text-[10px]"
+                                    }
+                                  >
+                                    {row.normalized_status}
+                                  </Badge>
+                                </TableCell>
+                                <TableCell className="text-xs text-muted-foreground">
+                                  <span>{row.category ?? "Other"}</span>
+                                  <span className="mx-1">·</span>
+                                  <span>{row.component ?? "Main"}</span>
+                                </TableCell>
+                              </TableRow>
+                            ))
+                          )}
+                        </TableBody>
+                      </Table>
+                    </CardContent>
+                  </Card>
                 </TabsContent>
 
                 {/* Changelog */}

@@ -1,7 +1,9 @@
 import { Brain, Sparkles, Trash2 } from "lucide-react";
+import { MemoryJobsTable } from "@/components/admin/memory-jobs-table";
 import { PageHeader } from "@/components/admin/page-header";
 import { KpiCard } from "@/components/admin/kpi-card";
 import { MemoryActions } from "@/components/admin/memory-actions";
+import { MemoryPipelineControls } from "@/components/admin/memory-pipeline-controls";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -29,6 +31,10 @@ export default async function MemoryPage(): Promise<React.JSX.Element> {
     data.memories.length > 0
       ? data.memories.reduce((sum, m) => sum + Number(m.salience), 0) / data.memories.length
       : 0;
+  const pendingJobs = data.jobs.filter((job) => job.status === "pending").length;
+  const processingJobs = data.jobs.filter((job) => job.status === "processing").length;
+  const readyJobs = data.jobs.filter((job) => job.status === "ready").length;
+  const failedJobs = data.jobs.filter((job) => job.status === "failed").length;
 
   // Memory type distribution
   const typeCounts: Record<string, number> = {};
@@ -68,6 +74,26 @@ export default async function MemoryPage(): Promise<React.JSX.Element> {
           variant={supersededCount > activeCount * 2 ? "warning" : "muted"}
         />
       </div>
+
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <KpiCard label="Queue Pending" value={String(pendingJobs)} hint="Waiting for extraction" variant={pendingJobs > 50 ? "warning" : "default"} />
+        <KpiCard label="Queue Processing" value={String(processingJobs)} hint="Locked by worker" />
+        <KpiCard label="Queue Ready" value={String(readyJobs)} hint="Completed turns" variant={readyJobs > 0 ? "success" : "muted"} />
+        <KpiCard label="Queue Failed" value={String(failedJobs)} hint="Needs retry" variant={failedJobs > 0 ? "danger" : "success"} />
+      </div>
+
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between pb-3">
+          <div>
+            <CardTitle className="text-base">Memory Extraction Queue</CardTitle>
+            <CardDescription>Async per-turn memory jobs with retry controls.</CardDescription>
+          </div>
+          <MemoryPipelineControls />
+        </CardHeader>
+        <CardContent className="pt-0">
+          <MemoryJobsTable jobs={data.jobs} />
+        </CardContent>
+      </Card>
 
       {/* Quality charts */}
       {data.memories.length > 0 && (

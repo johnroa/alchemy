@@ -10,22 +10,24 @@ struct ShimmerModifier: ViewModifier {
                     LinearGradient(
                         colors: [
                             .clear,
-                            Color.white.opacity(0.08),
-                            Color.white.opacity(0.15),
-                            Color.white.opacity(0.08),
+                            Color.white.opacity(0.018),
+                            Color.white.opacity(0.045),
+                            Color.white.opacity(0.018),
                             .clear
                         ],
                         startPoint: .leading,
                         endPoint: .trailing
                     )
-                    .frame(width: geo.size.width * 0.6)
+                    .frame(width: geo.size.width * 0.46)
                     .offset(x: geo.size.width * phase)
+                    .blur(radius: 4)
+                    .opacity(0.75)
                 }
             )
             .clipShape(RoundedRectangle(cornerRadius: Radius.md))
             .onAppear {
                 withAnimation(
-                    .linear(duration: 1.5)
+                    .linear(duration: 2.4)
                     .repeatForever(autoreverses: false)
                 ) {
                     phase = 1.8

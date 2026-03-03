@@ -48,90 +48,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/recipes/generate": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Generate a recipe from user intent and memory-aware context */
-        post: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path?: never;
-                cookie?: never;
-            };
-            requestBody: {
-                content: {
-                    "application/json": components["schemas"]["GenerateRecipeRequest"];
-                };
-            };
-            responses: {
-                /** @description Generated recipe */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["GenerateRecipeResponse"];
-                    };
-                };
-                default: components["responses"]["ErrorResponse"];
-            };
-        };
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/recipes/{id}/tweak": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Tweak an existing recipe and create a new version */
-        post: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    id: components["parameters"]["RecipeId"];
-                };
-                cookie?: never;
-            };
-            requestBody: {
-                content: {
-                    "application/json": components["schemas"]["TweakRecipeRequest"];
-                };
-            };
-            responses: {
-                /** @description Tweaked recipe version */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["TweakRecipeResponse"];
-                    };
-                };
-                default: components["responses"]["ErrorResponse"];
-            };
-        };
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/recipes/{id}": {
         parameters: {
             query?: never;
@@ -142,7 +58,14 @@ export interface paths {
         /** Get a recipe by id */
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    /** @description Response projection for ingredient and inline measurement units. */
+                    units?: "source" | "metric" | "imperial";
+                    /** @description Optional ingredient grouping strategy for response rendering. */
+                    group_by?: "flat" | "category" | "component";
+                    /** @description Whether to append inline measurements directly inside step instructions. */
+                    inline_measurements?: boolean;
+                };
                 header?: never;
                 path: {
                     id: components["parameters"]["RecipeId"];
@@ -899,6 +822,202 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/metadata-jobs/process": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Process due recipe metadata jobs (internal authenticated scope) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        limit?: number;
+                    };
+                };
+            };
+            responses: {
+                /** @description Metadata queue processing summary */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MetadataJobsProcessResponse"];
+                    };
+                };
+                default: components["responses"]["ErrorResponse"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/metadata-jobs/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Re-queue a metadata job safely (internal authenticated scope) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** Format: uuid */
+                        job_id: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Retry status */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            ok: boolean;
+                            job: {
+                                /** Format: uuid */
+                                id: string;
+                                /** @enum {string} */
+                                status: "pending" | "processing" | "ready" | "failed";
+                                attempts: number;
+                                /** Format: date-time */
+                                next_attempt_at: string;
+                            };
+                        };
+                    };
+                };
+                default: components["responses"]["ErrorResponse"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/memory-jobs/process": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Process due memory extraction jobs (internal authenticated scope) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        limit?: number;
+                    };
+                };
+            };
+            responses: {
+                /** @description Memory queue processing summary */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MemoryJobsProcessResponse"];
+                    };
+                };
+                default: components["responses"]["ErrorResponse"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/memory-jobs/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Re-queue a memory job safely (internal authenticated scope) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** Format: uuid */
+                        job_id: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Retry status */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            ok: boolean;
+                            job: {
+                                /** Format: uuid */
+                                id: string;
+                                /** @enum {string} */
+                                status: "pending" | "processing" | "ready" | "failed";
+                                attempts: number;
+                                /** Format: date-time */
+                                next_attempt_at: string;
+                            };
+                        };
+                    };
+                };
+                default: components["responses"]["ErrorResponse"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/chat": {
         parameters: {
             query?: never;
@@ -1026,7 +1145,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/chat/{id}/generate": {
+    "/chat/{id}/candidate": {
         parameters: {
             query?: never;
             header?: never;
@@ -1035,7 +1154,50 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Generate persisted recipe + version from chat session */
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Mutate ephemeral candidate recipe set state for a chat session */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["PatchCandidateRequest"];
+                };
+            };
+            responses: {
+                /** @description Updated chat session candidate set */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PatchCandidateResponse"];
+                    };
+                };
+                default: components["responses"]["ErrorResponse"];
+            };
+        };
+        trace?: never;
+    };
+    "/chat/{id}/commit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Persist all remaining candidate components to cookbook */
         post: {
             parameters: {
                 query?: never;
@@ -1045,15 +1207,19 @@ export interface paths {
                 };
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["CommitChatRecipesRequest"];
+                };
+            };
             responses: {
-                /** @description Finalized recipe */
+                /** @description Candidate components committed and linked */
                 200: {
                     headers: {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": components["schemas"]["ChatGenerateResponse"];
+                        "application/json": components["schemas"]["CommitChatRecipesResponse"];
                     };
                 };
                 default: components["responses"]["ErrorResponse"];
@@ -1212,6 +1378,16 @@ export interface components {
             unit: string;
             preparation?: string;
             category?: string;
+            /** Format: uuid */
+            ingredient_id?: string | null;
+            /** @enum {string} */
+            normalized_status?: "normalized" | "needs_retry";
+            component?: string | null;
+        };
+        IngredientGroup: {
+            key: string;
+            label: string;
+            ingredients: components["schemas"]["Ingredient"][];
         };
         InlineMeasurement: {
             ingredient: string;
@@ -1258,6 +1434,25 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        RecipePayloadAttachment: {
+            title: string;
+            relation_type: string;
+            recipe: {
+                [key: string]: unknown;
+            };
+        };
+        RecipePayload: {
+            title: string;
+            description?: string;
+            servings: number;
+            ingredients: components["schemas"]["Ingredient"][];
+            steps: components["schemas"]["Step"][];
+            notes?: string;
+            pairings?: string[];
+            emoji?: string[];
+            metadata?: components["schemas"]["RecipeMetadata"];
+            attachments?: components["schemas"]["RecipePayloadAttachment"][];
+        };
         RecipeAttachment: {
             /** Format: uuid */
             attachment_id: string;
@@ -1277,6 +1472,7 @@ export interface components {
             image_status?: "pending" | "ready" | "failed";
             servings: number;
             ingredients: components["schemas"]["Ingredient"][];
+            ingredient_groups?: components["schemas"]["IngredientGroup"][];
             steps: components["schemas"]["Step"][];
             notes?: string;
             pairings?: string[];
@@ -1380,6 +1576,20 @@ export interface components {
         ChangelogResponse: {
             items: components["schemas"]["ChangelogEvent"][];
         };
+        MetadataJobsProcessResponse: {
+            reaped: number;
+            claimed: number;
+            processed: number;
+            ready: number;
+            failed: number;
+            pending: number;
+            queue: {
+                pending: number;
+                processing: number;
+                ready: number;
+                failed: number;
+            };
+        };
         PreferenceProfile: {
             free_form?: string;
             dietary_preferences: string[];
@@ -1430,22 +1640,66 @@ export interface components {
                 [key: string]: unknown;
             };
         };
-        GenerateRecipeRequest: {
-            prompt: string;
-            vibe?: string;
+        /** @enum {string} */
+        ChatLoopState: "ideation" | "candidate_presented" | "iterating";
+        CandidateRecipeComponent: {
+            component_id: string;
+            /** @enum {string} */
+            role: "main" | "side" | "appetizer" | "dessert" | "drink";
+            title: string;
+            recipe: components["schemas"]["RecipePayload"];
         };
-        GenerateRecipeResponse: {
-            recipe: components["schemas"]["Recipe"];
-            version: components["schemas"]["RecipeVersion"];
-            assistant_reply?: components["schemas"]["AssistantReply"];
+        CandidateRecipeSet: {
+            candidate_id: string;
+            revision: number;
+            active_component_id: string;
+            components: components["schemas"]["CandidateRecipeComponent"][];
         };
-        TweakRecipeRequest: {
-            message: string;
+        PatchCandidateRequest: {
+            /** @enum {string} */
+            action: "set_active_component" | "delete_component" | "clear_candidate";
+            component_id?: string;
         };
-        TweakRecipeResponse: {
-            recipe: components["schemas"]["Recipe"];
-            version: components["schemas"]["RecipeVersion"];
-            assistant_reply?: components["schemas"]["AssistantReply"];
+        PatchCandidateResponse: components["schemas"]["ChatSession"];
+        CommitChatRecipesRequest: Record<string, never>;
+        CommitChatRecipesResponse: components["schemas"]["ChatSession"] & {
+            commit: {
+                candidate_id: string;
+                revision: number;
+                committed_count: number;
+                recipes: {
+                    component_id: string;
+                    /** @enum {string} */
+                    role: "main" | "side" | "appetizer" | "dessert" | "drink";
+                    title: string;
+                    /** Format: uuid */
+                    recipe_id: string;
+                    /** Format: uuid */
+                    recipe_version_id: string;
+                }[];
+                links: {
+                    /** Format: uuid */
+                    id: string;
+                    /** Format: uuid */
+                    parent_recipe_id: string;
+                    /** Format: uuid */
+                    child_recipe_id: string;
+                    relation_type: string;
+                    position: number;
+                }[];
+                post_save_options: ("continue_chat" | "restart_chat" | "go_to_cookbook")[];
+            };
+        };
+        MemoryJobsProcessResponse: {
+            processed: number;
+            succeeded: number;
+            failed: number;
+            queue: {
+                pending: number;
+                processing: number;
+                ready: number;
+                failed: number;
+            };
         };
         CreateAttachmentRequest: {
             relation_type: string;
@@ -1475,10 +1729,15 @@ export interface components {
             /** Format: uuid */
             id: string;
             messages: components["schemas"]["ChatMessage"][];
-            active_recipe?: components["schemas"]["Recipe"];
-            assistant_reply?: components["schemas"]["AssistantReply"];
-            memory_context_ids?: string[];
-            context_version?: number;
+            loop_state: components["schemas"]["ChatLoopState"];
+            assistant_reply: components["schemas"]["AssistantReply"] | null;
+            candidate_recipe_set?: components["schemas"]["CandidateRecipeSet"] | null;
+            memory_context_ids: string[];
+            context_version: number;
+            ui_hints?: {
+                show_generation_animation?: boolean;
+                focus_component_id?: string;
+            };
             context?: {
                 [key: string]: unknown;
             };
@@ -1486,11 +1745,6 @@ export interface components {
             created_at?: string;
             /** Format: date-time */
             updated_at?: string;
-        };
-        ChatGenerateResponse: {
-            recipe: components["schemas"]["Recipe"];
-            version: components["schemas"]["RecipeVersion"];
-            assistant_reply?: components["schemas"]["AssistantReply"];
         };
         Collection: {
             /** Format: uuid */

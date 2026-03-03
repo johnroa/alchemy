@@ -4,8 +4,6 @@ Edge function implementing `/v1/*` routes.
 
 ## Implemented routes
 
-- `POST /v1/recipes/generate`
-- `POST /v1/recipes/{id}/tweak`
 - `GET /v1/recipes/{id}`
 - `POST /v1/recipes/{id}/save`
 - `DELETE /v1/recipes/{id}/save`
@@ -19,7 +17,8 @@ Edge function implementing `/v1/*` routes.
 - `POST /v1/chat`
 - `POST /v1/chat/{id}/messages`
 - `GET /v1/chat/{id}`
-- `POST /v1/chat/{id}/generate`
+- `PATCH /v1/chat/{id}/candidate`
+- `POST /v1/chat/{id}/commit`
 - `POST /v1/recipes/{id}/categories/override`
 - `DELETE /v1/recipes/{id}/categories/override/{category}`
 - `GET /v1/recipes/{id}/graph`
@@ -32,7 +31,11 @@ Edge function implementing `/v1/*` routes.
 - `GET /v1/memories`
 - `POST /v1/memories/forget`
 - `POST /v1/memories/reset`
+- `POST /v1/memory-jobs/process`
+- `POST /v1/memory-jobs/retry`
 - `POST /v1/image-jobs/process`
+- `POST /v1/metadata-jobs/process`
+- `POST /v1/metadata-jobs/retry`
 
 ## Adaptive LLM controls
 

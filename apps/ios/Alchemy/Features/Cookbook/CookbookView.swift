@@ -4,8 +4,7 @@ struct CookbookView: View {
     @Environment(APIClient.self) private var api
     @State private var vm = CookbookViewModel()
     @Namespace private var recipeAnimation
-    @Binding var showPreferences: Bool
-    @Binding var showSettings: Bool
+    var onProfileTap: () -> Void
     @State private var filterSelection: String?
 
     var body: some View {
@@ -44,19 +43,7 @@ struct CookbookView: View {
     private var cookbookContent: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Spacing.md) {
-                AlchemyTopNav(
-                    title: "Cookbook",
-                    trailingAction: { showSettings = true }
-                )
-                .padding(.bottom, Spacing.sm)
-
-                Text("You’ve been putting together a great cookbook of gluten free hits")
-                    .font(AlchemyFont.body)
-                    .foregroundStyle(AlchemyColors.textTertiary)
-                    .padding(.horizontal, Spacing.md)
-
-                AlchemySearchBar(text: $vm.searchText)
-                    .padding(.horizontal, Spacing.md)
+                cookbookHeader(searchText: $vm.searchText, isInteractive: true)
 
                 if vm.categories.count > 2 {
                     AlchemyFilterRow(
@@ -134,21 +121,69 @@ struct CookbookView: View {
 
     private var loadingView: some View {
         ScrollView {
-            HStack(alignment: .top, spacing: Spacing.sm2) {
-                VStack(spacing: Spacing.sm2) {
-                    ForEach(0..<3, id: \.self) { _ in
-                        RecipeCardSkeleton()
+            VStack(alignment: .leading, spacing: Spacing.md) {
+                cookbookHeader(searchText: .constant(""), isInteractive: false)
+
+                HStack(alignment: .top, spacing: Spacing.sm2) {
+                    VStack(spacing: Spacing.sm2) {
+                        ForEach(0..<3, id: \.self) { _ in
+                            RecipeCardSkeleton()
+                        }
                     }
-                }
-                VStack(spacing: Spacing.sm2) {
-                    ForEach(0..<3, id: \.self) { _ in
-                        RecipeCardSkeleton()
+                    VStack(spacing: Spacing.sm2) {
+                        ForEach(0..<3, id: \.self) { _ in
+                            RecipeCardSkeleton()
+                        }
                     }
+                    .padding(.top, Spacing.xl)
                 }
-                .padding(.top, Spacing.xl)
+                .padding(.horizontal, Spacing.md)
             }
+            .padding(.bottom, Sizing.tabBarHeight + Spacing.xxxl)
+        }
+    }
+
+    private func cookbookHeader(searchText: Binding<String>, isInteractive: Bool) -> some View {
+        VStack(alignment: .leading, spacing: Spacing.md) {
+            HStack(alignment: .center, spacing: Spacing.md) {
+                Text("Cookbook")
+                    .font(AlchemyFont.largeTitle)
+                    .foregroundStyle(AlchemyColors.textPrimary)
+                    .tracking(0.4)
+
+                Spacer(minLength: Spacing.md)
+
+                Button(action: onProfileTap) {
+                    Image("chef-hat")
+                        .renderingMode(.template)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 22, height: 22)
+                        .foregroundStyle(AlchemyColors.grey2)
+                        .frame(width: 36, height: 36)
+                        .background(
+                            Circle().fill(Color.white.opacity(0.6))
+                        )
+                }
+                .buttonStyle(.plain)
+                .allowsHitTesting(isInteractive)
+                .opacity(isInteractive ? 1 : 0.92)
+            }
+            .frame(height: 52)
             .padding(.horizontal, Spacing.md)
-            .padding(.top, Spacing.sm)
+            .padding(.top, 20)
+            .padding(.bottom, Spacing.sm)
+
+            Text(vm.cookbookInsight)
+                .font(AlchemyFont.body)
+                .foregroundStyle(AlchemyColors.textTertiary)
+                .lineLimit(2)
+                .padding(.horizontal, Spacing.md)
+
+            AlchemySearchBar(text: searchText)
+                .padding(.horizontal, Spacing.md)
+                .allowsHitTesting(isInteractive)
+                .opacity(isInteractive ? 1 : 0.92)
         }
     }
 
@@ -186,7 +221,7 @@ struct CookbookView: View {
                 .foregroundStyle(AlchemyColors.textPrimary)
 
             Text(vm.searchText.isEmpty
-                ? "Generate your first recipe on the Generate tab."
+                ? "Create your first receipt on the Generate tab."
                 : "Try a different search term.")
                 .font(AlchemyFont.bodySmall)
                 .foregroundStyle(AlchemyColors.textSecondary)

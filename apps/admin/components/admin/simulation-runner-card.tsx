@@ -11,7 +11,7 @@ import { cn } from "@/lib/utils";
 
 type ModelOverride = { provider: string; model: string };
 
-const SIM_SCOPES = ["generate", "tweak", "classify"] as const;
+const SIM_SCOPES = ["chat_ideation", "chat_generation", "chat_iteration", "classify"] as const;
 type SimScope = (typeof SIM_SCOPES)[number];
 
 type LaneOverrides = Partial<Record<SimScope, ModelOverride>>;
@@ -134,19 +134,10 @@ function StepList({ steps }: { steps: SimStep[] }): React.JSX.Element {
           {step.error && (
             <span className="max-w-[160px] truncate text-red-600">{step.error}</span>
           )}
-          {step.name === "generate_recipe" && step.result && (
+          {step.name === "commit_candidate_set" && step.result && (
             <span className="flex-none text-[10px] text-muted-foreground">
-              {typeof step.result["ingredient_count"] === "number" && `${step.result["ingredient_count"]}ing`}
-              {" · "}
-              {typeof step.result["step_count"] === "number" && `${step.result["step_count"]}steps`}
-              {typeof step.result["quality_score"] === "number" && (
-                <span className={cn(
-                  "ml-1 font-semibold",
-                  (step.result["quality_score"] as number) >= 80 ? "text-emerald-600" : "text-amber-600"
-                )}>
-                  Q{step.result["quality_score"]}%
-                </span>
-              )}
+              {typeof step.result["committed_count"] === "number" && `${step.result["committed_count"]} recipes`}
+              {typeof step.result["link_count"] === "number" && <span className="ml-1">· {step.result["link_count"]} links</span>}
             </span>
           )}
           <span className="flex-none font-mono text-muted-foreground">{step.latency_ms.toLocaleString()}ms</span>
@@ -176,8 +167,8 @@ function RunLane({
   onRun: () => void;
 }): React.JSX.Element {
   const totalMs = result?.steps?.reduce((sum, s) => sum + s.latency_ms, 0) ?? 0;
-  const generateStep = result?.steps?.find((s) => s.name === "generate_recipe");
-  const qualityScore = generateStep?.result?.["quality_score"] as number | undefined;
+  const commitStep = result?.steps?.find((s) => s.name === "commit_candidate_set");
+  const committedCount = commitStep?.result?.["committed_count"] as number | undefined;
 
   return (
     <div className="flex flex-col gap-3">
@@ -220,19 +211,12 @@ function RunLane({
                 {totalMs > 0 && <span className="ml-2">{totalMs.toLocaleString()}ms total</span>}
               </p>
             </div>
-            {qualityScore !== undefined && (
+            {committedCount !== undefined && (
               <Badge
                 variant="outline"
-                className={cn(
-                  "text-xs",
-                  qualityScore >= 80
-                    ? "border-emerald-300 bg-emerald-50 text-emerald-700"
-                    : qualityScore >= 60
-                      ? "border-amber-300 bg-amber-50 text-amber-700"
-                      : "border-red-300 bg-red-50 text-red-700"
-                )}
+                className="border-emerald-300 bg-emerald-50 text-emerald-700 text-xs"
               >
-                Q{qualityScore}%
+                {committedCount} committed
               </Badge>
             )}
             <Badge

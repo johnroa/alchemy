@@ -256,6 +256,23 @@ type RecipeAuditDetail = {
     created_at: string;
     metadata: Record<string, unknown>;
   }>;
+  canonical_ingredients: Array<{
+    id: string;
+    recipe_version_id: string;
+    ingredient_id: string | null;
+    canonical_name: string | null;
+    source_name: string;
+    source_amount: number | null;
+    source_unit: string | null;
+    normalized_amount_si: number | null;
+    normalized_unit: string | null;
+    unit_kind: string;
+    normalized_status: string;
+    category: string | null;
+    component: string | null;
+    position: number;
+    updated_at: string;
+  }>;
 };
 
 const isSchemaMissingError = (error: unknown): boolean => {
@@ -696,6 +713,62 @@ export const getRecipeAuditDetail = async (recipeId: string): Promise<RecipeAudi
     updated_at: String(link.updated_at)
   }));
 
+  let canonicalIngredientsRaw: Array<{
+    id: string;
+    recipe_version_id: string;
+    ingredient_id: string | null;
+    source_name: string;
+    source_amount: number | null;
+    source_unit: string | null;
+    normalized_amount_si: number | null;
+    normalized_unit: string | null;
+    unit_kind: string;
+    normalized_status: string;
+    category: string | null;
+    component: string | null;
+    position: number;
+    updated_at: string;
+  }> = [];
+
+  if (recipe.current_version_id) {
+    const canonicalResult = await client
+      .from("recipe_ingredients")
+      .select(
+        "id,recipe_version_id,ingredient_id,source_name,source_amount,source_unit,normalized_amount_si,normalized_unit,unit_kind,normalized_status,category,component,position,updated_at"
+      )
+      .eq("recipe_version_id", recipe.current_version_id)
+      .order("position", { ascending: true });
+
+    if (canonicalResult.error) {
+      if (!isSchemaMissingError(canonicalResult.error)) {
+        throw new Error(canonicalResult.error.message);
+      }
+    } else {
+      canonicalIngredientsRaw = (canonicalResult.data ?? []) as typeof canonicalIngredientsRaw;
+    }
+  }
+
+  const canonicalIngredientIds = Array.from(
+    new Set(canonicalIngredientsRaw.map((row) => row.ingredient_id).filter((id): id is string => Boolean(id)))
+  );
+  const canonicalNameById = new Map<string, string>();
+  if (canonicalIngredientIds.length > 0) {
+    const canonicalNamesResult = await client
+      .from("ingredients")
+      .select("id,canonical_name")
+      .in("id", canonicalIngredientIds);
+
+    if (canonicalNamesResult.error) {
+      if (!isSchemaMissingError(canonicalNamesResult.error)) {
+        throw new Error(canonicalNamesResult.error.message);
+      }
+    } else {
+      for (const row of canonicalNamesResult.data ?? []) {
+        canonicalNameById.set(row.id, row.canonical_name);
+      }
+    }
+  }
+
   return {
     recipe: {
       id: recipe.id,
@@ -734,37 +807,174 @@ export const getRecipeAuditDetail = async (recipeId: string): Promise<RecipeAudi
       created_at: message.created_at
     })),
     attachments: attachmentRows,
+    canonical_ingredients: canonicalIngredientsRaw.map((row) => ({
+      id: String(row.id),
+      recipe_version_id: String(row.recipe_version_id),
+      ingredient_id: row.ingredient_id ? String(row.ingredient_id) : null,
+      canonical_name: row.ingredient_id ? canonicalNameById.get(row.ingredient_id) ?? null : null,
+      source_name: String(row.source_name),
+      source_amount: row.source_amount != null ? Number(row.source_amount) : null,
+      source_unit: row.source_unit ? String(row.source_unit) : null,
+      normalized_amount_si: row.normalized_amount_si != null ? Number(row.normalized_amount_si) : null,
+      normalized_unit: row.normalized_unit ? String(row.normalized_unit) : null,
+      unit_kind: String(row.unit_kind ?? "unknown"),
+      normalized_status: String(row.normalized_status ?? "needs_retry"),
+      category: row.category ? String(row.category) : null,
+      component: row.component ? String(row.component) : null,
+      position: Number(row.position ?? 0),
+      updated_at: String(row.updated_at)
+    })),
     changelog: Array.from(changelogById.values()).sort((a, b) => {
       return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
     })
   };
 };
 
-export const getGraphData = async (): Promise<{
-  entities: Array<{ id: string; entity_type: string; label: string }>;
-  edges: Array<{ id: string; from_entity_id: string; to_entity_id: string; from_label: string; to_label: string; confidence: number }>;
+export const getGraphData = async (recipeId?: string): Promise<{
+  context_recipe_id: string | null;
+  entities: Array<{ id: string; entity_type: string; label: string; metadata: Record<string, unknown> }>;
+  edges: Array<{
+    id: string;
+    from_entity_id: string;
+    to_entity_id: string;
+    from_label: string;
+    to_label: string;
+    relation_type: string;
+    confidence: number;
+    source: string;
+  }>;
+  relation_types: string[];
 }> => {
   const client = getAdminClient();
 
-  const [{ data: entities, error: entitiesError }, { data: edges }] = await Promise.all([
-    client.from("graph_entities").select("id,entity_type,label").order("updated_at", { ascending: false }).limit(200),
-    client.from("graph_edges").select("id,from_entity_id,to_entity_id,confidence").order("confidence", { ascending: false }).limit(100)
-  ]);
+  let entityIds: string[] = [];
+  let contextRecipeId: string | null = null;
 
-  if (entitiesError && !isSchemaMissingError(entitiesError)) {
-    throw new Error(entitiesError.message);
+  if (recipeId) {
+    const { data: recipe, error: recipeError } = await client
+      .from("recipes")
+      .select("id,current_version_id")
+      .eq("id", recipeId)
+      .maybeSingle();
+
+    if (recipeError && !isSchemaMissingError(recipeError)) {
+      throw new Error(recipeError.message);
+    }
+
+    if (recipe?.current_version_id) {
+      contextRecipeId = recipe.id;
+      const { data: links, error: linksError } = await client
+        .from("recipe_graph_links")
+        .select("entity_id")
+        .eq("recipe_version_id", recipe.current_version_id);
+
+      if (linksError && !isSchemaMissingError(linksError)) {
+        throw new Error(linksError.message);
+      }
+
+      entityIds = Array.from(new Set((links ?? []).map((link) => String(link.entity_id))));
+    }
   }
 
-  const entityList = (entities ?? []) as Array<{ id: string; entity_type: string; label: string }>;
-  const entityLabelById = new Map(entityList.map((e) => [e.id, e.label]));
+  let entities: Array<{ id: string; entity_type: string; label: string; metadata: Record<string, unknown> }> = [];
+  if (entityIds.length > 0) {
+    const { data: byId, error: byIdError } = await client
+      .from("graph_entities")
+      .select("id,entity_type,label,metadata")
+      .in("id", entityIds)
+      .limit(400);
+
+    if (byIdError && !isSchemaMissingError(byIdError)) {
+      throw new Error(byIdError.message);
+    }
+
+    entities = ((byId ?? []) as Array<{ id: string; entity_type: string; label: string; metadata: Record<string, unknown> }>).slice(0, 400);
+  } else {
+    const { data: recentEntities, error: entitiesError } = await client
+      .from("graph_entities")
+      .select("id,entity_type,label,metadata")
+      .order("updated_at", { ascending: false })
+      .limit(400);
+
+    if (entitiesError && !isSchemaMissingError(entitiesError)) {
+      throw new Error(entitiesError.message);
+    }
+
+    entities = (recentEntities ?? []) as Array<{ id: string; entity_type: string; label: string; metadata: Record<string, unknown> }>;
+    entityIds = entities.map((entity) => entity.id);
+  }
+
+  if (entityIds.length === 0) {
+    return { context_recipe_id: contextRecipeId, entities: [], edges: [], relation_types: [] };
+  }
+
+  const [{ data: edgesFrom, error: edgesFromError }, { data: edgesTo, error: edgesToError }] = await Promise.all([
+    client
+      .from("graph_edges")
+      .select("id,from_entity_id,to_entity_id,relation_type_id,confidence,source")
+      .in("from_entity_id", entityIds)
+      .limit(500),
+    client
+      .from("graph_edges")
+      .select("id,from_entity_id,to_entity_id,relation_type_id,confidence,source")
+      .in("to_entity_id", entityIds)
+      .limit(500)
+  ]);
+
+  if (edgesFromError && !isSchemaMissingError(edgesFromError)) {
+    throw new Error(edgesFromError.message);
+  }
+  if (edgesToError && !isSchemaMissingError(edgesToError)) {
+    throw new Error(edgesToError.message);
+  }
+
+  const rawEdges = [...(edgesFrom ?? []), ...(edgesTo ?? [])] as Array<{
+    id: string;
+    from_entity_id: string;
+    to_entity_id: string;
+    relation_type_id: string;
+    confidence: number;
+    source: string;
+  }>;
+  const entityIdSet = new Set(entityIds);
+  const edgeById = new Map<string, (typeof rawEdges)[number]>();
+  for (const edge of rawEdges) {
+    if (!entityIdSet.has(edge.from_entity_id) || !entityIdSet.has(edge.to_entity_id)) {
+      continue;
+    }
+    edgeById.set(edge.id, edge);
+  }
+  const edges = Array.from(edgeById.values());
+
+  const relationTypeIds = Array.from(new Set(edges.map((edge) => edge.relation_type_id)));
+  let relationNameById = new Map<string, string>();
+  if (relationTypeIds.length > 0) {
+    const { data: relationRows, error: relationError } = await client
+      .from("graph_relation_types")
+      .select("id,name")
+      .in("id", relationTypeIds);
+    if (relationError && !isSchemaMissingError(relationError)) {
+      throw new Error(relationError.message);
+    }
+    relationNameById = new Map((relationRows ?? []).map((row) => [row.id, row.name]));
+  }
+
+  const entityLabelById = new Map(entities.map((entity) => [entity.id, entity.label]));
 
   return {
-    entities: entityList.slice(0, 100),
-    edges: ((edges ?? []) as Array<{ id: string; from_entity_id: string; to_entity_id: string; confidence: number }>).map((edge) => ({
-      ...edge,
+    context_recipe_id: contextRecipeId,
+    entities,
+    edges: edges.map((edge) => ({
+      id: edge.id,
+      from_entity_id: edge.from_entity_id,
+      to_entity_id: edge.to_entity_id,
       from_label: entityLabelById.get(edge.from_entity_id) ?? edge.from_entity_id.slice(0, 8),
-      to_label: entityLabelById.get(edge.to_entity_id) ?? edge.to_entity_id.slice(0, 8)
-    }))
+      to_label: entityLabelById.get(edge.to_entity_id) ?? edge.to_entity_id.slice(0, 8),
+      relation_type: relationNameById.get(edge.relation_type_id) ?? "unknown",
+      confidence: Number(edge.confidence ?? 0),
+      source: String(edge.source ?? "unknown")
+    })),
+    relation_types: Array.from(new Set(edges.map((edge) => relationNameById.get(edge.relation_type_id) ?? "unknown"))).sort()
   };
 };
 
@@ -779,22 +989,47 @@ export const getModerationData = async (): Promise<{
 export const getMemoryData = async (): Promise<{
   snapshots: Array<{ user_id: string; email: string | null; token_estimate: number; updated_at: string }>;
   memories: Array<{ id: string; user_id: string; email: string | null; memory_type: string; memory_kind: string; status: string; confidence: number; salience: number; content: string | null; updated_at: string }>;
+  jobs: Array<{
+    id: string;
+    user_id: string;
+    user_email: string | null;
+    chat_id: string;
+    message_id: string;
+    status: string;
+    attempts: number;
+    max_attempts: number;
+    next_attempt_at: string;
+    last_error: string | null;
+    locked_at: string | null;
+    locked_by: string | null;
+    updated_at: string;
+  }>;
 }> => {
   const client = getAdminClient();
 
-  const [{ data: snapshots }, { data: memoriesRaw }] = await Promise.all([
+  const [{ data: snapshots }, { data: memoriesRaw }, { data: jobsRaw, error: jobsError }] = await Promise.all([
     client.from("memory_snapshots").select("user_id,token_estimate,updated_at").order("updated_at", { ascending: false }).limit(100),
     client
       .from("memories")
       .select("id,user_id,memory_type,memory_kind,status,confidence,salience,content,updated_at")
       .order("updated_at", { ascending: false })
-      .limit(150)
+      .limit(150),
+    client
+      .from("memory_jobs")
+      .select("id,user_id,chat_id,message_id,status,attempts,max_attempts,next_attempt_at,last_error,locked_at,locked_by,updated_at")
+      .order("updated_at", { ascending: false })
+      .limit(300)
   ]);
+
+  if (jobsError && !isSchemaMissingError(jobsError)) {
+    throw new Error(jobsError.message);
+  }
 
   const userIds = Array.from(
     new Set([
       ...(snapshots ?? []).map((s) => s.user_id as string),
-      ...(memoriesRaw ?? []).map((m) => m.user_id as string)
+      ...(memoriesRaw ?? []).map((m) => m.user_id as string),
+      ...((jobsRaw ?? []) as Array<{ user_id: string }>).map((j) => j.user_id)
     ])
   );
 
@@ -823,6 +1058,21 @@ export const getMemoryData = async (): Promise<{
       salience: Number(m.salience ?? 0),
       content: m.content ? String(m.content) : null,
       updated_at: String(m.updated_at)
+    })),
+    jobs: (jobsRaw ?? []).map((job) => ({
+      id: String(job.id),
+      user_id: String(job.user_id),
+      user_email: emailById.get(String(job.user_id)) ?? null,
+      chat_id: String(job.chat_id),
+      message_id: String(job.message_id),
+      status: String(job.status ?? "pending"),
+      attempts: Number(job.attempts ?? 0),
+      max_attempts: Number(job.max_attempts ?? 0),
+      next_attempt_at: String(job.next_attempt_at),
+      last_error: job.last_error ? String(job.last_error) : null,
+      locked_at: job.locked_at ? String(job.locked_at) : null,
+      locked_by: job.locked_by ? String(job.locked_by) : null,
+      updated_at: String(job.updated_at)
     }))
   };
 };
@@ -872,6 +1122,203 @@ export const getImagePipelineData = async (): Promise<{
 
   return {
     jobs: (data ?? []) as Array<{ id: string; recipe_id: string; status: string; attempt: number; max_attempts: number; next_attempt_at: string; last_error: string | null; updated_at: string }>
+  };
+};
+
+export const getMetadataPipelineData = async (): Promise<{
+  jobs: Array<{
+    id: string;
+    recipe_id: string;
+    recipe_version_id: string;
+    recipe_title: string | null;
+    status: string;
+    attempts: number;
+    max_attempts: number;
+    next_attempt_at: string;
+    last_error: string | null;
+    locked_at: string | null;
+    locked_by: string | null;
+    updated_at: string;
+  }>;
+}> => {
+  const client = getAdminClient();
+  const { data: jobs, error: jobsError } = await client
+    .from("recipe_metadata_jobs")
+    .select("id,recipe_id,recipe_version_id,status,attempts,max_attempts,next_attempt_at,last_error,locked_at,locked_by,updated_at")
+    .order("updated_at", { ascending: false })
+    .limit(250);
+
+  if (jobsError) {
+    if (isSchemaMissingError(jobsError)) {
+      return { jobs: [] };
+    }
+    throw new Error(jobsError.message);
+  }
+
+  const recipeIds = Array.from(new Set((jobs ?? []).map((job) => job.recipe_id)));
+  const { data: recipes, error: recipesError } =
+    recipeIds.length > 0
+      ? await client.from("recipes").select("id,title").in("id", recipeIds)
+      : { data: [] as Array<{ id: string; title: string }>, error: null };
+
+  if (recipesError && !isSchemaMissingError(recipesError)) {
+    throw new Error(recipesError.message);
+  }
+
+  const titleByRecipeId = new Map((recipes ?? []).map((recipe) => [recipe.id, recipe.title]));
+
+  return {
+    jobs: (jobs ?? []).map((job) => ({
+      id: String(job.id),
+      recipe_id: String(job.recipe_id),
+      recipe_version_id: String(job.recipe_version_id),
+      recipe_title: titleByRecipeId.get(String(job.recipe_id)) ?? null,
+      status: String(job.status),
+      attempts: Number(job.attempts ?? 0),
+      max_attempts: Number(job.max_attempts ?? 0),
+      next_attempt_at: String(job.next_attempt_at),
+      last_error: job.last_error ? String(job.last_error) : null,
+      locked_at: job.locked_at ? String(job.locked_at) : null,
+      locked_by: job.locked_by ? String(job.locked_by) : null,
+      updated_at: String(job.updated_at)
+    }))
+  };
+};
+
+export const getIngredientsData = async (): Promise<{
+  ingredients: Array<{
+    id: string;
+    canonical_name: string;
+    normalized_key: string;
+    alias_count: number;
+    usage_count: number;
+    updated_at: string;
+  }>;
+  aliases: Array<{
+    id: string;
+    ingredient_id: string;
+    canonical_name: string | null;
+    alias_key: string;
+    source: string;
+    confidence: number;
+    updated_at: string;
+  }>;
+  unresolved_rows: Array<{
+    id: string;
+    recipe_version_id: string;
+    source_name: string;
+    source_amount: number | null;
+    source_unit: string | null;
+    normalized_status: string;
+    updated_at: string;
+  }>;
+}> => {
+  const client = getAdminClient();
+
+  const [ingredientsResult, aliasesResult, usageResult, unresolvedResult] = await Promise.all([
+    client
+      .from("ingredients")
+      .select("id,canonical_name,normalized_key,updated_at")
+      .order("updated_at", { ascending: false })
+      .limit(300),
+    client
+      .from("ingredient_aliases")
+      .select("id,ingredient_id,alias_key,source,confidence,updated_at")
+      .order("updated_at", { ascending: false })
+      .limit(400),
+    client
+      .from("recipe_ingredients")
+      .select("ingredient_id")
+      .not("ingredient_id", "is", null)
+      .limit(2000),
+    client
+      .from("recipe_ingredients")
+      .select("id,recipe_version_id,source_name,source_amount,source_unit,normalized_status,updated_at")
+      .eq("normalized_status", "needs_retry")
+      .order("updated_at", { ascending: false })
+      .limit(150)
+  ]);
+
+  if (ingredientsResult.error && !isSchemaMissingError(ingredientsResult.error)) {
+    throw new Error(ingredientsResult.error.message);
+  }
+  if (aliasesResult.error && !isSchemaMissingError(aliasesResult.error)) {
+    throw new Error(aliasesResult.error.message);
+  }
+  if (usageResult.error && !isSchemaMissingError(usageResult.error)) {
+    throw new Error(usageResult.error.message);
+  }
+  if (unresolvedResult.error && !isSchemaMissingError(unresolvedResult.error)) {
+    throw new Error(unresolvedResult.error.message);
+  }
+
+  const ingredients = (ingredientsResult.data ?? []) as Array<{
+    id: string;
+    canonical_name: string;
+    normalized_key: string;
+    updated_at: string;
+  }>;
+
+  const aliases = (aliasesResult.data ?? []) as Array<{
+    id: string;
+    ingredient_id: string;
+    alias_key: string;
+    source: string;
+    confidence: number;
+    updated_at: string;
+  }>;
+
+  const usageRows = (usageResult.data ?? []) as Array<{ ingredient_id: string | null }>;
+  const unresolvedRows = (unresolvedResult.data ?? []) as Array<{
+    id: string;
+    recipe_version_id: string;
+    source_name: string;
+    source_amount: number | null;
+    source_unit: string | null;
+    normalized_status: string;
+    updated_at: string;
+  }>;
+
+  const aliasCountByIngredientId = new Map<string, number>();
+  for (const alias of aliases) {
+    aliasCountByIngredientId.set(alias.ingredient_id, (aliasCountByIngredientId.get(alias.ingredient_id) ?? 0) + 1);
+  }
+
+  const usageCountByIngredientId = new Map<string, number>();
+  for (const row of usageRows) {
+    if (!row.ingredient_id) continue;
+    usageCountByIngredientId.set(row.ingredient_id, (usageCountByIngredientId.get(row.ingredient_id) ?? 0) + 1);
+  }
+
+  const canonicalNameById = new Map(ingredients.map((ingredient) => [ingredient.id, ingredient.canonical_name]));
+
+  return {
+    ingredients: ingredients.map((ingredient) => ({
+      id: ingredient.id,
+      canonical_name: ingredient.canonical_name,
+      normalized_key: ingredient.normalized_key,
+      alias_count: aliasCountByIngredientId.get(ingredient.id) ?? 0,
+      usage_count: usageCountByIngredientId.get(ingredient.id) ?? 0,
+      updated_at: ingredient.updated_at
+    })),
+    aliases: aliases.map((alias) => ({
+      id: alias.id,
+      ingredient_id: alias.ingredient_id,
+      canonical_name: canonicalNameById.get(alias.ingredient_id) ?? null,
+      alias_key: alias.alias_key,
+      source: alias.source,
+      confidence: Number(alias.confidence ?? 0),
+      updated_at: alias.updated_at
+    })),
+    unresolved_rows: unresolvedRows.map((row) => ({
+      id: row.id,
+      recipe_version_id: row.recipe_version_id,
+      source_name: row.source_name,
+      source_amount: row.source_amount != null ? Number(row.source_amount) : null,
+      source_unit: row.source_unit ? String(row.source_unit) : null,
+      normalized_status: String(row.normalized_status ?? "needs_retry"),
+      updated_at: row.updated_at
+    }))
   };
 };
 
@@ -942,6 +1389,9 @@ const scopeLabel = (scope: string): string => {
   const known: Record<string, string> = {
     generate: "Generating",
     chat: "Chat",
+    chat_ideation: "Chat Ideation",
+    chat_generation: "Chat Generation",
+    chat_iteration: "Chat Iteration",
     tweak: "Tweaking",
     image: "Image Generation",
     classify: "Classification",
@@ -1296,7 +1746,7 @@ export const getSimulationData = async (): Promise<{
     client
       .from("llm_model_routes")
       .select("scope,provider,model,is_active")
-      .in("scope", ["generate", "tweak", "classify"])
+      .in("scope", ["chat_ideation", "chat_generation", "chat_iteration", "classify"])
       .order("scope")
       .order("is_active", { ascending: false }),
     client

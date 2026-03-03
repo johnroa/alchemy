@@ -1,0 +1,64 @@
+import { NextResponse } from "next/server";
+import { requireCloudflareAccess } from "@/lib/supabase-admin";
+
+const normalizeApiBase = (raw: string | undefined): string => {
+  const value = (raw ?? "https://api.cookwithalchemy.com/v1").trim();
+  if (!value) {
+    return "https://api.cookwithalchemy.com/v1";
+  }
+
+  const withProtocol = /^https?:\/\//i.test(value) ? value : `https://${value}`;
+  const withoutTrailing = withProtocol.replace(/\/+$/, "");
+  return withoutTrailing.endsWith("/v1") ? withoutTrailing : `${withoutTrailing}/v1`;
+};
+
+type Body = {
+  job_id?: string;
+};
+
+export async function POST(request: Request): Promise<NextResponse> {
+  await requireCloudflareAccess();
+
+  const token = process.env["ADMIN_SIMULATION_BEARER_TOKEN"];
+  if (!token) {
+    return NextResponse.json(
+      { error: "ADMIN_SIMULATION_BEARER_TOKEN is required for metadata job retry" },
+      { status: 500 }
+    );
+  }
+
+  const body = (await request.json().catch(() => ({}))) as Body;
+  if (!body.job_id) {
+    return NextResponse.json({ error: "job_id is required" }, { status: 400 });
+  }
+
+  const apiBase = normalizeApiBase(process.env["API_BASE_URL"]);
+  const response = await fetch(`${apiBase}/metadata-jobs/retry`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${token}`
+    },
+    body: JSON.stringify({ job_id: body.job_id })
+  });
+
+  const payloadText = await response.text();
+  let payload: unknown = payloadText;
+  try {
+    payload = JSON.parse(payloadText);
+  } catch {
+    // keep raw string payload
+  }
+
+  if (!response.ok) {
+    return NextResponse.json(
+      {
+        error: "Metadata job retry failed",
+        details: payload
+      },
+      { status: response.status }
+    );
+  }
+
+  return NextResponse.json(payload);
+}

@@ -6,6 +6,7 @@ import {
   Activity,
   BarChart3,
   Bot,
+  Carrot,
   Database,
   FlaskConical,
   FolderGit2,
@@ -46,8 +47,10 @@ const navGroups = [
     category: "Content",
     items: [
       { href: "/recipes", label: "Recipes", icon: FlaskConical },
+      { href: "/ingredients", label: "Ingredients", icon: Carrot },
       { href: "/graph", label: "Graph", icon: Network },
-      { href: "/image-pipeline", label: "Image Pipeline", icon: Image }
+      { href: "/image-pipeline", label: "Image Pipeline", icon: Image },
+      { href: "/metadata-pipeline", label: "Metadata Pipeline", icon: Database }
     ]
   },
   {

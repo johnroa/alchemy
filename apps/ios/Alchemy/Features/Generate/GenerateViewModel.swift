@@ -38,6 +38,7 @@ final class GenerateViewModel {
     var isTweakSheetOpen = false
     var isSaved = false
     var showSavedConfirmation = false
+    var isGenerationTransitioning = false
     var suggestions: [String] = []
 
     var hasRecipe: Bool { activeRecipe != nil }
@@ -50,7 +51,7 @@ final class GenerateViewModel {
     /// First message stays in `.chatting` with thinking indicator.
     var mode: GenerateViewMode {
         if isLoading && hasRecipe && isTweakSheetOpen { return .tweakLoading }
-        if isLoading && !hasRecipe && messages.count >= 3 { return .generating }
+        if isLoading && !hasRecipe && (isGenerationTransitioning || messages.count >= 3) { return .generating }
         if hasRecipe && isTweakSheetOpen { return .tweaking }
         if hasRecipe { return .recipe }
         if !messages.isEmpty { return .chatting }
@@ -68,9 +69,12 @@ final class GenerateViewModel {
         input = ""
         isLoading = true
         error = nil
+        isGenerationTransitioning = shouldStartGenerationTransition(for: text)
+        let requestStartedAt = Date()
 
         do {
             let response = try await api.createChat(message: text)
+            await ensureMinimumGeneratingState(startedAt: requestStartedAt)
             chatId = response.id
             processChatResponse(response)
             Haptics.fire(.light)
@@ -78,6 +82,7 @@ final class GenerateViewModel {
             self.error = error.localizedDescription
         }
 
+        isGenerationTransitioning = false
         isLoading = false
     }
 
@@ -92,9 +97,12 @@ final class GenerateViewModel {
         input = ""
         isLoading = true
         error = nil
+        isGenerationTransitioning = shouldStartGenerationTransition(for: text)
+        let requestStartedAt = Date()
 
         do {
             let response = try await api.sendChatMessage(chatId: chatId, message: text)
+            await ensureMinimumGeneratingState(startedAt: requestStartedAt)
             processChatResponse(response)
             // Close tweak sheet after response — show updated recipe
             if hasRecipe {
@@ -105,6 +113,7 @@ final class GenerateViewModel {
             self.error = error.localizedDescription
         }
 
+        isGenerationTransitioning = false
         isLoading = false
     }
 
@@ -155,6 +164,7 @@ final class GenerateViewModel {
         isTweakSheetOpen = false
         isSaved = false
         showSavedConfirmation = false
+        isGenerationTransitioning = false
         suggestions = []
     }
 
@@ -179,5 +189,18 @@ final class GenerateViewModel {
             )
             messages.append(msg)
         }
+    }
+
+    private func shouldStartGenerationTransition(for text: String) -> Bool {
+        activeRecipe == nil && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func ensureMinimumGeneratingState(startedAt: Date) async {
+        guard isGenerationTransitioning else { return }
+        let minimumDuration: TimeInterval = 0.8
+        let elapsed = Date().timeIntervalSince(startedAt)
+        let remaining = minimumDuration - elapsed
+        guard remaining > 0 else { return }
+        try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
     }
 }

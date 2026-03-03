@@ -4,6 +4,19 @@ import { ApiError, errorResponse, jsonResponse, requireJsonBody } from "../_shar
 import { createServiceClient, createUserClient } from "../_shared/db.ts";
 import { llmGateway, type ModelOverrideMap } from "../_shared/llm-gateway.ts";
 import type { AssistantReply, JsonValue, MemoryRecord, OnboardingState, RecipePayload } from "../_shared/types.ts";
+import {
+  buildIngredientGroups,
+  canonicalizeIngredients,
+  projectIngredientsForOutput,
+  projectInlineMeasurements,
+  resolvePresentationOptions,
+  type CanonicalIngredientView,
+  type GroupByPreference,
+  type IngredientGroup,
+  type NormalizedStatus,
+  type UnitKind,
+  type UnitPreference
+} from "./recipe-standardization.ts";
 
 type PreferenceContext = {
   free_form: string | null;
@@ -20,6 +33,7 @@ type PreferenceContext = {
 
 type ContextPack = {
   preferences: PreferenceContext;
+  preferencesNaturalLanguage: Record<string, JsonValue>;
   memorySnapshot: Record<string, JsonValue>;
   selectedMemories: MemoryRecord[];
   selectedMemoryIds: string[];
@@ -46,8 +60,9 @@ type RecipeView = {
   description?: string;
   summary: string;
   servings: number;
-  ingredients: RecipePayload["ingredients"];
+  ingredients: CanonicalIngredientView[];
   steps: RecipePayload["steps"];
+  ingredient_groups?: IngredientGroup[];
   notes?: string;
   pairings: string[];
   metadata?: JsonValue;
@@ -66,6 +81,167 @@ type RecipeView = {
   attachments: RecipeAttachmentView[];
 };
 
+type ChatLoopState = "ideation" | "candidate_presented" | "iterating";
+type CandidateRecipeRole = "main" | "side" | "appetizer" | "dessert" | "drink";
+
+type CandidateRecipeComponent = {
+  component_id: string;
+  role: CandidateRecipeRole;
+  title: string;
+  recipe: RecipePayload;
+};
+
+type CandidateRecipeSet = {
+  candidate_id: string;
+  revision: number;
+  active_component_id: string;
+  components: CandidateRecipeComponent[];
+};
+
+type ChatSessionContext = {
+  preferences?: PreferenceContext;
+  memory_snapshot?: Record<string, JsonValue>;
+  selected_memory_ids?: string[];
+  loop_state?: ChatLoopState;
+  candidate_recipe_set?: CandidateRecipeSet | null;
+  candidate_revision?: number;
+  active_component_id?: string | null;
+};
+
+type ChatUiHints = {
+  show_generation_animation?: boolean;
+  focus_component_id?: string;
+};
+
+type ChatLoopResponse = {
+  id: string;
+  messages: ChatMessageView[];
+  loop_state: ChatLoopState;
+  assistant_reply: AssistantReply | null;
+  candidate_recipe_set: CandidateRecipeSet | null;
+  memory_context_ids: string[];
+  context_version: number;
+  ui_hints?: ChatUiHints;
+  context?: Record<string, JsonValue>;
+  created_at?: string;
+  updated_at?: string;
+};
+
+const candidateRoles: CandidateRecipeRole[] = ["main", "side", "appetizer", "dessert", "drink"];
+
+const normalizeCandidateRole = (value: unknown): CandidateRecipeRole => {
+  if (typeof value === "string" && candidateRoles.includes(value as CandidateRecipeRole)) {
+    return value as CandidateRecipeRole;
+  }
+  return "main";
+};
+
+const normalizeCandidateRecipeSet = (candidate: unknown): CandidateRecipeSet | null => {
+  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+    return null;
+  }
+
+  const raw = candidate as Record<string, unknown>;
+  const rawComponents = Array.isArray(raw.components) ? raw.components : [];
+
+  const components: CandidateRecipeComponent[] = rawComponents
+    .map((component, index) => {
+      if (!component || typeof component !== "object" || Array.isArray(component)) {
+        return null;
+      }
+      const value = component as Record<string, unknown>;
+      const recipe = value.recipe;
+      if (!recipe || typeof recipe !== "object" || Array.isArray(recipe)) {
+        return null;
+      }
+      const normalizedRecipe = recipe as RecipePayload;
+      if (
+        typeof normalizedRecipe.title !== "string" ||
+        !Array.isArray(normalizedRecipe.ingredients) ||
+        !Array.isArray(normalizedRecipe.steps)
+      ) {
+        return null;
+      }
+
+      const componentId =
+        typeof value.component_id === "string" && value.component_id.trim().length > 0
+          ? value.component_id
+          : crypto.randomUUID();
+      const title =
+        typeof value.title === "string" && value.title.trim().length > 0
+          ? value.title.trim()
+          : normalizedRecipe.title;
+
+      return {
+        component_id: componentId,
+        role: normalizeCandidateRole(value.role),
+        title,
+        recipe: normalizedRecipe
+      };
+    })
+    .filter((component): component is CandidateRecipeComponent => component !== null)
+    .slice(0, 3);
+
+  if (components.length === 0) {
+    return null;
+  }
+
+  const activeComponentId =
+    typeof raw.active_component_id === "string" &&
+    components.some((component) => component.component_id === raw.active_component_id)
+      ? raw.active_component_id
+      : components[0].component_id;
+
+  const revision = Number(raw.revision);
+  const candidateId = typeof raw.candidate_id === "string" && raw.candidate_id.trim().length > 0
+    ? raw.candidate_id
+    : crypto.randomUUID();
+
+  return {
+    candidate_id: candidateId,
+    revision: Number.isFinite(revision) && revision >= 1 ? Math.trunc(revision) : 1,
+    active_component_id: activeComponentId,
+    components
+  };
+};
+
+const wrapRecipeInCandidateSet = (recipe: RecipePayload, existing?: CandidateRecipeSet | null): CandidateRecipeSet => {
+  const revision = Math.max(1, Number(existing?.revision ?? 0) + 1);
+  const componentId = existing?.components?.[0]?.component_id ?? crypto.randomUUID();
+
+  return {
+    candidate_id: existing?.candidate_id ?? crypto.randomUUID(),
+    revision,
+    active_component_id: componentId,
+    components: [
+      {
+        component_id: componentId,
+        role: "main",
+        title: recipe.title,
+        recipe
+      }
+    ]
+  };
+};
+
+const extractChatContext = (value: unknown): ChatSessionContext => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  return value as ChatSessionContext;
+};
+
+const deriveLoopState = (context: ChatSessionContext, candidateSet: CandidateRecipeSet | null): ChatLoopState => {
+  const raw = context.loop_state;
+  if (raw === "ideation" || raw === "candidate_presented" || raw === "iterating") {
+    if (!candidateSet && raw !== "ideation") {
+      return "ideation";
+    }
+    return raw;
+  }
+  return candidateSet ? "candidate_presented" : "ideation";
+};
+
 const defaultPreferences: PreferenceContext = {
   free_form: null,
   dietary_preferences: [],
@@ -78,6 +254,47 @@ const defaultPreferences: PreferenceContext = {
   max_difficulty: 3,
   presentation_preferences: {}
 };
+
+const rawPreferenceTextKeys = {
+  dietary_preferences: "raw_dietary_preferences",
+  dietary_restrictions: "raw_dietary_restrictions",
+  equipment: "raw_special_equipment",
+  cuisines: "raw_cuisines",
+  aversions: "raw_disliked_ingredients"
+} as const;
+
+const normalizedRawPreferenceText = (
+  preferences: PreferenceContext,
+  field: keyof typeof rawPreferenceTextKeys
+): string | null => {
+  const raw = preferences.presentation_preferences?.[rawPreferenceTextKeys[field]];
+  if (typeof raw !== "string") {
+    return null;
+  }
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : null;
+};
+
+const joinCanonicalPreferenceList = (values: string[]): string => values.join(", ");
+
+const buildNaturalLanguagePreferenceContext = (preferences: PreferenceContext): Record<string, JsonValue> => ({
+  chef_profile: preferences.free_form ?? "",
+  cooking_for: preferences.cooking_for ?? "",
+  skill_level: preferences.skill_level,
+  max_difficulty: preferences.max_difficulty,
+  dietary_preferences:
+    normalizedRawPreferenceText(preferences, "dietary_preferences") ??
+    joinCanonicalPreferenceList(preferences.dietary_preferences),
+  dietary_restrictions:
+    normalizedRawPreferenceText(preferences, "dietary_restrictions") ??
+    joinCanonicalPreferenceList(preferences.dietary_restrictions),
+  special_equipment:
+    normalizedRawPreferenceText(preferences, "equipment") ?? joinCanonicalPreferenceList(preferences.equipment),
+  cuisines:
+    normalizedRawPreferenceText(preferences, "cuisines") ?? joinCanonicalPreferenceList(preferences.cuisines),
+  disliked_ingredients:
+    normalizedRawPreferenceText(preferences, "aversions") ?? joinCanonicalPreferenceList(preferences.aversions)
+});
 
 const onboardingTopicKeys = ["skill", "equipment", "dietary", "presentation"] as const;
 
@@ -253,14 +470,32 @@ const getPreferences = async (client: SupabaseClient, userId: string): Promise<P
 };
 
 const normalizePreferenceStringArray = (value: unknown): string[] | undefined => {
-  if (!Array.isArray(value)) {
+  if (typeof value !== "string" && !Array.isArray(value) && value !== null) {
     return undefined;
   }
 
-  return value
-    .filter((item): item is string => typeof item === "string")
-    .map((item) => item.trim())
-    .filter((item) => item.length > 0);
+  const rawValues: string[] =
+    value === null
+      ? []
+      : typeof value === "string"
+        ? [value]
+        : value.filter((item): item is string => typeof item === "string");
+
+  const entries = rawValues
+    .map((raw) => raw.trim())
+    .filter((raw) => raw.length > 0);
+  const seen = new Set<string>();
+  const uniqueEntries: string[] = [];
+  for (const entry of entries) {
+    const key = entry.toLocaleLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    uniqueEntries.push(entry);
+  }
+
+  return uniqueEntries.slice(0, 32);
 };
 
 const normalizePreferencePatch = (candidate: unknown): Partial<PreferenceContext> | null => {
@@ -272,7 +507,8 @@ const normalizePreferencePatch = (candidate: unknown): Partial<PreferenceContext
   const patch: Partial<PreferenceContext> = {};
 
   if (typeof patchObject.free_form === "string") {
-    patch.free_form = patchObject.free_form.trim();
+    const freeForm = patchObject.free_form.trim();
+    patch.free_form = freeForm.length > 0 ? freeForm : null;
   } else if (patchObject.free_form === null) {
     patch.free_form = null;
   }
@@ -307,7 +543,8 @@ const normalizePreferencePatch = (candidate: unknown): Partial<PreferenceContext
   }
 
   if (typeof patchObject.cooking_for === "string") {
-    patch.cooking_for = patchObject.cooking_for.trim();
+    const cookingFor = patchObject.cooking_for.trim();
+    patch.cooking_for = cookingFor.length > 0 ? cookingFor : null;
   } else if (patchObject.cooking_for === null) {
     patch.cooking_for = null;
   }
@@ -328,6 +565,47 @@ const normalizePreferencePatch = (candidate: unknown): Partial<PreferenceContext
   return Object.keys(patch).length > 0 ? patch : null;
 };
 
+const preferenceListFieldLabels: Record<
+  "dietary_preferences" | "dietary_restrictions" | "equipment" | "cuisines" | "aversions",
+  string
+> = {
+  dietary_preferences: "dietary preferences",
+  dietary_restrictions: "dietary restrictions",
+  equipment: "special equipment",
+  cuisines: "cuisines",
+  aversions: "ingredients to avoid"
+};
+
+const normalizePreferencePatchWithLlm = async (params: {
+  client: SupabaseClient;
+  userId: string;
+  requestId: string;
+  patch: Partial<PreferenceContext>;
+}): Promise<Partial<PreferenceContext>> => {
+  const nextPatch: Partial<PreferenceContext> = { ...params.patch };
+
+  const listFields = Object.keys(preferenceListFieldLabels) as Array<keyof typeof preferenceListFieldLabels>;
+  await Promise.all(
+    listFields.map(async (field) => {
+      const candidate = params.patch[field];
+      if (!Array.isArray(candidate)) {
+        return;
+      }
+
+      const normalized = await llmGateway.normalizePreferenceList({
+        client: params.client,
+        userId: params.userId,
+        requestId: params.requestId,
+        field: preferenceListFieldLabels[field],
+        entries: candidate
+      });
+      nextPatch[field] = normalized;
+    })
+  );
+
+  return nextPatch;
+};
+
 const applyModelPreferenceUpdates = async (params: {
   client: SupabaseClient;
   serviceClient: SupabaseClient;
@@ -341,9 +619,14 @@ const applyModelPreferenceUpdates = async (params: {
     return params.currentPreferences;
   }
 
+  const { free_form: _ignoredFreeFormUpdate, ...safePatch } = patch;
+  if (Object.keys(safePatch).length === 0) {
+    return params.currentPreferences;
+  }
+
   const nextPreferences: PreferenceContext = {
     ...params.currentPreferences,
-    ...patch
+    ...safePatch
   };
 
   const { data, error } = await params.client
@@ -545,50 +828,731 @@ const resolveRelationTypeId = async (client: SupabaseClient, name: string): Prom
   return inserted.id;
 };
 
+type RecipeViewOptions = {
+  units: UnitPreference;
+  groupBy: GroupByPreference;
+  inlineMeasurements: boolean;
+};
+
+type CanonicalRecipeIngredientRow = {
+  position: number;
+  ingredient_id: string | null;
+  source_name: string;
+  source_amount: number | null;
+  source_unit: string | null;
+  normalized_amount_si: number | null;
+  normalized_unit: string | null;
+  unit_kind: UnitKind;
+  normalized_status: NormalizedStatus;
+  category: string | null;
+  component: string | null;
+};
+
+const defaultRecipeViewOptions: RecipeViewOptions = {
+  units: "source",
+  groupBy: "flat",
+  inlineMeasurements: false
+};
+
+const toFiniteNumberOrNull = (value: unknown): number | null => {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+};
+
+const listifyText = (value: unknown): string[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+};
+
+const fetchCanonicalIngredientRows = async (
+  client: SupabaseClient,
+  recipeVersionId: string
+): Promise<CanonicalRecipeIngredientRow[]> => {
+  const rowsResult = await client
+    .from("recipe_ingredients")
+    .select(
+      "position,ingredient_id,source_name,source_amount,source_unit,normalized_amount_si,normalized_unit,unit_kind,normalized_status,category,component"
+    )
+    .eq("recipe_version_id", recipeVersionId)
+    .order("position", { ascending: true });
+
+  if (rowsResult.error) {
+    if (isSchemaMissingError(rowsResult.error) || isRlsError(rowsResult.error)) {
+      return [];
+    }
+
+    throw new ApiError(
+      500,
+      "recipe_ingredients_fetch_failed",
+      "Could not fetch canonical recipe ingredients",
+      rowsResult.error.message
+    );
+  }
+
+  return (rowsResult.data ?? []).map((row) => ({
+    position: Number(row.position ?? 0),
+    ingredient_id: row.ingredient_id ?? null,
+    source_name: String(row.source_name ?? ""),
+    source_amount: toFiniteNumberOrNull(row.source_amount),
+    source_unit: row.source_unit ? String(row.source_unit) : null,
+    normalized_amount_si: toFiniteNumberOrNull(row.normalized_amount_si),
+    normalized_unit: row.normalized_unit ? String(row.normalized_unit) : null,
+    unit_kind:
+      row.unit_kind === "mass" || row.unit_kind === "volume" || row.unit_kind === "count" || row.unit_kind === "unknown"
+        ? row.unit_kind
+        : "unknown",
+    normalized_status: row.normalized_status === "normalized" ? "normalized" : "needs_retry",
+    category: row.category ? String(row.category) : null,
+    component: row.component ? String(row.component) : null
+  }));
+};
+
+const loadIngredientNameById = async (
+  client: SupabaseClient,
+  ingredientIds: string[]
+): Promise<Map<string, string>> => {
+  if (ingredientIds.length === 0) {
+    return new Map();
+  }
+
+  const { data, error } = await client.from("ingredients").select("id,canonical_name").in("id", ingredientIds);
+  if (error) {
+    if (isSchemaMissingError(error) || isRlsError(error)) {
+      return new Map();
+    }
+    throw new ApiError(500, "ingredients_fetch_failed", "Could not fetch canonical ingredients", error.message);
+  }
+
+  return new Map((data ?? []).map((row) => [row.id, row.canonical_name]));
+};
+
+const persistCanonicalRecipeIngredients = async (params: {
+  serviceClient: SupabaseClient;
+  recipeVersionId: string;
+  recipe: RecipePayload;
+}): Promise<void> => {
+  const canonicalRows = canonicalizeIngredients(params.recipe.ingredients);
+  if (canonicalRows.length === 0) {
+    return;
+  }
+
+  const keySet = Array.from(
+    new Set(canonicalRows.map((row) => row.normalized_key).filter((key) => key.length > 0))
+  );
+
+  if (keySet.length === 0) {
+    return;
+  }
+
+  const ingredientRows = canonicalRows.map((row) => ({
+    canonical_name: row.canonical_name,
+    normalized_key: row.normalized_key,
+    metadata: {
+      source: "llm",
+      last_seen_at: new Date().toISOString()
+    }
+  }));
+
+  const { data: ingredients, error: ingredientsError } = await params.serviceClient
+    .from("ingredients")
+    .upsert(ingredientRows, { onConflict: "normalized_key" })
+    .select("id,normalized_key,canonical_name");
+
+  if (ingredientsError || !ingredients) {
+    throw new ApiError(
+      500,
+      "canonical_ingredient_upsert_failed",
+      "Could not persist canonical ingredients",
+      ingredientsError?.message
+    );
+  }
+
+  const ingredientByKey = new Map(ingredients.map((ingredient) => [ingredient.normalized_key, ingredient]));
+
+  const aliases = canonicalRows
+    .filter((row) => row.normalized_key.length > 0)
+    .map((row) => ({
+      alias_key: row.normalized_key,
+      ingredient_id: ingredientByKey.get(row.normalized_key)?.id ?? null,
+      source: "llm",
+      confidence: 1
+    }))
+    .filter((row) => Boolean(row.ingredient_id));
+
+  if (aliases.length > 0) {
+    const { error: aliasError } = await params.serviceClient
+      .from("ingredient_aliases")
+      .upsert(aliases, { onConflict: "alias_key" });
+
+    if (aliasError) {
+      throw new ApiError(500, "ingredient_alias_upsert_failed", "Could not persist ingredient aliases", aliasError.message);
+    }
+  }
+
+  const { error: clearError } = await params.serviceClient
+    .from("recipe_ingredients")
+    .delete()
+    .eq("recipe_version_id", params.recipeVersionId);
+  if (clearError) {
+    throw new ApiError(500, "recipe_ingredients_clear_failed", "Could not clear recipe ingredients", clearError.message);
+  }
+
+  const rowsToInsert = canonicalRows.map((row) => ({
+    recipe_version_id: params.recipeVersionId,
+    ingredient_id: ingredientByKey.get(row.normalized_key)?.id ?? null,
+    source_name: row.source_name,
+    source_amount: row.source_amount,
+    source_unit: row.source_unit,
+    normalized_amount_si: row.normalized_amount_si,
+    normalized_unit: row.normalized_unit,
+    unit_kind: row.unit_kind,
+    normalized_status: row.normalized_status,
+    category: row.category,
+    component: row.component,
+    position: row.position,
+    metadata: {
+      preparation: row.preparation ?? null
+    }
+  }));
+
+  const { error: insertError } = await params.serviceClient.from("recipe_ingredients").insert(rowsToInsert);
+  if (insertError) {
+    throw new ApiError(500, "recipe_ingredients_insert_failed", "Could not persist recipe ingredients", insertError.message);
+  }
+};
+
+const enqueueRecipeMetadataJob = async (params: {
+  serviceClient: SupabaseClient;
+  recipeId: string;
+  recipeVersionId: string;
+}): Promise<void> => {
+  const { error } = await params.serviceClient.from("recipe_metadata_jobs").upsert(
+    {
+      recipe_id: params.recipeId,
+      recipe_version_id: params.recipeVersionId,
+      status: "pending",
+      attempts: 0,
+      max_attempts: 5,
+      next_attempt_at: new Date().toISOString(),
+      locked_at: null,
+      locked_by: null,
+      last_error: null,
+      updated_at: new Date().toISOString()
+    },
+    { onConflict: "recipe_version_id" }
+  );
+
+  if (error) {
+    throw new ApiError(500, "recipe_metadata_enqueue_failed", "Could not enqueue metadata job", error.message);
+  }
+};
+
+const ensureGraphRelationTypes = async (client: SupabaseClient, relationNames: string[]): Promise<Map<string, string>> => {
+  const normalizedNames = relationNames.map((name) => name.trim().toLowerCase()).filter((name) => name.length > 0);
+  if (normalizedNames.length === 0) {
+    return new Map();
+  }
+
+  const uniqueNames = Array.from(new Set(normalizedNames));
+  const insertPayload = uniqueNames.map((name) => ({
+    name,
+    description: `Graph relation: ${name}`
+  }));
+
+  const { error: upsertError } = await client.from("graph_relation_types").upsert(insertPayload, { onConflict: "name" });
+  if (upsertError) {
+    throw new ApiError(
+      500,
+      "metadata_relation_type_upsert_failed",
+      "Could not upsert graph relation types",
+      upsertError.message
+    );
+  }
+
+  const { data, error } = await client.from("graph_relation_types").select("id,name").in("name", uniqueNames);
+  if (error) {
+    throw new ApiError(500, "metadata_relation_type_fetch_failed", "Could not fetch graph relation types", error.message);
+  }
+
+  return new Map((data ?? []).map((row) => [row.name, row.id]));
+};
+
+const upsertMetadataGraph = async (params: {
+  serviceClient: SupabaseClient;
+  recipeId: string;
+  recipeVersionId: string;
+  payload: RecipePayload;
+  canonicalRows: CanonicalRecipeIngredientRow[];
+  canonicalIngredientNameById: Map<string, string>;
+}): Promise<void> => {
+  const recipeLabel = params.payload.title.trim();
+  if (!recipeLabel) {
+    return;
+  }
+
+  const ingredientNames = params.canonicalRows
+    .map((row) => {
+      if (row.ingredient_id) {
+        return params.canonicalIngredientNameById.get(row.ingredient_id) ?? row.source_name;
+      }
+      return row.source_name;
+    })
+    .map((name) => name.trim())
+    .filter((name) => name.length > 0);
+
+  const categoryNames = Array.from(
+    new Set(
+      [
+        ...params.canonicalRows.map((row) => row.category).filter((value): value is string => Boolean(value)),
+        ...listifyText(params.payload.metadata?.cuisine_tags),
+        ...listifyText(params.payload.metadata?.occasion_tags)
+      ]
+        .map((value) => value.trim())
+        .filter((value) => value.length > 0)
+    )
+  );
+
+  const keywordNames = Array.from(
+    new Set(
+      [
+        ...listifyText(params.payload.metadata?.flavor_profile),
+        ...listifyText(params.payload.pairings),
+        ...listifyText(params.payload.metadata?.pairing_rationale)
+      ]
+        .map((value) => value.trim())
+        .filter((value) => value.length > 0)
+    )
+  );
+
+  const entityPayload: Array<{ entity_type: string; label: string; metadata: Record<string, JsonValue> }> = [
+    {
+      entity_type: "recipe",
+      label: recipeLabel,
+      metadata: {
+        recipe_id: params.recipeId
+      }
+    },
+    ...ingredientNames.map((label) => ({
+      entity_type: "ingredient",
+      label,
+      metadata: {}
+    })),
+    ...categoryNames.map((label) => ({
+      entity_type: "category",
+      label,
+      metadata: {}
+    })),
+    ...keywordNames.map((label) => ({
+      entity_type: "keyword",
+      label,
+      metadata: {}
+    }))
+  ];
+
+  const uniqueEntityPayload = Array.from(
+    new Map(
+      entityPayload.map((entity) => [`${entity.entity_type}:${entity.label.toLowerCase()}`, entity])
+    ).values()
+  );
+
+  const { data: entities, error: entityError } = await params.serviceClient
+    .from("graph_entities")
+    .upsert(uniqueEntityPayload, { onConflict: "entity_type,label" })
+    .select("id,entity_type,label");
+
+  if (entityError || !entities) {
+    throw new ApiError(500, "metadata_entity_upsert_failed", "Could not upsert graph entities", entityError?.message);
+  }
+
+  const entityByKey = new Map(entities.map((entity) => [`${entity.entity_type}:${entity.label.toLowerCase()}`, entity.id]));
+  const recipeEntityId = entityByKey.get(`recipe:${recipeLabel.toLowerCase()}`);
+  if (!recipeEntityId) {
+    return;
+  }
+
+  const linkPayload = entities.map((entity) => ({
+    recipe_version_id: params.recipeVersionId,
+    entity_id: entity.id
+  }));
+  const { error: linkError } = await params.serviceClient.from("recipe_graph_links").upsert(linkPayload, {
+    onConflict: "recipe_version_id,entity_id"
+  });
+  if (linkError) {
+    throw new ApiError(500, "metadata_graph_link_failed", "Could not upsert recipe graph links", linkError.message);
+  }
+
+  const relationTypeByName = await ensureGraphRelationTypes(params.serviceClient, [
+    "contains_ingredient",
+    "has_category",
+    "has_keyword"
+  ]);
+
+  const containsIngredientRelation = relationTypeByName.get("contains_ingredient");
+  const hasCategoryRelation = relationTypeByName.get("has_category");
+  const hasKeywordRelation = relationTypeByName.get("has_keyword");
+
+  const edgePayload: Array<{
+    from_entity_id: string;
+    to_entity_id: string;
+    relation_type_id: string;
+    source: string;
+    confidence: number;
+    metadata: Record<string, JsonValue>;
+  }> = [];
+
+  if (containsIngredientRelation) {
+    for (const ingredientName of ingredientNames) {
+      const entityId = entityByKey.get(`ingredient:${ingredientName.toLowerCase()}`);
+      if (!entityId) {
+        continue;
+      }
+
+      edgePayload.push({
+        from_entity_id: recipeEntityId,
+        to_entity_id: entityId,
+        relation_type_id: containsIngredientRelation,
+        source: "metadata_job",
+        confidence: 1,
+        metadata: {}
+      });
+    }
+  }
+
+  if (hasCategoryRelation) {
+    for (const categoryName of categoryNames) {
+      const entityId = entityByKey.get(`category:${categoryName.toLowerCase()}`);
+      if (!entityId) {
+        continue;
+      }
+      edgePayload.push({
+        from_entity_id: recipeEntityId,
+        to_entity_id: entityId,
+        relation_type_id: hasCategoryRelation,
+        source: "metadata_job",
+        confidence: 0.85,
+        metadata: {}
+      });
+    }
+  }
+
+  if (hasKeywordRelation) {
+    for (const keywordName of keywordNames) {
+      const entityId = entityByKey.get(`keyword:${keywordName.toLowerCase()}`);
+      if (!entityId) {
+        continue;
+      }
+      edgePayload.push({
+        from_entity_id: recipeEntityId,
+        to_entity_id: entityId,
+        relation_type_id: hasKeywordRelation,
+        source: "metadata_job",
+        confidence: 0.8,
+        metadata: {}
+      });
+    }
+  }
+
+  if (edgePayload.length === 0) {
+    return;
+  }
+
+  const { error: edgeError } = await params.serviceClient.from("graph_edges").upsert(edgePayload, {
+    onConflict: "from_entity_id,to_entity_id,relation_type_id,source"
+  });
+
+  if (edgeError) {
+    throw new ApiError(500, "metadata_graph_edge_upsert_failed", "Could not upsert graph edges", edgeError.message);
+  }
+};
+
+const processMetadataJobs = async (params: {
+  serviceClient: SupabaseClient;
+  actorUserId: string;
+  requestId: string;
+  limit: number;
+}): Promise<{
+  reaped: number;
+  claimed: number;
+  processed: number;
+  ready: number;
+  failed: number;
+  pending: number;
+  queue: {
+    pending: number;
+    processing: number;
+    ready: number;
+    failed: number;
+  };
+}> => {
+  const now = new Date();
+  const staleThreshold = new Date(now.getTime() - 10 * 60 * 1000).toISOString();
+
+  const { data: staleJobs, error: staleJobsError } = await params.serviceClient
+    .from("recipe_metadata_jobs")
+    .select("id")
+    .eq("status", "processing")
+    .lt("locked_at", staleThreshold);
+
+  if (staleJobsError && !isSchemaMissingError(staleJobsError)) {
+    throw new ApiError(500, "metadata_jobs_stale_fetch_failed", "Could not fetch stale metadata jobs", staleJobsError.message);
+  }
+
+  const staleIds = (staleJobs ?? []).map((job) => job.id);
+  let reaped = 0;
+  if (staleIds.length > 0) {
+    const { error: reapError } = await params.serviceClient
+      .from("recipe_metadata_jobs")
+      .update({
+        status: "pending",
+        locked_at: null,
+        locked_by: null,
+        next_attempt_at: now.toISOString(),
+        updated_at: now.toISOString()
+      })
+      .in("id", staleIds);
+
+    if (reapError) {
+      throw new ApiError(500, "metadata_jobs_reap_failed", "Could not reap stale metadata locks", reapError.message);
+    }
+    reaped = staleIds.length;
+  }
+
+  if (params.limit <= 0) {
+    const { data: queueRows } = await params.serviceClient.from("recipe_metadata_jobs").select("status");
+    const queue = {
+      pending: (queueRows ?? []).filter((row) => row.status === "pending").length,
+      processing: (queueRows ?? []).filter((row) => row.status === "processing").length,
+      ready: (queueRows ?? []).filter((row) => row.status === "ready").length,
+      failed: (queueRows ?? []).filter((row) => row.status === "failed").length
+    };
+    return { reaped, claimed: 0, processed: 0, ready: 0, failed: 0, pending: 0, queue };
+  }
+
+  const { data: dueJobs, error: dueJobsError } = await params.serviceClient
+    .from("recipe_metadata_jobs")
+    .select("id,recipe_id,recipe_version_id,status,attempts,max_attempts,next_attempt_at")
+    .in("status", ["pending", "failed"])
+    .lte("next_attempt_at", now.toISOString())
+    .order("next_attempt_at", { ascending: true })
+    .limit(params.limit);
+
+  if (dueJobsError) {
+    if (isSchemaMissingError(dueJobsError)) {
+      return {
+        reaped,
+        claimed: 0,
+        processed: 0,
+        ready: 0,
+        failed: 0,
+        pending: 0,
+        queue: { pending: 0, processing: 0, ready: 0, failed: 0 }
+      };
+    }
+    throw new ApiError(500, "metadata_jobs_due_fetch_failed", "Could not fetch due metadata jobs", dueJobsError.message);
+  }
+
+  const jobs = dueJobs ?? [];
+  let claimed = 0;
+  let processed = 0;
+  let ready = 0;
+  let failed = 0;
+  let pending = 0;
+
+  for (const job of jobs) {
+    const nextAttempt = Number(job.attempts ?? 0) + 1;
+    const lockResult = await params.serviceClient
+      .from("recipe_metadata_jobs")
+      .update({
+        status: "processing",
+        attempts: nextAttempt,
+        locked_at: now.toISOString(),
+        locked_by: "v1_metadata_jobs_process",
+        updated_at: now.toISOString()
+      })
+      .eq("id", job.id)
+      .eq("status", job.status)
+      .select("id")
+      .maybeSingle();
+
+    if (lockResult.error) {
+      throw new ApiError(500, "metadata_job_lock_failed", "Could not claim metadata job", lockResult.error.message);
+    }
+    if (!lockResult.data) {
+      continue;
+    }
+    claimed += 1;
+
+    try {
+      const { data: version, error: versionError } = await params.serviceClient
+        .from("recipe_versions")
+        .select("id,payload")
+        .eq("id", job.recipe_version_id)
+        .maybeSingle();
+
+      if (versionError || !version?.payload) {
+        throw new Error("recipe_version_payload_missing");
+      }
+
+      const payload = version.payload as RecipePayload;
+      const canonicalRows = await fetchCanonicalIngredientRows(params.serviceClient, job.recipe_version_id);
+      const ingredientIds = Array.from(
+        new Set(canonicalRows.map((row) => row.ingredient_id).filter((id): id is string => Boolean(id)))
+      );
+      const canonicalIngredientNameById = await loadIngredientNameById(params.serviceClient, ingredientIds);
+      const categories = Array.from(
+        new Set(
+          [
+            ...canonicalRows.map((row) => row.category).filter((value): value is string => Boolean(value)),
+            ...listifyText(payload.metadata?.cuisine_tags),
+            ...listifyText(payload.metadata?.occasion_tags)
+          ]
+            .map((value) => value.trim())
+            .filter((value) => value.length > 0)
+        )
+      );
+      const keywords = Array.from(
+        new Set(
+          [
+            ...listifyText(payload.metadata?.flavor_profile),
+            ...listifyText(payload.pairings),
+            ...listifyText(payload.metadata?.pairing_rationale)
+          ]
+            .map((value) => value.trim())
+            .filter((value) => value.length > 0)
+        )
+      );
+
+      await upsertMetadataGraph({
+        serviceClient: params.serviceClient,
+        recipeId: job.recipe_id,
+        recipeVersionId: job.recipe_version_id,
+        payload,
+        canonicalRows,
+        canonicalIngredientNameById
+      });
+
+      const { error: readyError } = await params.serviceClient
+        .from("recipe_metadata_jobs")
+        .update({
+          status: "ready",
+          locked_at: null,
+          locked_by: null,
+          last_error: null,
+          metadata: {
+            categories,
+            keywords,
+            nutrition: payload.metadata?.nutrition ?? null,
+            processed_at: new Date().toISOString()
+          },
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", job.id);
+
+      if (readyError) {
+        throw new Error(readyError.message);
+      }
+
+      await logChangelog({
+        serviceClient: params.serviceClient,
+        actorUserId: params.actorUserId,
+        scope: "metadata",
+        entityType: "metadata_job",
+        entityId: job.id,
+        action: "ready",
+        requestId: params.requestId,
+        afterJson: {
+          recipe_id: job.recipe_id,
+          recipe_version_id: job.recipe_version_id
+        }
+      });
+
+      processed += 1;
+      ready += 1;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "metadata_job_failed";
+      const maxAttempts = Number(job.max_attempts ?? 5);
+      const terminal = nextAttempt >= maxAttempts;
+      const baseDelayMs = Math.min(60 * 60 * 1000, 1000 * (2 ** Math.max(0, nextAttempt - 1)));
+      const jitterMs = Math.floor(Math.random() * 2000);
+      const nextAttemptAt = new Date(Date.now() + baseDelayMs + jitterMs).toISOString();
+
+      const { error: failureUpdateError } = await params.serviceClient
+        .from("recipe_metadata_jobs")
+        .update({
+          status: terminal ? "failed" : "pending",
+          next_attempt_at: terminal ? now.toISOString() : nextAttemptAt,
+          locked_at: null,
+          locked_by: null,
+          last_error: message,
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", job.id);
+
+      if (failureUpdateError) {
+        throw new ApiError(
+          500,
+          "metadata_job_failure_update_failed",
+          "Could not update metadata job failure",
+          failureUpdateError.message
+        );
+      }
+
+      await logChangelog({
+        serviceClient: params.serviceClient,
+        actorUserId: params.actorUserId,
+        scope: "metadata",
+        entityType: "metadata_job",
+        entityId: job.id,
+        action: terminal ? "failed" : "retry_scheduled",
+        requestId: params.requestId,
+        afterJson: {
+          attempt: nextAttempt,
+          max_attempts: maxAttempts,
+          terminal,
+          error: message
+        }
+      });
+
+      processed += 1;
+      if (terminal) {
+        failed += 1;
+      } else {
+        pending += 1;
+      }
+    }
+  }
+
+  const { data: queueRows } = await params.serviceClient.from("recipe_metadata_jobs").select("status");
+  const queue = {
+    pending: (queueRows ?? []).filter((row) => row.status === "pending").length,
+    processing: (queueRows ?? []).filter((row) => row.status === "processing").length,
+    ready: (queueRows ?? []).filter((row) => row.status === "ready").length,
+    failed: (queueRows ?? []).filter((row) => row.status === "failed").length
+  };
+
+  return { reaped, claimed, processed, ready, failed, pending, queue };
+};
+
 const fetchRecipeView = async (
   client: SupabaseClient,
   recipeId: string,
-  includeAttachments = true
+  includeAttachments = true,
+  options: RecipeViewOptions = defaultRecipeViewOptions
 ): Promise<RecipeView> => {
-  const preferredRecipeQuery = await client
+  const { data: recipe, error: recipeError } = await client
     .from("recipes")
     .select("id,title,hero_image_url,image_status,visibility,updated_at,current_version_id")
     .eq("id", recipeId)
     .maybeSingle();
 
-  let recipe: {
-    id: string;
-    title: string;
-    hero_image_url: string | null;
-    image_status: string;
-    visibility: string;
-    updated_at: string;
-    current_version_id: string | null;
-  } | null = null;
-
-  if (preferredRecipeQuery.error) {
-    if (!isSchemaMissingError(preferredRecipeQuery.error)) {
-      throw new ApiError(500, "recipe_fetch_failed", "Could not fetch recipe", preferredRecipeQuery.error.message);
-    }
-
-    const legacyRecipeQuery = await client
-      .from("recipes")
-      .select("id,title,hero_image_url,visibility,updated_at,current_version_id")
-      .eq("id", recipeId)
-      .maybeSingle();
-
-    if (legacyRecipeQuery.error) {
-      throw new ApiError(500, "recipe_fetch_failed", "Could not fetch recipe", legacyRecipeQuery.error.message);
-    }
-
-    if (legacyRecipeQuery.data) {
-      recipe = {
-        ...legacyRecipeQuery.data,
-        image_status: legacyRecipeQuery.data.hero_image_url ? "ready" : "pending"
-      };
-    }
-  } else {
-    recipe = preferredRecipeQuery.data ?? null;
+  if (recipeError) {
+    throw new ApiError(500, "recipe_fetch_failed", "Could not fetch recipe", recipeError.message);
   }
 
   if (!recipe) {
@@ -610,6 +1574,22 @@ const fetchRecipeView = async (
   }
 
   const payload = version.payload as RecipePayload;
+  const canonicalRows = await fetchCanonicalIngredientRows(client, version.id);
+  const projectedIngredients = projectIngredientsForOutput({
+    sourceIngredients: payload.ingredients,
+    canonicalRows,
+    units: options.units
+  });
+  const ingredientGroups = buildIngredientGroups({
+    ingredients: projectedIngredients,
+    groupBy: options.groupBy
+  });
+
+  const projectedSteps = projectInlineMeasurements({
+    steps: payload.steps,
+    units: options.units,
+    includeInlineMeasurements: options.inlineMeasurements
+  });
 
   let attachments: RecipeAttachmentView[] = [];
   if (includeAttachments) {
@@ -621,33 +1601,6 @@ const fetchRecipeView = async (
 
     const links = linksResult.data ?? [];
     if (linksResult.error) {
-      if (isSchemaMissingError(linksResult.error)) {
-        return {
-          id: recipe.id,
-          title: payload.title ?? recipe.title,
-          description: payload.description,
-          summary: payload.description ?? payload.notes ?? "",
-          servings: payload.servings,
-          ingredients: payload.ingredients,
-          steps: payload.steps,
-          notes: payload.notes,
-          pairings: payload.pairings ?? [],
-          metadata: payload.metadata,
-          emoji: payload.emoji ?? [],
-          image_url: recipe.hero_image_url,
-          image_status: recipe.image_status,
-          visibility: recipe.visibility,
-          updated_at: recipe.updated_at,
-          version: {
-            version_id: version.id,
-            recipe_id: recipe.id,
-            parent_version_id: version.parent_version_id,
-            diff_summary: version.diff_summary,
-            created_at: version.created_at
-          },
-          attachments: []
-        };
-      }
       throw new ApiError(
         500,
         "recipe_links_fetch_failed",
@@ -674,7 +1627,7 @@ const fetchRecipeView = async (
 
     const attachmentItems: RecipeAttachmentView[] = [];
     for (const link of links) {
-      const childRecipe = await fetchRecipeView(client, link.child_recipe_id, false);
+      const childRecipe = await fetchRecipeView(client, link.child_recipe_id, false, options);
       attachmentItems.push({
         attachment_id: link.id,
         relation_type: relationById.get(link.relation_type_id) ?? "attached_to",
@@ -692,8 +1645,9 @@ const fetchRecipeView = async (
     description: payload.description,
     summary: payload.description ?? payload.notes ?? "",
     servings: payload.servings,
-    ingredients: payload.ingredients,
-    steps: payload.steps,
+    ingredients: projectedIngredients,
+    steps: projectedSteps,
+    ingredient_groups: ingredientGroups,
     notes: payload.notes,
     pairings: payload.pairings ?? [],
     metadata: payload.metadata,
@@ -838,6 +1792,18 @@ const persistRecipe = async (params: {
     }
   }
 
+  await persistCanonicalRecipeIngredients({
+    serviceClient: params.serviceClient,
+    recipeVersionId: version.id,
+    recipe: params.payload
+  });
+
+  await enqueueRecipeMetadataJob({
+    serviceClient: params.serviceClient,
+    recipeId,
+    recipeVersionId: version.id
+  });
+
   // Image jobs are only enqueued when a recipe is explicitly saved to cookbook.
   // Do NOT enqueue here — avoids triggering slow image generation on every chatSession/tweak.
 
@@ -919,69 +1885,6 @@ const applyAutoCategories = async (params: {
   }
 };
 
-const recordGraphData = async (params: {
-  client: SupabaseClient;
-  recipeVersionId: string;
-  recipe: RecipePayload;
-}): Promise<void> => {
-  const rawLabels: unknown[] = [
-    params.recipe.title,
-    ...(params.recipe.pairings ?? []),
-    ...params.recipe.ingredients.map((i) => i.name)
-  ];
-  const uniqueLabels = Array.from(
-    new Set(
-      rawLabels
-        .filter((label): label is string => typeof label === "string")
-        .map((label) => label.trim())
-        .filter((label) => label.length > 0)
-    )
-  );
-
-  if (uniqueLabels.length === 0) {
-    return;
-  }
-
-  const entitiesPayload = uniqueLabels.map((label) => ({
-    entity_type: "food_item",
-    label,
-    metadata: {}
-  }));
-
-  const { data: entities, error: entityError } = await params.client
-    .from("graph_entities")
-    .upsert(entitiesPayload, { onConflict: "entity_type,label" })
-    .select("id,label");
-
-  if (entityError || !entities) {
-    if (isRlsError(entityError) || isSchemaMissingError(entityError)) {
-      return;
-    }
-    throw new ApiError(500, "graph_entity_upsert_failed", "Could not upsert graph entities", entityError?.message);
-  }
-
-  const entityByLabel = new Map<string, string>();
-  for (const entity of entities) {
-    entityByLabel.set(entity.label, entity.id);
-  }
-
-  const links = uniqueLabels
-    .map((label) => entityByLabel.get(label))
-    .filter((id): id is string => Boolean(id))
-    .map((entityId) => ({ recipe_version_id: params.recipeVersionId, entity_id: entityId }));
-
-  const { error: linkError } = await params.client.from("recipe_graph_links").upsert(links, {
-    onConflict: "recipe_version_id,entity_id"
-  });
-
-  if (linkError) {
-    if (isRlsError(linkError) || isSchemaMissingError(linkError)) {
-      return;
-    }
-    throw new ApiError(500, "graph_link_failed", "Could not link recipe version to graph entities", linkError.message);
-  }
-};
-
 const buildContextPack = async (params: {
   userClient: SupabaseClient;
   serviceClient: SupabaseClient;
@@ -992,12 +1895,14 @@ const buildContextPack = async (params: {
   selectionMode?: "llm" | "fast";
 }): Promise<ContextPack> => {
   const preferences = await getPreferences(params.userClient, params.userId);
+  const preferencesNaturalLanguage = buildNaturalLanguagePreferenceContext(preferences);
   const memorySnapshot = await getMemorySnapshot(params.userClient, params.userId);
   const memories = await getActiveMemories(params.userClient, params.userId, 120);
 
   if (memories.length === 0) {
     return {
       preferences,
+      preferencesNaturalLanguage,
       memorySnapshot,
       selectedMemories: [],
       selectedMemoryIds: []
@@ -1008,6 +1913,7 @@ const buildContextPack = async (params: {
     const selectedMemories = memories.slice(0, 12);
     return {
       preferences,
+      preferencesNaturalLanguage,
       memorySnapshot,
       selectedMemories,
       selectedMemoryIds: selectedMemories.map((memory) => memory.id)
@@ -1023,6 +1929,7 @@ const buildContextPack = async (params: {
       prompt: params.prompt,
       context: {
         preferences,
+        preferences_natural_language: preferencesNaturalLanguage,
         memory_snapshot: memorySnapshot,
         ...params.context
       },
@@ -1039,6 +1946,7 @@ const buildContextPack = async (params: {
 
   return {
     preferences,
+    preferencesNaturalLanguage,
     memorySnapshot,
     selectedMemories,
     selectedMemoryIds: selectedMemories.map((memory) => memory.id)
@@ -1213,6 +2121,203 @@ const updateMemoryFromInteraction = async (params: {
   });
 };
 
+const enqueueMemoryJob = async (params: {
+  serviceClient: SupabaseClient;
+  userId: string;
+  chatId: string;
+  messageId: string;
+  interactionContext: Record<string, JsonValue>;
+}): Promise<void> => {
+  const { error } = await params.serviceClient.from("memory_jobs").upsert(
+    {
+      user_id: params.userId,
+      chat_id: params.chatId,
+      message_id: params.messageId,
+      status: "pending",
+      attempts: 0,
+      max_attempts: 5,
+      next_attempt_at: new Date().toISOString(),
+      interaction_context: params.interactionContext,
+      locked_at: null,
+      locked_by: null,
+      last_error: null,
+      updated_at: new Date().toISOString()
+    },
+    { onConflict: "chat_id,message_id" }
+  );
+
+  if (error) {
+    if (isSchemaMissingError(error)) {
+      return;
+    }
+    throw new ApiError(500, "memory_job_enqueue_failed", "Could not enqueue memory job", error.message);
+  }
+};
+
+const processMemoryJobs = async (params: {
+  userClient: SupabaseClient;
+  serviceClient: SupabaseClient;
+  actorUserId: string;
+  requestId: string;
+  limit: number;
+}): Promise<{
+  processed: number;
+  succeeded: number;
+  failed: number;
+  queue: { pending: number; processing: number; ready: number; failed: number };
+}> => {
+  const nowIso = new Date().toISOString();
+  const staleCutoffIso = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+  const lockOwner = `memory-worker:${crypto.randomUUID()}`;
+
+  const staleResult = await params.serviceClient
+    .from("memory_jobs")
+    .select("id")
+    .eq("status", "processing")
+    .lt("locked_at", staleCutoffIso)
+    .limit(200);
+
+  if (staleResult.error && !isSchemaMissingError(staleResult.error)) {
+    throw new ApiError(500, "memory_jobs_stale_fetch_failed", "Could not fetch stale memory jobs", staleResult.error.message);
+  }
+
+  if ((staleResult.data ?? []).length > 0) {
+    const staleIds = (staleResult.data ?? []).map((row) => row.id);
+    const staleUpdate = await params.serviceClient
+      .from("memory_jobs")
+      .update({
+        status: "pending",
+        locked_at: null,
+        locked_by: null,
+        next_attempt_at: nowIso,
+        updated_at: nowIso
+      })
+      .in("id", staleIds);
+
+    if (staleUpdate.error && !isSchemaMissingError(staleUpdate.error)) {
+      throw new ApiError(500, "memory_jobs_stale_requeue_failed", "Could not requeue stale memory jobs", staleUpdate.error.message);
+    }
+  }
+
+  const dueResult = await params.serviceClient
+    .from("memory_jobs")
+    .select("id,user_id,chat_id,message_id,attempts,max_attempts,interaction_context")
+    .in("status", ["pending", "failed"])
+    .lte("next_attempt_at", nowIso)
+    .order("next_attempt_at", { ascending: true })
+    .limit(Math.min(Math.max(params.limit, 1), 100));
+
+  if (dueResult.error) {
+    if (isSchemaMissingError(dueResult.error)) {
+      return {
+        processed: 0,
+        succeeded: 0,
+        failed: 0,
+        queue: { pending: 0, processing: 0, ready: 0, failed: 0 }
+      };
+    }
+    throw new ApiError(500, "memory_jobs_due_fetch_failed", "Could not fetch due memory jobs", dueResult.error.message);
+  }
+
+  let processed = 0;
+  let succeeded = 0;
+  let failed = 0;
+
+  for (const row of dueResult.data ?? []) {
+    const claim = await params.serviceClient
+      .from("memory_jobs")
+      .update({
+        status: "processing",
+        locked_at: nowIso,
+        locked_by: lockOwner,
+        updated_at: nowIso
+      })
+      .eq("id", row.id)
+      .in("status", ["pending", "failed"])
+      .select("id,user_id,interaction_context,attempts,max_attempts")
+      .maybeSingle();
+
+    if (claim.error || !claim.data) {
+      continue;
+    }
+
+    processed += 1;
+    try {
+      await updateMemoryFromInteraction({
+        userClient: params.userClient,
+        serviceClient: params.serviceClient,
+        userId: claim.data.user_id,
+        requestId: params.requestId,
+        interactionContext: (claim.data.interaction_context as Record<string, JsonValue>) ?? {},
+        mode: "full"
+      });
+
+      const readyUpdate = await params.serviceClient
+        .from("memory_jobs")
+        .update({
+          status: "ready",
+          locked_at: null,
+          locked_by: null,
+          last_error: null,
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", claim.data.id);
+
+      if (readyUpdate.error) {
+        throw new ApiError(500, "memory_job_ready_update_failed", "Could not update memory job status", readyUpdate.error.message);
+      }
+
+      succeeded += 1;
+    } catch (error) {
+      const attempts = Number(claim.data.attempts ?? 0) + 1;
+      const maxAttempts = Number(claim.data.max_attempts ?? 5);
+      const terminal = attempts >= maxAttempts;
+      const baseDelay = Math.min(60, 2 ** Math.min(attempts, 6)) * 1000;
+      const jitter = Math.floor(Math.random() * 1000);
+      const nextAttemptAt = new Date(Date.now() + baseDelay + jitter).toISOString();
+
+      const failedUpdate = await params.serviceClient
+        .from("memory_jobs")
+        .update({
+          status: terminal ? "failed" : "pending",
+          attempts,
+          next_attempt_at: terminal ? new Date().toISOString() : nextAttemptAt,
+          locked_at: null,
+          locked_by: null,
+          last_error: error instanceof Error ? error.message.slice(0, 2000) : String(error).slice(0, 2000),
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", claim.data.id);
+
+      if (failedUpdate.error) {
+        throw new ApiError(
+          500,
+          "memory_job_failure_update_failed",
+          "Could not update memory job failure",
+          failedUpdate.error.message
+        );
+      }
+
+      failed += 1;
+    }
+  }
+
+  const queueRows = await params.serviceClient.from("memory_jobs").select("status");
+  if (queueRows.error && !isSchemaMissingError(queueRows.error)) {
+    throw new ApiError(500, "memory_jobs_queue_fetch_failed", "Could not fetch memory queue summary", queueRows.error.message);
+  }
+
+  const queue = { pending: 0, processing: 0, ready: 0, failed: 0 };
+  for (const row of queueRows.data ?? []) {
+    if (row.status === "pending") queue.pending += 1;
+    if (row.status === "processing") queue.processing += 1;
+    if (row.status === "ready") queue.ready += 1;
+    if (row.status === "failed") queue.failed += 1;
+  }
+
+  return { processed, succeeded, failed, queue };
+};
+
 const deriveAttachmentPayload = (recipe: Omit<RecipePayload, "attachments">): RecipePayload => {
   return {
     ...recipe,
@@ -1315,7 +2420,7 @@ const fetchChatMessages = async (client: SupabaseClient, chatId: string): Promis
 
 const parseAssistantChatPayload = (
   message: Pick<ChatMessageView, "content">
-): { recipe: RecipePayload | null; assistantReply: AssistantReply | null } | null => {
+): { recipe: RecipePayload | null; assistantReply: AssistantReply | null; candidateSet: CandidateRecipeSet | null } | null => {
   try {
     const parsed = JSON.parse(message.content) as unknown;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
@@ -1335,6 +2440,9 @@ const parseAssistantChatPayload = (
             }
             return null;
           })();
+    const candidateSet =
+      normalizeCandidateRecipeSet(candidate.candidate_recipe_set) ??
+      (recipe ? wrapRecipeInCandidateSet(recipe) : null);
 
     const replyCandidate =
       candidate.assistant_reply ??
@@ -1357,13 +2465,14 @@ const parseAssistantChatPayload = (
       return null;
     })();
 
-    if (!recipe && !assistantReply) {
+    if (!recipe && !assistantReply && !candidateSet) {
       return null;
     }
 
     return {
       recipe,
-      assistantReply
+      assistantReply,
+      candidateSet
     };
   } catch {
     return null;
@@ -1382,6 +2491,9 @@ const extractLatestAssistantRecipe = (messages: ChatMessageView[]): RecipePayloa
     const parsed = parseAssistantChatPayload(message);
     if (parsed?.recipe) {
       return parsed.recipe;
+    }
+    if (parsed?.candidateSet?.components?.[0]?.recipe) {
+      return parsed.candidateSet.components[0].recipe;
     }
   }
 
@@ -1422,6 +2534,150 @@ const renderChatMessageForPrompt = (message: ChatMessageView): string => {
   }
 
   return message.content;
+};
+
+const updateChatSessionLoopContext = async (params: {
+  client: SupabaseClient;
+  chatId: string;
+  context: ChatSessionContext;
+}): Promise<void> => {
+  const { error } = await params.client
+    .from("chat_sessions")
+    .update({
+      context: params.context,
+      updated_at: new Date().toISOString()
+    })
+    .eq("id", params.chatId);
+
+  if (error) {
+    throw new ApiError(500, "chat_context_update_failed", "Could not update chat context", error.message);
+  }
+};
+
+const buildChatLoopResponse = (params: {
+  chatId: string;
+  messages: ChatMessageView[];
+  context: ChatSessionContext;
+  assistantReply?: AssistantReply | null;
+  memoryContextIds: string[];
+  createdAt?: string;
+  updatedAt?: string;
+  uiHints?: ChatUiHints;
+}): ChatLoopResponse => {
+  const candidateSet = normalizeCandidateRecipeSet(params.context.candidate_recipe_set ?? null);
+  const loopState = deriveLoopState(params.context, candidateSet);
+  const reply = params.assistantReply ?? extractLatestAssistantReply(params.messages);
+
+  return {
+    id: params.chatId,
+    messages: params.messages,
+    loop_state: loopState,
+    assistant_reply: reply ?? null,
+    candidate_recipe_set: candidateSet,
+    memory_context_ids: params.memoryContextIds,
+    context_version: 2,
+    ui_hints: params.uiHints,
+    context: params.context as Record<string, JsonValue>,
+    created_at: params.createdAt,
+    updated_at: params.updatedAt
+  };
+};
+
+const mapCandidateRoleToRelation = (role: CandidateRecipeRole): string => {
+  switch (role) {
+    case "side":
+      return "is_side_of";
+    case "appetizer":
+      return "is_appetizer_of";
+    case "dessert":
+      return "is_dessert_of";
+    case "drink":
+      return "pairs_with";
+    case "main":
+    default:
+      return "pairs_with";
+  }
+};
+
+const mapRelationTypeToCandidateRole = (relationType: string | null | undefined): CandidateRecipeRole => {
+  const normalized = relationType?.trim().toLowerCase() ?? "";
+  if (normalized.includes("side")) return "side";
+  if (normalized.includes("appetizer")) return "appetizer";
+  if (normalized.includes("dessert")) return "dessert";
+  if (normalized.includes("drink") || normalized.includes("beverage")) return "drink";
+  return "main";
+};
+
+const removeRecipeAttachments = (recipe: RecipePayload): RecipePayload => ({
+  ...recipe,
+  attachments: []
+});
+
+const candidateFromRecipePayload = (
+  recipe: RecipePayload,
+  existing: CandidateRecipeSet | null = null
+): CandidateRecipeSet => {
+  const components: CandidateRecipeComponent[] = [
+    {
+      component_id: existing?.components?.[0]?.component_id ?? crypto.randomUUID(),
+      role: "main",
+      title: recipe.title,
+      recipe: removeRecipeAttachments(recipe)
+    }
+  ];
+
+  for (const attachment of recipe.attachments ?? []) {
+    if (components.length >= 3) break;
+    if (!attachment?.recipe) continue;
+    components.push({
+      component_id: crypto.randomUUID(),
+      role: mapRelationTypeToCandidateRole(attachment.relation_type),
+      title: attachment.title?.trim() || attachment.recipe.title,
+      recipe: removeRecipeAttachments(attachment.recipe as RecipePayload)
+    });
+  }
+
+  const activeComponentId =
+    existing?.active_component_id && components.some((component) => component.component_id === existing.active_component_id)
+      ? existing.active_component_id
+      : components[0].component_id;
+
+  return {
+    candidate_id: existing?.candidate_id ?? crypto.randomUUID(),
+    revision: Math.max(1, Number(existing?.revision ?? 0) + 1),
+    active_component_id: activeComponentId,
+    components
+  };
+};
+
+const mergeRecipeIntoCandidate = (
+  existing: CandidateRecipeSet | null,
+  recipe: RecipePayload
+): CandidateRecipeSet => {
+  if (!existing) {
+    return candidateFromRecipePayload(recipe, null);
+  }
+
+  if (Array.isArray(recipe.attachments) && recipe.attachments.length > 0) {
+    return candidateFromRecipePayload(recipe, existing);
+  }
+
+  const nextComponents = existing.components.map((component) => {
+    if (component.component_id !== existing.active_component_id) {
+      return component;
+    }
+    return {
+      ...component,
+      title: recipe.title,
+      recipe: removeRecipeAttachments(recipe)
+    };
+  });
+
+  return {
+    ...existing,
+    revision: Math.max(1, Number(existing.revision ?? 0) + 1),
+    components: nextComponents
+  };
 };
 
 const buildCookbookItems = async (client: SupabaseClient, userId: string): Promise<Array<Record<string, JsonValue>>> => {
@@ -1542,6 +2798,65 @@ const buildCookbookItems = async (client: SupabaseClient, userId: string): Promi
       updated_at: recipe.updated_at
     };
   });
+};
+
+const normalizeCookbookInsight = (candidate: string | null | undefined): string | null => {
+  if (typeof candidate !== "string") {
+    return null;
+  }
+
+  const collapsed = candidate.replace(/\s+/g, " ").trim();
+  if (collapsed.length === 0) {
+    return null;
+  }
+
+  const sentenceBoundary = collapsed.search(/[.!?]\s/);
+  const firstSentence = sentenceBoundary >= 0 ? collapsed.slice(0, sentenceBoundary + 1) : collapsed;
+  if (firstSentence.length <= 150) {
+    return firstSentence;
+  }
+
+  return `${firstSentence.slice(0, 147).trimEnd()}...`;
+};
+
+const generateCookbookInsight = async (params: {
+  client: SupabaseClient;
+  userId: string;
+  requestId: string;
+  items: Array<Record<string, JsonValue>>;
+}): Promise<string | null> => {
+  if (params.items.length === 0) {
+    return null;
+  }
+
+  const contextItems = params.items.slice(0, 12).map((item) => ({
+    title: typeof item.title === "string" ? item.title : "",
+    category: typeof item.category === "string" ? item.category : "",
+    summary: typeof item.summary === "string" ? item.summary.slice(0, 220) : ""
+  }));
+
+  try {
+    const response = await llmGateway.converseChat({
+      client: params.client,
+      userId: params.userId,
+      requestId: params.requestId,
+      prompt:
+        "Write a single warm sentence for a cookbook header subtitle based on the user's saved recipes. Mention one clear pattern you infer. Keep it under 20 words. No markdown.",
+      context: {
+        task: "cookbook_header_insight",
+        cookbook_items: contextItems,
+        cookbook_recipe_count: params.items.length
+      }
+    });
+
+    return normalizeCookbookInsight(response.assistant_reply.text);
+  } catch (error) {
+    console.error("cookbook_insight_failed", {
+      request_id: params.requestId,
+      error: error instanceof Error ? error.message : String(error)
+    });
+    return null;
+  }
 };
 
 const processImageJobs = async (params: {
@@ -1670,6 +2985,7 @@ const processImageJobs = async (params: {
         recipe: recipePayload,
         context: {
           preferences,
+          preferences_natural_language: buildNaturalLanguagePreferenceContext(preferences),
           memory_snapshot: snapshot
         }
       });
@@ -1809,8 +3125,30 @@ Deno.serve(async (request) => {
       }
 
       if (method === "PATCH") {
-        const body = await requireJsonBody<PreferenceContext>(request);
-        const payload = { ...body, user_id: auth.userId, updated_at: new Date().toISOString() };
+        const body = await requireJsonBody<Record<string, unknown>>(request);
+        const patch = normalizePreferencePatch(body);
+        if (!patch) {
+          throw new ApiError(400, "invalid_preferences_payload", "No valid preference fields were provided");
+        }
+
+        const normalizedPatch = await normalizePreferencePatchWithLlm({
+          client: serviceClient,
+          userId: auth.userId,
+          requestId,
+          patch
+        });
+
+        const currentPreferences = await getPreferences(client, auth.userId);
+        const nextPreferences: PreferenceContext = {
+          ...currentPreferences,
+          ...normalizedPatch
+        };
+
+        const payload = {
+          user_id: auth.userId,
+          ...nextPreferences,
+          updated_at: new Date().toISOString()
+        };
         const { data, error } = await client.from("preferences").upsert(payload).select("*").single();
         if (error) {
           throw new ApiError(500, "preferences_update_failed", "Could not update preferences", error.message);
@@ -1891,6 +3229,7 @@ Deno.serve(async (request) => {
         prompt: normalizedMessage || "start onboarding",
         context: {
           preferences: contextPack.preferences,
+          preferences_natural_language: contextPack.preferencesNaturalLanguage,
           memory_snapshot: contextPack.memorySnapshot,
           selected_memories: contextPack.selectedMemories,
           transcript,
@@ -2164,6 +3503,147 @@ Deno.serve(async (request) => {
       return jsonResponse(200, result);
     }
 
+    if (segments.length === 2 && segments[0] === "metadata-jobs" && segments[1] === "process" && method === "POST") {
+      const body = await requireJsonBody<{ limit?: number }>(request).catch(() => ({ limit: 10 }));
+      const limit = Number.isFinite(Number(body.limit)) ? Math.max(0, Math.min(50, Number(body.limit))) : 10;
+
+      const result = await processMetadataJobs({
+        serviceClient,
+        actorUserId: auth.userId,
+        requestId,
+        limit
+      });
+
+      await logChangelog({
+        serviceClient,
+        actorUserId: auth.userId,
+        scope: "metadata",
+        entityType: "metadata_job",
+        action: "process_batch",
+        requestId,
+        afterJson: {
+          reaped: result.reaped,
+          claimed: result.claimed,
+          processed: result.processed,
+          ready: result.ready,
+          failed: result.failed,
+          pending: result.pending,
+          queue: result.queue
+        }
+      });
+
+      return jsonResponse(200, result);
+    }
+
+    if (segments.length === 2 && segments[0] === "metadata-jobs" && segments[1] === "retry" && method === "POST") {
+      const body = await requireJsonBody<{ job_id?: string }>(request);
+      const jobId = parseUuid(body.job_id ?? "");
+
+      const { data: retried, error: retryError } = await serviceClient
+        .from("recipe_metadata_jobs")
+        .update({
+          status: "pending",
+          attempts: 0,
+          next_attempt_at: new Date().toISOString(),
+          locked_at: null,
+          locked_by: null,
+          last_error: null,
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", jobId)
+        .in("status", ["pending", "processing", "failed"])
+        .select("id,status,attempts,next_attempt_at")
+        .maybeSingle();
+
+      if (retryError) {
+        throw new ApiError(500, "metadata_job_retry_failed", "Could not retry metadata job", retryError.message);
+      }
+      if (!retried) {
+        throw new ApiError(404, "metadata_job_not_found", "Metadata job not found");
+      }
+
+      await logChangelog({
+        serviceClient,
+        actorUserId: auth.userId,
+        scope: "metadata",
+        entityType: "metadata_job",
+        entityId: jobId,
+        action: "manual_retry",
+        requestId
+      });
+
+      return jsonResponse(200, { ok: true, job: retried });
+    }
+
+    if (segments.length === 2 && segments[0] === "memory-jobs" && segments[1] === "process" && method === "POST") {
+      const body = await requireJsonBody<{ limit?: number }>(request).catch(() => ({ limit: 25 }));
+      const limit = Number.isFinite(Number(body.limit)) ? Math.max(1, Math.min(100, Number(body.limit))) : 25;
+
+      const result = await processMemoryJobs({
+        userClient: client,
+        serviceClient,
+        actorUserId: auth.userId,
+        requestId,
+        limit
+      });
+
+      await logChangelog({
+        serviceClient,
+        actorUserId: auth.userId,
+        scope: "memory",
+        entityType: "memory_job",
+        action: "process_batch",
+        requestId,
+        afterJson: {
+          processed: result.processed,
+          succeeded: result.succeeded,
+          failed: result.failed,
+          queue: result.queue
+        }
+      });
+
+      return jsonResponse(200, result);
+    }
+
+    if (segments.length === 2 && segments[0] === "memory-jobs" && segments[1] === "retry" && method === "POST") {
+      const body = await requireJsonBody<{ job_id?: string }>(request);
+      const jobId = parseUuid(body.job_id ?? "");
+
+      const { data: retried, error: retryError } = await client
+        .from("memory_jobs")
+        .update({
+          status: "pending",
+          attempts: 0,
+          next_attempt_at: new Date().toISOString(),
+          locked_at: null,
+          locked_by: null,
+          last_error: null,
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", jobId)
+        .select("id,status,attempts,next_attempt_at")
+        .maybeSingle();
+
+      if (retryError) {
+        throw new ApiError(500, "memory_job_retry_failed", "Could not retry memory job", retryError.message);
+      }
+      if (!retried) {
+        throw new ApiError(404, "memory_job_not_found", "Memory job not found");
+      }
+
+      await logChangelog({
+        serviceClient,
+        actorUserId: auth.userId,
+        scope: "memory",
+        entityType: "memory_job",
+        entityId: jobId,
+        action: "manual_retry",
+        requestId
+      });
+
+      return jsonResponse(200, { ok: true, job: retried });
+    }
+
     if (segments.length === 1 && segments[0] === "collections") {
       if (method === "GET") {
         const { data, error } = await client
@@ -2237,116 +3717,32 @@ Deno.serve(async (request) => {
     }
 
     if (segments.length === 2 && segments[0] === "recipes" && segments[1] === "generate" && method === "POST") {
-      const body = await requireJsonBody<{ prompt: string; vibe?: string }>(request);
-      if (!body.prompt?.trim()) {
-        throw new ApiError(400, "invalid_prompt", "prompt is required");
-      }
-
-      const contextPack = await buildContextPack({
-        userClient: client,
-        serviceClient,
-        userId: auth.userId,
-        requestId,
-        prompt: body.prompt,
-        context: { vibe: body.vibe ?? null },
-        selectionMode: "fast"
-      });
-
-      const generation = await llmGateway.generateRecipe({
-        client: serviceClient,
-        userId: auth.userId,
-        requestId,
-        prompt: body.prompt,
-        context: {
-          vibe: body.vibe ?? null,
-          preferences: contextPack.preferences,
-          memory_snapshot: contextPack.memorySnapshot,
-          selected_memories: contextPack.selectedMemories
-        }
-      });
-      const recipePayload = generation.recipe;
-      const effectivePreferences = await applyModelPreferenceUpdates({
-        client,
-        serviceClient,
-        userId: auth.userId,
-        requestId,
-        currentPreferences: contextPack.preferences,
-        preferenceUpdates: generation.response_context?.preference_updates
-      });
-      const effectiveContextPack: ContextPack = {
-        ...contextPack,
-        preferences: effectivePreferences
-      };
-
-      const categories = await llmGateway.inferCategories({
-        client: serviceClient,
-        userId: auth.userId,
-        requestId,
-        recipe: recipePayload,
-        context: {
-          preferences: effectivePreferences,
-          memory_snapshot: contextPack.memorySnapshot
-        }
-      });
-
-      const saved = await persistRecipe({
-        client,
-        serviceClient,
-        userId: auth.userId,
-        requestId,
-        payload: recipePayload,
-        diffSummary: "Initial generation",
-        selectedMemoryIds: contextPack.selectedMemoryIds
-      });
-
-      await applyAutoCategories({
-        client,
-        recipeId: saved.recipeId,
-        categories
-      });
-
-      await recordGraphData({
-        client,
-        recipeVersionId: saved.versionId,
-        recipe: recipePayload
-      });
-
-      await syncRecipeAttachments({
-        userClient: client,
-        serviceClient,
-        userId: auth.userId,
-        requestId,
-        parentRecipeId: saved.recipeId,
-        payload: recipePayload,
-        contextPack: effectiveContextPack
-      });
-
-      await updateMemoryFromInteraction({
-        userClient: client,
-        serviceClient,
-        userId: auth.userId,
-        requestId,
-        interactionContext: {
-          prompt: body.prompt,
-          recipe: recipePayload,
-          preferences: effectivePreferences,
-          selected_memory_ids: contextPack.selectedMemoryIds
-        },
-        mode: "light"
-      });
-
-      const recipe = await fetchRecipeView(client, saved.recipeId);
-      return jsonResponse(200, { recipe, version: recipe.version, assistant_reply: generation.assistant_reply });
+      throw new ApiError(
+        404,
+        "route_not_found",
+        "Use chat loop endpoints: POST /chat and POST /chat/{id}/messages"
+      );
     }
 
     if (segments.length === 2 && segments[0] === "recipes" && segments[1] === "cookbook" && method === "GET") {
       const items = await buildCookbookItems(client, auth.userId);
-      return jsonResponse(200, { items });
+      const cookbookInsight = await generateCookbookInsight({
+        client,
+        userId: auth.userId,
+        requestId,
+        items
+      });
+      return jsonResponse(200, { items, cookbook_insight: cookbookInsight });
     }
 
     if (segments.length === 2 && segments[0] === "recipes" && method === "GET") {
       const recipeId = parseUuid(segments[1]);
-      const recipe = await fetchRecipeView(client, recipeId);
+      const preferences = await getPreferences(client, auth.userId);
+      const viewOptions = resolvePresentationOptions({
+        query: url.searchParams,
+        presentationPreferences: preferences.presentation_preferences as Record<string, unknown>
+      });
+      const recipe = await fetchRecipeView(client, recipeId, true, viewOptions);
       return jsonResponse(200, recipe);
     }
 
@@ -2411,129 +3807,11 @@ Deno.serve(async (request) => {
     }
 
     if (segments.length === 3 && segments[0] === "recipes" && segments[2] === "tweak" && method === "POST") {
-      const recipeId = parseUuid(segments[1]);
-      const body = await requireJsonBody<{ message: string }>(request);
-      if (!body.message?.trim()) {
-        throw new ApiError(400, "invalid_message", "message is required");
-      }
-
-      const current = await fetchRecipeView(client, recipeId, false);
-      const contextPack = await buildContextPack({
-        userClient: client,
-        serviceClient,
-        userId: auth.userId,
-        requestId,
-        prompt: body.message,
-        context: {
-          recipe_id: recipeId,
-          current_recipe: {
-            title: current.title,
-            servings: current.servings,
-            ingredients: current.ingredients,
-            steps: current.steps,
-            notes: current.notes,
-            pairings: current.pairings,
-            metadata: current.metadata
-          }
-        },
-        selectionMode: "fast"
-      });
-
-      const tweak = await llmGateway.tweakRecipe({
-        client: serviceClient,
-        userId: auth.userId,
-        requestId,
-        prompt: body.message,
-        context: {
-          current_recipe: {
-            title: current.title,
-            servings: current.servings,
-            ingredients: current.ingredients,
-            steps: current.steps,
-            notes: current.notes,
-            pairings: current.pairings,
-            metadata: current.metadata
-          },
-          preferences: contextPack.preferences,
-          memory_snapshot: contextPack.memorySnapshot,
-          selected_memories: contextPack.selectedMemories
-        }
-      });
-      const tweakedPayload = tweak.recipe;
-      const effectivePreferences = await applyModelPreferenceUpdates({
-        client,
-        serviceClient,
-        userId: auth.userId,
-        requestId,
-        currentPreferences: contextPack.preferences,
-        preferenceUpdates: tweak.response_context?.preference_updates
-      });
-      const effectiveContextPack: ContextPack = {
-        ...contextPack,
-        preferences: effectivePreferences
-      };
-
-      const categories = await llmGateway.inferCategories({
-        client: serviceClient,
-        userId: auth.userId,
-        requestId,
-        recipe: tweakedPayload,
-        context: {
-          preferences: effectivePreferences,
-          memory_snapshot: contextPack.memorySnapshot
-        }
-      });
-
-      const saved = await persistRecipe({
-        client,
-        serviceClient,
-        userId: auth.userId,
-        requestId,
-        recipeId,
-        payload: tweakedPayload,
-        parentVersionId: current.version.version_id,
-        diffSummary: body.message,
-        selectedMemoryIds: contextPack.selectedMemoryIds
-      });
-
-      await applyAutoCategories({
-        client,
-        recipeId,
-        categories
-      });
-
-      await recordGraphData({
-        client,
-        recipeVersionId: saved.versionId,
-        recipe: tweakedPayload
-      });
-
-      await syncRecipeAttachments({
-        userClient: client,
-        serviceClient,
-        userId: auth.userId,
-        requestId,
-        parentRecipeId: recipeId,
-        payload: tweakedPayload,
-        contextPack: effectiveContextPack
-      });
-
-      await updateMemoryFromInteraction({
-        userClient: client,
-        serviceClient,
-        userId: auth.userId,
-        requestId,
-        interactionContext: {
-          prompt: body.message,
-          recipe_id: recipeId,
-          updated_recipe: tweakedPayload,
-          selected_memory_ids: contextPack.selectedMemoryIds
-        },
-        mode: "light"
-      });
-
-      const recipe = await fetchRecipeView(client, recipeId);
-      return jsonResponse(200, { recipe, version: recipe.version, assistant_reply: tweak.assistant_reply });
+      throw new ApiError(
+        404,
+        "route_not_found",
+        "Use chat loop endpoints: POST /chat and POST /chat/{id}/messages"
+      );
     }
 
     if (segments.length === 3 && segments[0] === "recipes" && segments[2] === "attachments" && method === "POST") {
@@ -2588,6 +3866,7 @@ Deno.serve(async (request) => {
               metadata: parentRecipe.metadata
             },
             preferences: contextPack.preferences,
+            preferences_natural_language: contextPack.preferencesNaturalLanguage,
             memory_snapshot: contextPack.memorySnapshot,
             selected_memories: contextPack.selectedMemories
           }
@@ -2954,7 +4233,11 @@ Deno.serve(async (request) => {
           context: {
             preferences: contextPack.preferences,
             memory_snapshot: contextPack.memorySnapshot,
-            selected_memory_ids: contextPack.selectedMemoryIds
+            selected_memory_ids: contextPack.selectedMemoryIds,
+            loop_state: "ideation",
+            candidate_recipe_set: null,
+            candidate_revision: 0,
+            active_component_id: null
           }
         })
         .select("id,created_at,updated_at")
@@ -2964,28 +4247,65 @@ Deno.serve(async (request) => {
         throw new ApiError(500, "chat_create_failed", "Could not create chat session", chatError?.message);
       }
 
-      const { error: userMessageError } = await client.from("chat_messages").insert({
-        chat_id: chatSession.id,
-        role: "user",
-        content: message
-      });
+      const { data: userMessage, error: userMessageError } = await client
+        .from("chat_messages")
+        .insert({
+          chat_id: chatSession.id,
+          role: "user",
+          content: message
+        })
+        .select("id")
+        .single();
 
-      if (userMessageError) {
-        throw new ApiError(500, "chat_message_create_failed", "Could not store chat message", userMessageError.message);
+      if (userMessageError || !userMessage) {
+        throw new ApiError(
+          500,
+          "chat_message_create_failed",
+          "Could not store chat message",
+          userMessageError?.message ?? "chat_message_insert_missing"
+        );
       }
 
-      const assistantChatResponse = await llmGateway.converseChat({
+      let assistantChatResponse = await llmGateway.converseChat({
         client: serviceClient,
         userId: auth.userId,
         requestId,
         prompt: message,
         context: {
           preferences: contextPack.preferences,
+          preferences_natural_language: contextPack.preferencesNaturalLanguage,
           memory_snapshot: contextPack.memorySnapshot,
           selected_memories: contextPack.selectedMemories
         },
+        scopeHint: "chat_ideation",
         modelOverrides
       });
+
+      if (
+        assistantChatResponse.trigger_recipe === true &&
+        !assistantChatResponse.candidate_recipe_set &&
+        !assistantChatResponse.recipe
+      ) {
+        const generationResponse = await llmGateway.converseChat({
+          client: serviceClient,
+          userId: auth.userId,
+          requestId,
+          prompt: message,
+          context: {
+            preferences: contextPack.preferences,
+            memory_snapshot: contextPack.memorySnapshot,
+            selected_memories: contextPack.selectedMemories,
+            loop_state: "iterating",
+            thread: [{ role: "user", content: message }]
+          },
+          scopeHint: "chat_generation",
+          modelOverrides
+        });
+
+        if (generationResponse.candidate_recipe_set || generationResponse.recipe) {
+          assistantChatResponse = generationResponse;
+        }
+      }
       const effectivePreferences = await applyModelPreferenceUpdates({
         client,
         serviceClient,
@@ -2995,11 +4315,42 @@ Deno.serve(async (request) => {
         preferenceUpdates: assistantChatResponse.response_context?.preference_updates
       });
 
+      let candidateSet = normalizeCandidateRecipeSet(assistantChatResponse.candidate_recipe_set ?? null);
+      if (!candidateSet && assistantChatResponse.recipe) {
+        candidateSet = candidateFromRecipePayload(assistantChatResponse.recipe, null);
+      }
+
+      const nextLoopState: ChatLoopState = candidateSet ? "candidate_presented" : "ideation";
+      const nextContext: ChatSessionContext = {
+        preferences: effectivePreferences,
+        memory_snapshot: contextPack.memorySnapshot,
+        selected_memory_ids: contextPack.selectedMemoryIds,
+        loop_state: nextLoopState,
+        candidate_recipe_set: candidateSet,
+        candidate_revision: candidateSet?.revision ?? 0,
+        active_component_id: candidateSet?.active_component_id ?? null
+      };
+
+      await updateChatSessionLoopContext({
+        client,
+        chatId: chatSession.id,
+        context: nextContext
+      });
+
       const { error: assistantMessageError } = await client.from("chat_messages").insert({
         chat_id: chatSession.id,
         role: "assistant",
-        content: JSON.stringify(assistantChatResponse),
-        metadata: { format: "assistant_chat_envelope" }
+        content: JSON.stringify({
+          assistant_reply: assistantChatResponse.assistant_reply,
+          trigger_recipe: assistantChatResponse.trigger_recipe ?? Boolean(candidateSet),
+          candidate_recipe_set: candidateSet,
+          recipe: assistantChatResponse.recipe,
+          response_context: assistantChatResponse.response_context
+        }),
+        metadata: {
+          format: "assistant_chat_envelope_v2",
+          loop_state: nextLoopState
+        }
       });
 
       if (assistantMessageError) {
@@ -3011,19 +4362,21 @@ Deno.serve(async (request) => {
         chat_id: chatSession.id,
         assistant_reply: assistantChatResponse.assistant_reply,
         preferences: effectivePreferences,
-        selected_memory_ids: contextPack.selectedMemoryIds
+        selected_memory_ids: contextPack.selectedMemoryIds,
+        loop_state: nextLoopState
       };
-      if (assistantChatResponse.recipe) {
-        interactionContext.assistant_recipe = assistantChatResponse.recipe;
+      if (candidateSet) {
+        interactionContext.candidate_recipe_set = candidateSet as unknown as JsonValue;
+      } else if (assistantChatResponse.recipe) {
+        interactionContext.assistant_recipe = assistantChatResponse.recipe as unknown as JsonValue;
       }
 
-      await updateMemoryFromInteraction({
-        userClient: client,
+      await enqueueMemoryJob({
         serviceClient,
         userId: auth.userId,
-        requestId,
-        interactionContext,
-        mode: "light"
+        chatId: chatSession.id,
+        messageId: userMessage.id,
+        interactionContext
       });
 
       const messages = await fetchChatMessages(client, chatSession.id);
@@ -3041,16 +4394,24 @@ Deno.serve(async (request) => {
         }
       });
 
-      return jsonResponse(200, {
-        id: chatSession.id,
-        messages,
-        active_recipe: assistantChatResponse.recipe ?? null,
-        assistant_reply: assistantChatResponse.assistant_reply,
-        context_version: 1,
-        memory_context_ids: contextPack.selectedMemoryIds,
-        created_at: chatSession.created_at,
-        updated_at: chatSession.updated_at
-      });
+      return jsonResponse(
+        200,
+        buildChatLoopResponse({
+          chatId: chatSession.id,
+          messages,
+          context: nextContext,
+          assistantReply: assistantChatResponse.assistant_reply,
+          memoryContextIds: contextPack.selectedMemoryIds,
+          createdAt: chatSession.created_at,
+          updatedAt: new Date().toISOString(),
+          uiHints: candidateSet
+            ? {
+                show_generation_animation: true,
+                focus_component_id: candidateSet.active_component_id
+              }
+            : undefined
+        })
+      );
     }
 
     if (segments.length === 2 && segments[0] === "chat" && method === "GET") {
@@ -3067,18 +4428,23 @@ Deno.serve(async (request) => {
       }
 
       const messages = await fetchChatMessages(client, chatId);
-      const latestAssistantRecipe = extractLatestAssistantRecipe(messages);
-      const latestAssistantReply = extractLatestAssistantReply(messages);
+      const context = extractChatContext(chatSession.context);
+      const memoryContextIds = Array.isArray(context.selected_memory_ids)
+        ? context.selected_memory_ids.filter((item): item is string => typeof item === "string")
+        : [];
 
-      return jsonResponse(200, {
-        id: chatSession.id,
-        messages,
-        active_recipe: latestAssistantRecipe,
-        assistant_reply: latestAssistantReply,
-        context: chatSession.context,
-        created_at: chatSession.created_at,
-        updated_at: chatSession.updated_at
-      });
+      return jsonResponse(
+        200,
+        buildChatLoopResponse({
+          chatId: chatSession.id,
+          messages,
+          context,
+          assistantReply: extractLatestAssistantReply(messages),
+          memoryContextIds,
+          createdAt: chatSession.created_at,
+          updatedAt: chatSession.updated_at
+        })
+      );
     }
 
     if (segments.length === 3 && segments[0] === "chat" && segments[2] === "messages" && method === "POST") {
@@ -3092,13 +4458,23 @@ Deno.serve(async (request) => {
 
       const { data: chatSession, error: chatError } = await client
         .from("chat_sessions")
-        .select("id,context")
+        .select("id,context,created_at,updated_at,status")
         .eq("id", chatId)
         .maybeSingle();
 
       if (chatError || !chatSession) {
         throw new ApiError(404, "chat_not_found", "Chat session not found", chatError?.message);
       }
+      if (chatSession.status === "archived") {
+        throw new ApiError(409, "chat_not_open", "Archived chat sessions cannot receive new messages");
+      }
+
+      const sessionContext = extractChatContext(chatSession.context);
+      const existingCandidate = normalizeCandidateRecipeSet(sessionContext.candidate_recipe_set ?? null);
+      const activeComponent =
+        existingCandidate?.components.find((component) => component.component_id === existingCandidate.active_component_id) ??
+        existingCandidate?.components[0] ??
+        null;
 
       const contextPack = await buildContextPack({
         userClient: client,
@@ -3107,25 +4483,35 @@ Deno.serve(async (request) => {
         requestId,
         prompt: message,
         context: {
-          chat_context: (chatSession.context as Record<string, JsonValue>) ?? {}
+          chat_context: (chatSession.context as Record<string, JsonValue>) ?? {},
+          loop_state: deriveLoopState(sessionContext, existingCandidate),
+          candidate_recipe_set: existingCandidate as unknown as JsonValue
         },
         selectionMode: "fast"
       });
 
-      const { error: userMessageError } = await client.from("chat_messages").insert({
-        chat_id: chatId,
-        role: "user",
-        content: message
-      });
+      const { data: userMessage, error: userMessageError } = await client
+        .from("chat_messages")
+        .insert({
+          chat_id: chatId,
+          role: "user",
+          content: message
+        })
+        .select("id")
+        .single();
 
-      if (userMessageError) {
-        throw new ApiError(500, "chat_message_create_failed", "Could not store chat message", userMessageError.message);
+      if (userMessageError || !userMessage) {
+        throw new ApiError(
+          500,
+          "chat_message_create_failed",
+          "Could not store chat message",
+          userMessageError?.message ?? "chat_message_insert_missing"
+        );
       }
 
       const threadMessages = await fetchChatMessages(client, chatId);
-      const latestAssistantRecipe = extractLatestAssistantRecipe(threadMessages);
 
-      const assistantChatResponse = await llmGateway.converseChat({
+      let assistantChatResponse = await llmGateway.converseChat({
         client: serviceClient,
         userId: auth.userId,
         requestId,
@@ -3133,13 +4519,44 @@ Deno.serve(async (request) => {
         context: {
           chat_context: (chatSession.context as Record<string, JsonValue>) ?? {},
           thread: threadMessages,
-          active_recipe: latestAssistantRecipe ?? undefined,
+          active_recipe: activeComponent?.recipe ? (activeComponent.recipe as unknown as JsonValue) : null,
+          candidate_recipe_set: existingCandidate as unknown as JsonValue,
+          loop_state: deriveLoopState(sessionContext, existingCandidate),
           preferences: contextPack.preferences,
+          preferences_natural_language: contextPack.preferencesNaturalLanguage,
           memory_snapshot: contextPack.memorySnapshot,
           selected_memories: contextPack.selectedMemories
         },
+        scopeHint: existingCandidate ? "chat_iteration" : "chat_ideation",
         modelOverrides
       });
+
+      if (
+        !existingCandidate &&
+        assistantChatResponse.trigger_recipe === true &&
+        !assistantChatResponse.candidate_recipe_set &&
+        !assistantChatResponse.recipe
+      ) {
+        const generationResponse = await llmGateway.converseChat({
+          client: serviceClient,
+          userId: auth.userId,
+          requestId,
+          prompt: message,
+          context: {
+            chat_context: (chatSession.context as Record<string, JsonValue>) ?? {},
+            thread: threadMessages,
+            loop_state: "iterating",
+            preferences: contextPack.preferences,
+            memory_snapshot: contextPack.memorySnapshot,
+            selected_memories: contextPack.selectedMemories
+          },
+          scopeHint: "chat_generation",
+          modelOverrides
+        });
+        if (generationResponse.candidate_recipe_set || generationResponse.recipe) {
+          assistantChatResponse = generationResponse;
+        }
+      }
       const effectivePreferences = await applyModelPreferenceUpdates({
         client,
         serviceClient,
@@ -3149,11 +4566,60 @@ Deno.serve(async (request) => {
         preferenceUpdates: assistantChatResponse.response_context?.preference_updates
       });
 
+      const modelCandidateSet = normalizeCandidateRecipeSet(assistantChatResponse.candidate_recipe_set ?? null);
+      let nextCandidateSet: CandidateRecipeSet | null = modelCandidateSet;
+
+      if (!nextCandidateSet && assistantChatResponse.recipe) {
+        nextCandidateSet = mergeRecipeIntoCandidate(existingCandidate, assistantChatResponse.recipe);
+      }
+      if (!nextCandidateSet) {
+        nextCandidateSet = existingCandidate;
+      }
+
+      if (existingCandidate && nextCandidateSet) {
+        nextCandidateSet = {
+          ...nextCandidateSet,
+          candidate_id: existingCandidate.candidate_id,
+          revision: Math.max(existingCandidate.revision + 1, nextCandidateSet.revision),
+          active_component_id:
+            nextCandidateSet.active_component_id &&
+            nextCandidateSet.components.some((component) => component.component_id === nextCandidateSet?.active_component_id)
+              ? nextCandidateSet.active_component_id
+              : nextCandidateSet.components[0]?.component_id ?? existingCandidate.active_component_id
+        };
+      }
+
+      const nextLoopState: ChatLoopState = nextCandidateSet ? "candidate_presented" : "ideation";
+      const nextContext: ChatSessionContext = {
+        preferences: effectivePreferences,
+        memory_snapshot: contextPack.memorySnapshot,
+        selected_memory_ids: contextPack.selectedMemoryIds,
+        loop_state: nextLoopState,
+        candidate_recipe_set: nextCandidateSet,
+        candidate_revision: nextCandidateSet?.revision ?? 0,
+        active_component_id: nextCandidateSet?.active_component_id ?? null
+      };
+
+      await updateChatSessionLoopContext({
+        client,
+        chatId,
+        context: nextContext
+      });
+
       const { error: assistantMessageError } = await client.from("chat_messages").insert({
         chat_id: chatId,
         role: "assistant",
-        content: JSON.stringify(assistantChatResponse),
-        metadata: { format: "assistant_chat_envelope" }
+        content: JSON.stringify({
+          assistant_reply: assistantChatResponse.assistant_reply,
+          trigger_recipe: assistantChatResponse.trigger_recipe ?? Boolean(nextCandidateSet),
+          candidate_recipe_set: nextCandidateSet,
+          recipe: assistantChatResponse.recipe,
+          response_context: assistantChatResponse.response_context
+        }),
+        metadata: {
+          format: "assistant_chat_envelope_v2",
+          loop_state: nextLoopState
+        }
       });
 
       if (assistantMessageError) {
@@ -3166,40 +4632,64 @@ Deno.serve(async (request) => {
         assistant_reply: assistantChatResponse.assistant_reply,
         thread_size: threadMessages.length,
         preferences: effectivePreferences,
-        selected_memory_ids: contextPack.selectedMemoryIds
+        selected_memory_ids: contextPack.selectedMemoryIds,
+        loop_state: nextLoopState
       };
-      if (assistantChatResponse.recipe) {
-        interactionContext.assistant_recipe = assistantChatResponse.recipe;
+      if (nextCandidateSet) {
+        interactionContext.candidate_recipe_set = nextCandidateSet as unknown as JsonValue;
+      } else if (assistantChatResponse.recipe) {
+        interactionContext.assistant_recipe = assistantChatResponse.recipe as unknown as JsonValue;
       }
 
-      await updateMemoryFromInteraction({
-        userClient: client,
+      await enqueueMemoryJob({
         serviceClient,
         userId: auth.userId,
-        requestId,
-        interactionContext,
-        mode: "light"
+        chatId,
+        messageId: userMessage.id,
+        interactionContext
       });
 
       const messages = await fetchChatMessages(client, chatId);
-      const responseActiveRecipe = assistantChatResponse.recipe ?? extractLatestAssistantRecipe(messages);
+      const justGenerated = !existingCandidate && Boolean(nextCandidateSet);
 
-      return jsonResponse(200, {
-        id: chatId,
-        messages,
-        active_recipe: responseActiveRecipe ?? null,
-        assistant_reply: assistantChatResponse.assistant_reply,
-        context_version: 1,
-        memory_context_ids: contextPack.selectedMemoryIds
-      });
+      return jsonResponse(
+        200,
+        buildChatLoopResponse({
+          chatId,
+          messages,
+          context: nextContext,
+          assistantReply: assistantChatResponse.assistant_reply,
+          memoryContextIds: contextPack.selectedMemoryIds,
+          createdAt: chatSession.created_at,
+          updatedAt: new Date().toISOString(),
+          uiHints: justGenerated
+            ? {
+                show_generation_animation: true,
+                focus_component_id: nextCandidateSet?.active_component_id
+              }
+            : nextCandidateSet
+              ? {
+                  focus_component_id: nextCandidateSet.active_component_id
+                }
+              : undefined
+        })
+      );
     }
 
-    if (segments.length === 3 && segments[0] === "chat" && segments[2] === "generate" && method === "POST") {
+    if (segments.length === 3 && segments[0] === "chat" && segments[2] === "candidate" && method === "PATCH") {
       const chatId = parseUuid(segments[1]);
+      const body = await requireJsonBody<{
+        action?: "set_active_component" | "delete_component" | "clear_candidate";
+        component_id?: string;
+      }>(request);
+
+      if (!body.action) {
+        throw new ApiError(400, "invalid_candidate_action", "action is required");
+      }
 
       const { data: chatSession, error: chatError } = await client
         .from("chat_sessions")
-        .select("id,context,status")
+        .select("id,context,created_at,updated_at")
         .eq("id", chatId)
         .maybeSingle();
 
@@ -3207,156 +4697,284 @@ Deno.serve(async (request) => {
         throw new ApiError(404, "chat_not_found", "Chat session not found", chatError?.message);
       }
 
-      if (chatSession.status !== "open") {
-        throw new ApiError(409, "chat_not_open", "Only open chat sessions can generate a recipe");
+      const context = extractChatContext(chatSession.context);
+      const candidateSet = normalizeCandidateRecipeSet(context.candidate_recipe_set ?? null);
+      let nextCandidateSet = candidateSet;
+
+      if (body.action === "clear_candidate") {
+        nextCandidateSet = null;
       }
 
-      const messages = await fetchChatMessages(client, chatId);
-      if (messages.length === 0) {
-        throw new ApiError(400, "chat_empty", "Chat session does not contain any messages");
+      if (body.action === "set_active_component") {
+        if (!candidateSet) {
+          throw new ApiError(409, "candidate_missing", "No candidate recipe set exists for this chat");
+        }
+        if (!body.component_id) {
+          throw new ApiError(400, "invalid_component_id", "component_id is required for set_active_component");
+        }
+        if (!candidateSet.components.some((component) => component.component_id === body.component_id)) {
+          throw new ApiError(404, "candidate_component_not_found", "Candidate component not found");
+        }
+        nextCandidateSet = {
+          ...candidateSet,
+          revision: Math.max(1, candidateSet.revision + 1),
+          active_component_id: body.component_id
+        };
       }
 
-      // Try to extract the recipe already generated during chat (no LLM call needed)
-      const existingRecipe = extractLatestAssistantRecipe(messages);
-      const existingReply = extractLatestAssistantReply(messages);
+      if (body.action === "delete_component") {
+        if (!candidateSet) {
+          throw new ApiError(409, "candidate_missing", "No candidate recipe set exists for this chat");
+        }
+        if (!body.component_id) {
+          throw new ApiError(400, "invalid_component_id", "component_id is required for delete_component");
+        }
+        const remaining = candidateSet.components.filter((component) => component.component_id !== body.component_id);
+        if (remaining.length === candidateSet.components.length) {
+          throw new ApiError(404, "candidate_component_not_found", "Candidate component not found");
+        }
+        if (remaining.length === 0) {
+          throw new ApiError(409, "candidate_last_component", "Cannot delete the final remaining component");
+        }
 
-      const contextPack = await buildContextPack({
-        userClient: client,
-        serviceClient,
-        userId: auth.userId,
-        requestId,
-        prompt: messages.map((m) => `[${m.role}] ${renderChatMessageForPrompt(m)}`).join("\n"),
-        context: {
-          chat_context: (chatSession.context as Record<string, JsonValue>) ?? {},
-          thread_size: messages.length
-        },
-        selectionMode: "fast"
-      });
+        const nextActiveId =
+          candidateSet.active_component_id === body.component_id
+            ? remaining[0].component_id
+            : candidateSet.active_component_id;
 
-      let recipePayload: RecipePayload;
-      let assistantReply: AssistantReply;
-
-      if (existingRecipe) {
-        // Fast path: reuse the recipe from chat — no LLM generation call
-        recipePayload = existingRecipe;
-        assistantReply = existingReply ?? { text: "Saved to your cookbook!" };
-      } else {
-        // Fallback: no recipe in chat, generate one via LLM
-        const consolidatedPrompt = messages
-          .map((message) => `[${message.role}] ${renderChatMessageForPrompt(message)}`)
-          .join("\n");
-
-        const finalizedGeneration = await llmGateway.generateRecipe({
-          client: serviceClient,
-          userId: auth.userId,
-          requestId,
-          prompt: consolidatedPrompt,
-          context: {
-            chat_context: (chatSession.context as Record<string, JsonValue>) ?? {},
-            thread: messages,
-            preferences: contextPack.preferences,
-            memory_snapshot: contextPack.memorySnapshot,
-            selected_memories: contextPack.selectedMemories
-          },
-          modelOverrides
-        });
-        recipePayload = finalizedGeneration.recipe;
-        assistantReply = finalizedGeneration.assistant_reply;
+        nextCandidateSet = {
+          ...candidateSet,
+          revision: Math.max(1, candidateSet.revision + 1),
+          active_component_id: nextActiveId,
+          components: remaining
+        };
       }
 
-      const effectivePreferences = contextPack.preferences;
-      const effectiveContextPack: ContextPack = {
-        ...contextPack,
-        preferences: effectivePreferences
+      const nextLoopState: ChatLoopState = nextCandidateSet ? "candidate_presented" : "ideation";
+      const memoryContextIds = Array.isArray(context.selected_memory_ids)
+        ? context.selected_memory_ids.filter((item): item is string => typeof item === "string")
+        : [];
+      const nextContext: ChatSessionContext = {
+        ...context,
+        loop_state: nextLoopState,
+        candidate_recipe_set: nextCandidateSet,
+        candidate_revision: nextCandidateSet?.revision ?? 0,
+        active_component_id: nextCandidateSet?.active_component_id ?? null
       };
 
-      const categories = await llmGateway.inferCategories({
-        client: serviceClient,
-        userId: auth.userId,
-        requestId,
-        recipe: recipePayload,
-        context: {
-          chat_context: (chatSession.context as Record<string, JsonValue>) ?? {},
-          preferences: effectivePreferences,
-          memory_snapshot: contextPack.memorySnapshot
-        }
-      });
-
-      const saved = await persistRecipe({
+      await updateChatSessionLoopContext({
         client,
-        serviceClient,
-        userId: auth.userId,
-        requestId,
-        payload: recipePayload,
-        sourceChatId: chatId,
-        diffSummary: "Generated from chat session",
-        selectedMemoryIds: contextPack.selectedMemoryIds
+        chatId,
+        context: nextContext
       });
 
-      await applyAutoCategories({
-        client,
-        recipeId: saved.recipeId,
-        categories
-      });
-
-      await recordGraphData({
-        client,
-        recipeVersionId: saved.versionId,
-        recipe: recipePayload
-      });
-
-      await syncRecipeAttachments({
-        userClient: client,
-        serviceClient,
-        userId: auth.userId,
-        requestId,
-        parentRecipeId: saved.recipeId,
-        payload: recipePayload,
-        contextPack: effectiveContextPack
-      });
-
-      const { error: chatStatusError } = await client
-        .from("chat_sessions")
-        .update({ status: "finalized", updated_at: new Date().toISOString() })
-        .eq("id", chatId);
-
-      if (chatStatusError) {
-        throw new ApiError(500, "chat_generate_update_failed", "Could not update chat session status", chatStatusError.message);
-      }
-
-      // Fire-and-forget: memory + changelog
-      updateMemoryFromInteraction({
-        userClient: client,
-        serviceClient,
-        userId: auth.userId,
-        requestId,
-        interactionContext: {
-          chat_id: chatId,
-          finalized_recipe: recipePayload,
-          preferences: effectivePreferences,
-          selected_memory_ids: contextPack.selectedMemoryIds
-        }
-      });
-
-      logChangelog({
+      await logChangelog({
         serviceClient,
         actorUserId: auth.userId,
         scope: "chat",
         entityType: "chat_session",
         entityId: chatId,
-        action: "generated_recipe",
+        action: `candidate_${body.action}`,
         requestId,
         afterJson: {
-          recipe_id: saved.recipeId
+          candidate_id: nextCandidateSet?.candidate_id ?? null,
+          revision: nextCandidateSet?.revision ?? null,
+          active_component_id: nextCandidateSet?.active_component_id ?? null
         }
       });
 
-      const recipe = await fetchRecipeView(client, saved.recipeId);
-      return jsonResponse(200, {
-        recipe,
-        version: recipe.version,
-        assistant_reply: assistantReply
+      const messages = await fetchChatMessages(client, chatId);
+      return jsonResponse(
+        200,
+        buildChatLoopResponse({
+          chatId,
+          messages,
+          context: nextContext,
+          memoryContextIds,
+          createdAt: chatSession.created_at,
+          updatedAt: new Date().toISOString(),
+          uiHints: nextCandidateSet
+            ? {
+                focus_component_id: nextCandidateSet.active_component_id
+              }
+            : undefined
+        })
+      );
+    }
+
+    if (segments.length === 3 && segments[0] === "chat" && segments[2] === "commit" && method === "POST") {
+      const chatId = parseUuid(segments[1]);
+
+      const { data: chatSession, error: chatError } = await client
+        .from("chat_sessions")
+        .select("id,context,created_at,updated_at,status")
+        .eq("id", chatId)
+        .maybeSingle();
+
+      if (chatError || !chatSession) {
+        throw new ApiError(404, "chat_not_found", "Chat session not found", chatError?.message);
+      }
+      if (chatSession.status === "archived") {
+        throw new ApiError(409, "chat_not_open", "Archived chat sessions cannot be committed");
+      }
+
+      const context = extractChatContext(chatSession.context);
+      const candidateSet = normalizeCandidateRecipeSet(context.candidate_recipe_set ?? null);
+      if (!candidateSet || candidateSet.components.length === 0) {
+        throw new ApiError(409, "candidate_missing", "No candidate recipe set is available to commit");
+      }
+
+      const selectedMemoryIds = Array.isArray(context.selected_memory_ids)
+        ? context.selected_memory_ids.filter((item): item is string => typeof item === "string")
+        : [];
+
+      const committedComponents: Array<{
+        component_id: string;
+        role: CandidateRecipeRole;
+        title: string;
+        recipe_id: string;
+        recipe_version_id: string;
+      }> = [];
+
+      for (let index = 0; index < candidateSet.components.length; index += 1) {
+        const component = candidateSet.components[index];
+        const saved = await persistRecipe({
+          client,
+          serviceClient,
+          userId: auth.userId,
+          requestId,
+          payload: component.recipe,
+          sourceChatId: chatId,
+          diffSummary: `Committed from chat candidate (${component.role})`,
+          selectedMemoryIds
+        });
+
+        const { error: saveError } = await client
+          .from("recipe_saves")
+          .upsert(
+            {
+              user_id: auth.userId,
+              recipe_id: saved.recipeId
+            },
+            { onConflict: "user_id,recipe_id" }
+          );
+        if (saveError) {
+          throw new ApiError(500, "recipe_save_failed", "Could not save committed recipe to cookbook", saveError.message);
+        }
+
+        await enqueueImageJob(client, saved.recipeId);
+
+        committedComponents.push({
+          component_id: component.component_id,
+          role: component.role,
+          title: component.title,
+          recipe_id: saved.recipeId,
+          recipe_version_id: saved.versionId
+        });
+      }
+
+      const primary = committedComponents[0];
+      const links: Array<{
+        id: string;
+        parent_recipe_id: string;
+        child_recipe_id: string;
+        relation_type: string;
+        position: number;
+      }> = [];
+
+      if (primary) {
+        for (let index = 1; index < committedComponents.length; index += 1) {
+          const component = committedComponents[index];
+          const relationType = mapCandidateRoleToRelation(component.role);
+          const relationTypeId = await resolveRelationTypeId(client, relationType);
+          const { data: link, error: linkError } = await client
+            .from("recipe_links")
+            .insert({
+              parent_recipe_id: primary.recipe_id,
+              child_recipe_id: component.recipe_id,
+              relation_type_id: relationTypeId,
+              position: index,
+              source: "chat_commit"
+            })
+            .select("id,parent_recipe_id,child_recipe_id,position")
+            .single();
+
+          if (linkError || !link) {
+            throw new ApiError(500, "recipe_link_insert_failed", "Could not link committed recipe components", linkError?.message);
+          }
+
+          links.push({
+            id: String(link.id),
+            parent_recipe_id: String(link.parent_recipe_id),
+            child_recipe_id: String(link.child_recipe_id),
+            relation_type: relationType,
+            position: Number(link.position ?? index)
+          });
+        }
+      }
+
+      const nextContext: ChatSessionContext = {
+        ...context,
+        loop_state: "ideation",
+        candidate_recipe_set: null,
+        candidate_revision: candidateSet.revision,
+        active_component_id: null
+      };
+
+      await updateChatSessionLoopContext({
+        client,
+        chatId,
+        context: nextContext
       });
+
+      await logChangelog({
+        serviceClient,
+        actorUserId: auth.userId,
+        scope: "chat",
+        entityType: "chat_session",
+        entityId: chatId,
+        action: "committed_candidate_set",
+        requestId,
+        afterJson: {
+          candidate_id: candidateSet.candidate_id,
+          revision: candidateSet.revision,
+          committed_components: committedComponents,
+          links
+        }
+      });
+
+      const messages = await fetchChatMessages(client, chatId);
+      const memoryContextIds = Array.isArray(nextContext.selected_memory_ids)
+        ? nextContext.selected_memory_ids.filter((item): item is string => typeof item === "string")
+        : [];
+      const loopResponse = buildChatLoopResponse({
+        chatId,
+        messages,
+        context: nextContext,
+        memoryContextIds,
+        createdAt: chatSession.created_at,
+        updatedAt: new Date().toISOString()
+      });
+
+      return jsonResponse(200, {
+        ...loopResponse,
+        commit: {
+          candidate_id: candidateSet.candidate_id,
+          revision: candidateSet.revision,
+          committed_count: committedComponents.length,
+          recipes: committedComponents,
+          links,
+          post_save_options: ["continue_chat", "restart_chat", "go_to_cookbook"]
+        }
+      });
+    }
+
+    if (segments.length === 3 && segments[0] === "chat" && segments[2] === "generate" && method === "POST") {
+      throw new ApiError(
+        404,
+        "route_not_found",
+        "Use chat loop endpoints: POST /chat, POST /chat/{id}/messages, and POST /chat/{id}/commit"
+      );
     }
 
     throw new ApiError(404, "route_not_found", "Requested route does not exist");
