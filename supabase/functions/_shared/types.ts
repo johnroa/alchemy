@@ -73,6 +73,7 @@ export type RecipePayload = {
     name: string;
     amount: number;
     unit: string;
+    display_amount?: string;
     preparation?: string;
     category?: string;
   }>;
@@ -109,9 +110,11 @@ export type RecipeAssistantEnvelope = {
   };
 };
 
-export type DraftAssistantEnvelope = {
+export type ChatAssistantEnvelope = {
   assistant_reply: AssistantReply;
   recipe?: RecipePayload;
+  trigger_recipe?: boolean;
+  candidate_recipe_set?: CandidateRecipeSet;
   response_context?: {
     mode?: string;
     changed_sections?: string[];
@@ -120,7 +123,29 @@ export type DraftAssistantEnvelope = {
   };
 };
 
+export type ChatLoopState = "ideation" | "candidate_presented" | "iterating";
+
+export type CandidateRecipeRole = "main" | "side" | "appetizer" | "dessert" | "drink";
+
+export type CandidateRecipeComponent = {
+  component_id: string;
+  role: CandidateRecipeRole;
+  title: string;
+  recipe: RecipePayload;
+};
+
+export type CandidateRecipeSet = {
+  candidate_id: string;
+  revision: number;
+  active_component_id: string;
+  components: CandidateRecipeComponent[];
+};
+
 export type GatewayScope =
+  | "chat"
+  | "chat_ideation"
+  | "chat_generation"
+  | "chat_iteration"
   | "generate"
   | "tweak"
   | "classify"
@@ -137,6 +162,8 @@ export type GatewayConfig = {
   provider: string;
   model: string;
   modelConfig: Record<string, JsonValue>;
+  inputCostPer1m: number;
+  outputCostPer1m: number;
 };
 
 export type MemoryRecord = {
