@@ -1966,13 +1966,52 @@ const generateChatConversationPayload = async (
     }
   })();
 
+  const runtimeModelConfig: Record<string, JsonValue> = {
+    ...config.modelConfig,
+  };
+  const outputTokenCap = scope === "chat_ideation" ? 650 : 2200;
+
+  const configuredMaxTokens = Number(runtimeModelConfig.max_output_tokens);
+  if (
+    !Number.isFinite(configuredMaxTokens) || configuredMaxTokens < 1 ||
+    configuredMaxTokens > outputTokenCap
+  ) {
+    runtimeModelConfig.max_output_tokens = outputTokenCap;
+  }
+
+  if (!Number.isFinite(Number(runtimeModelConfig.temperature))) {
+    runtimeModelConfig.temperature = scope === "chat_ideation" ? 0.3 : 0.35;
+  }
+
+  const scopeSpecificRuntimeRules = scope === "chat_ideation"
+    ? `Runtime constraints:
+- Keep assistant_reply.text under 22 words.
+- Ask at most one concise question.
+- trigger_recipe=true only when the user explicitly asks to generate now or commits to a concrete dish.`
+    : scope === "chat_generation"
+    ? `Runtime constraints:
+- Keep assistant_reply.text under 20 words.
+- If user did not explicitly request multiple dishes, return exactly one component with role "main".
+- Add additional components only when explicitly requested.
+- Keep each recipe concise and practical: usually 8-12 ingredients and 4-7 steps.`
+    : scope === "chat_iteration"
+    ? `Runtime constraints:
+- Keep assistant_reply.text under 20 words.
+- Preserve current component count unless user explicitly asks to add or remove components.
+- Keep each recipe concise and practical: usually 8-12 ingredients and 4-7 steps.`
+    : `Runtime constraints:
+- Keep assistant replies concise and practical.
+- Output strictly valid JSON.`;
+
+  const runtimeSystemPrompt = `${config.promptTemplate}\n\n${scopeSpecificRuntimeRules}`;
+
   const { result, inputTokens, outputTokens } = await callProvider<
     Record<string, JsonValue>
   >({
     provider: config.provider,
     model: config.model,
-    modelConfig: config.modelConfig,
-    systemPrompt: config.promptTemplate,
+    modelConfig: runtimeModelConfig,
+    systemPrompt: runtimeSystemPrompt,
     userInput: {
       task: "chat_conversation",
       rule: config.rule,
@@ -2042,9 +2081,9 @@ const generateChatConversationPayload = async (
     await callProvider<Record<string, JsonValue>>({
       provider: config.provider,
       model: config.model,
-      modelConfig: config.modelConfig,
+      modelConfig: runtimeModelConfig,
       systemPrompt:
-        `${config.promptTemplate}\n\nYou are in strict schema normalization mode for chat. Return one valid JSON object with keys assistant_reply, optional recipe, optional candidate_recipe_set, optional trigger_recipe, and optional response_context. No markdown or prose.`,
+        `${runtimeSystemPrompt}\n\nYou are in strict schema normalization mode for chat. Return one valid JSON object with keys assistant_reply, optional recipe, optional candidate_recipe_set, optional trigger_recipe, and optional response_context. No markdown or prose.`,
       userInput: {
         task: "repair_chat_schema",
         rule: config.rule,
@@ -2478,49 +2517,6 @@ export const llmGateway = {
       (hasActiveRecipe ? "chat_iteration" : "chat_ideation");
 
     try {
-      const classification = await classifyScope(
-        params.client,
-        {
-          userPrompt: params.prompt,
-          context: params.context,
-        },
-        params.modelOverrides,
-        accum,
-      );
-
-      if (!classification.isAllowed) {
-        const outOfScopeReply = await generateOutOfScopeAssistantReply(
-          params.client,
-          scope,
-          {
-            userPrompt: params.prompt,
-            context: params.context,
-          },
-          classification,
-          params.modelOverrides,
-          accum,
-        );
-        await logLlmEvent(
-          params.client,
-          params.userId,
-          params.requestId,
-          scope,
-          Date.now() - startedAt,
-          "out_of_scope",
-          {
-            classification_label: classification.label,
-            classification_reason: classification.reason ?? null,
-          },
-          accum,
-        );
-        return {
-          assistant_reply: outOfScopeReply,
-          response_context: {
-            mode: "out_of_scope",
-          },
-        };
-      }
-
       const envelope = await generateChatConversationPayload(
         params.client,
         scope,
@@ -2541,6 +2537,7 @@ export const llmGateway = {
         "ok",
         {
           chat_mode: envelope.recipe ? "recipe" : "ideation",
+          classification_skipped: true,
         },
         accum,
       );

@@ -5159,26 +5159,55 @@ Deno.serve(async (request) => {
         !assistantChatResponse.candidate_recipe_set &&
         !assistantChatResponse.recipe
       ) {
-        const generationResponse = await llmGateway.converseChat({
-          client: serviceClient,
-          userId: auth.userId,
-          requestId,
-          prompt: message,
-          context: {
-            preferences: contextPack.preferences,
-            memory_snapshot: contextPack.memorySnapshot,
-            selected_memories: contextPack.selectedMemories,
-            loop_state: "iterating",
-            thread: [{ role: "user", content: message }],
-          },
-          scopeHint: "chat_generation",
-          modelOverrides,
-        });
+        let generationResponse: Awaited<
+          ReturnType<typeof llmGateway.converseChat>
+        > | null = null;
+
+        try {
+          generationResponse = await llmGateway.converseChat({
+            client: serviceClient,
+            userId: auth.userId,
+            requestId,
+            prompt: message,
+            context: {
+              preferences: contextPack.preferences,
+              memory_snapshot: contextPack.memorySnapshot,
+              selected_memories: contextPack.selectedMemories,
+              loop_state: "iterating",
+              thread: [{ role: "user", content: message }],
+            },
+            scopeHint: "chat_generation",
+            modelOverrides,
+          });
+        } catch {
+          generationResponse = null;
+        }
 
         if (
-          generationResponse.candidate_recipe_set || generationResponse.recipe
+          generationResponse?.candidate_recipe_set || generationResponse?.recipe
         ) {
           assistantChatResponse = generationResponse;
+        } else {
+          const fallbackGeneration = await llmGateway.generateRecipe({
+            client: serviceClient,
+            userId: auth.userId,
+            requestId,
+            prompt: message,
+            context: {
+              preferences: contextPack.preferences,
+              memory_snapshot: contextPack.memorySnapshot,
+              selected_memories: contextPack.selectedMemories,
+              loop_state: "iterating",
+              thread: [{ role: "user", content: message }],
+            },
+            modelOverrides,
+          });
+          assistantChatResponse = {
+            assistant_reply: fallbackGeneration.assistant_reply,
+            recipe: fallbackGeneration.recipe,
+            trigger_recipe: true,
+            response_context: fallbackGeneration.response_context,
+          };
         }
       }
       const effectivePreferences = await applyModelPreferenceUpdates({
@@ -5457,27 +5486,59 @@ Deno.serve(async (request) => {
         !assistantChatResponse.candidate_recipe_set &&
         !assistantChatResponse.recipe
       ) {
-        const generationResponse = await llmGateway.converseChat({
-          client: serviceClient,
-          userId: auth.userId,
-          requestId,
-          prompt: message,
-          context: {
-            chat_context: (chatSession.context as Record<string, JsonValue>) ??
-              {},
-            thread: threadMessages,
-            loop_state: "iterating",
-            preferences: contextPack.preferences,
-            memory_snapshot: contextPack.memorySnapshot,
-            selected_memories: contextPack.selectedMemories,
-          },
-          scopeHint: "chat_generation",
-          modelOverrides,
-        });
+        let generationResponse: Awaited<
+          ReturnType<typeof llmGateway.converseChat>
+        > | null = null;
+
+        try {
+          generationResponse = await llmGateway.converseChat({
+            client: serviceClient,
+            userId: auth.userId,
+            requestId,
+            prompt: message,
+            context: {
+              chat_context: (chatSession.context as Record<string, JsonValue>) ??
+                {},
+              thread: threadMessages,
+              loop_state: "iterating",
+              preferences: contextPack.preferences,
+              memory_snapshot: contextPack.memorySnapshot,
+              selected_memories: contextPack.selectedMemories,
+            },
+            scopeHint: "chat_generation",
+            modelOverrides,
+          });
+        } catch {
+          generationResponse = null;
+        }
+
         if (
-          generationResponse.candidate_recipe_set || generationResponse.recipe
+          generationResponse?.candidate_recipe_set || generationResponse?.recipe
         ) {
           assistantChatResponse = generationResponse;
+        } else {
+          const fallbackGeneration = await llmGateway.generateRecipe({
+            client: serviceClient,
+            userId: auth.userId,
+            requestId,
+            prompt: message,
+            context: {
+              chat_context: (chatSession.context as Record<string, JsonValue>) ??
+                {},
+              thread: threadMessages,
+              loop_state: "iterating",
+              preferences: contextPack.preferences,
+              memory_snapshot: contextPack.memorySnapshot,
+              selected_memories: contextPack.selectedMemories,
+            },
+            modelOverrides,
+          });
+          assistantChatResponse = {
+            assistant_reply: fallbackGeneration.assistant_reply,
+            recipe: fallbackGeneration.recipe,
+            trigger_recipe: true,
+            response_context: fallbackGeneration.response_context,
+          };
         }
       }
       const effectivePreferences = await applyModelPreferenceUpdates({
@@ -5919,10 +5980,10 @@ Deno.serve(async (request) => {
           const component = committedComponents[index];
           const relationType = mapCandidateRoleToRelation(component.role);
           const relationTypeId = await resolveRelationTypeId(
-            client,
+            serviceClient,
             relationType,
           );
-          const { data: link, error: linkError } = await client
+          const { data: link, error: linkError } = await serviceClient
             .from("recipe_links")
             .insert({
               parent_recipe_id: primary.recipe_id,

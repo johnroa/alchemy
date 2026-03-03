@@ -223,7 +223,48 @@ const summarizeComponents = (candidate: CandidateRecipeSet | null | undefined): 
   }));
 };
 
+const readJsonBody = async (response: Response): Promise<Record<string, unknown>> => {
+  const text = await response.text();
+  if (!text.trim()) {
+    return {};
+  }
+
+  try {
+    const parsed = JSON.parse(text);
+    if (parsed && typeof parsed === "object") {
+      return parsed as Record<string, unknown>;
+    }
+    return { raw: parsed };
+  } catch {
+    return { raw: text };
+  }
+};
+
+const signInSimulationUser = async (supabaseUrl: string, serviceKey: string): Promise<string> => {
+  const signInRes = await fetch(`${supabaseUrl}/auth/v1/token?grant_type=password`, {
+    method: "POST",
+    headers: { apikey: serviceKey, "Content-Type": "application/json" },
+    body: JSON.stringify({ email: SIM_USER_EMAIL, password: SIM_USER_PASSWORD })
+  });
+
+  const signInData = await readJsonBody(signInRes);
+  const accessToken = String(signInData["access_token"] ?? "");
+  if (!signInRes.ok || accessToken.length === 0) {
+    throw new Error(
+      `Simulation user password sign-in failed (${signInRes.status}): ${JSON.stringify(signInData)}`
+    );
+  }
+
+  return accessToken;
+};
+
 const getSimToken = async (supabaseUrl: string, serviceKey: string): Promise<string> => {
+  if (!supabaseUrl || !serviceKey) {
+    throw new Error("Missing Supabase URL or service key in admin worker environment");
+  }
+
+  let magiclinkFailure = "";
+
   const linkRes = await fetch(`${supabaseUrl}/auth/v1/admin/generate_link`, {
     method: "POST",
     headers: {
@@ -234,33 +275,33 @@ const getSimToken = async (supabaseUrl: string, serviceKey: string): Promise<str
     body: JSON.stringify({ type: "magiclink", email: SIM_USER_EMAIL })
   });
 
-  const linkData = (await linkRes.json()) as { email_otp?: string };
-  if (!linkData.email_otp) {
-    const signInRes = await fetch(`${supabaseUrl}/auth/v1/token?grant_type=password`, {
+  const linkData = await readJsonBody(linkRes);
+  const emailOtp = String(linkData["email_otp"] ?? "");
+
+  if (linkRes.ok && emailOtp.length > 0) {
+    const verifyRes = await fetch(`${supabaseUrl}/auth/v1/verify`, {
       method: "POST",
       headers: { apikey: serviceKey, "Content-Type": "application/json" },
-      body: JSON.stringify({ email: SIM_USER_EMAIL, password: SIM_USER_PASSWORD })
+      body: JSON.stringify({ type: "magiclink", token: emailOtp, email: SIM_USER_EMAIL })
     });
 
-    const signInData = (await signInRes.json()) as { access_token?: string };
-    if (!signInData.access_token) {
-      throw new Error("Failed to sign in simulation user");
+    const verifyData = await readJsonBody(verifyRes);
+    const verifyToken = String(verifyData["access_token"] ?? "");
+    if (verifyRes.ok && verifyToken.length > 0) {
+      return verifyToken;
     }
-    return signInData.access_token;
+
+    magiclinkFailure = `Magiclink verify failed (${verifyRes.status}): ${JSON.stringify(verifyData)}`;
+  } else {
+    magiclinkFailure = `Magiclink generation failed (${linkRes.status}): ${JSON.stringify(linkData)}`;
   }
 
-  const verifyRes = await fetch(`${supabaseUrl}/auth/v1/verify`, {
-    method: "POST",
-    headers: { apikey: serviceKey, "Content-Type": "application/json" },
-    body: JSON.stringify({ type: "magiclink", token: linkData.email_otp, email: SIM_USER_EMAIL })
-  });
-
-  const verifyData = (await verifyRes.json()) as { access_token?: string };
-  if (!verifyData.access_token) {
-    throw new Error("Failed to verify sim user OTP");
+  try {
+    return await signInSimulationUser(supabaseUrl, serviceKey);
+  } catch (error) {
+    const passwordFailure = error instanceof Error ? error.message : String(error);
+    throw new Error(`${magiclinkFailure}; ${passwordFailure}`);
   }
-
-  return verifyData.access_token;
 };
 
 const runSimulation = async (params: {
@@ -441,28 +482,50 @@ const runSimulation = async (params: {
         };
       }
 
-      const response = await requestJson<ChatApiResponse>({
-        apiBase,
-        token,
-        path: `/chat/${chat.chat_id}/messages`,
-        method: "POST",
-        body: { message: prompts.trigger },
-        modelOverrides: params.modelOverrides
-      });
+      const triggerMessages = [
+        prompts.trigger,
+        "Generate the candidate recipe set now. Include complete normalized ingredients and steps."
+      ] as const;
 
-      const components = summarizeComponents(response.candidate_recipe_set);
-      assertCondition(components.length > 0, "Generation trigger did not produce a candidate recipe set");
+      const attemptNotes: string[] = [];
+      for (let attempt = 0; attempt < triggerMessages.length; attempt += 1) {
+        const attemptNumber = attempt + 1;
+        const triggerMessage = triggerMessages[attempt];
 
-      return {
-        loop_state: response.loop_state ?? "unknown",
-        candidate_id: response.candidate_recipe_set?.candidate_id ?? "",
-        revision: response.candidate_recipe_set?.revision ?? null,
-        active_component_id: response.candidate_recipe_set?.active_component_id ?? null,
-        candidate_count: components.length,
-        candidate_summary: components,
-        assistant_reply: extractAssistantText(response),
-        thread_tail: Array.isArray(response.messages) ? response.messages.slice(-6) : []
-      };
+        try {
+          const response = await requestJson<ChatApiResponse>({
+            apiBase,
+            token,
+            path: `/chat/${chat.chat_id}/messages`,
+            method: "POST",
+            body: { message: triggerMessage },
+            modelOverrides: params.modelOverrides
+          });
+
+          const components = summarizeComponents(response.candidate_recipe_set);
+          if (components.length > 0) {
+            return {
+              loop_state: response.loop_state ?? "unknown",
+              candidate_id: response.candidate_recipe_set?.candidate_id ?? "",
+              revision: response.candidate_recipe_set?.revision ?? null,
+              active_component_id: response.candidate_recipe_set?.active_component_id ?? null,
+              candidate_count: components.length,
+              candidate_summary: components,
+              assistant_reply: extractAssistantText(response),
+              thread_tail: Array.isArray(response.messages) ? response.messages.slice(-6) : []
+            };
+          }
+
+          attemptNotes.push(
+            `attempt ${attemptNumber}: no candidate (loop_state=${response.loop_state ?? "unknown"})`
+          );
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          attemptNotes.push(`attempt ${attemptNumber}: ${message}`);
+        }
+      }
+
+      throw new Error(`Generation trigger did not produce a candidate recipe set: ${attemptNotes.join(" | ")}`);
     });
 
     const iterated = await runStep("chat_iterate_candidate", async () => {
