@@ -1,22 +1,34 @@
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2";
 import { requireAuth } from "../_shared/auth.ts";
-import { ApiError, errorResponse, jsonResponse, requireJsonBody } from "../_shared/errors.ts";
+import {
+  ApiError,
+  errorResponse,
+  jsonResponse,
+  requireJsonBody,
+} from "../_shared/errors.ts";
 import { createServiceClient, createUserClient } from "../_shared/db.ts";
 import { llmGateway, type ModelOverrideMap } from "../_shared/llm-gateway.ts";
-import type { AssistantReply, JsonValue, MemoryRecord, OnboardingState, RecipePayload } from "../_shared/types.ts";
+import type {
+  AssistantReply,
+  JsonValue,
+  MemoryRecord,
+  OnboardingState,
+  RecipePayload,
+} from "../_shared/types.ts";
 import {
   buildIngredientGroups,
-  canonicalizeIngredients,
-  projectIngredientsForOutput,
-  projectInlineMeasurements,
-  resolvePresentationOptions,
   type CanonicalIngredientView,
+  canonicalizeIngredients,
   type GroupByPreference,
   type IngredientGroup,
   type NormalizedStatus,
+  projectIngredientsForOutput,
+  projectInlineMeasurements,
+  resolvePresentationOptions,
   type UnitKind,
-  type UnitPreference
+  type UnitPreference,
 } from "./recipe-standardization.ts";
+import { sanitizeModelPreferencePatch } from "./preference-auto-update.ts";
 
 type PreferenceContext = {
   free_form: string | null;
@@ -127,16 +139,27 @@ type ChatLoopResponse = {
   updated_at?: string;
 };
 
-const candidateRoles: CandidateRecipeRole[] = ["main", "side", "appetizer", "dessert", "drink"];
+const candidateRoles: CandidateRecipeRole[] = [
+  "main",
+  "side",
+  "appetizer",
+  "dessert",
+  "drink",
+];
 
 const normalizeCandidateRole = (value: unknown): CandidateRecipeRole => {
-  if (typeof value === "string" && candidateRoles.includes(value as CandidateRecipeRole)) {
+  if (
+    typeof value === "string" &&
+    candidateRoles.includes(value as CandidateRecipeRole)
+  ) {
     return value as CandidateRecipeRole;
   }
   return "main";
 };
 
-const normalizeCandidateRecipeSet = (candidate: unknown): CandidateRecipeSet | null => {
+const normalizeCandidateRecipeSet = (
+  candidate: unknown,
+): CandidateRecipeSet | null => {
   if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
     return null;
   }
@@ -146,7 +169,9 @@ const normalizeCandidateRecipeSet = (candidate: unknown): CandidateRecipeSet | n
 
   const components: CandidateRecipeComponent[] = rawComponents
     .map((component, index) => {
-      if (!component || typeof component !== "object" || Array.isArray(component)) {
+      if (
+        !component || typeof component !== "object" || Array.isArray(component)
+      ) {
         return null;
       }
       const value = component as Record<string, unknown>;
@@ -163,10 +188,10 @@ const normalizeCandidateRecipeSet = (candidate: unknown): CandidateRecipeSet | n
         return null;
       }
 
-      const componentId =
-        typeof value.component_id === "string" && value.component_id.trim().length > 0
-          ? value.component_id
-          : crypto.randomUUID();
+      const componentId = typeof value.component_id === "string" &&
+          value.component_id.trim().length > 0
+        ? value.component_id
+        : crypto.randomUUID();
       const title =
         typeof value.title === "string" && value.title.trim().length > 0
           ? value.title.trim()
@@ -176,38 +201,48 @@ const normalizeCandidateRecipeSet = (candidate: unknown): CandidateRecipeSet | n
         component_id: componentId,
         role: normalizeCandidateRole(value.role),
         title,
-        recipe: normalizedRecipe
+        recipe: normalizedRecipe,
       };
     })
-    .filter((component): component is CandidateRecipeComponent => component !== null)
+    .filter((component): component is CandidateRecipeComponent =>
+      component !== null
+    )
     .slice(0, 3);
 
   if (components.length === 0) {
     return null;
   }
 
-  const activeComponentId =
-    typeof raw.active_component_id === "string" &&
-    components.some((component) => component.component_id === raw.active_component_id)
-      ? raw.active_component_id
-      : components[0].component_id;
+  const activeComponentId = typeof raw.active_component_id === "string" &&
+      components.some((component) =>
+        component.component_id === raw.active_component_id
+      )
+    ? raw.active_component_id
+    : components[0].component_id;
 
   const revision = Number(raw.revision);
-  const candidateId = typeof raw.candidate_id === "string" && raw.candidate_id.trim().length > 0
-    ? raw.candidate_id
-    : crypto.randomUUID();
+  const candidateId =
+    typeof raw.candidate_id === "string" && raw.candidate_id.trim().length > 0
+      ? raw.candidate_id
+      : crypto.randomUUID();
 
   return {
     candidate_id: candidateId,
-    revision: Number.isFinite(revision) && revision >= 1 ? Math.trunc(revision) : 1,
+    revision: Number.isFinite(revision) && revision >= 1
+      ? Math.trunc(revision)
+      : 1,
     active_component_id: activeComponentId,
-    components
+    components,
   };
 };
 
-const wrapRecipeInCandidateSet = (recipe: RecipePayload, existing?: CandidateRecipeSet | null): CandidateRecipeSet => {
+const wrapRecipeInCandidateSet = (
+  recipe: RecipePayload,
+  existing?: CandidateRecipeSet | null,
+): CandidateRecipeSet => {
   const revision = Math.max(1, Number(existing?.revision ?? 0) + 1);
-  const componentId = existing?.components?.[0]?.component_id ?? crypto.randomUUID();
+  const componentId = existing?.components?.[0]?.component_id ??
+    crypto.randomUUID();
 
   return {
     candidate_id: existing?.candidate_id ?? crypto.randomUUID(),
@@ -218,9 +253,9 @@ const wrapRecipeInCandidateSet = (recipe: RecipePayload, existing?: CandidateRec
         component_id: componentId,
         role: "main",
         title: recipe.title,
-        recipe
-      }
-    ]
+        recipe,
+      },
+    ],
   };
 };
 
@@ -231,9 +266,14 @@ const extractChatContext = (value: unknown): ChatSessionContext => {
   return value as ChatSessionContext;
 };
 
-const deriveLoopState = (context: ChatSessionContext, candidateSet: CandidateRecipeSet | null): ChatLoopState => {
+const deriveLoopState = (
+  context: ChatSessionContext,
+  candidateSet: CandidateRecipeSet | null,
+): ChatLoopState => {
   const raw = context.loop_state;
-  if (raw === "ideation" || raw === "candidate_presented" || raw === "iterating") {
+  if (
+    raw === "ideation" || raw === "candidate_presented" || raw === "iterating"
+  ) {
     if (!candidateSet && raw !== "ideation") {
       return "ideation";
     }
@@ -252,7 +292,7 @@ const defaultPreferences: PreferenceContext = {
   aversions: [],
   cooking_for: null,
   max_difficulty: 3,
-  presentation_preferences: {}
+  presentation_preferences: {},
 };
 
 const rawPreferenceTextKeys = {
@@ -260,14 +300,15 @@ const rawPreferenceTextKeys = {
   dietary_restrictions: "raw_dietary_restrictions",
   equipment: "raw_special_equipment",
   cuisines: "raw_cuisines",
-  aversions: "raw_disliked_ingredients"
+  aversions: "raw_disliked_ingredients",
 } as const;
 
 const normalizedRawPreferenceText = (
   preferences: PreferenceContext,
-  field: keyof typeof rawPreferenceTextKeys
+  field: keyof typeof rawPreferenceTextKeys,
 ): string | null => {
-  const raw = preferences.presentation_preferences?.[rawPreferenceTextKeys[field]];
+  const raw = preferences.presentation_preferences
+    ?.[rawPreferenceTextKeys[field]];
   if (typeof raw !== "string") {
     return null;
   }
@@ -275,30 +316,40 @@ const normalizedRawPreferenceText = (
   return trimmed.length > 0 ? trimmed : null;
 };
 
-const joinCanonicalPreferenceList = (values: string[]): string => values.join(", ");
+const joinCanonicalPreferenceList = (values: string[]): string =>
+  values.join(", ");
 
-const buildNaturalLanguagePreferenceContext = (preferences: PreferenceContext): Record<string, JsonValue> => ({
+const buildNaturalLanguagePreferenceContext = (
+  preferences: PreferenceContext,
+): Record<string, JsonValue> => ({
   chef_profile: preferences.free_form ?? "",
   cooking_for: preferences.cooking_for ?? "",
   skill_level: preferences.skill_level,
   max_difficulty: preferences.max_difficulty,
   dietary_preferences:
     normalizedRawPreferenceText(preferences, "dietary_preferences") ??
-    joinCanonicalPreferenceList(preferences.dietary_preferences),
+      joinCanonicalPreferenceList(preferences.dietary_preferences),
   dietary_restrictions:
     normalizedRawPreferenceText(preferences, "dietary_restrictions") ??
-    joinCanonicalPreferenceList(preferences.dietary_restrictions),
-  special_equipment:
-    normalizedRawPreferenceText(preferences, "equipment") ?? joinCanonicalPreferenceList(preferences.equipment),
-  cuisines:
-    normalizedRawPreferenceText(preferences, "cuisines") ?? joinCanonicalPreferenceList(preferences.cuisines),
-  disliked_ingredients:
-    normalizedRawPreferenceText(preferences, "aversions") ?? joinCanonicalPreferenceList(preferences.aversions)
+      joinCanonicalPreferenceList(preferences.dietary_restrictions),
+  special_equipment: normalizedRawPreferenceText(preferences, "equipment") ??
+    joinCanonicalPreferenceList(preferences.equipment),
+  cuisines: normalizedRawPreferenceText(preferences, "cuisines") ??
+    joinCanonicalPreferenceList(preferences.cuisines),
+  disliked_ingredients: normalizedRawPreferenceText(preferences, "aversions") ??
+    joinCanonicalPreferenceList(preferences.aversions),
 });
 
-const onboardingTopicKeys = ["skill", "equipment", "dietary", "presentation"] as const;
+const onboardingTopicKeys = [
+  "skill",
+  "equipment",
+  "dietary",
+  "presentation",
+] as const;
 
-const extractOnboardingStateFromPreferences = (preferences: PreferenceContext): OnboardingState | null => {
+const extractOnboardingStateFromPreferences = (
+  preferences: PreferenceContext,
+): OnboardingState | null => {
   const candidate = preferences.presentation_preferences?.["onboarding_state"];
   if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
     return null;
@@ -307,12 +358,16 @@ const extractOnboardingStateFromPreferences = (preferences: PreferenceContext): 
   const data = candidate as Record<string, unknown>;
   const completed = Boolean(data.completed);
   const rawProgress = Number(data.progress);
-  const progress = Number.isFinite(rawProgress) ? Math.max(0, Math.min(1, rawProgress)) : completed ? 1 : 0;
+  const progress = Number.isFinite(rawProgress)
+    ? Math.max(0, Math.min(1, rawProgress))
+    : completed
+    ? 1
+    : 0;
   const missingTopics = Array.isArray(data.missing_topics)
     ? data.missing_topics
-        .filter((topic): topic is string => typeof topic === "string")
-        .map((topic) => topic.trim())
-        .filter((topic) => topic.length > 0)
+      .filter((topic): topic is string => typeof topic === "string")
+      .map((topic) => topic.trim())
+      .filter((topic) => topic.length > 0)
     : [];
   const state =
     data.state && typeof data.state === "object" && !Array.isArray(data.state)
@@ -323,19 +378,23 @@ const extractOnboardingStateFromPreferences = (preferences: PreferenceContext): 
     completed,
     progress,
     missing_topics: missingTopics,
-    state
+    state,
   };
 };
 
-const deriveOnboardingStateFromPreferences = (preferences: PreferenceContext): OnboardingState => {
+const deriveOnboardingStateFromPreferences = (
+  preferences: PreferenceContext,
+): OnboardingState => {
   const missingTopics: string[] = [];
 
   const hasSkill = preferences.skill_level.trim().length > 0;
   const hasEquipment = preferences.equipment.length > 0;
-  const hasDietary = preferences.dietary_preferences.length > 0 || preferences.dietary_restrictions.length > 0;
-  const presentationPreferenceCount = Object.keys(preferences.presentation_preferences ?? {}).filter(
-    (key) => key !== "onboarding_state"
-  ).length;
+  const hasDietary = preferences.dietary_preferences.length > 0 ||
+    preferences.dietary_restrictions.length > 0;
+  const presentationPreferenceCount =
+    Object.keys(preferences.presentation_preferences ?? {}).filter(
+      (key) => key !== "onboarding_state",
+    ).length;
   const hasPresentation = presentationPreferenceCount > 0;
 
   if (!hasSkill) {
@@ -351,13 +410,20 @@ const deriveOnboardingStateFromPreferences = (preferences: PreferenceContext): O
     missingTopics.push("presentation");
   }
 
-  const progress = Math.max(0, Math.min(1, (onboardingTopicKeys.length - missingTopics.length) / onboardingTopicKeys.length));
+  const progress = Math.max(
+    0,
+    Math.min(
+      1,
+      (onboardingTopicKeys.length - missingTopics.length) /
+        onboardingTopicKeys.length,
+    ),
+  );
 
   return {
     completed: missingTopics.length === 0,
     progress,
     missing_topics: missingTopics,
-    state: {}
+    state: {},
   };
 };
 
@@ -428,24 +494,40 @@ const ensureUserProfile = async (
     email?: string | null;
     fullName?: string | null;
     avatarUrl?: string | null;
-  }
+  },
 ): Promise<void> => {
   const { error } = await client.from("users").upsert({
     id: params.userId,
     email: params.email ?? null,
     full_name: params.fullName ?? null,
     avatar_url: params.avatarUrl ?? null,
-    updated_at: new Date().toISOString()
+    updated_at: new Date().toISOString(),
   });
   if (error) {
-    throw new ApiError(500, "user_profile_upsert_failed", "Could not ensure user profile", error.message);
+    throw new ApiError(
+      500,
+      "user_profile_upsert_failed",
+      "Could not ensure user profile",
+      error.message,
+    );
   }
 };
 
-const getPreferences = async (client: SupabaseClient, userId: string): Promise<PreferenceContext> => {
-  const { data, error } = await client.from("preferences").select("*").eq("user_id", userId).maybeSingle();
+const getPreferences = async (
+  client: SupabaseClient,
+  userId: string,
+): Promise<PreferenceContext> => {
+  const { data, error } = await client.from("preferences").select("*").eq(
+    "user_id",
+    userId,
+  ).maybeSingle();
   if (error) {
-    throw new ApiError(500, "preferences_fetch_failed", "Could not load preferences", error.message);
+    throw new ApiError(
+      500,
+      "preferences_fetch_failed",
+      "Could not load preferences",
+      error.message,
+    );
   }
 
   if (!data) {
@@ -462,24 +544,26 @@ const getPreferences = async (client: SupabaseClient, userId: string): Promise<P
     aversions: data.aversions ?? [],
     cooking_for: data.cooking_for,
     max_difficulty: data.max_difficulty,
-    presentation_preferences:
-      data.presentation_preferences && typeof data.presentation_preferences === "object" && !Array.isArray(data.presentation_preferences)
-        ? (data.presentation_preferences as Record<string, JsonValue>)
-        : {}
+    presentation_preferences: data.presentation_preferences &&
+        typeof data.presentation_preferences === "object" &&
+        !Array.isArray(data.presentation_preferences)
+      ? (data.presentation_preferences as Record<string, JsonValue>)
+      : {},
   };
 };
 
-const normalizePreferenceStringArray = (value: unknown): string[] | undefined => {
+const normalizePreferenceStringArray = (
+  value: unknown,
+): string[] | undefined => {
   if (typeof value !== "string" && !Array.isArray(value) && value !== null) {
     return undefined;
   }
 
-  const rawValues: string[] =
-    value === null
-      ? []
-      : typeof value === "string"
-        ? [value]
-        : value.filter((item): item is string => typeof item === "string");
+  const rawValues: string[] = value === null
+    ? []
+    : typeof value === "string"
+    ? [value]
+    : value.filter((item): item is string => typeof item === "string");
 
   const entries = rawValues
     .map((raw) => raw.trim())
@@ -498,7 +582,9 @@ const normalizePreferenceStringArray = (value: unknown): string[] | undefined =>
   return uniqueEntries.slice(0, 32);
 };
 
-const normalizePreferencePatch = (candidate: unknown): Partial<PreferenceContext> | null => {
+const normalizePreferencePatch = (
+  candidate: unknown,
+): Partial<PreferenceContext> | null => {
   if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
     return null;
   }
@@ -513,17 +599,24 @@ const normalizePreferencePatch = (candidate: unknown): Partial<PreferenceContext
     patch.free_form = null;
   }
 
-  const dietaryPreferences = normalizePreferenceStringArray(patchObject.dietary_preferences);
+  const dietaryPreferences = normalizePreferenceStringArray(
+    patchObject.dietary_preferences,
+  );
   if (dietaryPreferences) {
     patch.dietary_preferences = dietaryPreferences;
   }
 
-  const dietaryRestrictions = normalizePreferenceStringArray(patchObject.dietary_restrictions);
+  const dietaryRestrictions = normalizePreferenceStringArray(
+    patchObject.dietary_restrictions,
+  );
   if (dietaryRestrictions) {
     patch.dietary_restrictions = dietaryRestrictions;
   }
 
-  if (typeof patchObject.skill_level === "string" && patchObject.skill_level.trim().length > 0) {
+  if (
+    typeof patchObject.skill_level === "string" &&
+    patchObject.skill_level.trim().length > 0
+  ) {
     patch.skill_level = patchObject.skill_level.trim();
   }
 
@@ -559,21 +652,26 @@ const normalizePreferencePatch = (candidate: unknown): Partial<PreferenceContext
     typeof patchObject.presentation_preferences === "object" &&
     !Array.isArray(patchObject.presentation_preferences)
   ) {
-    patch.presentation_preferences = patchObject.presentation_preferences as Record<string, JsonValue>;
+    patch.presentation_preferences = patchObject
+      .presentation_preferences as Record<string, JsonValue>;
   }
 
   return Object.keys(patch).length > 0 ? patch : null;
 };
 
 const preferenceListFieldLabels: Record<
-  "dietary_preferences" | "dietary_restrictions" | "equipment" | "cuisines" | "aversions",
+  | "dietary_preferences"
+  | "dietary_restrictions"
+  | "equipment"
+  | "cuisines"
+  | "aversions",
   string
 > = {
   dietary_preferences: "dietary preferences",
   dietary_restrictions: "dietary restrictions",
   equipment: "special equipment",
   cuisines: "cuisines",
-  aversions: "ingredients to avoid"
+  aversions: "ingredients to avoid",
 };
 
 const normalizePreferencePatchWithLlm = async (params: {
@@ -584,7 +682,9 @@ const normalizePreferencePatchWithLlm = async (params: {
 }): Promise<Partial<PreferenceContext>> => {
   const nextPatch: Partial<PreferenceContext> = { ...params.patch };
 
-  const listFields = Object.keys(preferenceListFieldLabels) as Array<keyof typeof preferenceListFieldLabels>;
+  const listFields = Object.keys(preferenceListFieldLabels) as Array<
+    keyof typeof preferenceListFieldLabels
+  >;
   await Promise.all(
     listFields.map(async (field) => {
       const candidate = params.patch[field];
@@ -597,10 +697,10 @@ const normalizePreferencePatchWithLlm = async (params: {
         userId: params.userId,
         requestId: params.requestId,
         field: preferenceListFieldLabels[field],
-        entries: candidate
+        entries: candidate,
       });
       nextPatch[field] = normalized;
-    })
+    }),
   );
 
   return nextPatch;
@@ -613,20 +713,41 @@ const applyModelPreferenceUpdates = async (params: {
   requestId: string;
   currentPreferences: PreferenceContext;
   preferenceUpdates: unknown;
+  latestUserMessage: string;
+  userMessages?: string[];
 }): Promise<PreferenceContext> => {
   const patch = normalizePreferencePatch(params.preferenceUpdates);
   if (!patch) {
     return params.currentPreferences;
   }
 
-  const { free_form: _ignoredFreeFormUpdate, ...safePatch } = patch;
+  const safePatch = sanitizeModelPreferencePatch(patch);
+  if (Array.isArray(safePatch.equipment) && safePatch.equipment.length > 0) {
+    const filteredEquipment = await llmGateway.filterEquipmentPreferenceUpdates(
+      {
+        client: params.serviceClient,
+        userId: params.userId,
+        requestId: params.requestId,
+        latestUserMessage: params.latestUserMessage,
+        userMessages: params.userMessages ?? [],
+        candidateEquipment: safePatch.equipment,
+      },
+    );
+
+    if (filteredEquipment.length > 0) {
+      safePatch.equipment = filteredEquipment;
+    } else {
+      delete safePatch.equipment;
+    }
+  }
+
   if (Object.keys(safePatch).length === 0) {
     return params.currentPreferences;
   }
 
   const nextPreferences: PreferenceContext = {
     ...params.currentPreferences,
-    ...safePatch
+    ...safePatch,
   };
 
   const { data, error } = await params.client
@@ -634,7 +755,7 @@ const applyModelPreferenceUpdates = async (params: {
     .upsert({
       user_id: params.userId,
       ...nextPreferences,
-      updated_at: new Date().toISOString()
+      updated_at: new Date().toISOString(),
     })
     .select("*")
     .single();
@@ -654,10 +775,11 @@ const applyModelPreferenceUpdates = async (params: {
     aversions: data.aversions ?? [],
     cooking_for: data.cooking_for,
     max_difficulty: data.max_difficulty,
-    presentation_preferences:
-      data.presentation_preferences && typeof data.presentation_preferences === "object" && !Array.isArray(data.presentation_preferences)
-        ? (data.presentation_preferences as Record<string, JsonValue>)
-        : {}
+    presentation_preferences: data.presentation_preferences &&
+        typeof data.presentation_preferences === "object" &&
+        !Array.isArray(data.presentation_preferences)
+      ? (data.presentation_preferences as Record<string, JsonValue>)
+      : {},
   };
 
   await logChangelog({
@@ -668,7 +790,7 @@ const applyModelPreferenceUpdates = async (params: {
     entityId: params.userId,
     action: "assistant_updated",
     requestId: params.requestId,
-    afterJson: persistedPreferences
+    afterJson: persistedPreferences,
   });
 
   return persistedPreferences;
@@ -676,7 +798,7 @@ const applyModelPreferenceUpdates = async (params: {
 
 const getMemorySnapshot = async (
   client: SupabaseClient,
-  userId: string
+  userId: string,
 ): Promise<Record<string, JsonValue>> => {
   const { data, error } = await client
     .from("memory_snapshots")
@@ -688,10 +810,18 @@ const getMemorySnapshot = async (
     if (isSchemaMissingError(error)) {
       return {};
     }
-    throw new ApiError(500, "memory_snapshot_fetch_failed", "Could not load memory snapshot", error.message);
+    throw new ApiError(
+      500,
+      "memory_snapshot_fetch_failed",
+      "Could not load memory snapshot",
+      error.message,
+    );
   }
 
-  if (!data || !data.summary || typeof data.summary !== "object" || Array.isArray(data.summary)) {
+  if (
+    !data || !data.summary || typeof data.summary !== "object" ||
+    Array.isArray(data.summary)
+  ) {
     return {};
   }
 
@@ -701,11 +831,13 @@ const getMemorySnapshot = async (
 const getActiveMemories = async (
   client: SupabaseClient,
   userId: string,
-  limit: number
+  limit: number,
 ): Promise<MemoryRecord[]> => {
   const preferred = await client
     .from("memories")
-    .select("id,memory_type,memory_kind,memory_content,confidence,salience,status,source,created_at,updated_at")
+    .select(
+      "id,memory_type,memory_kind,memory_content,confidence,salience,status,source,created_at,updated_at",
+    )
     .eq("user_id", userId)
     .eq("status", "active")
     .order("salience", { ascending: false })
@@ -714,12 +846,19 @@ const getActiveMemories = async (
 
   if (preferred.error) {
     if (!isSchemaMissingError(preferred.error)) {
-      throw new ApiError(500, "memory_fetch_failed", "Could not load user memories", preferred.error.message);
+      throw new ApiError(
+        500,
+        "memory_fetch_failed",
+        "Could not load user memories",
+        preferred.error.message,
+      );
     }
 
     const legacy = await client
       .from("memories")
-      .select("id,memory_type,memory_content,confidence,source,created_at,updated_at")
+      .select(
+        "id,memory_type,memory_content,confidence,source,created_at,updated_at",
+      )
       .eq("user_id", userId)
       .order("updated_at", { ascending: false })
       .limit(limit);
@@ -728,7 +867,12 @@ const getActiveMemories = async (
       if (isSchemaMissingError(legacy.error)) {
         return [];
       }
-      throw new ApiError(500, "memory_fetch_failed", "Could not load user memories", legacy.error.message);
+      throw new ApiError(
+        500,
+        "memory_fetch_failed",
+        "Could not load user memories",
+        legacy.error.message,
+      );
     }
 
     return (legacy.data ?? []).map((row) => ({
@@ -741,7 +885,7 @@ const getActiveMemories = async (
       status: "active",
       source: row.source ?? "legacy",
       created_at: row.created_at,
-      updated_at: row.updated_at
+      updated_at: row.updated_at,
     })) as MemoryRecord[];
   }
 
@@ -769,7 +913,7 @@ const logChangelog = async (params: {
     p_request_id: params.requestId,
     p_before_json: params.beforeJson ?? null,
     p_after_json: params.afterJson ?? null,
-    p_metadata: params.metadata ?? {}
+    p_metadata: params.metadata ?? {},
   });
 
   if (error) {
@@ -780,7 +924,7 @@ const logChangelog = async (params: {
 const enqueueImageJob = async (
   client: SupabaseClient,
   recipeId: string,
-  errorMessage?: string
+  errorMessage?: string,
 ): Promise<void> => {
   const { error } = await client.from("recipe_image_jobs").upsert(
     {
@@ -788,9 +932,9 @@ const enqueueImageJob = async (
       status: "pending",
       next_attempt_at: new Date().toISOString(),
       last_error: errorMessage ?? null,
-      updated_at: new Date().toISOString()
+      updated_at: new Date().toISOString(),
     },
-    { onConflict: "recipe_id" }
+    { onConflict: "recipe_id" },
   );
 
   if (error) {
@@ -798,7 +942,10 @@ const enqueueImageJob = async (
   }
 };
 
-const resolveRelationTypeId = async (client: SupabaseClient, name: string): Promise<string> => {
+const resolveRelationTypeId = async (
+  client: SupabaseClient,
+  name: string,
+): Promise<string> => {
   const normalizedName = name.trim().toLowerCase();
 
   const { data: existing, error: existingError } = await client
@@ -808,7 +955,12 @@ const resolveRelationTypeId = async (client: SupabaseClient, name: string): Prom
     .maybeSingle();
 
   if (existingError) {
-    throw new ApiError(500, "relation_type_lookup_failed", "Could not lookup relation type", existingError.message);
+    throw new ApiError(
+      500,
+      "relation_type_lookup_failed",
+      "Could not lookup relation type",
+      existingError.message,
+    );
   }
 
   if (existing?.id) {
@@ -817,12 +969,20 @@ const resolveRelationTypeId = async (client: SupabaseClient, name: string): Prom
 
   const { data: inserted, error: insertError } = await client
     .from("graph_relation_types")
-    .insert({ name: normalizedName, description: `Attached recipe relation: ${normalizedName}` })
+    .insert({
+      name: normalizedName,
+      description: `Attached recipe relation: ${normalizedName}`,
+    })
     .select("id")
     .single();
 
   if (insertError || !inserted) {
-    throw new ApiError(500, "relation_type_create_failed", "Could not create relation type", insertError?.message);
+    throw new ApiError(
+      500,
+      "relation_type_create_failed",
+      "Could not create relation type",
+      insertError?.message,
+    );
   }
 
   return inserted.id;
@@ -851,7 +1011,7 @@ type CanonicalRecipeIngredientRow = {
 const defaultRecipeViewOptions: RecipeViewOptions = {
   units: "source",
   groupBy: "flat",
-  inlineMeasurements: false
+  inlineMeasurements: false,
 };
 
 const toFiniteNumberOrNull = (value: unknown): number | null => {
@@ -872,18 +1032,20 @@ const listifyText = (value: unknown): string[] => {
 
 const fetchCanonicalIngredientRows = async (
   client: SupabaseClient,
-  recipeVersionId: string
+  recipeVersionId: string,
 ): Promise<CanonicalRecipeIngredientRow[]> => {
   const rowsResult = await client
     .from("recipe_ingredients")
     .select(
-      "position,ingredient_id,source_name,source_amount,source_unit,normalized_amount_si,normalized_unit,unit_kind,normalized_status,category,component"
+      "position,ingredient_id,source_name,source_amount,source_unit,normalized_amount_si,normalized_unit,unit_kind,normalized_status,category,component",
     )
     .eq("recipe_version_id", recipeVersionId)
     .order("position", { ascending: true });
 
   if (rowsResult.error) {
-    if (isSchemaMissingError(rowsResult.error) || isRlsError(rowsResult.error)) {
+    if (
+      isSchemaMissingError(rowsResult.error) || isRlsError(rowsResult.error)
+    ) {
       return [];
     }
 
@@ -891,7 +1053,7 @@ const fetchCanonicalIngredientRows = async (
       500,
       "recipe_ingredients_fetch_failed",
       "Could not fetch canonical recipe ingredients",
-      rowsResult.error.message
+      rowsResult.error.message,
     );
   }
 
@@ -903,30 +1065,39 @@ const fetchCanonicalIngredientRows = async (
     source_unit: row.source_unit ? String(row.source_unit) : null,
     normalized_amount_si: toFiniteNumberOrNull(row.normalized_amount_si),
     normalized_unit: row.normalized_unit ? String(row.normalized_unit) : null,
-    unit_kind:
-      row.unit_kind === "mass" || row.unit_kind === "volume" || row.unit_kind === "count" || row.unit_kind === "unknown"
-        ? row.unit_kind
-        : "unknown",
-    normalized_status: row.normalized_status === "normalized" ? "normalized" : "needs_retry",
+    unit_kind: row.unit_kind === "mass" || row.unit_kind === "volume" ||
+        row.unit_kind === "count" || row.unit_kind === "unknown"
+      ? row.unit_kind
+      : "unknown",
+    normalized_status: row.normalized_status === "normalized"
+      ? "normalized"
+      : "needs_retry",
     category: row.category ? String(row.category) : null,
-    component: row.component ? String(row.component) : null
+    component: row.component ? String(row.component) : null,
   }));
 };
 
 const loadIngredientNameById = async (
   client: SupabaseClient,
-  ingredientIds: string[]
+  ingredientIds: string[],
 ): Promise<Map<string, string>> => {
   if (ingredientIds.length === 0) {
     return new Map();
   }
 
-  const { data, error } = await client.from("ingredients").select("id,canonical_name").in("id", ingredientIds);
+  const { data, error } = await client.from("ingredients").select(
+    "id,canonical_name",
+  ).in("id", ingredientIds);
   if (error) {
     if (isSchemaMissingError(error) || isRlsError(error)) {
       return new Map();
     }
-    throw new ApiError(500, "ingredients_fetch_failed", "Could not fetch canonical ingredients", error.message);
+    throw new ApiError(
+      500,
+      "ingredients_fetch_failed",
+      "Could not fetch canonical ingredients",
+      error.message,
+    );
   }
 
   return new Map((data ?? []).map((row) => [row.id, row.canonical_name]));
@@ -943,7 +1114,11 @@ const persistCanonicalRecipeIngredients = async (params: {
   }
 
   const keySet = Array.from(
-    new Set(canonicalRows.map((row) => row.normalized_key).filter((key) => key.length > 0))
+    new Set(
+      canonicalRows.map((row) => row.normalized_key).filter((key) =>
+        key.length > 0
+      ),
+    ),
   );
 
   if (keySet.length === 0) {
@@ -955,11 +1130,12 @@ const persistCanonicalRecipeIngredients = async (params: {
     normalized_key: row.normalized_key,
     metadata: {
       source: "llm",
-      last_seen_at: new Date().toISOString()
-    }
+      last_seen_at: new Date().toISOString(),
+    },
   }));
 
-  const { data: ingredients, error: ingredientsError } = await params.serviceClient
+  const { data: ingredients, error: ingredientsError } = await params
+    .serviceClient
     .from("ingredients")
     .upsert(ingredientRows, { onConflict: "normalized_key" })
     .select("id,normalized_key,canonical_name");
@@ -969,11 +1145,13 @@ const persistCanonicalRecipeIngredients = async (params: {
       500,
       "canonical_ingredient_upsert_failed",
       "Could not persist canonical ingredients",
-      ingredientsError?.message
+      ingredientsError?.message,
     );
   }
 
-  const ingredientByKey = new Map(ingredients.map((ingredient) => [ingredient.normalized_key, ingredient]));
+  const ingredientByKey = new Map(
+    ingredients.map((ingredient) => [ingredient.normalized_key, ingredient]),
+  );
 
   const aliases = canonicalRows
     .filter((row) => row.normalized_key.length > 0)
@@ -981,7 +1159,7 @@ const persistCanonicalRecipeIngredients = async (params: {
       alias_key: row.normalized_key,
       ingredient_id: ingredientByKey.get(row.normalized_key)?.id ?? null,
       source: "llm",
-      confidence: 1
+      confidence: 1,
     }))
     .filter((row) => Boolean(row.ingredient_id));
 
@@ -991,7 +1169,12 @@ const persistCanonicalRecipeIngredients = async (params: {
       .upsert(aliases, { onConflict: "alias_key" });
 
     if (aliasError) {
-      throw new ApiError(500, "ingredient_alias_upsert_failed", "Could not persist ingredient aliases", aliasError.message);
+      throw new ApiError(
+        500,
+        "ingredient_alias_upsert_failed",
+        "Could not persist ingredient aliases",
+        aliasError.message,
+      );
     }
   }
 
@@ -1000,7 +1183,12 @@ const persistCanonicalRecipeIngredients = async (params: {
     .delete()
     .eq("recipe_version_id", params.recipeVersionId);
   if (clearError) {
-    throw new ApiError(500, "recipe_ingredients_clear_failed", "Could not clear recipe ingredients", clearError.message);
+    throw new ApiError(
+      500,
+      "recipe_ingredients_clear_failed",
+      "Could not clear recipe ingredients",
+      clearError.message,
+    );
   }
 
   const rowsToInsert = canonicalRows.map((row) => ({
@@ -1017,13 +1205,20 @@ const persistCanonicalRecipeIngredients = async (params: {
     component: row.component,
     position: row.position,
     metadata: {
-      preparation: row.preparation ?? null
-    }
+      preparation: row.preparation ?? null,
+    },
   }));
 
-  const { error: insertError } = await params.serviceClient.from("recipe_ingredients").insert(rowsToInsert);
+  const { error: insertError } = await params.serviceClient.from(
+    "recipe_ingredients",
+  ).insert(rowsToInsert);
   if (insertError) {
-    throw new ApiError(500, "recipe_ingredients_insert_failed", "Could not persist recipe ingredients", insertError.message);
+    throw new ApiError(
+      500,
+      "recipe_ingredients_insert_failed",
+      "Could not persist recipe ingredients",
+      insertError.message,
+    );
   }
 };
 
@@ -1032,29 +1227,39 @@ const enqueueRecipeMetadataJob = async (params: {
   recipeId: string;
   recipeVersionId: string;
 }): Promise<void> => {
-  const { error } = await params.serviceClient.from("recipe_metadata_jobs").upsert(
-    {
-      recipe_id: params.recipeId,
-      recipe_version_id: params.recipeVersionId,
-      status: "pending",
-      attempts: 0,
-      max_attempts: 5,
-      next_attempt_at: new Date().toISOString(),
-      locked_at: null,
-      locked_by: null,
-      last_error: null,
-      updated_at: new Date().toISOString()
-    },
-    { onConflict: "recipe_version_id" }
-  );
+  const { error } = await params.serviceClient.from("recipe_metadata_jobs")
+    .upsert(
+      {
+        recipe_id: params.recipeId,
+        recipe_version_id: params.recipeVersionId,
+        status: "pending",
+        attempts: 0,
+        max_attempts: 5,
+        next_attempt_at: new Date().toISOString(),
+        locked_at: null,
+        locked_by: null,
+        last_error: null,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "recipe_version_id" },
+    );
 
   if (error) {
-    throw new ApiError(500, "recipe_metadata_enqueue_failed", "Could not enqueue metadata job", error.message);
+    throw new ApiError(
+      500,
+      "recipe_metadata_enqueue_failed",
+      "Could not enqueue metadata job",
+      error.message,
+    );
   }
 };
 
-const ensureGraphRelationTypes = async (client: SupabaseClient, relationNames: string[]): Promise<Map<string, string>> => {
-  const normalizedNames = relationNames.map((name) => name.trim().toLowerCase()).filter((name) => name.length > 0);
+const ensureGraphRelationTypes = async (
+  client: SupabaseClient,
+  relationNames: string[],
+): Promise<Map<string, string>> => {
+  const normalizedNames = relationNames.map((name) => name.trim().toLowerCase())
+    .filter((name) => name.length > 0);
   if (normalizedNames.length === 0) {
     return new Map();
   }
@@ -1062,22 +1267,30 @@ const ensureGraphRelationTypes = async (client: SupabaseClient, relationNames: s
   const uniqueNames = Array.from(new Set(normalizedNames));
   const insertPayload = uniqueNames.map((name) => ({
     name,
-    description: `Graph relation: ${name}`
+    description: `Graph relation: ${name}`,
   }));
 
-  const { error: upsertError } = await client.from("graph_relation_types").upsert(insertPayload, { onConflict: "name" });
+  const { error: upsertError } = await client.from("graph_relation_types")
+    .upsert(insertPayload, { onConflict: "name" });
   if (upsertError) {
     throw new ApiError(
       500,
       "metadata_relation_type_upsert_failed",
       "Could not upsert graph relation types",
-      upsertError.message
+      upsertError.message,
     );
   }
 
-  const { data, error } = await client.from("graph_relation_types").select("id,name").in("name", uniqueNames);
+  const { data, error } = await client.from("graph_relation_types").select(
+    "id,name",
+  ).in("name", uniqueNames);
   if (error) {
-    throw new ApiError(500, "metadata_relation_type_fetch_failed", "Could not fetch graph relation types", error.message);
+    throw new ApiError(
+      500,
+      "metadata_relation_type_fetch_failed",
+      "Could not fetch graph relation types",
+      error.message,
+    );
   }
 
   return new Map((data ?? []).map((row) => [row.name, row.id]));
@@ -1099,7 +1312,8 @@ const upsertMetadataGraph = async (params: {
   const ingredientNames = params.canonicalRows
     .map((row) => {
       if (row.ingredient_id) {
-        return params.canonicalIngredientNameById.get(row.ingredient_id) ?? row.source_name;
+        return params.canonicalIngredientNameById.get(row.ingredient_id) ??
+          row.source_name;
       }
       return row.source_name;
     })
@@ -1109,13 +1323,15 @@ const upsertMetadataGraph = async (params: {
   const categoryNames = Array.from(
     new Set(
       [
-        ...params.canonicalRows.map((row) => row.category).filter((value): value is string => Boolean(value)),
+        ...params.canonicalRows.map((row) => row.category).filter((
+          value,
+        ): value is string => Boolean(value)),
         ...listifyText(params.payload.metadata?.cuisine_tags),
-        ...listifyText(params.payload.metadata?.occasion_tags)
+        ...listifyText(params.payload.metadata?.occasion_tags),
       ]
         .map((value) => value.trim())
-        .filter((value) => value.length > 0)
-    )
+        .filter((value) => value.length > 0),
+    ),
   );
 
   const keywordNames = Array.from(
@@ -1123,42 +1339,46 @@ const upsertMetadataGraph = async (params: {
       [
         ...listifyText(params.payload.metadata?.flavor_profile),
         ...listifyText(params.payload.pairings),
-        ...listifyText(params.payload.metadata?.pairing_rationale)
+        ...listifyText(params.payload.metadata?.pairing_rationale),
       ]
         .map((value) => value.trim())
-        .filter((value) => value.length > 0)
-    )
+        .filter((value) => value.length > 0),
+    ),
   );
 
-  const entityPayload: Array<{ entity_type: string; label: string; metadata: Record<string, JsonValue> }> = [
+  const entityPayload: Array<
+    { entity_type: string; label: string; metadata: Record<string, JsonValue> }
+  > = [
     {
       entity_type: "recipe",
       label: recipeLabel,
       metadata: {
-        recipe_id: params.recipeId
-      }
+        recipe_id: params.recipeId,
+      },
     },
     ...ingredientNames.map((label) => ({
       entity_type: "ingredient",
       label,
-      metadata: {}
+      metadata: {},
     })),
     ...categoryNames.map((label) => ({
       entity_type: "category",
       label,
-      metadata: {}
+      metadata: {},
     })),
     ...keywordNames.map((label) => ({
       entity_type: "keyword",
       label,
-      metadata: {}
-    }))
+      metadata: {},
+    })),
   ];
 
   const uniqueEntityPayload = Array.from(
     new Map(
-      entityPayload.map((entity) => [`${entity.entity_type}:${entity.label.toLowerCase()}`, entity])
-    ).values()
+      entityPayload.map((
+        entity,
+      ) => [`${entity.entity_type}:${entity.label.toLowerCase()}`, entity]),
+    ).values(),
   );
 
   const { data: entities, error: entityError } = await params.serviceClient
@@ -1167,10 +1387,19 @@ const upsertMetadataGraph = async (params: {
     .select("id,entity_type,label");
 
   if (entityError || !entities) {
-    throw new ApiError(500, "metadata_entity_upsert_failed", "Could not upsert graph entities", entityError?.message);
+    throw new ApiError(
+      500,
+      "metadata_entity_upsert_failed",
+      "Could not upsert graph entities",
+      entityError?.message,
+    );
   }
 
-  const entityByKey = new Map(entities.map((entity) => [`${entity.entity_type}:${entity.label.toLowerCase()}`, entity.id]));
+  const entityByKey = new Map(
+    entities.map((
+      entity,
+    ) => [`${entity.entity_type}:${entity.label.toLowerCase()}`, entity.id]),
+  );
   const recipeEntityId = entityByKey.get(`recipe:${recipeLabel.toLowerCase()}`);
   if (!recipeEntityId) {
     return;
@@ -1178,22 +1407,34 @@ const upsertMetadataGraph = async (params: {
 
   const linkPayload = entities.map((entity) => ({
     recipe_version_id: params.recipeVersionId,
-    entity_id: entity.id
+    entity_id: entity.id,
   }));
-  const { error: linkError } = await params.serviceClient.from("recipe_graph_links").upsert(linkPayload, {
-    onConflict: "recipe_version_id,entity_id"
+  const { error: linkError } = await params.serviceClient.from(
+    "recipe_graph_links",
+  ).upsert(linkPayload, {
+    onConflict: "recipe_version_id,entity_id",
   });
   if (linkError) {
-    throw new ApiError(500, "metadata_graph_link_failed", "Could not upsert recipe graph links", linkError.message);
+    throw new ApiError(
+      500,
+      "metadata_graph_link_failed",
+      "Could not upsert recipe graph links",
+      linkError.message,
+    );
   }
 
-  const relationTypeByName = await ensureGraphRelationTypes(params.serviceClient, [
-    "contains_ingredient",
-    "has_category",
-    "has_keyword"
-  ]);
+  const relationTypeByName = await ensureGraphRelationTypes(
+    params.serviceClient,
+    [
+      "contains_ingredient",
+      "has_category",
+      "has_keyword",
+    ],
+  );
 
-  const containsIngredientRelation = relationTypeByName.get("contains_ingredient");
+  const containsIngredientRelation = relationTypeByName.get(
+    "contains_ingredient",
+  );
   const hasCategoryRelation = relationTypeByName.get("has_category");
   const hasKeywordRelation = relationTypeByName.get("has_keyword");
 
@@ -1208,7 +1449,9 @@ const upsertMetadataGraph = async (params: {
 
   if (containsIngredientRelation) {
     for (const ingredientName of ingredientNames) {
-      const entityId = entityByKey.get(`ingredient:${ingredientName.toLowerCase()}`);
+      const entityId = entityByKey.get(
+        `ingredient:${ingredientName.toLowerCase()}`,
+      );
       if (!entityId) {
         continue;
       }
@@ -1219,14 +1462,16 @@ const upsertMetadataGraph = async (params: {
         relation_type_id: containsIngredientRelation,
         source: "metadata_job",
         confidence: 1,
-        metadata: {}
+        metadata: {},
       });
     }
   }
 
   if (hasCategoryRelation) {
     for (const categoryName of categoryNames) {
-      const entityId = entityByKey.get(`category:${categoryName.toLowerCase()}`);
+      const entityId = entityByKey.get(
+        `category:${categoryName.toLowerCase()}`,
+      );
       if (!entityId) {
         continue;
       }
@@ -1236,7 +1481,7 @@ const upsertMetadataGraph = async (params: {
         relation_type_id: hasCategoryRelation,
         source: "metadata_job",
         confidence: 0.85,
-        metadata: {}
+        metadata: {},
       });
     }
   }
@@ -1253,7 +1498,7 @@ const upsertMetadataGraph = async (params: {
         relation_type_id: hasKeywordRelation,
         source: "metadata_job",
         confidence: 0.8,
-        metadata: {}
+        metadata: {},
       });
     }
   }
@@ -1262,12 +1507,18 @@ const upsertMetadataGraph = async (params: {
     return;
   }
 
-  const { error: edgeError } = await params.serviceClient.from("graph_edges").upsert(edgePayload, {
-    onConflict: "from_entity_id,to_entity_id,relation_type_id,source"
-  });
+  const { error: edgeError } = await params.serviceClient.from("graph_edges")
+    .upsert(edgePayload, {
+      onConflict: "from_entity_id,to_entity_id,relation_type_id,source",
+    });
 
   if (edgeError) {
-    throw new ApiError(500, "metadata_graph_edge_upsert_failed", "Could not upsert graph edges", edgeError.message);
+    throw new ApiError(
+      500,
+      "metadata_graph_edge_upsert_failed",
+      "Could not upsert graph edges",
+      edgeError.message,
+    );
   }
 };
 
@@ -1300,7 +1551,12 @@ const processMetadataJobs = async (params: {
     .lt("locked_at", staleThreshold);
 
   if (staleJobsError && !isSchemaMissingError(staleJobsError)) {
-    throw new ApiError(500, "metadata_jobs_stale_fetch_failed", "Could not fetch stale metadata jobs", staleJobsError.message);
+    throw new ApiError(
+      500,
+      "metadata_jobs_stale_fetch_failed",
+      "Could not fetch stale metadata jobs",
+      staleJobsError.message,
+    );
   }
 
   const staleIds = (staleJobs ?? []).map((job) => job.id);
@@ -1313,30 +1569,51 @@ const processMetadataJobs = async (params: {
         locked_at: null,
         locked_by: null,
         next_attempt_at: now.toISOString(),
-        updated_at: now.toISOString()
+        updated_at: now.toISOString(),
       })
       .in("id", staleIds);
 
     if (reapError) {
-      throw new ApiError(500, "metadata_jobs_reap_failed", "Could not reap stale metadata locks", reapError.message);
+      throw new ApiError(
+        500,
+        "metadata_jobs_reap_failed",
+        "Could not reap stale metadata locks",
+        reapError.message,
+      );
     }
     reaped = staleIds.length;
   }
 
   if (params.limit <= 0) {
-    const { data: queueRows } = await params.serviceClient.from("recipe_metadata_jobs").select("status");
+    const { data: queueRows } = await params.serviceClient.from(
+      "recipe_metadata_jobs",
+    ).select("status");
     const queue = {
-      pending: (queueRows ?? []).filter((row) => row.status === "pending").length,
-      processing: (queueRows ?? []).filter((row) => row.status === "processing").length,
+      pending: (queueRows ?? []).filter((row) =>
+        row.status === "pending"
+      ).length,
+      processing: (queueRows ?? []).filter((row) =>
+        row.status === "processing"
+      ).length,
       ready: (queueRows ?? []).filter((row) => row.status === "ready").length,
-      failed: (queueRows ?? []).filter((row) => row.status === "failed").length
+      failed: (queueRows ?? []).filter((row) => row.status === "failed").length,
     };
-    return { reaped, claimed: 0, processed: 0, ready: 0, failed: 0, pending: 0, queue };
+    return {
+      reaped,
+      claimed: 0,
+      processed: 0,
+      ready: 0,
+      failed: 0,
+      pending: 0,
+      queue,
+    };
   }
 
   const { data: dueJobs, error: dueJobsError } = await params.serviceClient
     .from("recipe_metadata_jobs")
-    .select("id,recipe_id,recipe_version_id,status,attempts,max_attempts,next_attempt_at")
+    .select(
+      "id,recipe_id,recipe_version_id,status,attempts,max_attempts,next_attempt_at",
+    )
     .in("status", ["pending", "failed"])
     .lte("next_attempt_at", now.toISOString())
     .order("next_attempt_at", { ascending: true })
@@ -1351,10 +1628,15 @@ const processMetadataJobs = async (params: {
         ready: 0,
         failed: 0,
         pending: 0,
-        queue: { pending: 0, processing: 0, ready: 0, failed: 0 }
+        queue: { pending: 0, processing: 0, ready: 0, failed: 0 },
       };
     }
-    throw new ApiError(500, "metadata_jobs_due_fetch_failed", "Could not fetch due metadata jobs", dueJobsError.message);
+    throw new ApiError(
+      500,
+      "metadata_jobs_due_fetch_failed",
+      "Could not fetch due metadata jobs",
+      dueJobsError.message,
+    );
   }
 
   const jobs = dueJobs ?? [];
@@ -1373,7 +1655,7 @@ const processMetadataJobs = async (params: {
         attempts: nextAttempt,
         locked_at: now.toISOString(),
         locked_by: "v1_metadata_jobs_process",
-        updated_at: now.toISOString()
+        updated_at: now.toISOString(),
       })
       .eq("id", job.id)
       .eq("status", job.status)
@@ -1381,7 +1663,12 @@ const processMetadataJobs = async (params: {
       .maybeSingle();
 
     if (lockResult.error) {
-      throw new ApiError(500, "metadata_job_lock_failed", "Could not claim metadata job", lockResult.error.message);
+      throw new ApiError(
+        500,
+        "metadata_job_lock_failed",
+        "Could not claim metadata job",
+        lockResult.error.message,
+      );
     }
     if (!lockResult.data) {
       continue;
@@ -1400,32 +1687,44 @@ const processMetadataJobs = async (params: {
       }
 
       const payload = version.payload as RecipePayload;
-      const canonicalRows = await fetchCanonicalIngredientRows(params.serviceClient, job.recipe_version_id);
-      const ingredientIds = Array.from(
-        new Set(canonicalRows.map((row) => row.ingredient_id).filter((id): id is string => Boolean(id)))
+      const canonicalRows = await fetchCanonicalIngredientRows(
+        params.serviceClient,
+        job.recipe_version_id,
       );
-      const canonicalIngredientNameById = await loadIngredientNameById(params.serviceClient, ingredientIds);
+      const ingredientIds = Array.from(
+        new Set(
+          canonicalRows.map((row) => row.ingredient_id).filter((
+            id,
+          ): id is string => Boolean(id)),
+        ),
+      );
+      const canonicalIngredientNameById = await loadIngredientNameById(
+        params.serviceClient,
+        ingredientIds,
+      );
       const categories = Array.from(
         new Set(
           [
-            ...canonicalRows.map((row) => row.category).filter((value): value is string => Boolean(value)),
+            ...canonicalRows.map((row) => row.category).filter((
+              value,
+            ): value is string => Boolean(value)),
             ...listifyText(payload.metadata?.cuisine_tags),
-            ...listifyText(payload.metadata?.occasion_tags)
+            ...listifyText(payload.metadata?.occasion_tags),
           ]
             .map((value) => value.trim())
-            .filter((value) => value.length > 0)
-        )
+            .filter((value) => value.length > 0),
+        ),
       );
       const keywords = Array.from(
         new Set(
           [
             ...listifyText(payload.metadata?.flavor_profile),
             ...listifyText(payload.pairings),
-            ...listifyText(payload.metadata?.pairing_rationale)
+            ...listifyText(payload.metadata?.pairing_rationale),
           ]
             .map((value) => value.trim())
-            .filter((value) => value.length > 0)
-        )
+            .filter((value) => value.length > 0),
+        ),
       );
 
       await upsertMetadataGraph({
@@ -1434,7 +1733,7 @@ const processMetadataJobs = async (params: {
         recipeVersionId: job.recipe_version_id,
         payload,
         canonicalRows,
-        canonicalIngredientNameById
+        canonicalIngredientNameById,
       });
 
       const { error: readyError } = await params.serviceClient
@@ -1448,9 +1747,9 @@ const processMetadataJobs = async (params: {
             categories,
             keywords,
             nutrition: payload.metadata?.nutrition ?? null,
-            processed_at: new Date().toISOString()
+            processed_at: new Date().toISOString(),
           },
-          updated_at: new Date().toISOString()
+          updated_at: new Date().toISOString(),
         })
         .eq("id", job.id);
 
@@ -1468,19 +1767,25 @@ const processMetadataJobs = async (params: {
         requestId: params.requestId,
         afterJson: {
           recipe_id: job.recipe_id,
-          recipe_version_id: job.recipe_version_id
-        }
+          recipe_version_id: job.recipe_version_id,
+        },
       });
 
       processed += 1;
       ready += 1;
     } catch (error) {
-      const message = error instanceof Error ? error.message : "metadata_job_failed";
+      const message = error instanceof Error
+        ? error.message
+        : "metadata_job_failed";
       const maxAttempts = Number(job.max_attempts ?? 5);
       const terminal = nextAttempt >= maxAttempts;
-      const baseDelayMs = Math.min(60 * 60 * 1000, 1000 * (2 ** Math.max(0, nextAttempt - 1)));
+      const baseDelayMs = Math.min(
+        60 * 60 * 1000,
+        1000 * (2 ** Math.max(0, nextAttempt - 1)),
+      );
       const jitterMs = Math.floor(Math.random() * 2000);
-      const nextAttemptAt = new Date(Date.now() + baseDelayMs + jitterMs).toISOString();
+      const nextAttemptAt = new Date(Date.now() + baseDelayMs + jitterMs)
+        .toISOString();
 
       const { error: failureUpdateError } = await params.serviceClient
         .from("recipe_metadata_jobs")
@@ -1490,7 +1795,7 @@ const processMetadataJobs = async (params: {
           locked_at: null,
           locked_by: null,
           last_error: message,
-          updated_at: new Date().toISOString()
+          updated_at: new Date().toISOString(),
         })
         .eq("id", job.id);
 
@@ -1499,7 +1804,7 @@ const processMetadataJobs = async (params: {
           500,
           "metadata_job_failure_update_failed",
           "Could not update metadata job failure",
-          failureUpdateError.message
+          failureUpdateError.message,
         );
       }
 
@@ -1515,8 +1820,8 @@ const processMetadataJobs = async (params: {
           attempt: nextAttempt,
           max_attempts: maxAttempts,
           terminal,
-          error: message
-        }
+          error: message,
+        },
       });
 
       processed += 1;
@@ -1528,12 +1833,15 @@ const processMetadataJobs = async (params: {
     }
   }
 
-  const { data: queueRows } = await params.serviceClient.from("recipe_metadata_jobs").select("status");
+  const { data: queueRows } = await params.serviceClient.from(
+    "recipe_metadata_jobs",
+  ).select("status");
   const queue = {
     pending: (queueRows ?? []).filter((row) => row.status === "pending").length,
-    processing: (queueRows ?? []).filter((row) => row.status === "processing").length,
+    processing:
+      (queueRows ?? []).filter((row) => row.status === "processing").length,
     ready: (queueRows ?? []).filter((row) => row.status === "ready").length,
-    failed: (queueRows ?? []).filter((row) => row.status === "failed").length
+    failed: (queueRows ?? []).filter((row) => row.status === "failed").length,
   };
 
   return { reaped, claimed, processed, ready, failed, pending, queue };
@@ -1543,16 +1851,23 @@ const fetchRecipeView = async (
   client: SupabaseClient,
   recipeId: string,
   includeAttachments = true,
-  options: RecipeViewOptions = defaultRecipeViewOptions
+  options: RecipeViewOptions = defaultRecipeViewOptions,
 ): Promise<RecipeView> => {
   const { data: recipe, error: recipeError } = await client
     .from("recipes")
-    .select("id,title,hero_image_url,image_status,visibility,updated_at,current_version_id")
+    .select(
+      "id,title,hero_image_url,image_status,visibility,updated_at,current_version_id",
+    )
     .eq("id", recipeId)
     .maybeSingle();
 
   if (recipeError) {
-    throw new ApiError(500, "recipe_fetch_failed", "Could not fetch recipe", recipeError.message);
+    throw new ApiError(
+      500,
+      "recipe_fetch_failed",
+      "Could not fetch recipe",
+      recipeError.message,
+    );
   }
 
   if (!recipe) {
@@ -1560,7 +1875,11 @@ const fetchRecipeView = async (
   }
 
   if (!recipe.current_version_id) {
-    throw new ApiError(500, "recipe_version_missing", "Recipe does not have a current version");
+    throw new ApiError(
+      500,
+      "recipe_version_missing",
+      "Recipe does not have a current version",
+    );
   }
 
   const { data: version, error: versionError } = await client
@@ -1570,7 +1889,12 @@ const fetchRecipeView = async (
     .maybeSingle();
 
   if (versionError || !version) {
-    throw new ApiError(500, "recipe_version_fetch_failed", "Could not fetch recipe version", versionError?.message);
+    throw new ApiError(
+      500,
+      "recipe_version_fetch_failed",
+      "Could not fetch recipe version",
+      versionError?.message,
+    );
   }
 
   const payload = version.payload as RecipePayload;
@@ -1578,17 +1902,17 @@ const fetchRecipeView = async (
   const projectedIngredients = projectIngredientsForOutput({
     sourceIngredients: payload.ingredients,
     canonicalRows,
-    units: options.units
+    units: options.units,
   });
   const ingredientGroups = buildIngredientGroups({
     ingredients: projectedIngredients,
-    groupBy: options.groupBy
+    groupBy: options.groupBy,
   });
 
   const projectedSteps = projectInlineMeasurements({
     steps: payload.steps,
     units: options.units,
-    includeInlineMeasurements: options.inlineMeasurements
+    includeInlineMeasurements: options.inlineMeasurements,
   });
 
   let attachments: RecipeAttachmentView[] = [];
@@ -1605,11 +1929,13 @@ const fetchRecipeView = async (
         500,
         "recipe_links_fetch_failed",
         "Could not fetch recipe attachments",
-        linksResult.error.message
+        linksResult.error.message,
       );
     }
 
-    const relationTypeIds = Array.from(new Set(links.map((link) => link.relation_type_id)));
+    const relationTypeIds = Array.from(
+      new Set(links.map((link) => link.relation_type_id)),
+    );
     let relationById = new Map<string, string>();
 
     if (relationTypeIds.length > 0) {
@@ -1619,20 +1945,32 @@ const fetchRecipeView = async (
         .in("id", relationTypeIds);
 
       if (relationError) {
-        throw new ApiError(500, "relation_types_fetch_failed", "Could not fetch relation type names", relationError.message);
+        throw new ApiError(
+          500,
+          "relation_types_fetch_failed",
+          "Could not fetch relation type names",
+          relationError.message,
+        );
       }
 
-      relationById = new Map((relationTypes ?? []).map((item) => [item.id, item.name]));
+      relationById = new Map(
+        (relationTypes ?? []).map((item) => [item.id, item.name]),
+      );
     }
 
     const attachmentItems: RecipeAttachmentView[] = [];
     for (const link of links) {
-      const childRecipe = await fetchRecipeView(client, link.child_recipe_id, false, options);
+      const childRecipe = await fetchRecipeView(
+        client,
+        link.child_recipe_id,
+        false,
+        options,
+      );
       attachmentItems.push({
         attachment_id: link.id,
         relation_type: relationById.get(link.relation_type_id) ?? "attached_to",
         position: link.position,
-        recipe: childRecipe
+        recipe: childRecipe,
       });
     }
 
@@ -1661,9 +1999,9 @@ const fetchRecipeView = async (
       recipe_id: recipe.id,
       parent_version_id: version.parent_version_id,
       diff_summary: version.diff_summary,
-      created_at: version.created_at
+      created_at: version.created_at,
     },
-    attachments
+    attachments,
   };
 };
 
@@ -1700,7 +2038,7 @@ const persistRecipe = async (params: {
         image_generation_attempts: params.heroImageUrl ? 1 : 0,
         visibility: "public",
         source_chat_id: params.sourceChatId,
-        updated_at: now
+        updated_at: now,
       })
       .select("id")
       .single();
@@ -1708,7 +2046,12 @@ const persistRecipe = async (params: {
     let recipe = preferredInsert.data;
     if (preferredInsert.error || !recipe) {
       if (!isSchemaMissingError(preferredInsert.error)) {
-        throw new ApiError(500, "recipe_insert_failed", "Could not create recipe", preferredInsert.error?.message);
+        throw new ApiError(
+          500,
+          "recipe_insert_failed",
+          "Could not create recipe",
+          preferredInsert.error?.message,
+        );
       }
 
       const legacyInsert = await params.client
@@ -1719,13 +2062,18 @@ const persistRecipe = async (params: {
           hero_image_url: params.heroImageUrl,
           visibility: "public",
           source_chat_id: params.sourceChatId,
-          updated_at: now
+          updated_at: now,
         })
         .select("id")
         .single();
 
       if (legacyInsert.error || !legacyInsert.data) {
-        throw new ApiError(500, "recipe_insert_failed", "Could not create recipe", legacyInsert.error?.message);
+        throw new ApiError(
+          500,
+          "recipe_insert_failed",
+          "Could not create recipe",
+          legacyInsert.error?.message,
+        );
       }
 
       recipe = legacyInsert.data;
@@ -1741,13 +2089,18 @@ const persistRecipe = async (params: {
       parent_version_id: params.parentVersionId,
       payload: params.payload,
       diff_summary: params.diffSummary,
-      created_by: params.userId
+      created_by: params.userId,
     })
     .select("id")
     .single();
 
   if (versionError || !version) {
-    throw new ApiError(500, "recipe_version_insert_failed", "Could not create recipe version", versionError?.message);
+    throw new ApiError(
+      500,
+      "recipe_version_insert_failed",
+      "Could not create recipe version",
+      versionError?.message,
+    );
   }
 
   const updatePayload: Record<string, JsonValue> = {
@@ -1755,10 +2108,12 @@ const persistRecipe = async (params: {
     current_version_id: version.id,
     updated_at: now,
     image_updated_at: now,
-    image_generation_attempts: params.heroImageUrl ? 1 : 0
+    image_generation_attempts: params.heroImageUrl ? 1 : 0,
   };
 
-  if (typeof params.heroImageUrl === "string" && params.heroImageUrl.length > 0) {
+  if (
+    typeof params.heroImageUrl === "string" && params.heroImageUrl.length > 0
+  ) {
     updatePayload.hero_image_url = params.heroImageUrl;
     updatePayload.image_status = "ready";
     updatePayload.image_last_error = null;
@@ -1767,18 +2122,27 @@ const persistRecipe = async (params: {
     updatePayload.image_last_error = params.imageError ?? null;
   }
 
-  const { error: updateError } = await params.client.from("recipes").update(updatePayload).eq("id", recipeId);
+  const { error: updateError } = await params.client.from("recipes").update(
+    updatePayload,
+  ).eq("id", recipeId);
   if (updateError) {
     if (!isSchemaMissingError(updateError)) {
-      throw new ApiError(500, "recipe_update_failed", "Could not update recipe", updateError.message);
+      throw new ApiError(
+        500,
+        "recipe_update_failed",
+        "Could not update recipe",
+        updateError.message,
+      );
     }
 
     const legacyPayload: Record<string, JsonValue> = {
       title: params.payload.title,
       current_version_id: version.id,
-      updated_at: now
+      updated_at: now,
     };
-    if (typeof params.heroImageUrl === "string" && params.heroImageUrl.length > 0) {
+    if (
+      typeof params.heroImageUrl === "string" && params.heroImageUrl.length > 0
+    ) {
       legacyPayload.hero_image_url = params.heroImageUrl;
     }
 
@@ -1788,34 +2152,41 @@ const persistRecipe = async (params: {
       .eq("id", recipeId);
 
     if (legacyUpdateError) {
-      throw new ApiError(500, "recipe_update_failed", "Could not update recipe", legacyUpdateError.message);
+      throw new ApiError(
+        500,
+        "recipe_update_failed",
+        "Could not update recipe",
+        legacyUpdateError.message,
+      );
     }
   }
 
   await persistCanonicalRecipeIngredients({
     serviceClient: params.serviceClient,
     recipeVersionId: version.id,
-    recipe: params.payload
+    recipe: params.payload,
   });
 
   await enqueueRecipeMetadataJob({
     serviceClient: params.serviceClient,
     recipeId,
-    recipeVersionId: version.id
+    recipeVersionId: version.id,
   });
 
   // Image jobs are only enqueued when a recipe is explicitly saved to cookbook.
   // Do NOT enqueue here — avoids triggering slow image generation on every chatSession/tweak.
 
-  const { error: versionEventError } = await params.client.from("recipe_version_events").insert({
+  const { error: versionEventError } = await params.client.from(
+    "recipe_version_events",
+  ).insert({
     recipe_version_id: version.id,
     event_type: params.parentVersionId ? "recipe_tweak" : "recipe_create",
     request_id: params.requestId,
     metadata: {
       source_chat_id: params.sourceChatId ?? null,
       diff_summary: params.diffSummary ?? null,
-      selected_memory_ids: params.selectedMemoryIds ?? []
-    }
+      selected_memory_ids: params.selectedMemoryIds ?? [],
+    },
   });
 
   if (versionEventError) {
@@ -1827,7 +2198,7 @@ const persistRecipe = async (params: {
       memory_id: memoryId,
       recipe_id: recipeId,
       recipe_version_id: version.id,
-      source_event_id: null
+      source_event_id: null,
     }));
 
     const { error: memoryLinkError } = await params.client
@@ -1850,13 +2221,13 @@ const persistRecipe = async (params: {
     afterJson: {
       recipe_id: recipeId,
       version_id: version.id,
-      diff_summary: params.diffSummary ?? null
-    }
+      diff_summary: params.diffSummary ?? null,
+    },
   });
 
   return {
     recipeId,
-    versionId: version.id
+    versionId: version.id,
   };
 };
 
@@ -1869,19 +2240,27 @@ const applyAutoCategories = async (params: {
     recipe_id: params.recipeId,
     category: item.category,
     confidence: item.confidence,
-    source: "llm"
+    source: "llm",
   }));
 
   if (records.length === 0) {
     return;
   }
 
-  const { error } = await params.client.from("recipe_auto_categories").upsert(records, {
-    onConflict: "recipe_id,category"
-  });
+  const { error } = await params.client.from("recipe_auto_categories").upsert(
+    records,
+    {
+      onConflict: "recipe_id,category",
+    },
+  );
 
   if (error) {
-    throw new ApiError(500, "auto_categories_failed", "Could not apply recipe auto categories", error.message);
+    throw new ApiError(
+      500,
+      "auto_categories_failed",
+      "Could not apply recipe auto categories",
+      error.message,
+    );
   }
 };
 
@@ -1895,9 +2274,18 @@ const buildContextPack = async (params: {
   selectionMode?: "llm" | "fast";
 }): Promise<ContextPack> => {
   const preferences = await getPreferences(params.userClient, params.userId);
-  const preferencesNaturalLanguage = buildNaturalLanguagePreferenceContext(preferences);
-  const memorySnapshot = await getMemorySnapshot(params.userClient, params.userId);
-  const memories = await getActiveMemories(params.userClient, params.userId, 120);
+  const preferencesNaturalLanguage = buildNaturalLanguagePreferenceContext(
+    preferences,
+  );
+  const memorySnapshot = await getMemorySnapshot(
+    params.userClient,
+    params.userId,
+  );
+  const memories = await getActiveMemories(
+    params.userClient,
+    params.userId,
+    120,
+  );
 
   if (memories.length === 0) {
     return {
@@ -1905,7 +2293,7 @@ const buildContextPack = async (params: {
       preferencesNaturalLanguage,
       memorySnapshot,
       selectedMemories: [],
-      selectedMemoryIds: []
+      selectedMemoryIds: [],
     };
   }
 
@@ -1916,7 +2304,7 @@ const buildContextPack = async (params: {
       preferencesNaturalLanguage,
       memorySnapshot,
       selectedMemories,
-      selectedMemoryIds: selectedMemories.map((memory) => memory.id)
+      selectedMemoryIds: selectedMemories.map((memory) => memory.id),
     };
   }
 
@@ -1931,9 +2319,9 @@ const buildContextPack = async (params: {
         preferences,
         preferences_natural_language: preferencesNaturalLanguage,
         memory_snapshot: memorySnapshot,
-        ...params.context
+        ...params.context,
       },
-      memories
+      memories,
     });
     selectedIds = selection.selected_memory_ids;
   } catch (error) {
@@ -1942,14 +2330,16 @@ const buildContextPack = async (params: {
   }
 
   const selectedSet = new Set(selectedIds);
-  const selectedMemories = memories.filter((memory) => selectedSet.has(memory.id));
+  const selectedMemories = memories.filter((memory) =>
+    selectedSet.has(memory.id)
+  );
 
   return {
     preferences,
     preferencesNaturalLanguage,
     memorySnapshot,
     selectedMemories,
-    selectedMemoryIds: selectedMemories.map((memory) => memory.id)
+    selectedMemoryIds: selectedMemories.map((memory) => memory.id),
   };
 };
 
@@ -1972,13 +2362,17 @@ const updateMemoryFromInteraction = async (params: {
       requestId: params.requestId,
       afterJson: {
         mode: "light",
-        reason: "deferred_memory_processing"
-      }
+        reason: "deferred_memory_processing",
+      },
     });
     return;
   }
 
-  const existingMemories = await getActiveMemories(params.userClient, params.userId, 200);
+  const existingMemories = await getActiveMemories(
+    params.userClient,
+    params.userId,
+    200,
+  );
 
   let candidates: Array<{
     memory_type: string;
@@ -1994,7 +2388,7 @@ const updateMemoryFromInteraction = async (params: {
       client: params.serviceClient,
       userId: params.userId,
       requestId: params.requestId,
-      context: params.interactionContext
+      context: params.interactionContext,
     });
   } catch (error) {
     console.error("memory_extract_failed", error);
@@ -2007,11 +2401,15 @@ const updateMemoryFromInteraction = async (params: {
         memory_type: candidate.memory_type,
         memory_kind: candidate.memory_kind ?? "preference",
         memory_content: candidate.memory_content,
-        confidence: Number.isFinite(Number(candidate.confidence)) ? Number(candidate.confidence) : 0.5,
-        salience: Number.isFinite(Number(candidate.salience)) ? Number(candidate.salience) : 0.5,
+        confidence: Number.isFinite(Number(candidate.confidence))
+          ? Number(candidate.confidence)
+          : 0.5,
+        salience: Number.isFinite(Number(candidate.salience))
+          ? Number(candidate.salience)
+          : 0.5,
         source: candidate.source ?? "llm_extract",
-        status: "active"
-      }))
+        status: "active",
+      })),
     );
 
     if (preferredInsert.error) {
@@ -2023,9 +2421,11 @@ const updateMemoryFromInteraction = async (params: {
             user_id: params.userId,
             memory_type: candidate.memory_type,
             memory_content: candidate.memory_content,
-            confidence: Number.isFinite(Number(candidate.confidence)) ? Number(candidate.confidence) : 0.5,
-            source: candidate.source ?? "llm_extract"
-          }))
+            confidence: Number.isFinite(Number(candidate.confidence))
+              ? Number(candidate.confidence)
+              : 0.5,
+            source: candidate.source ?? "llm_extract",
+          })),
         );
 
         if (legacyInsert.error) {
@@ -2041,7 +2441,7 @@ const updateMemoryFromInteraction = async (params: {
       userId: params.userId,
       requestId: params.requestId,
       existingMemories,
-      candidates
+      candidates,
     });
 
     for (const action of conflict.actions) {
@@ -2056,17 +2456,26 @@ const updateMemoryFromInteraction = async (params: {
           .eq("id", action.memory_id);
 
         if (deleteUpdate.error && isSchemaMissingError(deleteUpdate.error)) {
-          await params.userClient.from("memories").delete().eq("id", action.memory_id);
+          await params.userClient.from("memories").delete().eq(
+            "id",
+            action.memory_id,
+          );
         }
       }
 
       if (action.action === "supersede") {
         const supersedeUpdate = await params.userClient
           .from("memories")
-          .update({ status: "superseded", supersedes_memory_id: action.supersedes_memory_id ?? null, updated_at: new Date().toISOString() })
+          .update({
+            status: "superseded",
+            supersedes_memory_id: action.supersedes_memory_id ?? null,
+            updated_at: new Date().toISOString(),
+          })
           .eq("id", action.memory_id);
 
-        if (supersedeUpdate.error && isSchemaMissingError(supersedeUpdate.error)) {
+        if (
+          supersedeUpdate.error && isSchemaMissingError(supersedeUpdate.error)
+        ) {
           // Legacy schema does not support supersession fields.
           continue;
         }
@@ -2075,7 +2484,10 @@ const updateMemoryFromInteraction = async (params: {
       if (action.action === "merge" && action.merged_content) {
         await params.userClient
           .from("memories")
-          .update({ memory_content: action.merged_content, updated_at: new Date().toISOString() })
+          .update({
+            memory_content: action.merged_content,
+            updated_at: new Date().toISOString(),
+          })
           .eq("id", action.memory_id);
       }
     }
@@ -2083,21 +2495,27 @@ const updateMemoryFromInteraction = async (params: {
     console.error("memory_conflict_resolution_failed", error);
   }
 
-  const activeMemories = await getActiveMemories(params.userClient, params.userId, 200);
+  const activeMemories = await getActiveMemories(
+    params.userClient,
+    params.userId,
+    200,
+  );
   try {
     const summary = await llmGateway.summarizeMemories({
       client: params.serviceClient,
       userId: params.userId,
       requestId: params.requestId,
       memories: activeMemories,
-      context: params.interactionContext
+      context: params.interactionContext,
     });
 
-    const { error: snapshotError } = await params.userClient.from("memory_snapshots").upsert({
+    const { error: snapshotError } = await params.userClient.from(
+      "memory_snapshots",
+    ).upsert({
       user_id: params.userId,
       summary: summary.summary,
       token_estimate: summary.token_estimate ?? 0,
-      updated_at: new Date().toISOString()
+      updated_at: new Date().toISOString(),
     });
 
     if (snapshotError && !isSchemaMissingError(snapshotError)) {
@@ -2116,8 +2534,8 @@ const updateMemoryFromInteraction = async (params: {
     action: "updated",
     requestId: params.requestId,
     afterJson: {
-      active_memory_count: activeMemories.length
-    }
+      active_memory_count: activeMemories.length,
+    },
   });
 };
 
@@ -2141,16 +2559,21 @@ const enqueueMemoryJob = async (params: {
       locked_at: null,
       locked_by: null,
       last_error: null,
-      updated_at: new Date().toISOString()
+      updated_at: new Date().toISOString(),
     },
-    { onConflict: "chat_id,message_id" }
+    { onConflict: "chat_id,message_id" },
   );
 
   if (error) {
     if (isSchemaMissingError(error)) {
       return;
     }
-    throw new ApiError(500, "memory_job_enqueue_failed", "Could not enqueue memory job", error.message);
+    throw new ApiError(
+      500,
+      "memory_job_enqueue_failed",
+      "Could not enqueue memory job",
+      error.message,
+    );
   }
 };
 
@@ -2178,7 +2601,12 @@ const processMemoryJobs = async (params: {
     .limit(200);
 
   if (staleResult.error && !isSchemaMissingError(staleResult.error)) {
-    throw new ApiError(500, "memory_jobs_stale_fetch_failed", "Could not fetch stale memory jobs", staleResult.error.message);
+    throw new ApiError(
+      500,
+      "memory_jobs_stale_fetch_failed",
+      "Could not fetch stale memory jobs",
+      staleResult.error.message,
+    );
   }
 
   if ((staleResult.data ?? []).length > 0) {
@@ -2190,18 +2618,25 @@ const processMemoryJobs = async (params: {
         locked_at: null,
         locked_by: null,
         next_attempt_at: nowIso,
-        updated_at: nowIso
+        updated_at: nowIso,
       })
       .in("id", staleIds);
 
     if (staleUpdate.error && !isSchemaMissingError(staleUpdate.error)) {
-      throw new ApiError(500, "memory_jobs_stale_requeue_failed", "Could not requeue stale memory jobs", staleUpdate.error.message);
+      throw new ApiError(
+        500,
+        "memory_jobs_stale_requeue_failed",
+        "Could not requeue stale memory jobs",
+        staleUpdate.error.message,
+      );
     }
   }
 
   const dueResult = await params.serviceClient
     .from("memory_jobs")
-    .select("id,user_id,chat_id,message_id,attempts,max_attempts,interaction_context")
+    .select(
+      "id,user_id,chat_id,message_id,attempts,max_attempts,interaction_context",
+    )
     .in("status", ["pending", "failed"])
     .lte("next_attempt_at", nowIso)
     .order("next_attempt_at", { ascending: true })
@@ -2213,10 +2648,15 @@ const processMemoryJobs = async (params: {
         processed: 0,
         succeeded: 0,
         failed: 0,
-        queue: { pending: 0, processing: 0, ready: 0, failed: 0 }
+        queue: { pending: 0, processing: 0, ready: 0, failed: 0 },
       };
     }
-    throw new ApiError(500, "memory_jobs_due_fetch_failed", "Could not fetch due memory jobs", dueResult.error.message);
+    throw new ApiError(
+      500,
+      "memory_jobs_due_fetch_failed",
+      "Could not fetch due memory jobs",
+      dueResult.error.message,
+    );
   }
 
   let processed = 0;
@@ -2230,7 +2670,7 @@ const processMemoryJobs = async (params: {
         status: "processing",
         locked_at: nowIso,
         locked_by: lockOwner,
-        updated_at: nowIso
+        updated_at: nowIso,
       })
       .eq("id", row.id)
       .in("status", ["pending", "failed"])
@@ -2248,8 +2688,9 @@ const processMemoryJobs = async (params: {
         serviceClient: params.serviceClient,
         userId: claim.data.user_id,
         requestId: params.requestId,
-        interactionContext: (claim.data.interaction_context as Record<string, JsonValue>) ?? {},
-        mode: "full"
+        interactionContext:
+          (claim.data.interaction_context as Record<string, JsonValue>) ?? {},
+        mode: "full",
       });
 
       const readyUpdate = await params.serviceClient
@@ -2259,12 +2700,17 @@ const processMemoryJobs = async (params: {
           locked_at: null,
           locked_by: null,
           last_error: null,
-          updated_at: new Date().toISOString()
+          updated_at: new Date().toISOString(),
         })
         .eq("id", claim.data.id);
 
       if (readyUpdate.error) {
-        throw new ApiError(500, "memory_job_ready_update_failed", "Could not update memory job status", readyUpdate.error.message);
+        throw new ApiError(
+          500,
+          "memory_job_ready_update_failed",
+          "Could not update memory job status",
+          readyUpdate.error.message,
+        );
       }
 
       succeeded += 1;
@@ -2274,7 +2720,8 @@ const processMemoryJobs = async (params: {
       const terminal = attempts >= maxAttempts;
       const baseDelay = Math.min(60, 2 ** Math.min(attempts, 6)) * 1000;
       const jitter = Math.floor(Math.random() * 1000);
-      const nextAttemptAt = new Date(Date.now() + baseDelay + jitter).toISOString();
+      const nextAttemptAt = new Date(Date.now() + baseDelay + jitter)
+        .toISOString();
 
       const failedUpdate = await params.serviceClient
         .from("memory_jobs")
@@ -2284,8 +2731,10 @@ const processMemoryJobs = async (params: {
           next_attempt_at: terminal ? new Date().toISOString() : nextAttemptAt,
           locked_at: null,
           locked_by: null,
-          last_error: error instanceof Error ? error.message.slice(0, 2000) : String(error).slice(0, 2000),
-          updated_at: new Date().toISOString()
+          last_error: error instanceof Error
+            ? error.message.slice(0, 2000)
+            : String(error).slice(0, 2000),
+          updated_at: new Date().toISOString(),
         })
         .eq("id", claim.data.id);
 
@@ -2294,7 +2743,7 @@ const processMemoryJobs = async (params: {
           500,
           "memory_job_failure_update_failed",
           "Could not update memory job failure",
-          failedUpdate.error.message
+          failedUpdate.error.message,
         );
       }
 
@@ -2302,9 +2751,16 @@ const processMemoryJobs = async (params: {
     }
   }
 
-  const queueRows = await params.serviceClient.from("memory_jobs").select("status");
+  const queueRows = await params.serviceClient.from("memory_jobs").select(
+    "status",
+  );
   if (queueRows.error && !isSchemaMissingError(queueRows.error)) {
-    throw new ApiError(500, "memory_jobs_queue_fetch_failed", "Could not fetch memory queue summary", queueRows.error.message);
+    throw new ApiError(
+      500,
+      "memory_jobs_queue_fetch_failed",
+      "Could not fetch memory queue summary",
+      queueRows.error.message,
+    );
   }
 
   const queue = { pending: 0, processing: 0, ready: 0, failed: 0 };
@@ -2318,10 +2774,12 @@ const processMemoryJobs = async (params: {
   return { processed, succeeded, failed, queue };
 };
 
-const deriveAttachmentPayload = (recipe: Omit<RecipePayload, "attachments">): RecipePayload => {
+const deriveAttachmentPayload = (
+  recipe: Omit<RecipePayload, "attachments">,
+): RecipePayload => {
   return {
     ...recipe,
-    attachments: []
+    attachments: [],
   };
 };
 
@@ -2345,7 +2803,12 @@ const syncRecipeAttachments = async (params: {
     if (isSchemaMissingError(clearError)) {
       return;
     }
-    throw new ApiError(500, "recipe_links_clear_failed", "Could not clear existing attachments", clearError.message);
+    throw new ApiError(
+      500,
+      "recipe_links_clear_failed",
+      "Could not clear existing attachments",
+      clearError.message,
+    );
   }
 
   if (attachments.length === 0) {
@@ -2369,21 +2832,30 @@ const syncRecipeAttachments = async (params: {
       requestId: params.requestId,
       payload: childPayload,
       diffSummary: `Attached to ${params.parentRecipeId}`,
-      selectedMemoryIds: params.contextPack.selectedMemoryIds
+      selectedMemoryIds: params.contextPack.selectedMemoryIds,
     });
 
-    const relationTypeId = await resolveRelationTypeId(params.userClient, relationType);
+    const relationTypeId = await resolveRelationTypeId(
+      params.userClient,
+      relationType,
+    );
 
-    const { error: linkError } = await params.userClient.from("recipe_links").insert({
-      parent_recipe_id: params.parentRecipeId,
-      child_recipe_id: childSaved.recipeId,
-      relation_type_id: relationTypeId,
-      position: index,
-      source: "llm"
-    });
+    const { error: linkError } = await params.userClient.from("recipe_links")
+      .insert({
+        parent_recipe_id: params.parentRecipeId,
+        child_recipe_id: childSaved.recipeId,
+        relation_type_id: relationTypeId,
+        position: index,
+        source: "llm",
+      });
 
     if (linkError) {
-      throw new ApiError(500, "recipe_link_insert_failed", "Could not create recipe attachment link", linkError.message);
+      throw new ApiError(
+        500,
+        "recipe_link_insert_failed",
+        "Could not create recipe attachment link",
+        linkError.message,
+      );
     }
 
     await logChangelog({
@@ -2398,13 +2870,16 @@ const syncRecipeAttachments = async (params: {
         parent_recipe_id: params.parentRecipeId,
         child_recipe_id: childSaved.recipeId,
         relation_type: relationType,
-        position: index
-      }
+        position: index,
+      },
     });
   }
 };
 
-const fetchChatMessages = async (client: SupabaseClient, chatId: string): Promise<ChatMessageView[]> => {
+const fetchChatMessages = async (
+  client: SupabaseClient,
+  chatId: string,
+): Promise<ChatMessageView[]> => {
   const { data: messages, error } = await client
     .from("chat_messages")
     .select("id,role,content,metadata,created_at")
@@ -2412,15 +2887,24 @@ const fetchChatMessages = async (client: SupabaseClient, chatId: string): Promis
     .order("created_at", { ascending: true });
 
   if (error) {
-    throw new ApiError(500, "chat_messages_fetch_failed", "Could not fetch chat messages", error.message);
+    throw new ApiError(
+      500,
+      "chat_messages_fetch_failed",
+      "Could not fetch chat messages",
+      error.message,
+    );
   }
 
   return (messages ?? []) as ChatMessageView[];
 };
 
 const parseAssistantChatPayload = (
-  message: Pick<ChatMessageView, "content">
-): { recipe: RecipePayload | null; assistantReply: AssistantReply | null; candidateSet: CandidateRecipeSet | null } | null => {
+  message: Pick<ChatMessageView, "content">,
+): {
+  recipe: RecipePayload | null;
+  assistantReply: AssistantReply | null;
+  candidateSet: CandidateRecipeSet | null;
+} | null => {
   try {
     const parsed = JSON.parse(message.content) as unknown;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
@@ -2430,26 +2914,34 @@ const parseAssistantChatPayload = (
     const candidate = parsed as Record<string, unknown>;
     const envelopeRecipe = candidate.recipe as RecipePayload | undefined;
 
-    const recipe =
-      envelopeRecipe && envelopeRecipe.title && Array.isArray(envelopeRecipe.ingredients) && Array.isArray(envelopeRecipe.steps)
-        ? envelopeRecipe
-        : (() => {
-            const directRecipe = parsed as RecipePayload;
-            if (directRecipe && directRecipe.title && Array.isArray(directRecipe.ingredients) && Array.isArray(directRecipe.steps)) {
-              return directRecipe;
-            }
-            return null;
-          })();
+    const recipe = envelopeRecipe && envelopeRecipe.title &&
+        Array.isArray(envelopeRecipe.ingredients) &&
+        Array.isArray(envelopeRecipe.steps)
+      ? envelopeRecipe
+      : (() => {
+        const directRecipe = parsed as RecipePayload;
+        if (
+          directRecipe && directRecipe.title &&
+          Array.isArray(directRecipe.ingredients) &&
+          Array.isArray(directRecipe.steps)
+        ) {
+          return directRecipe;
+        }
+        return null;
+      })();
     const candidateSet =
       normalizeCandidateRecipeSet(candidate.candidate_recipe_set) ??
-      (recipe ? wrapRecipeInCandidateSet(recipe) : null);
+        (recipe ? wrapRecipeInCandidateSet(recipe) : null);
 
-    const replyCandidate =
-      candidate.assistant_reply ??
-      ((candidate.data as Record<string, unknown> | undefined)?.assistant_reply as unknown) ??
-      ((candidate.result as Record<string, unknown> | undefined)?.assistant_reply as unknown);
+    const replyCandidate = candidate.assistant_reply ??
+      ((candidate.data as Record<string, unknown> | undefined)
+        ?.assistant_reply as unknown) ??
+      ((candidate.result as Record<string, unknown> | undefined)
+        ?.assistant_reply as unknown);
     const assistantReply = (() => {
-      if (typeof replyCandidate === "string" && replyCandidate.trim().length > 0) {
+      if (
+        typeof replyCandidate === "string" && replyCandidate.trim().length > 0
+      ) {
         return { text: replyCandidate.trim() } as AssistantReply;
       }
 
@@ -2472,7 +2964,7 @@ const parseAssistantChatPayload = (
     return {
       recipe,
       assistantReply,
-      candidateSet
+      candidateSet,
     };
   } catch {
     return null;
@@ -2481,7 +2973,9 @@ const parseAssistantChatPayload = (
   return null;
 };
 
-const extractLatestAssistantRecipe = (messages: ChatMessageView[]): RecipePayload | null => {
+const extractLatestAssistantRecipe = (
+  messages: ChatMessageView[],
+): RecipePayload | null => {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
     if (message.role !== "assistant") {
@@ -2500,7 +2994,9 @@ const extractLatestAssistantRecipe = (messages: ChatMessageView[]): RecipePayloa
   return null;
 };
 
-const extractLatestAssistantReply = (messages: ChatMessageView[]): AssistantReply | null => {
+const extractLatestAssistantReply = (
+  messages: ChatMessageView[],
+): AssistantReply | null => {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
     if (message.role !== "assistant") {
@@ -2527,8 +3023,13 @@ const renderChatMessageForPrompt = (message: ChatMessageView): string => {
   }
 
   if (parsed?.recipe) {
-    const summaryParts = [parsed.recipe.title, parsed.recipe.description, parsed.recipe.notes].filter(
-      (value): value is string => typeof value === "string" && value.trim().length > 0
+    const summaryParts = [
+      parsed.recipe.title,
+      parsed.recipe.description,
+      parsed.recipe.notes,
+    ].filter(
+      (value): value is string =>
+        typeof value === "string" && value.trim().length > 0,
     );
     return summaryParts.join(" — ");
   }
@@ -2545,12 +3046,17 @@ const updateChatSessionLoopContext = async (params: {
     .from("chat_sessions")
     .update({
       context: params.context,
-      updated_at: new Date().toISOString()
+      updated_at: new Date().toISOString(),
     })
     .eq("id", params.chatId);
 
   if (error) {
-    throw new ApiError(500, "chat_context_update_failed", "Could not update chat context", error.message);
+    throw new ApiError(
+      500,
+      "chat_context_update_failed",
+      "Could not update chat context",
+      error.message,
+    );
   }
 };
 
@@ -2564,9 +3070,12 @@ const buildChatLoopResponse = (params: {
   updatedAt?: string;
   uiHints?: ChatUiHints;
 }): ChatLoopResponse => {
-  const candidateSet = normalizeCandidateRecipeSet(params.context.candidate_recipe_set ?? null);
+  const candidateSet = normalizeCandidateRecipeSet(
+    params.context.candidate_recipe_set ?? null,
+  );
   const loopState = deriveLoopState(params.context, candidateSet);
-  const reply = params.assistantReply ?? extractLatestAssistantReply(params.messages);
+  const reply = params.assistantReply ??
+    extractLatestAssistantReply(params.messages);
 
   return {
     id: params.chatId,
@@ -2579,7 +3088,7 @@ const buildChatLoopResponse = (params: {
     ui_hints: params.uiHints,
     context: params.context as Record<string, JsonValue>,
     created_at: params.createdAt,
-    updated_at: params.updatedAt
+    updated_at: params.updatedAt,
   };
 };
 
@@ -2599,31 +3108,36 @@ const mapCandidateRoleToRelation = (role: CandidateRecipeRole): string => {
   }
 };
 
-const mapRelationTypeToCandidateRole = (relationType: string | null | undefined): CandidateRecipeRole => {
+const mapRelationTypeToCandidateRole = (
+  relationType: string | null | undefined,
+): CandidateRecipeRole => {
   const normalized = relationType?.trim().toLowerCase() ?? "";
   if (normalized.includes("side")) return "side";
   if (normalized.includes("appetizer")) return "appetizer";
   if (normalized.includes("dessert")) return "dessert";
-  if (normalized.includes("drink") || normalized.includes("beverage")) return "drink";
+  if (normalized.includes("drink") || normalized.includes("beverage")) {
+    return "drink";
+  }
   return "main";
 };
 
 const removeRecipeAttachments = (recipe: RecipePayload): RecipePayload => ({
   ...recipe,
-  attachments: []
+  attachments: [],
 });
 
 const candidateFromRecipePayload = (
   recipe: RecipePayload,
-  existing: CandidateRecipeSet | null = null
+  existing: CandidateRecipeSet | null = null,
 ): CandidateRecipeSet => {
   const components: CandidateRecipeComponent[] = [
     {
-      component_id: existing?.components?.[0]?.component_id ?? crypto.randomUUID(),
+      component_id: existing?.components?.[0]?.component_id ??
+        crypto.randomUUID(),
       role: "main",
       title: recipe.title,
-      recipe: removeRecipeAttachments(recipe)
-    }
+      recipe: removeRecipeAttachments(recipe),
+    },
   ];
 
   for (const attachment of recipe.attachments ?? []) {
@@ -2633,26 +3147,28 @@ const candidateFromRecipePayload = (
       component_id: crypto.randomUUID(),
       role: mapRelationTypeToCandidateRole(attachment.relation_type),
       title: attachment.title?.trim() || attachment.recipe.title,
-      recipe: removeRecipeAttachments(attachment.recipe as RecipePayload)
+      recipe: removeRecipeAttachments(attachment.recipe as RecipePayload),
     });
   }
 
-  const activeComponentId =
-    existing?.active_component_id && components.some((component) => component.component_id === existing.active_component_id)
-      ? existing.active_component_id
-      : components[0].component_id;
+  const activeComponentId = existing?.active_component_id &&
+      components.some((component) =>
+        component.component_id === existing.active_component_id
+      )
+    ? existing.active_component_id
+    : components[0].component_id;
 
   return {
     candidate_id: existing?.candidate_id ?? crypto.randomUUID(),
     revision: Math.max(1, Number(existing?.revision ?? 0) + 1),
     active_component_id: activeComponentId,
-    components
+    components,
   };
 };
 
 const mergeRecipeIntoCandidate = (
   existing: CandidateRecipeSet | null,
-  recipe: RecipePayload
+  recipe: RecipePayload,
 ): CandidateRecipeSet => {
   if (!existing) {
     return candidateFromRecipePayload(recipe, null);
@@ -2669,25 +3185,33 @@ const mergeRecipeIntoCandidate = (
     return {
       ...component,
       title: recipe.title,
-      recipe: removeRecipeAttachments(recipe)
+      recipe: removeRecipeAttachments(recipe),
     };
   });
 
   return {
     ...existing,
     revision: Math.max(1, Number(existing.revision ?? 0) + 1),
-    components: nextComponents
+    components: nextComponents,
   };
 };
 
-const buildCookbookItems = async (client: SupabaseClient, userId: string): Promise<Array<Record<string, JsonValue>>> => {
+const buildCookbookItems = async (
+  client: SupabaseClient,
+  userId: string,
+): Promise<Array<Record<string, JsonValue>>> => {
   const { data: saves, error: savesError } = await client
     .from("recipe_saves")
     .select("recipe_id")
     .eq("user_id", userId);
 
   if (savesError) {
-    throw new ApiError(500, "cookbook_saves_fetch_failed", "Could not fetch saved recipes", savesError.message);
+    throw new ApiError(
+      500,
+      "cookbook_saves_fetch_failed",
+      "Could not fetch saved recipes",
+      savesError.message,
+    );
   }
 
   const recipeIds = (saves ?? []).map((row) => row.recipe_id);
@@ -2697,7 +3221,9 @@ const buildCookbookItems = async (client: SupabaseClient, userId: string): Promi
 
   const preferredRecipesQuery = await client
     .from("recipes")
-    .select("id,title,hero_image_url,image_status,visibility,updated_at,current_version_id")
+    .select(
+      "id,title,hero_image_url,image_status,visibility,updated_at,current_version_id",
+    )
     .in("id", recipeIds)
     .order("updated_at", { ascending: false });
 
@@ -2713,22 +3239,34 @@ const buildCookbookItems = async (client: SupabaseClient, userId: string): Promi
 
   if (preferredRecipesQuery.error) {
     if (!isSchemaMissingError(preferredRecipesQuery.error)) {
-      throw new ApiError(500, "cookbook_fetch_failed", "Could not load cookbook recipes", preferredRecipesQuery.error.message);
+      throw new ApiError(
+        500,
+        "cookbook_fetch_failed",
+        "Could not load cookbook recipes",
+        preferredRecipesQuery.error.message,
+      );
     }
 
     const legacyRecipesQuery = await client
       .from("recipes")
-      .select("id,title,hero_image_url,visibility,updated_at,current_version_id")
+      .select(
+        "id,title,hero_image_url,visibility,updated_at,current_version_id",
+      )
       .in("id", recipeIds)
       .order("updated_at", { ascending: false });
 
     if (legacyRecipesQuery.error) {
-      throw new ApiError(500, "cookbook_fetch_failed", "Could not load cookbook recipes", legacyRecipesQuery.error.message);
+      throw new ApiError(
+        500,
+        "cookbook_fetch_failed",
+        "Could not load cookbook recipes",
+        legacyRecipesQuery.error.message,
+      );
     }
 
     recipes = (legacyRecipesQuery.data ?? []).map((row) => ({
       ...row,
-      image_status: row.hero_image_url ? "ready" : "pending"
+      image_status: row.hero_image_url ? "ready" : "pending",
     }));
   } else {
     recipes = (preferredRecipesQuery.data ?? []) as Array<{
@@ -2754,21 +3292,31 @@ const buildCookbookItems = async (client: SupabaseClient, userId: string): Promi
       .in("id", versionIds);
 
     if (versionsError) {
-      throw new ApiError(500, "cookbook_version_fetch_failed", "Could not load cookbook versions", versionsError.message);
+      throw new ApiError(
+        500,
+        "cookbook_version_fetch_failed",
+        "Could not load cookbook versions",
+        versionsError.message,
+      );
     }
 
-    versionById = new Map((versions ?? []).map((version) => [version.id, version.payload as RecipePayload]));
+    versionById = new Map(
+      (versions ?? []).map((
+        version,
+      ) => [version.id, version.payload as RecipePayload]),
+    );
   }
 
-  const [{ data: userCategories }, { data: autoCategories }] = await Promise.all([
-    client
-      .from("recipe_user_categories")
-      .select("recipe_id,category")
-      .eq("user_id", userId),
-    client
-      .from("recipe_auto_categories")
-      .select("recipe_id,category,confidence")
-  ]);
+  const [{ data: userCategories }, { data: autoCategories }] = await Promise
+    .all([
+      client
+        .from("recipe_user_categories")
+        .select("recipe_id,category")
+        .eq("user_id", userId),
+      client
+        .from("recipe_auto_categories")
+        .select("recipe_id,category,confidence"),
+    ]);
 
   const userCategoryByRecipe = new Map<string, string>();
   for (const entry of userCategories ?? []) {
@@ -2783,7 +3331,9 @@ const buildCookbookItems = async (client: SupabaseClient, userId: string): Promi
   }
 
   return recipes.map((recipe) => {
-    const payload = recipe.current_version_id ? versionById.get(recipe.current_version_id) : undefined;
+    const payload = recipe.current_version_id
+      ? versionById.get(recipe.current_version_id)
+      : undefined;
     const userCategory = userCategoryByRecipe.get(recipe.id);
     const autoCategory = autoCategoryByRecipe.get(recipe.id);
 
@@ -2795,12 +3345,14 @@ const buildCookbookItems = async (client: SupabaseClient, userId: string): Promi
       image_status: recipe.image_status,
       category: userCategory ?? autoCategory ?? "Auto Organized",
       visibility: recipe.visibility,
-      updated_at: recipe.updated_at
+      updated_at: recipe.updated_at,
     };
   });
 };
 
-const normalizeCookbookInsight = (candidate: string | null | undefined): string | null => {
+const normalizeCookbookInsight = (
+  candidate: string | null | undefined,
+): string | null => {
   if (typeof candidate !== "string") {
     return null;
   }
@@ -2811,7 +3363,9 @@ const normalizeCookbookInsight = (candidate: string | null | undefined): string 
   }
 
   const sentenceBoundary = collapsed.search(/[.!?]\s/);
-  const firstSentence = sentenceBoundary >= 0 ? collapsed.slice(0, sentenceBoundary + 1) : collapsed;
+  const firstSentence = sentenceBoundary >= 0
+    ? collapsed.slice(0, sentenceBoundary + 1)
+    : collapsed;
   if (firstSentence.length <= 150) {
     return firstSentence;
   }
@@ -2832,7 +3386,7 @@ const generateCookbookInsight = async (params: {
   const contextItems = params.items.slice(0, 12).map((item) => ({
     title: typeof item.title === "string" ? item.title : "",
     category: typeof item.category === "string" ? item.category : "",
-    summary: typeof item.summary === "string" ? item.summary.slice(0, 220) : ""
+    summary: typeof item.summary === "string" ? item.summary.slice(0, 220) : "",
   }));
 
   try {
@@ -2845,15 +3399,15 @@ const generateCookbookInsight = async (params: {
       context: {
         task: "cookbook_header_insight",
         cookbook_items: contextItems,
-        cookbook_recipe_count: params.items.length
-      }
+        cookbook_recipe_count: params.items.length,
+      },
     });
 
     return normalizeCookbookInsight(response.assistant_reply.text);
   } catch (error) {
     console.error("cookbook_insight_failed", {
       request_id: params.requestId,
-      error: error instanceof Error ? error.message : String(error)
+      error: error instanceof Error ? error.message : String(error),
     });
     return null;
   }
@@ -2882,7 +3436,12 @@ const processImageJobs = async (params: {
     if (isSchemaMissingError(jobsError)) {
       return { processed: 0, ready: 0, failed: 0, pending: 0 };
     }
-    throw new ApiError(500, "image_jobs_fetch_failed", "Could not fetch image jobs", jobsError.message);
+    throw new ApiError(
+      500,
+      "image_jobs_fetch_failed",
+      "Could not fetch image jobs",
+      jobsError.message,
+    );
   }
 
   if (!jobs || jobs.length === 0) {
@@ -2905,7 +3464,7 @@ const processImageJobs = async (params: {
         attempt: nextAttempt,
         updated_at: new Date().toISOString(),
         locked_at: new Date().toISOString(),
-        locked_by: "v1_image_jobs_process"
+        locked_by: "v1_image_jobs_process",
       })
       .eq("id", job.id);
 
@@ -2923,7 +3482,7 @@ const processImageJobs = async (params: {
           last_error: "recipe_or_current_version_missing",
           updated_at: new Date().toISOString(),
           locked_at: null,
-          locked_by: null
+          locked_by: null,
         })
         .eq("id", job.id);
       await logChangelog({
@@ -2935,8 +3494,8 @@ const processImageJobs = async (params: {
         action: "image_failed",
         requestId: params.requestId,
         afterJson: {
-          reason: "recipe_or_current_version_missing"
-        }
+          reason: "recipe_or_current_version_missing",
+        },
       });
       failed += 1;
       continue;
@@ -2956,7 +3515,7 @@ const processImageJobs = async (params: {
           last_error: "recipe_payload_missing",
           updated_at: new Date().toISOString(),
           locked_at: null,
-          locked_by: null
+          locked_by: null,
         })
         .eq("id", job.id);
       await logChangelog({
@@ -2968,8 +3527,8 @@ const processImageJobs = async (params: {
         action: "image_failed",
         requestId: params.requestId,
         afterJson: {
-          reason: "recipe_payload_missing"
-        }
+          reason: "recipe_payload_missing",
+        },
       });
       failed += 1;
       continue;
@@ -2985,9 +3544,11 @@ const processImageJobs = async (params: {
         recipe: recipePayload,
         context: {
           preferences,
-          preferences_natural_language: buildNaturalLanguagePreferenceContext(preferences),
-          memory_snapshot: snapshot
-        }
+          preferences_natural_language: buildNaturalLanguagePreferenceContext(
+            preferences,
+          ),
+          memory_snapshot: snapshot,
+        },
       });
 
       await params.userClient
@@ -2998,7 +3559,7 @@ const processImageJobs = async (params: {
           image_last_error: null,
           image_updated_at: new Date().toISOString(),
           image_generation_attempts: nextAttempt,
-          updated_at: new Date().toISOString()
+          updated_at: new Date().toISOString(),
         })
         .eq("id", job.recipe_id);
 
@@ -3009,7 +3570,7 @@ const processImageJobs = async (params: {
           last_error: null,
           updated_at: new Date().toISOString(),
           locked_at: null,
-          locked_by: null
+          locked_by: null,
         })
         .eq("id", job.id);
 
@@ -3020,11 +3581,13 @@ const processImageJobs = async (params: {
         entityType: "recipe",
         entityId: job.recipe_id,
         action: "image_ready",
-        requestId: params.requestId
+        requestId: params.requestId,
       });
       ready += 1;
     } catch (error) {
-      const message = error instanceof Error ? error.message : "image_generation_failed";
+      const message = error instanceof Error
+        ? error.message
+        : "image_generation_failed";
       const terminalFailure = nextAttempt >= Number(job.max_attempts);
       await params.userClient
         .from("recipes")
@@ -3033,7 +3596,7 @@ const processImageJobs = async (params: {
           image_last_error: message,
           image_updated_at: new Date().toISOString(),
           image_generation_attempts: nextAttempt,
-          updated_at: new Date().toISOString()
+          updated_at: new Date().toISOString(),
         })
         .eq("id", job.recipe_id);
 
@@ -3045,7 +3608,7 @@ const processImageJobs = async (params: {
           next_attempt_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
           locked_at: null,
-          locked_by: null
+          locked_by: null,
         })
         .eq("id", job.id);
 
@@ -3060,8 +3623,8 @@ const processImageJobs = async (params: {
         afterJson: {
           reason: message,
           attempt: nextAttempt,
-          terminal_failure: terminalFailure
-        }
+          terminal_failure: terminalFailure,
+        },
       });
 
       if (terminalFailure) {
@@ -3076,7 +3639,7 @@ const processImageJobs = async (params: {
     processed: jobs.length,
     ready,
     failed,
-    pending
+    pending,
   };
 };
 
@@ -3089,12 +3652,14 @@ Deno.serve(async (request) => {
     const segments = [...rawSegments];
     const method = request.method.toUpperCase();
 
-    if (segments.length === 1 && segments[0] === "healthz" && method === "GET") {
+    if (
+      segments.length === 1 && segments[0] === "healthz" && method === "GET"
+    ) {
       return jsonResponse(200, {
         status: "ok",
         service: "alchemy-api",
         timestamp: new Date().toISOString(),
-        request_id: requestId
+        request_id: requestId,
       });
     }
 
@@ -3115,7 +3680,7 @@ Deno.serve(async (request) => {
       userId: auth.userId,
       email: auth.email,
       fullName: auth.fullName,
-      avatarUrl: auth.avatarUrl
+      avatarUrl: auth.avatarUrl,
     });
 
     if (segments.length === 1 && segments[0] === "preferences") {
@@ -3128,30 +3693,40 @@ Deno.serve(async (request) => {
         const body = await requireJsonBody<Record<string, unknown>>(request);
         const patch = normalizePreferencePatch(body);
         if (!patch) {
-          throw new ApiError(400, "invalid_preferences_payload", "No valid preference fields were provided");
+          throw new ApiError(
+            400,
+            "invalid_preferences_payload",
+            "No valid preference fields were provided",
+          );
         }
 
         const normalizedPatch = await normalizePreferencePatchWithLlm({
           client: serviceClient,
           userId: auth.userId,
           requestId,
-          patch
+          patch,
         });
 
         const currentPreferences = await getPreferences(client, auth.userId);
         const nextPreferences: PreferenceContext = {
           ...currentPreferences,
-          ...normalizedPatch
+          ...normalizedPatch,
         };
 
         const payload = {
           user_id: auth.userId,
           ...nextPreferences,
-          updated_at: new Date().toISOString()
+          updated_at: new Date().toISOString(),
         };
-        const { data, error } = await client.from("preferences").upsert(payload).select("*").single();
+        const { data, error } = await client.from("preferences").upsert(payload)
+          .select("*").single();
         if (error) {
-          throw new ApiError(500, "preferences_update_failed", "Could not update preferences", error.message);
+          throw new ApiError(
+            500,
+            "preferences_update_failed",
+            "Could not update preferences",
+            error.message,
+          );
         }
 
         await logChangelog({
@@ -3162,51 +3737,63 @@ Deno.serve(async (request) => {
           entityId: auth.userId,
           action: "updated",
           requestId,
-          afterJson: data as unknown as JsonValue
+          afterJson: data as unknown as JsonValue,
         });
 
         return jsonResponse(200, data);
       }
     }
 
-    if (segments.length === 2 && segments[0] === "onboarding" && segments[1] === "state" && method === "GET") {
+    if (
+      segments.length === 2 && segments[0] === "onboarding" &&
+      segments[1] === "state" && method === "GET"
+    ) {
       const preferences = await getPreferences(client, auth.userId);
       const storedState = extractOnboardingStateFromPreferences(preferences);
       const derivedState = deriveOnboardingStateFromPreferences(preferences);
 
-      const onboardingState =
-        storedState && storedState.completed
-          ? storedState
-          : {
-              ...derivedState,
-              state: storedState?.state ?? {}
-            };
+      const onboardingState = storedState && storedState.completed
+        ? storedState
+        : {
+          ...derivedState,
+          state: storedState?.state ?? {},
+        };
 
       return jsonResponse(200, onboardingState);
     }
 
-    if (segments.length === 2 && segments[0] === "onboarding" && segments[1] === "chat" && method === "POST") {
+    if (
+      segments.length === 2 && segments[0] === "onboarding" &&
+      segments[1] === "chat" && method === "POST"
+    ) {
       const body = await requireJsonBody<{
         message?: string;
-        transcript?: Array<{ role?: string; content?: string; created_at?: string }>;
+        transcript?: Array<
+          { role?: string; content?: string; created_at?: string }
+        >;
         state?: Record<string, JsonValue>;
       }>(request);
 
-      const normalizedMessage = typeof body.message === "string" ? body.message.trim() : "";
+      const normalizedMessage = typeof body.message === "string"
+        ? body.message.trim()
+        : "";
       const transcript = Array.isArray(body.transcript)
         ? body.transcript
-            .filter((entry) => entry && typeof entry.content === "string" && typeof entry.role === "string")
-            .map((entry) => ({
-              role: entry.role === "assistant" ? "assistant" : "user",
-              content: entry.content?.trim() ?? "",
-              created_at: entry.created_at
-            }))
-            .filter((entry) => entry.content.length > 0)
+          .filter((entry) =>
+            entry && typeof entry.content === "string" &&
+            typeof entry.role === "string"
+          )
+          .map((entry) => ({
+            role: entry.role === "assistant" ? "assistant" : "user",
+            content: entry.content?.trim() ?? "",
+            created_at: entry.created_at,
+          }))
+          .filter((entry) => entry.content.length > 0)
         : [];
-      const state =
-        body.state && typeof body.state === "object" && !Array.isArray(body.state)
-          ? body.state
-          : {};
+      const state = body.state && typeof body.state === "object" &&
+          !Array.isArray(body.state)
+        ? body.state
+        : {};
 
       const contextPack = await buildContextPack({
         userClient: client,
@@ -3217,9 +3804,9 @@ Deno.serve(async (request) => {
         context: {
           workflow: "onboarding",
           transcript,
-          state
+          state,
         },
-        selectionMode: "fast"
+        selectionMode: "fast",
       });
 
       const interview = await llmGateway.runOnboardingInterview({
@@ -3233,8 +3820,8 @@ Deno.serve(async (request) => {
           memory_snapshot: contextPack.memorySnapshot,
           selected_memories: contextPack.selectedMemories,
           transcript,
-          state
-        }
+          state,
+        },
       });
 
       const effectivePreferences = await applyModelPreferenceUpdates({
@@ -3243,63 +3830,78 @@ Deno.serve(async (request) => {
         userId: auth.userId,
         requestId,
         currentPreferences: contextPack.preferences,
-        preferenceUpdates: interview.preference_updates
+        preferenceUpdates: interview.preference_updates,
+        latestUserMessage: normalizedMessage,
+        userMessages: transcript
+          .filter((entry) => entry.role === "user")
+          .map((entry) => entry.content),
       });
 
-      const inferredState = deriveOnboardingStateFromPreferences(effectivePreferences);
-      const userSkipRequested =
-        normalizedMessage.length > 0 &&
-        /\b(skip|later|not now|start using|use the app|done for now|skip onboarding)\b/i.test(normalizedMessage);
+      const inferredState = deriveOnboardingStateFromPreferences(
+        effectivePreferences,
+      );
+      const userSkipRequested = normalizedMessage.length > 0 &&
+        /\b(skip|later|not now|start using|use the app|done for now|skip onboarding)\b/i
+          .test(normalizedMessage);
 
       const onboardingState: OnboardingState = userSkipRequested
         ? {
-            completed: true,
-            progress: 1,
-            missing_topics: [],
-            state: {
-              ...interview.onboarding_state.state,
-              skip_requested: true
-            }
-          }
+          completed: true,
+          progress: 1,
+          missing_topics: [],
+          state: {
+            ...interview.onboarding_state.state,
+            skip_requested: true,
+          },
+        }
         : interview.onboarding_state.completed || inferredState.completed
-          ? {
-              completed: true,
-              progress: 1,
-              missing_topics: [],
-              state: {
-                ...interview.onboarding_state.state,
-                readiness_inferred: inferredState.completed
-              }
-            }
-          : {
-              completed: false,
-              progress: Math.max(interview.onboarding_state.progress, inferredState.progress),
-              missing_topics: Array.from(new Set([...interview.onboarding_state.missing_topics, ...inferredState.missing_topics])),
-              state: interview.onboarding_state.state
-            };
+        ? {
+          completed: true,
+          progress: 1,
+          missing_topics: [],
+          state: {
+            ...interview.onboarding_state.state,
+            readiness_inferred: inferredState.completed,
+          },
+        }
+        : {
+          completed: false,
+          progress: Math.max(
+            interview.onboarding_state.progress,
+            inferredState.progress,
+          ),
+          missing_topics: Array.from(
+            new Set([
+              ...interview.onboarding_state.missing_topics,
+              ...inferredState.missing_topics,
+            ]),
+          ),
+          state: interview.onboarding_state.state,
+        };
 
       const mergedPresentationPreferences = {
         ...(effectivePreferences.presentation_preferences ?? {}),
-        onboarding_state: onboardingState
+        onboarding_state: onboardingState,
       } as Record<string, JsonValue>;
 
-      const { data: persistedPreferences, error: persistedPreferencesError } = await client
-        .from("preferences")
-        .upsert({
-          user_id: auth.userId,
-          ...effectivePreferences,
-          presentation_preferences: mergedPresentationPreferences,
-          updated_at: new Date().toISOString()
-        })
-        .select("*")
-        .single();
+      const { data: persistedPreferences, error: persistedPreferencesError } =
+        await client
+          .from("preferences")
+          .upsert({
+            user_id: auth.userId,
+            ...effectivePreferences,
+            presentation_preferences: mergedPresentationPreferences,
+            updated_at: new Date().toISOString(),
+          })
+          .select("*")
+          .single();
 
       if (persistedPreferencesError) {
         throw new ApiError(
           500,
           "onboarding_preferences_persist_failed",
           "Could not persist onboarding preferences",
-          persistedPreferencesError.message
+          persistedPreferencesError.message,
         );
       }
 
@@ -3319,8 +3921,11 @@ Deno.serve(async (request) => {
               assistant_reply: interview.assistant_reply,
               onboarding_state: onboardingState,
               preference_updates: interview.preference_updates ?? {},
-              effective_preferences: persistedPreferences as unknown as Record<string, JsonValue>
-            }
+              effective_preferences: persistedPreferences as unknown as Record<
+                string,
+                JsonValue
+              >,
+            },
           });
           await logChangelog({
             serviceClient,
@@ -3332,8 +3937,8 @@ Deno.serve(async (request) => {
             requestId,
             afterJson: {
               onboarding_state: onboardingState,
-              preference_updates: interview.preference_updates ?? {}
-            }
+              preference_updates: interview.preference_updates ?? {},
+            },
           });
         } catch (bgError) {
           console.error("onboarding_background_task_failed", bgError);
@@ -3343,19 +3948,26 @@ Deno.serve(async (request) => {
       return jsonResponse(200, {
         assistant_reply: interview.assistant_reply,
         onboarding_state: onboardingState,
-        preference_updates: interview.preference_updates ?? {}
+        preference_updates: interview.preference_updates ?? {},
       });
     }
 
     if (segments.length === 1 && segments[0] === "memories") {
       if (method === "GET") {
-        const memories = await getActiveMemories(client, auth.userId, getLimit(url, 100));
+        const memories = await getActiveMemories(
+          client,
+          auth.userId,
+          getLimit(url, 100),
+        );
         const snapshot = await getMemorySnapshot(client, auth.userId);
         return jsonResponse(200, { items: memories, snapshot });
       }
     }
 
-    if (segments.length === 2 && segments[0] === "memories" && segments[1] === "reset" && method === "POST") {
+    if (
+      segments.length === 2 && segments[0] === "memories" &&
+      segments[1] === "reset" && method === "POST"
+    ) {
       const resetResult = await client
         .from("memories")
         .update({ status: "deleted", updated_at: new Date().toISOString() })
@@ -3364,12 +3976,25 @@ Deno.serve(async (request) => {
 
       if (resetResult.error) {
         if (!isSchemaMissingError(resetResult.error)) {
-          throw new ApiError(500, "memory_reset_failed", "Could not reset memories", resetResult.error.message);
+          throw new ApiError(
+            500,
+            "memory_reset_failed",
+            "Could not reset memories",
+            resetResult.error.message,
+          );
         }
 
-        const legacyDelete = await client.from("memories").delete().eq("user_id", auth.userId);
+        const legacyDelete = await client.from("memories").delete().eq(
+          "user_id",
+          auth.userId,
+        );
         if (legacyDelete.error) {
-          throw new ApiError(500, "memory_reset_failed", "Could not reset memories", legacyDelete.error.message);
+          throw new ApiError(
+            500,
+            "memory_reset_failed",
+            "Could not reset memories",
+            legacyDelete.error.message,
+          );
         }
       }
 
@@ -3377,10 +4002,15 @@ Deno.serve(async (request) => {
         user_id: auth.userId,
         summary: {},
         token_estimate: 0,
-        updated_at: new Date().toISOString()
+        updated_at: new Date().toISOString(),
       });
       if (snapshotResult.error && !isSchemaMissingError(snapshotResult.error)) {
-        throw new ApiError(500, "memory_reset_failed", "Could not reset memory snapshot", snapshotResult.error.message);
+        throw new ApiError(
+          500,
+          "memory_reset_failed",
+          "Could not reset memory snapshot",
+          snapshotResult.error.message,
+        );
       }
 
       await logChangelog({
@@ -3390,13 +4020,16 @@ Deno.serve(async (request) => {
         entityType: "memory",
         entityId: auth.userId,
         action: "reset",
-        requestId
+        requestId,
       });
 
       return jsonResponse(200, { ok: true });
     }
 
-    if (segments.length === 2 && segments[0] === "memories" && segments[1] === "forget" && method === "POST") {
+    if (
+      segments.length === 2 && segments[0] === "memories" &&
+      segments[1] === "forget" && method === "POST"
+    ) {
       const body = await requireJsonBody<{ memory_id: string }>(request);
       const memoryId = parseUuid(body.memory_id);
 
@@ -3408,12 +4041,25 @@ Deno.serve(async (request) => {
 
       if (forgetResult.error) {
         if (!isSchemaMissingError(forgetResult.error)) {
-          throw new ApiError(500, "memory_forget_failed", "Could not forget memory", forgetResult.error.message);
+          throw new ApiError(
+            500,
+            "memory_forget_failed",
+            "Could not forget memory",
+            forgetResult.error.message,
+          );
         }
 
-        const legacyDelete = await client.from("memories").delete().eq("id", memoryId).eq("user_id", auth.userId);
+        const legacyDelete = await client.from("memories").delete().eq(
+          "id",
+          memoryId,
+        ).eq("user_id", auth.userId);
         if (legacyDelete.error) {
-          throw new ApiError(500, "memory_forget_failed", "Could not forget memory", legacyDelete.error.message);
+          throw new ApiError(
+            500,
+            "memory_forget_failed",
+            "Could not forget memory",
+            legacyDelete.error.message,
+          );
         }
       }
 
@@ -3424,24 +4070,33 @@ Deno.serve(async (request) => {
         entityType: "memory",
         entityId: memoryId,
         action: "forgotten",
-        requestId
+        requestId,
       });
 
       return jsonResponse(200, { ok: true });
     }
 
-    if (segments.length === 1 && segments[0] === "changelog" && method === "GET") {
+    if (
+      segments.length === 1 && segments[0] === "changelog" && method === "GET"
+    ) {
       const limit = getLimit(url, 100);
       const changelogResult = await client
         .from("changelog_events")
-        .select("id,scope,entity_type,entity_id,action,request_id,before_json,after_json,metadata,created_at")
+        .select(
+          "id,scope,entity_type,entity_id,action,request_id,before_json,after_json,metadata,created_at",
+        )
         .eq("actor_user_id", auth.userId)
         .order("created_at", { ascending: false })
         .limit(limit);
 
       if (changelogResult.error) {
         if (!isSchemaMissingError(changelogResult.error)) {
-          throw new ApiError(500, "changelog_fetch_failed", "Could not load changelog", changelogResult.error.message);
+          throw new ApiError(
+            500,
+            "changelog_fetch_failed",
+            "Could not load changelog",
+            changelogResult.error.message,
+          );
         }
 
         const legacyEvents = await client
@@ -3452,7 +4107,12 @@ Deno.serve(async (request) => {
           .limit(limit);
 
         if (legacyEvents.error) {
-          throw new ApiError(500, "changelog_fetch_failed", "Could not load changelog", legacyEvents.error.message);
+          throw new ApiError(
+            500,
+            "changelog_fetch_failed",
+            "Could not load changelog",
+            legacyEvents.error.message,
+          );
         }
 
         const items = (legacyEvents.data ?? []).map((event) => ({
@@ -3465,7 +4125,7 @@ Deno.serve(async (request) => {
           before_json: null,
           after_json: event.event_payload,
           metadata: {},
-          created_at: event.created_at
+          created_at: event.created_at,
         }));
         return jsonResponse(200, { items });
       }
@@ -3473,16 +4133,23 @@ Deno.serve(async (request) => {
       return jsonResponse(200, { items: changelogResult.data ?? [] });
     }
 
-    if (segments.length === 2 && segments[0] === "image-jobs" && segments[1] === "process" && method === "POST") {
-      const body = await requireJsonBody<{ limit?: number }>(request).catch(() => ({ limit: 5 }));
-      const limit = Number.isFinite(Number(body.limit)) ? Math.max(1, Math.min(20, Number(body.limit))) : 5;
+    if (
+      segments.length === 2 && segments[0] === "image-jobs" &&
+      segments[1] === "process" && method === "POST"
+    ) {
+      const body = await requireJsonBody<{ limit?: number }>(request).catch(
+        () => ({ limit: 5 }),
+      );
+      const limit = Number.isFinite(Number(body.limit))
+        ? Math.max(1, Math.min(20, Number(body.limit)))
+        : 5;
 
       const result = await processImageJobs({
         userClient: client,
         serviceClient,
         userId: auth.userId,
         requestId,
-        limit
+        limit,
       });
 
       await logChangelog({
@@ -3496,22 +4163,29 @@ Deno.serve(async (request) => {
           processed: result.processed,
           ready: result.ready,
           failed: result.failed,
-          pending: result.pending
-        }
+          pending: result.pending,
+        },
       });
 
       return jsonResponse(200, result);
     }
 
-    if (segments.length === 2 && segments[0] === "metadata-jobs" && segments[1] === "process" && method === "POST") {
-      const body = await requireJsonBody<{ limit?: number }>(request).catch(() => ({ limit: 10 }));
-      const limit = Number.isFinite(Number(body.limit)) ? Math.max(0, Math.min(50, Number(body.limit))) : 10;
+    if (
+      segments.length === 2 && segments[0] === "metadata-jobs" &&
+      segments[1] === "process" && method === "POST"
+    ) {
+      const body = await requireJsonBody<{ limit?: number }>(request).catch(
+        () => ({ limit: 10 }),
+      );
+      const limit = Number.isFinite(Number(body.limit))
+        ? Math.max(0, Math.min(50, Number(body.limit)))
+        : 10;
 
       const result = await processMetadataJobs({
         serviceClient,
         actorUserId: auth.userId,
         requestId,
-        limit
+        limit,
       });
 
       await logChangelog({
@@ -3528,14 +4202,17 @@ Deno.serve(async (request) => {
           ready: result.ready,
           failed: result.failed,
           pending: result.pending,
-          queue: result.queue
-        }
+          queue: result.queue,
+        },
       });
 
       return jsonResponse(200, result);
     }
 
-    if (segments.length === 2 && segments[0] === "metadata-jobs" && segments[1] === "retry" && method === "POST") {
+    if (
+      segments.length === 2 && segments[0] === "metadata-jobs" &&
+      segments[1] === "retry" && method === "POST"
+    ) {
       const body = await requireJsonBody<{ job_id?: string }>(request);
       const jobId = parseUuid(body.job_id ?? "");
 
@@ -3548,7 +4225,7 @@ Deno.serve(async (request) => {
           locked_at: null,
           locked_by: null,
           last_error: null,
-          updated_at: new Date().toISOString()
+          updated_at: new Date().toISOString(),
         })
         .eq("id", jobId)
         .in("status", ["pending", "processing", "failed"])
@@ -3556,10 +4233,19 @@ Deno.serve(async (request) => {
         .maybeSingle();
 
       if (retryError) {
-        throw new ApiError(500, "metadata_job_retry_failed", "Could not retry metadata job", retryError.message);
+        throw new ApiError(
+          500,
+          "metadata_job_retry_failed",
+          "Could not retry metadata job",
+          retryError.message,
+        );
       }
       if (!retried) {
-        throw new ApiError(404, "metadata_job_not_found", "Metadata job not found");
+        throw new ApiError(
+          404,
+          "metadata_job_not_found",
+          "Metadata job not found",
+        );
       }
 
       await logChangelog({
@@ -3569,22 +4255,29 @@ Deno.serve(async (request) => {
         entityType: "metadata_job",
         entityId: jobId,
         action: "manual_retry",
-        requestId
+        requestId,
       });
 
       return jsonResponse(200, { ok: true, job: retried });
     }
 
-    if (segments.length === 2 && segments[0] === "memory-jobs" && segments[1] === "process" && method === "POST") {
-      const body = await requireJsonBody<{ limit?: number }>(request).catch(() => ({ limit: 25 }));
-      const limit = Number.isFinite(Number(body.limit)) ? Math.max(1, Math.min(100, Number(body.limit))) : 25;
+    if (
+      segments.length === 2 && segments[0] === "memory-jobs" &&
+      segments[1] === "process" && method === "POST"
+    ) {
+      const body = await requireJsonBody<{ limit?: number }>(request).catch(
+        () => ({ limit: 25 }),
+      );
+      const limit = Number.isFinite(Number(body.limit))
+        ? Math.max(1, Math.min(100, Number(body.limit)))
+        : 25;
 
       const result = await processMemoryJobs({
         userClient: client,
         serviceClient,
         actorUserId: auth.userId,
         requestId,
-        limit
+        limit,
       });
 
       await logChangelog({
@@ -3598,14 +4291,17 @@ Deno.serve(async (request) => {
           processed: result.processed,
           succeeded: result.succeeded,
           failed: result.failed,
-          queue: result.queue
-        }
+          queue: result.queue,
+        },
       });
 
       return jsonResponse(200, result);
     }
 
-    if (segments.length === 2 && segments[0] === "memory-jobs" && segments[1] === "retry" && method === "POST") {
+    if (
+      segments.length === 2 && segments[0] === "memory-jobs" &&
+      segments[1] === "retry" && method === "POST"
+    ) {
       const body = await requireJsonBody<{ job_id?: string }>(request);
       const jobId = parseUuid(body.job_id ?? "");
 
@@ -3618,14 +4314,19 @@ Deno.serve(async (request) => {
           locked_at: null,
           locked_by: null,
           last_error: null,
-          updated_at: new Date().toISOString()
+          updated_at: new Date().toISOString(),
         })
         .eq("id", jobId)
         .select("id,status,attempts,next_attempt_at")
         .maybeSingle();
 
       if (retryError) {
-        throw new ApiError(500, "memory_job_retry_failed", "Could not retry memory job", retryError.message);
+        throw new ApiError(
+          500,
+          "memory_job_retry_failed",
+          "Could not retry memory job",
+          retryError.message,
+        );
       }
       if (!retried) {
         throw new ApiError(404, "memory_job_not_found", "Memory job not found");
@@ -3638,7 +4339,7 @@ Deno.serve(async (request) => {
         entityType: "memory_job",
         entityId: jobId,
         action: "manual_retry",
-        requestId
+        requestId,
       });
 
       return jsonResponse(200, { ok: true, job: retried });
@@ -3651,7 +4352,12 @@ Deno.serve(async (request) => {
           .select("id,name,created_at")
           .order("created_at", { ascending: false });
         if (error) {
-          throw new ApiError(500, "collections_fetch_failed", "Could not fetch collections", error.message);
+          throw new ApiError(
+            500,
+            "collections_fetch_failed",
+            "Could not fetch collections",
+            error.message,
+          );
         }
 
         return jsonResponse(200, { items: data ?? [] });
@@ -3661,7 +4367,11 @@ Deno.serve(async (request) => {
         const body = await requireJsonBody<{ name: string }>(request);
         const name = body.name?.trim();
         if (!name) {
-          throw new ApiError(400, "invalid_collection_name", "Collection name is required");
+          throw new ApiError(
+            400,
+            "invalid_collection_name",
+            "Collection name is required",
+          );
         }
 
         const { data, error } = await client
@@ -3671,7 +4381,12 @@ Deno.serve(async (request) => {
           .single();
 
         if (error || !data) {
-          throw new ApiError(500, "collection_create_failed", "Could not create collection", error?.message);
+          throw new ApiError(
+            500,
+            "collection_create_failed",
+            "Could not create collection",
+            error?.message,
+          );
         }
 
         await logChangelog({
@@ -3682,25 +4397,33 @@ Deno.serve(async (request) => {
           entityId: data.id,
           action: "created",
           requestId,
-          afterJson: data as unknown as JsonValue
+          afterJson: data as unknown as JsonValue,
         });
 
         return jsonResponse(200, data);
       }
     }
 
-    if (segments.length === 3 && segments[0] === "collections" && segments[2] === "items" && method === "POST") {
+    if (
+      segments.length === 3 && segments[0] === "collections" &&
+      segments[2] === "items" && method === "POST"
+    ) {
       const collectionId = parseUuid(segments[1]);
       const body = await requireJsonBody<{ recipe_id: string }>(request);
       const recipeId = parseUuid(body.recipe_id);
 
       const { error } = await client.from("collection_items").upsert({
         collection_id: collectionId,
-        recipe_id: recipeId
+        recipe_id: recipeId,
       });
 
       if (error) {
-        throw new ApiError(500, "collection_item_create_failed", "Could not add recipe to collection", error.message);
+        throw new ApiError(
+          500,
+          "collection_item_create_failed",
+          "Could not add recipe to collection",
+          error.message,
+        );
       }
 
       await logChangelog({
@@ -3710,43 +4433,57 @@ Deno.serve(async (request) => {
         entityType: "collection_item",
         entityId: `${collectionId}:${recipeId}`,
         action: "added",
-        requestId
+        requestId,
       });
 
       return jsonResponse(200, { ok: true });
     }
 
-    if (segments.length === 2 && segments[0] === "recipes" && segments[1] === "generate" && method === "POST") {
+    if (
+      segments.length === 2 && segments[0] === "recipes" &&
+      segments[1] === "generate" && method === "POST"
+    ) {
       throw new ApiError(
         404,
         "route_not_found",
-        "Use chat loop endpoints: POST /chat and POST /chat/{id}/messages"
+        "Use chat loop endpoints: POST /chat and POST /chat/{id}/messages",
       );
     }
 
-    if (segments.length === 2 && segments[0] === "recipes" && segments[1] === "cookbook" && method === "GET") {
+    if (
+      segments.length === 2 && segments[0] === "recipes" &&
+      segments[1] === "cookbook" && method === "GET"
+    ) {
       const items = await buildCookbookItems(client, auth.userId);
       const cookbookInsight = await generateCookbookInsight({
         client,
         userId: auth.userId,
         requestId,
-        items
+        items,
       });
       return jsonResponse(200, { items, cookbook_insight: cookbookInsight });
     }
 
-    if (segments.length === 2 && segments[0] === "recipes" && method === "GET") {
+    if (
+      segments.length === 2 && segments[0] === "recipes" && method === "GET"
+    ) {
       const recipeId = parseUuid(segments[1]);
       const preferences = await getPreferences(client, auth.userId);
       const viewOptions = resolvePresentationOptions({
         query: url.searchParams,
-        presentationPreferences: preferences.presentation_preferences as Record<string, unknown>
+        presentationPreferences: preferences.presentation_preferences as Record<
+          string,
+          unknown
+        >,
       });
       const recipe = await fetchRecipeView(client, recipeId, true, viewOptions);
       return jsonResponse(200, recipe);
     }
 
-    if (segments.length === 3 && segments[0] === "recipes" && segments[2] === "history" && method === "GET") {
+    if (
+      segments.length === 3 && segments[0] === "recipes" &&
+      segments[2] === "history" && method === "GET"
+    ) {
       const recipeId = parseUuid(segments[1]);
 
       const { data: recipe, error: recipeError } = await client
@@ -3756,17 +4493,29 @@ Deno.serve(async (request) => {
         .maybeSingle();
 
       if (recipeError || !recipe) {
-        throw new ApiError(404, "recipe_not_found", "Recipe not found", recipeError?.message);
+        throw new ApiError(
+          404,
+          "recipe_not_found",
+          "Recipe not found",
+          recipeError?.message,
+        );
       }
 
       const { data: versions, error: versionsError } = await client
         .from("recipe_versions")
-        .select("id,parent_version_id,diff_summary,created_at,payload,created_by")
+        .select(
+          "id,parent_version_id,diff_summary,created_at,payload,created_by",
+        )
         .eq("recipe_id", recipeId)
         .order("created_at", { ascending: true });
 
       if (versionsError) {
-        throw new ApiError(500, "recipe_history_fetch_failed", "Could not fetch recipe history", versionsError.message);
+        throw new ApiError(
+          500,
+          "recipe_history_fetch_failed",
+          "Could not fetch recipe history",
+          versionsError.message,
+        );
       }
 
       const versionIds = (versions ?? []).map((version) => version.id);
@@ -3774,7 +4523,9 @@ Deno.serve(async (request) => {
       if (versionIds.length > 0) {
         const versionEventsResult = await client
           .from("recipe_version_events")
-          .select("id,recipe_version_id,event_type,request_id,metadata,created_at")
+          .select(
+            "id,recipe_version_id,event_type,request_id,metadata,created_at",
+          )
           .in("recipe_version_id", versionIds)
           .order("created_at", { ascending: true });
 
@@ -3784,11 +4535,13 @@ Deno.serve(async (request) => {
               500,
               "recipe_version_events_fetch_failed",
               "Could not fetch recipe version events",
-              versionEventsResult.error.message
+              versionEventsResult.error.message,
             );
           }
         } else {
-          events = (versionEventsResult.data ?? []) as unknown as Array<Record<string, JsonValue>>;
+          events = (versionEventsResult.data ?? []) as unknown as Array<
+            Record<string, JsonValue>
+          >;
         }
       }
 
@@ -3802,19 +4555,25 @@ Deno.serve(async (request) => {
         source_chat_id: recipe.source_chat_id,
         versions: versions ?? [],
         version_events: events,
-        chat_messages: chatMessages
+        chat_messages: chatMessages,
       });
     }
 
-    if (segments.length === 3 && segments[0] === "recipes" && segments[2] === "tweak" && method === "POST") {
+    if (
+      segments.length === 3 && segments[0] === "recipes" &&
+      segments[2] === "tweak" && method === "POST"
+    ) {
       throw new ApiError(
         404,
         "route_not_found",
-        "Use chat loop endpoints: POST /chat and POST /chat/{id}/messages"
+        "Use chat loop endpoints: POST /chat and POST /chat/{id}/messages",
       );
     }
 
-    if (segments.length === 3 && segments[0] === "recipes" && segments[2] === "attachments" && method === "POST") {
+    if (
+      segments.length === 3 && segments[0] === "recipes" &&
+      segments[2] === "attachments" && method === "POST"
+    ) {
       const parentRecipeId = parseUuid(segments[1]);
       const body = await requireJsonBody<{
         relation_type: string;
@@ -3825,7 +4584,11 @@ Deno.serve(async (request) => {
 
       const relationType = body.relation_type?.trim().toLowerCase();
       if (!relationType) {
-        throw new ApiError(400, "invalid_relation_type", "relation_type is required");
+        throw new ApiError(
+          400,
+          "invalid_relation_type",
+          "relation_type is required",
+        );
       }
 
       let attachmentRecipePayload: RecipePayload;
@@ -3843,9 +4606,9 @@ Deno.serve(async (request) => {
             title: parentRecipe.title,
             ingredients: parentRecipe.ingredients,
             steps: parentRecipe.steps,
-            metadata: parentRecipe.metadata
-          }
-        }
+            metadata: parentRecipe.metadata,
+          },
+        },
       });
 
       if (body.recipe) {
@@ -3863,17 +4626,22 @@ Deno.serve(async (request) => {
               title: parentRecipe.title,
               ingredients: parentRecipe.ingredients,
               steps: parentRecipe.steps,
-              metadata: parentRecipe.metadata
+              metadata: parentRecipe.metadata,
             },
             preferences: contextPack.preferences,
-            preferences_natural_language: contextPack.preferencesNaturalLanguage,
+            preferences_natural_language:
+              contextPack.preferencesNaturalLanguage,
             memory_snapshot: contextPack.memorySnapshot,
-            selected_memories: contextPack.selectedMemories
-          }
+            selected_memories: contextPack.selectedMemories,
+          },
         });
         attachmentRecipePayload = attachmentGeneration.recipe;
       } else {
-        throw new ApiError(400, "invalid_attachment_payload", "Provide either prompt or recipe payload");
+        throw new ApiError(
+          400,
+          "invalid_attachment_payload",
+          "Provide either prompt or recipe payload",
+        );
       }
 
       const saved = await persistRecipe({
@@ -3883,7 +4651,7 @@ Deno.serve(async (request) => {
         requestId,
         payload: attachmentRecipePayload,
         diffSummary: `Attachment (${relationType})`,
-        selectedMemoryIds: contextPack.selectedMemoryIds
+        selectedMemoryIds: contextPack.selectedMemoryIds,
       });
 
       const relationTypeId = await resolveRelationTypeId(client, relationType);
@@ -3893,14 +4661,21 @@ Deno.serve(async (request) => {
           parent_recipe_id: parentRecipeId,
           child_recipe_id: saved.recipeId,
           relation_type_id: relationTypeId,
-          position: Number.isFinite(Number(body.position)) ? Number(body.position) : 0,
-          source: "user"
+          position: Number.isFinite(Number(body.position))
+            ? Number(body.position)
+            : 0,
+          source: "user",
         })
         .select("id")
         .single();
 
       if (linkError || !insertedLink) {
-        throw new ApiError(500, "recipe_attachment_create_failed", "Could not create attachment link", linkError?.message);
+        throw new ApiError(
+          500,
+          "recipe_attachment_create_failed",
+          "Could not create attachment link",
+          linkError?.message,
+        );
       }
 
       await logChangelog({
@@ -3914,29 +4689,39 @@ Deno.serve(async (request) => {
         afterJson: {
           parent_recipe_id: parentRecipeId,
           child_recipe_id: saved.recipeId,
-          relation_type: relationType
-        }
+          relation_type: relationType,
+        },
       });
 
       const recipe = await fetchRecipeView(client, parentRecipeId);
       return jsonResponse(200, { recipe, attachment_id: insertedLink.id });
     }
 
-    if (segments.length === 4 && segments[0] === "recipes" && segments[2] === "attachments" && method === "PATCH") {
+    if (
+      segments.length === 4 && segments[0] === "recipes" &&
+      segments[2] === "attachments" && method === "PATCH"
+    ) {
       const parentRecipeId = parseUuid(segments[1]);
       const attachmentId = parseUuid(segments[3]);
-      const body = await requireJsonBody<{ relation_type?: string; position?: number }>(request);
+      const body = await requireJsonBody<
+        { relation_type?: string; position?: number }
+      >(request);
 
       const updatePayload: Record<string, JsonValue> = {
-        updated_at: new Date().toISOString()
+        updated_at: new Date().toISOString(),
       };
 
-      if (typeof body.position === "number" && Number.isInteger(body.position)) {
+      if (
+        typeof body.position === "number" && Number.isInteger(body.position)
+      ) {
         updatePayload.position = body.position;
       }
 
       if (body.relation_type?.trim()) {
-        updatePayload.relation_type_id = await resolveRelationTypeId(client, body.relation_type);
+        updatePayload.relation_type_id = await resolveRelationTypeId(
+          client,
+          body.relation_type,
+        );
       }
 
       const { error } = await client
@@ -3946,7 +4731,12 @@ Deno.serve(async (request) => {
         .eq("parent_recipe_id", parentRecipeId);
 
       if (error) {
-        throw new ApiError(500, "recipe_attachment_update_failed", "Could not update attachment", error.message);
+        throw new ApiError(
+          500,
+          "recipe_attachment_update_failed",
+          "Could not update attachment",
+          error.message,
+        );
       }
 
       await logChangelog({
@@ -3957,14 +4747,17 @@ Deno.serve(async (request) => {
         entityId: attachmentId,
         action: "updated",
         requestId,
-        afterJson: updatePayload as unknown as JsonValue
+        afterJson: updatePayload as unknown as JsonValue,
       });
 
       const recipe = await fetchRecipeView(client, parentRecipeId);
       return jsonResponse(200, { recipe });
     }
 
-    if (segments.length === 4 && segments[0] === "recipes" && segments[2] === "attachments" && method === "DELETE") {
+    if (
+      segments.length === 4 && segments[0] === "recipes" &&
+      segments[2] === "attachments" && method === "DELETE"
+    ) {
       const parentRecipeId = parseUuid(segments[1]);
       const attachmentId = parseUuid(segments[3]);
 
@@ -3975,7 +4768,12 @@ Deno.serve(async (request) => {
         .eq("parent_recipe_id", parentRecipeId);
 
       if (error) {
-        throw new ApiError(500, "recipe_attachment_delete_failed", "Could not delete attachment", error.message);
+        throw new ApiError(
+          500,
+          "recipe_attachment_delete_failed",
+          "Could not delete attachment",
+          error.message,
+        );
       }
 
       await logChangelog({
@@ -3985,22 +4783,32 @@ Deno.serve(async (request) => {
         entityType: "recipe_link",
         entityId: attachmentId,
         action: "deleted",
-        requestId
+        requestId,
       });
 
       const recipe = await fetchRecipeView(client, parentRecipeId);
       return jsonResponse(200, { recipe });
     }
 
-    if (segments.length === 3 && segments[0] === "recipes" && segments[2] === "save") {
+    if (
+      segments.length === 3 && segments[0] === "recipes" &&
+      segments[2] === "save"
+    ) {
       const recipeId = parseUuid(segments[1]);
       if (method === "POST") {
         const { error } = await client
           .from("recipe_saves")
-          .upsert({ user_id: auth.userId, recipe_id: recipeId }, { onConflict: "user_id,recipe_id" });
+          .upsert({ user_id: auth.userId, recipe_id: recipeId }, {
+            onConflict: "user_id,recipe_id",
+          });
 
         if (error) {
-          throw new ApiError(500, "recipe_save_failed", "Could not save recipe", error.message);
+          throw new ApiError(
+            500,
+            "recipe_save_failed",
+            "Could not save recipe",
+            error.message,
+          );
         }
 
         await logChangelog({
@@ -4010,7 +4818,7 @@ Deno.serve(async (request) => {
           entityType: "recipe_save",
           entityId: recipeId,
           action: "saved",
-          requestId
+          requestId,
         });
 
         // Enqueue image generation now that the recipe is saved to cookbook
@@ -4035,7 +4843,12 @@ Deno.serve(async (request) => {
           .eq("recipe_id", recipeId);
 
         if (error) {
-          throw new ApiError(500, "recipe_unsave_failed", "Could not unsave recipe", error.message);
+          throw new ApiError(
+            500,
+            "recipe_unsave_failed",
+            "Could not unsave recipe",
+            error.message,
+          );
         }
 
         await logChangelog({
@@ -4045,14 +4858,17 @@ Deno.serve(async (request) => {
           entityType: "recipe_save",
           entityId: recipeId,
           action: "unsaved",
-          requestId
+          requestId,
         });
 
         return jsonResponse(200, { saved: false });
       }
     }
 
-    if (segments.length === 4 && segments[0] === "recipes" && segments[2] === "categories" && segments[3] === "override") {
+    if (
+      segments.length === 4 && segments[0] === "recipes" &&
+      segments[2] === "categories" && segments[3] === "override"
+    ) {
       const recipeId = parseUuid(segments[1]);
       if (method === "POST") {
         const body = await requireJsonBody<{ category: string }>(request);
@@ -4065,11 +4881,16 @@ Deno.serve(async (request) => {
         const { error } = await client.from("recipe_user_categories").upsert({
           user_id: auth.userId,
           recipe_id: recipeId,
-          category
+          category,
         });
 
         if (error) {
-          throw new ApiError(500, "category_override_failed", "Could not set category override", error.message);
+          throw new ApiError(
+            500,
+            "category_override_failed",
+            "Could not set category override",
+            error.message,
+          );
         }
 
         await logChangelog({
@@ -4079,14 +4900,17 @@ Deno.serve(async (request) => {
           entityType: "recipe_user_category",
           entityId: `${recipeId}:${category}`,
           action: "override_set",
-          requestId
+          requestId,
         });
 
         return jsonResponse(200, { ok: true });
       }
     }
 
-    if (segments.length === 5 && segments[0] === "recipes" && segments[2] === "categories" && segments[3] === "override") {
+    if (
+      segments.length === 5 && segments[0] === "recipes" &&
+      segments[2] === "categories" && segments[3] === "override"
+    ) {
       const recipeId = parseUuid(segments[1]);
       const category = decodeURIComponent(segments[4]);
 
@@ -4099,7 +4923,12 @@ Deno.serve(async (request) => {
           .eq("category", category);
 
         if (error) {
-          throw new ApiError(500, "category_override_remove_failed", "Could not remove category override", error.message);
+          throw new ApiError(
+            500,
+            "category_override_remove_failed",
+            "Could not remove category override",
+            error.message,
+          );
         }
 
         await logChangelog({
@@ -4109,14 +4938,17 @@ Deno.serve(async (request) => {
           entityType: "recipe_user_category",
           entityId: `${recipeId}:${category}`,
           action: "override_removed",
-          requestId
+          requestId,
         });
 
         return jsonResponse(200, { ok: true });
       }
     }
 
-    if (segments.length === 3 && segments[0] === "recipes" && segments[2] === "graph" && method === "GET") {
+    if (
+      segments.length === 3 && segments[0] === "recipes" &&
+      segments[2] === "graph" && method === "GET"
+    ) {
       const recipeId = parseUuid(segments[1]);
 
       const { data: recipe, error: recipeError } = await client
@@ -4126,7 +4958,12 @@ Deno.serve(async (request) => {
         .maybeSingle();
 
       if (recipeError || !recipe?.current_version_id) {
-        throw new ApiError(404, "recipe_or_version_not_found", "Recipe graph source was not found", recipeError?.message);
+        throw new ApiError(
+          404,
+          "recipe_or_version_not_found",
+          "Recipe graph source was not found",
+          recipeError?.message,
+        );
       }
 
       const { data: links, error: linksError } = await client
@@ -4135,7 +4972,12 @@ Deno.serve(async (request) => {
         .eq("recipe_version_id", recipe.current_version_id);
 
       if (linksError) {
-        throw new ApiError(500, "graph_links_fetch_failed", "Could not fetch graph links", linksError.message);
+        throw new ApiError(
+          500,
+          "graph_links_fetch_failed",
+          "Could not fetch graph links",
+          linksError.message,
+        );
       }
 
       const entityIds = (links ?? []).map((item) => item.entity_id);
@@ -4149,18 +4991,30 @@ Deno.serve(async (request) => {
         .in("id", entityIds);
 
       if (entitiesError) {
-        throw new ApiError(500, "graph_entities_fetch_failed", "Could not fetch graph entities", entitiesError.message);
+        throw new ApiError(
+          500,
+          "graph_entities_fetch_failed",
+          "Could not fetch graph entities",
+          entitiesError.message,
+        );
       }
 
-      const [{ data: edgesFrom, error: edgesFromError }, { data: edgesTo, error: edgesToError }] = await Promise.all([
+      const [
+        { data: edgesFrom, error: edgesFromError },
+        { data: edgesTo, error: edgesToError },
+      ] = await Promise.all([
         client
           .from("graph_edges")
-          .select("id,from_entity_id,to_entity_id,confidence,source,relation_type_id")
+          .select(
+            "id,from_entity_id,to_entity_id,confidence,source,relation_type_id",
+          )
           .in("from_entity_id", entityIds),
         client
           .from("graph_edges")
-          .select("id,from_entity_id,to_entity_id,confidence,source,relation_type_id")
-          .in("to_entity_id", entityIds)
+          .select(
+            "id,from_entity_id,to_entity_id,confidence,source,relation_type_id",
+          )
+          .in("to_entity_id", entityIds),
       ]);
 
       if (edgesFromError || edgesToError) {
@@ -4168,7 +5022,7 @@ Deno.serve(async (request) => {
           500,
           "graph_edges_fetch_failed",
           "Could not fetch graph edges",
-          edgesFromError?.message ?? edgesToError?.message
+          edgesFromError?.message ?? edgesToError?.message,
         );
       }
 
@@ -4182,7 +5036,9 @@ Deno.serve(async (request) => {
       }
       const edges = Array.from(edgeById.values());
 
-      const relationTypeIds = Array.from(new Set((edges ?? []).map((edge) => edge.relation_type_id)));
+      const relationTypeIds = Array.from(
+        new Set((edges ?? []).map((edge) => edge.relation_type_id)),
+      );
       let relationById = new Map<string, string>();
       if (relationTypeIds.length > 0) {
         const { data: relationTypes, error: relationTypesError } = await client
@@ -4191,10 +5047,19 @@ Deno.serve(async (request) => {
           .in("id", relationTypeIds);
 
         if (relationTypesError) {
-          throw new ApiError(500, "graph_relation_types_fetch_failed", "Could not fetch graph relation types", relationTypesError.message);
+          throw new ApiError(
+            500,
+            "graph_relation_types_fetch_failed",
+            "Could not fetch graph relation types",
+            relationTypesError.message,
+          );
         }
 
-        relationById = new Map((relationTypes ?? []).map((relationType) => [relationType.id, relationType.name]));
+        relationById = new Map(
+          (relationTypes ?? []).map((
+            relationType,
+          ) => [relationType.id, relationType.name]),
+        );
       }
 
       const responseEdges = (edges ?? []).map((edge) => ({
@@ -4203,10 +5068,13 @@ Deno.serve(async (request) => {
         to_entity_id: edge.to_entity_id,
         relation_type: relationById.get(edge.relation_type_id) ?? "unknown",
         confidence: edge.confidence,
-        source: edge.source
+        source: edge.source,
       }));
 
-      return jsonResponse(200, { entities: entities ?? [], edges: responseEdges });
+      return jsonResponse(200, {
+        entities: entities ?? [],
+        edges: responseEdges,
+      });
     }
 
     if (segments.length === 1 && segments[0] === "chat" && method === "POST") {
@@ -4223,7 +5091,7 @@ Deno.serve(async (request) => {
         requestId,
         prompt: message,
         context: {},
-        selectionMode: "fast"
+        selectionMode: "fast",
       });
 
       const { data: chatSession, error: chatError } = await client
@@ -4237,14 +5105,19 @@ Deno.serve(async (request) => {
             loop_state: "ideation",
             candidate_recipe_set: null,
             candidate_revision: 0,
-            active_component_id: null
-          }
+            active_component_id: null,
+          },
         })
         .select("id,created_at,updated_at")
         .single();
 
       if (chatError || !chatSession) {
-        throw new ApiError(500, "chat_create_failed", "Could not create chat session", chatError?.message);
+        throw new ApiError(
+          500,
+          "chat_create_failed",
+          "Could not create chat session",
+          chatError?.message,
+        );
       }
 
       const { data: userMessage, error: userMessageError } = await client
@@ -4252,7 +5125,7 @@ Deno.serve(async (request) => {
         .insert({
           chat_id: chatSession.id,
           role: "user",
-          content: message
+          content: message,
         })
         .select("id")
         .single();
@@ -4262,7 +5135,7 @@ Deno.serve(async (request) => {
           500,
           "chat_message_create_failed",
           "Could not store chat message",
-          userMessageError?.message ?? "chat_message_insert_missing"
+          userMessageError?.message ?? "chat_message_insert_missing",
         );
       }
 
@@ -4275,10 +5148,10 @@ Deno.serve(async (request) => {
           preferences: contextPack.preferences,
           preferences_natural_language: contextPack.preferencesNaturalLanguage,
           memory_snapshot: contextPack.memorySnapshot,
-          selected_memories: contextPack.selectedMemories
+          selected_memories: contextPack.selectedMemories,
         },
         scopeHint: "chat_ideation",
-        modelOverrides
+        modelOverrides,
       });
 
       if (
@@ -4296,13 +5169,15 @@ Deno.serve(async (request) => {
             memory_snapshot: contextPack.memorySnapshot,
             selected_memories: contextPack.selectedMemories,
             loop_state: "iterating",
-            thread: [{ role: "user", content: message }]
+            thread: [{ role: "user", content: message }],
           },
           scopeHint: "chat_generation",
-          modelOverrides
+          modelOverrides,
         });
 
-        if (generationResponse.candidate_recipe_set || generationResponse.recipe) {
+        if (
+          generationResponse.candidate_recipe_set || generationResponse.recipe
+        ) {
           assistantChatResponse = generationResponse;
         }
       }
@@ -4312,15 +5187,24 @@ Deno.serve(async (request) => {
         userId: auth.userId,
         requestId,
         currentPreferences: contextPack.preferences,
-        preferenceUpdates: assistantChatResponse.response_context?.preference_updates
+        preferenceUpdates: assistantChatResponse.response_context
+          ?.preference_updates,
+        latestUserMessage: message,
       });
 
-      let candidateSet = normalizeCandidateRecipeSet(assistantChatResponse.candidate_recipe_set ?? null);
+      let candidateSet = normalizeCandidateRecipeSet(
+        assistantChatResponse.candidate_recipe_set ?? null,
+      );
       if (!candidateSet && assistantChatResponse.recipe) {
-        candidateSet = candidateFromRecipePayload(assistantChatResponse.recipe, null);
+        candidateSet = candidateFromRecipePayload(
+          assistantChatResponse.recipe,
+          null,
+        );
       }
 
-      const nextLoopState: ChatLoopState = candidateSet ? "candidate_presented" : "ideation";
+      const nextLoopState: ChatLoopState = candidateSet
+        ? "candidate_presented"
+        : "ideation";
       const nextContext: ChatSessionContext = {
         preferences: effectivePreferences,
         memory_snapshot: contextPack.memorySnapshot,
@@ -4328,33 +5212,41 @@ Deno.serve(async (request) => {
         loop_state: nextLoopState,
         candidate_recipe_set: candidateSet,
         candidate_revision: candidateSet?.revision ?? 0,
-        active_component_id: candidateSet?.active_component_id ?? null
+        active_component_id: candidateSet?.active_component_id ?? null,
       };
 
       await updateChatSessionLoopContext({
         client,
         chatId: chatSession.id,
-        context: nextContext
+        context: nextContext,
       });
 
-      const { error: assistantMessageError } = await client.from("chat_messages").insert({
+      const { error: assistantMessageError } = await client.from(
+        "chat_messages",
+      ).insert({
         chat_id: chatSession.id,
         role: "assistant",
         content: JSON.stringify({
           assistant_reply: assistantChatResponse.assistant_reply,
-          trigger_recipe: assistantChatResponse.trigger_recipe ?? Boolean(candidateSet),
+          trigger_recipe: assistantChatResponse.trigger_recipe ??
+            Boolean(candidateSet),
           candidate_recipe_set: candidateSet,
           recipe: assistantChatResponse.recipe,
-          response_context: assistantChatResponse.response_context
+          response_context: assistantChatResponse.response_context,
         }),
         metadata: {
           format: "assistant_chat_envelope_v2",
-          loop_state: nextLoopState
-        }
+          loop_state: nextLoopState,
+        },
       });
 
       if (assistantMessageError) {
-        throw new ApiError(500, "chat_assistant_message_failed", "Could not store assistant chat message", assistantMessageError.message);
+        throw new ApiError(
+          500,
+          "chat_assistant_message_failed",
+          "Could not store assistant chat message",
+          assistantMessageError.message,
+        );
       }
 
       const interactionContext: Record<string, JsonValue> = {
@@ -4363,12 +5255,14 @@ Deno.serve(async (request) => {
         assistant_reply: assistantChatResponse.assistant_reply,
         preferences: effectivePreferences,
         selected_memory_ids: contextPack.selectedMemoryIds,
-        loop_state: nextLoopState
+        loop_state: nextLoopState,
       };
       if (candidateSet) {
-        interactionContext.candidate_recipe_set = candidateSet as unknown as JsonValue;
+        interactionContext.candidate_recipe_set =
+          candidateSet as unknown as JsonValue;
       } else if (assistantChatResponse.recipe) {
-        interactionContext.assistant_recipe = assistantChatResponse.recipe as unknown as JsonValue;
+        interactionContext.assistant_recipe = assistantChatResponse
+          .recipe as unknown as JsonValue;
       }
 
       await enqueueMemoryJob({
@@ -4376,7 +5270,7 @@ Deno.serve(async (request) => {
         userId: auth.userId,
         chatId: chatSession.id,
         messageId: userMessage.id,
-        interactionContext
+        interactionContext,
       });
 
       const messages = await fetchChatMessages(client, chatSession.id);
@@ -4390,8 +5284,8 @@ Deno.serve(async (request) => {
         action: "created",
         requestId,
         afterJson: {
-          message_count: messages.length
-        }
+          message_count: messages.length,
+        },
       });
 
       return jsonResponse(
@@ -4406,11 +5300,11 @@ Deno.serve(async (request) => {
           updatedAt: new Date().toISOString(),
           uiHints: candidateSet
             ? {
-                show_generation_animation: true,
-                focus_component_id: candidateSet.active_component_id
-              }
-            : undefined
-        })
+              show_generation_animation: true,
+              focus_component_id: candidateSet.active_component_id,
+            }
+            : undefined,
+        }),
       );
     }
 
@@ -4424,13 +5318,20 @@ Deno.serve(async (request) => {
         .maybeSingle();
 
       if (chatError || !chatSession) {
-        throw new ApiError(404, "chat_not_found", "Chat session not found", chatError?.message);
+        throw new ApiError(
+          404,
+          "chat_not_found",
+          "Chat session not found",
+          chatError?.message,
+        );
       }
 
       const messages = await fetchChatMessages(client, chatId);
       const context = extractChatContext(chatSession.context);
       const memoryContextIds = Array.isArray(context.selected_memory_ids)
-        ? context.selected_memory_ids.filter((item): item is string => typeof item === "string")
+        ? context.selected_memory_ids.filter((item): item is string =>
+          typeof item === "string"
+        )
         : [];
 
       return jsonResponse(
@@ -4442,12 +5343,15 @@ Deno.serve(async (request) => {
           assistantReply: extractLatestAssistantReply(messages),
           memoryContextIds,
           createdAt: chatSession.created_at,
-          updatedAt: chatSession.updated_at
-        })
+          updatedAt: chatSession.updated_at,
+        }),
       );
     }
 
-    if (segments.length === 3 && segments[0] === "chat" && segments[2] === "messages" && method === "POST") {
+    if (
+      segments.length === 3 && segments[0] === "chat" &&
+      segments[2] === "messages" && method === "POST"
+    ) {
       const chatId = parseUuid(segments[1]);
       const body = await requireJsonBody<{ message: string }>(request);
       const message = body.message?.trim();
@@ -4463,16 +5367,28 @@ Deno.serve(async (request) => {
         .maybeSingle();
 
       if (chatError || !chatSession) {
-        throw new ApiError(404, "chat_not_found", "Chat session not found", chatError?.message);
+        throw new ApiError(
+          404,
+          "chat_not_found",
+          "Chat session not found",
+          chatError?.message,
+        );
       }
       if (chatSession.status === "archived") {
-        throw new ApiError(409, "chat_not_open", "Archived chat sessions cannot receive new messages");
+        throw new ApiError(
+          409,
+          "chat_not_open",
+          "Archived chat sessions cannot receive new messages",
+        );
       }
 
       const sessionContext = extractChatContext(chatSession.context);
-      const existingCandidate = normalizeCandidateRecipeSet(sessionContext.candidate_recipe_set ?? null);
-      const activeComponent =
-        existingCandidate?.components.find((component) => component.component_id === existingCandidate.active_component_id) ??
+      const existingCandidate = normalizeCandidateRecipeSet(
+        sessionContext.candidate_recipe_set ?? null,
+      );
+      const activeComponent = existingCandidate?.components.find((component) =>
+        component.component_id === existingCandidate.active_component_id
+      ) ??
         existingCandidate?.components[0] ??
         null;
 
@@ -4483,11 +5399,12 @@ Deno.serve(async (request) => {
         requestId,
         prompt: message,
         context: {
-          chat_context: (chatSession.context as Record<string, JsonValue>) ?? {},
+          chat_context: (chatSession.context as Record<string, JsonValue>) ??
+            {},
           loop_state: deriveLoopState(sessionContext, existingCandidate),
-          candidate_recipe_set: existingCandidate as unknown as JsonValue
+          candidate_recipe_set: existingCandidate as unknown as JsonValue,
         },
-        selectionMode: "fast"
+        selectionMode: "fast",
       });
 
       const { data: userMessage, error: userMessageError } = await client
@@ -4495,7 +5412,7 @@ Deno.serve(async (request) => {
         .insert({
           chat_id: chatId,
           role: "user",
-          content: message
+          content: message,
         })
         .select("id")
         .single();
@@ -4505,7 +5422,7 @@ Deno.serve(async (request) => {
           500,
           "chat_message_create_failed",
           "Could not store chat message",
-          userMessageError?.message ?? "chat_message_insert_missing"
+          userMessageError?.message ?? "chat_message_insert_missing",
         );
       }
 
@@ -4517,18 +5434,21 @@ Deno.serve(async (request) => {
         requestId,
         prompt: message,
         context: {
-          chat_context: (chatSession.context as Record<string, JsonValue>) ?? {},
+          chat_context: (chatSession.context as Record<string, JsonValue>) ??
+            {},
           thread: threadMessages,
-          active_recipe: activeComponent?.recipe ? (activeComponent.recipe as unknown as JsonValue) : null,
+          active_recipe: activeComponent?.recipe
+            ? (activeComponent.recipe as unknown as JsonValue)
+            : null,
           candidate_recipe_set: existingCandidate as unknown as JsonValue,
           loop_state: deriveLoopState(sessionContext, existingCandidate),
           preferences: contextPack.preferences,
           preferences_natural_language: contextPack.preferencesNaturalLanguage,
           memory_snapshot: contextPack.memorySnapshot,
-          selected_memories: contextPack.selectedMemories
+          selected_memories: contextPack.selectedMemories,
         },
         scopeHint: existingCandidate ? "chat_iteration" : "chat_ideation",
-        modelOverrides
+        modelOverrides,
       });
 
       if (
@@ -4543,17 +5463,20 @@ Deno.serve(async (request) => {
           requestId,
           prompt: message,
           context: {
-            chat_context: (chatSession.context as Record<string, JsonValue>) ?? {},
+            chat_context: (chatSession.context as Record<string, JsonValue>) ??
+              {},
             thread: threadMessages,
             loop_state: "iterating",
             preferences: contextPack.preferences,
             memory_snapshot: contextPack.memorySnapshot,
-            selected_memories: contextPack.selectedMemories
+            selected_memories: contextPack.selectedMemories,
           },
           scopeHint: "chat_generation",
-          modelOverrides
+          modelOverrides,
         });
-        if (generationResponse.candidate_recipe_set || generationResponse.recipe) {
+        if (
+          generationResponse.candidate_recipe_set || generationResponse.recipe
+        ) {
           assistantChatResponse = generationResponse;
         }
       }
@@ -4563,14 +5486,26 @@ Deno.serve(async (request) => {
         userId: auth.userId,
         requestId,
         currentPreferences: contextPack.preferences,
-        preferenceUpdates: assistantChatResponse.response_context?.preference_updates
+        preferenceUpdates: assistantChatResponse.response_context
+          ?.preference_updates,
+        latestUserMessage: message,
+        userMessages: threadMessages
+          .filter((entry) =>
+            entry.role === "user"
+          )
+          .map((entry) => entry.content),
       });
 
-      const modelCandidateSet = normalizeCandidateRecipeSet(assistantChatResponse.candidate_recipe_set ?? null);
+      const modelCandidateSet = normalizeCandidateRecipeSet(
+        assistantChatResponse.candidate_recipe_set ?? null,
+      );
       let nextCandidateSet: CandidateRecipeSet | null = modelCandidateSet;
 
       if (!nextCandidateSet && assistantChatResponse.recipe) {
-        nextCandidateSet = mergeRecipeIntoCandidate(existingCandidate, assistantChatResponse.recipe);
+        nextCandidateSet = mergeRecipeIntoCandidate(
+          existingCandidate,
+          assistantChatResponse.recipe,
+        );
       }
       if (!nextCandidateSet) {
         nextCandidateSet = existingCandidate;
@@ -4580,16 +5515,23 @@ Deno.serve(async (request) => {
         nextCandidateSet = {
           ...nextCandidateSet,
           candidate_id: existingCandidate.candidate_id,
-          revision: Math.max(existingCandidate.revision + 1, nextCandidateSet.revision),
-          active_component_id:
-            nextCandidateSet.active_component_id &&
-            nextCandidateSet.components.some((component) => component.component_id === nextCandidateSet?.active_component_id)
-              ? nextCandidateSet.active_component_id
-              : nextCandidateSet.components[0]?.component_id ?? existingCandidate.active_component_id
+          revision: Math.max(
+            existingCandidate.revision + 1,
+            nextCandidateSet.revision,
+          ),
+          active_component_id: nextCandidateSet.active_component_id &&
+              nextCandidateSet.components.some((component) =>
+                component.component_id === nextCandidateSet?.active_component_id
+              )
+            ? nextCandidateSet.active_component_id
+            : nextCandidateSet.components[0]?.component_id ??
+              existingCandidate.active_component_id,
         };
       }
 
-      const nextLoopState: ChatLoopState = nextCandidateSet ? "candidate_presented" : "ideation";
+      const nextLoopState: ChatLoopState = nextCandidateSet
+        ? "candidate_presented"
+        : "ideation";
       const nextContext: ChatSessionContext = {
         preferences: effectivePreferences,
         memory_snapshot: contextPack.memorySnapshot,
@@ -4597,33 +5539,41 @@ Deno.serve(async (request) => {
         loop_state: nextLoopState,
         candidate_recipe_set: nextCandidateSet,
         candidate_revision: nextCandidateSet?.revision ?? 0,
-        active_component_id: nextCandidateSet?.active_component_id ?? null
+        active_component_id: nextCandidateSet?.active_component_id ?? null,
       };
 
       await updateChatSessionLoopContext({
         client,
         chatId,
-        context: nextContext
+        context: nextContext,
       });
 
-      const { error: assistantMessageError } = await client.from("chat_messages").insert({
+      const { error: assistantMessageError } = await client.from(
+        "chat_messages",
+      ).insert({
         chat_id: chatId,
         role: "assistant",
         content: JSON.stringify({
           assistant_reply: assistantChatResponse.assistant_reply,
-          trigger_recipe: assistantChatResponse.trigger_recipe ?? Boolean(nextCandidateSet),
+          trigger_recipe: assistantChatResponse.trigger_recipe ??
+            Boolean(nextCandidateSet),
           candidate_recipe_set: nextCandidateSet,
           recipe: assistantChatResponse.recipe,
-          response_context: assistantChatResponse.response_context
+          response_context: assistantChatResponse.response_context,
         }),
         metadata: {
           format: "assistant_chat_envelope_v2",
-          loop_state: nextLoopState
-        }
+          loop_state: nextLoopState,
+        },
       });
 
       if (assistantMessageError) {
-        throw new ApiError(500, "chat_assistant_message_failed", "Could not store assistant chat message", assistantMessageError.message);
+        throw new ApiError(
+          500,
+          "chat_assistant_message_failed",
+          "Could not store assistant chat message",
+          assistantMessageError.message,
+        );
       }
 
       const interactionContext: Record<string, JsonValue> = {
@@ -4633,12 +5583,14 @@ Deno.serve(async (request) => {
         thread_size: threadMessages.length,
         preferences: effectivePreferences,
         selected_memory_ids: contextPack.selectedMemoryIds,
-        loop_state: nextLoopState
+        loop_state: nextLoopState,
       };
       if (nextCandidateSet) {
-        interactionContext.candidate_recipe_set = nextCandidateSet as unknown as JsonValue;
+        interactionContext.candidate_recipe_set =
+          nextCandidateSet as unknown as JsonValue;
       } else if (assistantChatResponse.recipe) {
-        interactionContext.assistant_recipe = assistantChatResponse.recipe as unknown as JsonValue;
+        interactionContext.assistant_recipe = assistantChatResponse
+          .recipe as unknown as JsonValue;
       }
 
       await enqueueMemoryJob({
@@ -4646,7 +5598,7 @@ Deno.serve(async (request) => {
         userId: auth.userId,
         chatId,
         messageId: userMessage.id,
-        interactionContext
+        interactionContext,
       });
 
       const messages = await fetchChatMessages(client, chatId);
@@ -4664,27 +5616,37 @@ Deno.serve(async (request) => {
           updatedAt: new Date().toISOString(),
           uiHints: justGenerated
             ? {
-                show_generation_animation: true,
-                focus_component_id: nextCandidateSet?.active_component_id
-              }
+              show_generation_animation: true,
+              focus_component_id: nextCandidateSet?.active_component_id,
+            }
             : nextCandidateSet
-              ? {
-                  focus_component_id: nextCandidateSet.active_component_id
-                }
-              : undefined
-        })
+            ? {
+              focus_component_id: nextCandidateSet.active_component_id,
+            }
+            : undefined,
+        }),
       );
     }
 
-    if (segments.length === 3 && segments[0] === "chat" && segments[2] === "candidate" && method === "PATCH") {
+    if (
+      segments.length === 3 && segments[0] === "chat" &&
+      segments[2] === "candidate" && method === "PATCH"
+    ) {
       const chatId = parseUuid(segments[1]);
       const body = await requireJsonBody<{
-        action?: "set_active_component" | "delete_component" | "clear_candidate";
+        action?:
+          | "set_active_component"
+          | "delete_component"
+          | "clear_candidate";
         component_id?: string;
       }>(request);
 
       if (!body.action) {
-        throw new ApiError(400, "invalid_candidate_action", "action is required");
+        throw new ApiError(
+          400,
+          "invalid_candidate_action",
+          "action is required",
+        );
       }
 
       const { data: chatSession, error: chatError } = await client
@@ -4694,11 +5656,18 @@ Deno.serve(async (request) => {
         .maybeSingle();
 
       if (chatError || !chatSession) {
-        throw new ApiError(404, "chat_not_found", "Chat session not found", chatError?.message);
+        throw new ApiError(
+          404,
+          "chat_not_found",
+          "Chat session not found",
+          chatError?.message,
+        );
       }
 
       const context = extractChatContext(chatSession.context);
-      const candidateSet = normalizeCandidateRecipeSet(context.candidate_recipe_set ?? null);
+      const candidateSet = normalizeCandidateRecipeSet(
+        context.candidate_recipe_set ?? null,
+      );
       let nextCandidateSet = candidateSet;
 
       if (body.action === "clear_candidate") {
@@ -4707,34 +5676,68 @@ Deno.serve(async (request) => {
 
       if (body.action === "set_active_component") {
         if (!candidateSet) {
-          throw new ApiError(409, "candidate_missing", "No candidate recipe set exists for this chat");
+          throw new ApiError(
+            409,
+            "candidate_missing",
+            "No candidate recipe set exists for this chat",
+          );
         }
         if (!body.component_id) {
-          throw new ApiError(400, "invalid_component_id", "component_id is required for set_active_component");
+          throw new ApiError(
+            400,
+            "invalid_component_id",
+            "component_id is required for set_active_component",
+          );
         }
-        if (!candidateSet.components.some((component) => component.component_id === body.component_id)) {
-          throw new ApiError(404, "candidate_component_not_found", "Candidate component not found");
+        if (
+          !candidateSet.components.some((component) =>
+            component.component_id === body.component_id
+          )
+        ) {
+          throw new ApiError(
+            404,
+            "candidate_component_not_found",
+            "Candidate component not found",
+          );
         }
         nextCandidateSet = {
           ...candidateSet,
           revision: Math.max(1, candidateSet.revision + 1),
-          active_component_id: body.component_id
+          active_component_id: body.component_id,
         };
       }
 
       if (body.action === "delete_component") {
         if (!candidateSet) {
-          throw new ApiError(409, "candidate_missing", "No candidate recipe set exists for this chat");
+          throw new ApiError(
+            409,
+            "candidate_missing",
+            "No candidate recipe set exists for this chat",
+          );
         }
         if (!body.component_id) {
-          throw new ApiError(400, "invalid_component_id", "component_id is required for delete_component");
+          throw new ApiError(
+            400,
+            "invalid_component_id",
+            "component_id is required for delete_component",
+          );
         }
-        const remaining = candidateSet.components.filter((component) => component.component_id !== body.component_id);
+        const remaining = candidateSet.components.filter((component) =>
+          component.component_id !== body.component_id
+        );
         if (remaining.length === candidateSet.components.length) {
-          throw new ApiError(404, "candidate_component_not_found", "Candidate component not found");
+          throw new ApiError(
+            404,
+            "candidate_component_not_found",
+            "Candidate component not found",
+          );
         }
         if (remaining.length === 0) {
-          throw new ApiError(409, "candidate_last_component", "Cannot delete the final remaining component");
+          throw new ApiError(
+            409,
+            "candidate_last_component",
+            "Cannot delete the final remaining component",
+          );
         }
 
         const nextActiveId =
@@ -4746,26 +5749,30 @@ Deno.serve(async (request) => {
           ...candidateSet,
           revision: Math.max(1, candidateSet.revision + 1),
           active_component_id: nextActiveId,
-          components: remaining
+          components: remaining,
         };
       }
 
-      const nextLoopState: ChatLoopState = nextCandidateSet ? "candidate_presented" : "ideation";
+      const nextLoopState: ChatLoopState = nextCandidateSet
+        ? "candidate_presented"
+        : "ideation";
       const memoryContextIds = Array.isArray(context.selected_memory_ids)
-        ? context.selected_memory_ids.filter((item): item is string => typeof item === "string")
+        ? context.selected_memory_ids.filter((item): item is string =>
+          typeof item === "string"
+        )
         : [];
       const nextContext: ChatSessionContext = {
         ...context,
         loop_state: nextLoopState,
         candidate_recipe_set: nextCandidateSet,
         candidate_revision: nextCandidateSet?.revision ?? 0,
-        active_component_id: nextCandidateSet?.active_component_id ?? null
+        active_component_id: nextCandidateSet?.active_component_id ?? null,
       };
 
       await updateChatSessionLoopContext({
         client,
         chatId,
-        context: nextContext
+        context: nextContext,
       });
 
       await logChangelog({
@@ -4779,8 +5786,8 @@ Deno.serve(async (request) => {
         afterJson: {
           candidate_id: nextCandidateSet?.candidate_id ?? null,
           revision: nextCandidateSet?.revision ?? null,
-          active_component_id: nextCandidateSet?.active_component_id ?? null
-        }
+          active_component_id: nextCandidateSet?.active_component_id ?? null,
+        },
       });
 
       const messages = await fetchChatMessages(client, chatId);
@@ -4795,14 +5802,17 @@ Deno.serve(async (request) => {
           updatedAt: new Date().toISOString(),
           uiHints: nextCandidateSet
             ? {
-                focus_component_id: nextCandidateSet.active_component_id
-              }
-            : undefined
-        })
+              focus_component_id: nextCandidateSet.active_component_id,
+            }
+            : undefined,
+        }),
       );
     }
 
-    if (segments.length === 3 && segments[0] === "chat" && segments[2] === "commit" && method === "POST") {
+    if (
+      segments.length === 3 && segments[0] === "chat" &&
+      segments[2] === "commit" && method === "POST"
+    ) {
       const chatId = parseUuid(segments[1]);
 
       const { data: chatSession, error: chatError } = await client
@@ -4812,20 +5822,37 @@ Deno.serve(async (request) => {
         .maybeSingle();
 
       if (chatError || !chatSession) {
-        throw new ApiError(404, "chat_not_found", "Chat session not found", chatError?.message);
+        throw new ApiError(
+          404,
+          "chat_not_found",
+          "Chat session not found",
+          chatError?.message,
+        );
       }
       if (chatSession.status === "archived") {
-        throw new ApiError(409, "chat_not_open", "Archived chat sessions cannot be committed");
+        throw new ApiError(
+          409,
+          "chat_not_open",
+          "Archived chat sessions cannot be committed",
+        );
       }
 
       const context = extractChatContext(chatSession.context);
-      const candidateSet = normalizeCandidateRecipeSet(context.candidate_recipe_set ?? null);
+      const candidateSet = normalizeCandidateRecipeSet(
+        context.candidate_recipe_set ?? null,
+      );
       if (!candidateSet || candidateSet.components.length === 0) {
-        throw new ApiError(409, "candidate_missing", "No candidate recipe set is available to commit");
+        throw new ApiError(
+          409,
+          "candidate_missing",
+          "No candidate recipe set is available to commit",
+        );
       }
 
       const selectedMemoryIds = Array.isArray(context.selected_memory_ids)
-        ? context.selected_memory_ids.filter((item): item is string => typeof item === "string")
+        ? context.selected_memory_ids.filter((item): item is string =>
+          typeof item === "string"
+        )
         : [];
 
       const committedComponents: Array<{
@@ -4846,7 +5873,7 @@ Deno.serve(async (request) => {
           payload: component.recipe,
           sourceChatId: chatId,
           diffSummary: `Committed from chat candidate (${component.role})`,
-          selectedMemoryIds
+          selectedMemoryIds,
         });
 
         const { error: saveError } = await client
@@ -4854,12 +5881,17 @@ Deno.serve(async (request) => {
           .upsert(
             {
               user_id: auth.userId,
-              recipe_id: saved.recipeId
+              recipe_id: saved.recipeId,
             },
-            { onConflict: "user_id,recipe_id" }
+            { onConflict: "user_id,recipe_id" },
           );
         if (saveError) {
-          throw new ApiError(500, "recipe_save_failed", "Could not save committed recipe to cookbook", saveError.message);
+          throw new ApiError(
+            500,
+            "recipe_save_failed",
+            "Could not save committed recipe to cookbook",
+            saveError.message,
+          );
         }
 
         await enqueueImageJob(client, saved.recipeId);
@@ -4869,7 +5901,7 @@ Deno.serve(async (request) => {
           role: component.role,
           title: component.title,
           recipe_id: saved.recipeId,
-          recipe_version_id: saved.versionId
+          recipe_version_id: saved.versionId,
         });
       }
 
@@ -4886,7 +5918,10 @@ Deno.serve(async (request) => {
         for (let index = 1; index < committedComponents.length; index += 1) {
           const component = committedComponents[index];
           const relationType = mapCandidateRoleToRelation(component.role);
-          const relationTypeId = await resolveRelationTypeId(client, relationType);
+          const relationTypeId = await resolveRelationTypeId(
+            client,
+            relationType,
+          );
           const { data: link, error: linkError } = await client
             .from("recipe_links")
             .insert({
@@ -4894,13 +5929,18 @@ Deno.serve(async (request) => {
               child_recipe_id: component.recipe_id,
               relation_type_id: relationTypeId,
               position: index,
-              source: "chat_commit"
+              source: "chat_commit",
             })
             .select("id,parent_recipe_id,child_recipe_id,position")
             .single();
 
           if (linkError || !link) {
-            throw new ApiError(500, "recipe_link_insert_failed", "Could not link committed recipe components", linkError?.message);
+            throw new ApiError(
+              500,
+              "recipe_link_insert_failed",
+              "Could not link committed recipe components",
+              linkError?.message,
+            );
           }
 
           links.push({
@@ -4908,7 +5948,7 @@ Deno.serve(async (request) => {
             parent_recipe_id: String(link.parent_recipe_id),
             child_recipe_id: String(link.child_recipe_id),
             relation_type: relationType,
-            position: Number(link.position ?? index)
+            position: Number(link.position ?? index),
           });
         }
       }
@@ -4918,13 +5958,13 @@ Deno.serve(async (request) => {
         loop_state: "ideation",
         candidate_recipe_set: null,
         candidate_revision: candidateSet.revision,
-        active_component_id: null
+        active_component_id: null,
       };
 
       await updateChatSessionLoopContext({
         client,
         chatId,
-        context: nextContext
+        context: nextContext,
       });
 
       await logChangelog({
@@ -4939,13 +5979,15 @@ Deno.serve(async (request) => {
           candidate_id: candidateSet.candidate_id,
           revision: candidateSet.revision,
           committed_components: committedComponents,
-          links
-        }
+          links,
+        },
       });
 
       const messages = await fetchChatMessages(client, chatId);
       const memoryContextIds = Array.isArray(nextContext.selected_memory_ids)
-        ? nextContext.selected_memory_ids.filter((item): item is string => typeof item === "string")
+        ? nextContext.selected_memory_ids.filter((item): item is string =>
+          typeof item === "string"
+        )
         : [];
       const loopResponse = buildChatLoopResponse({
         chatId,
@@ -4953,7 +5995,7 @@ Deno.serve(async (request) => {
         context: nextContext,
         memoryContextIds,
         createdAt: chatSession.created_at,
-        updatedAt: new Date().toISOString()
+        updatedAt: new Date().toISOString(),
       });
 
       return jsonResponse(200, {
@@ -4964,20 +6006,31 @@ Deno.serve(async (request) => {
           committed_count: committedComponents.length,
           recipes: committedComponents,
           links,
-          post_save_options: ["continue_chat", "restart_chat", "go_to_cookbook"]
-        }
+          post_save_options: [
+            "continue_chat",
+            "restart_chat",
+            "go_to_cookbook",
+          ],
+        },
       });
     }
 
-    if (segments.length === 3 && segments[0] === "chat" && segments[2] === "generate" && method === "POST") {
+    if (
+      segments.length === 3 && segments[0] === "chat" &&
+      segments[2] === "generate" && method === "POST"
+    ) {
       throw new ApiError(
         404,
         "route_not_found",
-        "Use chat loop endpoints: POST /chat, POST /chat/{id}/messages, and POST /chat/{id}/commit"
+        "Use chat loop endpoints: POST /chat, POST /chat/{id}/messages, and POST /chat/{id}/commit",
       );
     }
 
-    throw new ApiError(404, "route_not_found", "Requested route does not exist");
+    throw new ApiError(
+      404,
+      "route_not_found",
+      "Requested route does not exist",
+    );
   } catch (error) {
     return errorResponse(requestId, error);
   }

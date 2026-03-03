@@ -10,7 +10,7 @@ import type {
   OnboardingAssistantEnvelope,
   OnboardingState,
   RecipeAssistantEnvelope,
-  RecipePayload
+  RecipePayload,
 } from "./types.ts";
 
 type GatewayInput = {
@@ -48,7 +48,10 @@ type MemorySummary = {
   token_estimate?: number;
 };
 
-export type ModelOverrideMap = Record<string, { provider: string; model: string }>;
+export type ModelOverrideMap = Record<
+  string,
+  { provider: string; model: string }
+>;
 
 type TokenAccum = { input: number; output: number; costUsd: number };
 
@@ -67,19 +70,36 @@ const DEFAULT_OUT_OF_SCOPE_FALLBACK_TEXT = "i didnt understand that";
 const getActiveConfig = async (
   client: SupabaseClient,
   scope: GatewayScope,
-  modelOverride?: { provider: string; model: string }
+  modelOverride?: { provider: string; model: string },
 ): Promise<GatewayConfig> => {
-  const [{ data: prompt, error: promptError }, { data: rule, error: ruleError }] = await Promise.all([
-    client.from("llm_prompts").select("template").eq("scope", scope).eq("is_active", true).maybeSingle(),
-    client.from("llm_rules").select("rule").eq("scope", scope).eq("is_active", true).maybeSingle()
+  const [
+    { data: prompt, error: promptError },
+    { data: rule, error: ruleError },
+  ] = await Promise.all([
+    client.from("llm_prompts").select("template").eq("scope", scope).eq(
+      "is_active",
+      true,
+    ).maybeSingle(),
+    client.from("llm_rules").select("rule").eq("scope", scope).eq(
+      "is_active",
+      true,
+    ).maybeSingle(),
   ]);
 
   if (promptError || !prompt?.template) {
-    throw new ApiError(500, "gateway_prompt_missing", `No active prompt configured for scope: ${scope}`);
+    throw new ApiError(
+      500,
+      "gateway_prompt_missing",
+      `No active prompt configured for scope: ${scope}`,
+    );
   }
 
   if (ruleError || !rule?.rule) {
-    throw new ApiError(500, "gateway_rule_missing", `No active rule configured for scope: ${scope}`);
+    throw new ApiError(
+      500,
+      "gateway_rule_missing",
+      `No active rule configured for scope: ${scope}`,
+    );
   }
 
   let provider: string;
@@ -99,11 +119,19 @@ const getActiveConfig = async (
       .maybeSingle();
 
     if (routeError || !route) {
-      throw new ApiError(500, "gateway_route_missing", `No active model route configured for scope: ${scope}`);
+      throw new ApiError(
+        500,
+        "gateway_route_missing",
+        `No active model route configured for scope: ${scope}`,
+      );
     }
 
     if (!route.provider || !route.model) {
-      throw new ApiError(500, "gateway_route_invalid", `Active model route for ${scope} does not contain a model`);
+      throw new ApiError(
+        500,
+        "gateway_route_invalid",
+        `Active model route for ${scope} does not contain a model`,
+      );
     }
 
     provider = route.provider;
@@ -125,7 +153,7 @@ const getActiveConfig = async (
     model,
     modelConfig,
     inputCostPer1m: Number(reg?.input_cost_per_1m_tokens ?? 0),
-    outputCostPer1m: Number(reg?.output_cost_per_1m_tokens ?? 0)
+    outputCostPer1m: Number(reg?.output_cost_per_1m_tokens ?? 0),
   };
 };
 
@@ -136,7 +164,9 @@ const normalizeTextValue = (value: unknown): string | null => {
 
   if (value && typeof value === "object" && !Array.isArray(value)) {
     const withValue = value as { value?: unknown };
-    if (typeof withValue.value === "string" && withValue.value.trim().length > 0) {
+    if (
+      typeof withValue.value === "string" && withValue.value.trim().length > 0
+    ) {
       return withValue.value;
     }
   }
@@ -163,7 +193,7 @@ const extractFirstJsonValue = (text: string): string | null => {
       continue;
     }
 
-    if (char === "\"") {
+    if (char === '"') {
       inString = !inString;
       continue;
     }
@@ -236,7 +266,9 @@ const parseJsonFromText = (raw: string): Record<string, JsonValue> | null => {
   return null;
 };
 
-const parseResponseOutputJson = (payload: unknown): Record<string, JsonValue> | null => {
+const parseResponseOutputJson = (
+  payload: unknown,
+): Record<string, JsonValue> | null => {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     return null;
   }
@@ -255,11 +287,17 @@ const parseResponseOutputJson = (payload: unknown): Record<string, JsonValue> | 
         continue;
       }
 
-      if (outputItem.json && typeof outputItem.json === "object" && !Array.isArray(outputItem.json)) {
+      if (
+        outputItem.json && typeof outputItem.json === "object" &&
+        !Array.isArray(outputItem.json)
+      ) {
         return outputItem.json as Record<string, JsonValue>;
       }
 
-      if (outputItem.parsed && typeof outputItem.parsed === "object" && !Array.isArray(outputItem.parsed)) {
+      if (
+        outputItem.parsed && typeof outputItem.parsed === "object" &&
+        !Array.isArray(outputItem.parsed)
+      ) {
         return outputItem.parsed as Record<string, JsonValue>;
       }
 
@@ -269,7 +307,10 @@ const parseResponseOutputJson = (payload: unknown): Record<string, JsonValue> | 
             continue;
           }
 
-          if (contentItem.json && typeof contentItem.json === "object" && !Array.isArray(contentItem.json)) {
+          if (
+            contentItem.json && typeof contentItem.json === "object" &&
+            !Array.isArray(contentItem.json)
+          ) {
             return contentItem.json as Record<string, JsonValue>;
           }
 
@@ -280,11 +321,16 @@ const parseResponseOutputJson = (payload: unknown): Record<string, JsonValue> | 
             }
           }
 
-          if (contentItem.parsed && typeof contentItem.parsed === "object" && !Array.isArray(contentItem.parsed)) {
+          if (
+            contentItem.parsed && typeof contentItem.parsed === "object" &&
+            !Array.isArray(contentItem.parsed)
+          ) {
             return contentItem.parsed as Record<string, JsonValue>;
           }
 
-          if (Array.isArray(contentItem.parsed) && contentItem.parsed.length > 0) {
+          if (
+            Array.isArray(contentItem.parsed) && contentItem.parsed.length > 0
+          ) {
             const first = contentItem.parsed[0];
             if (first && typeof first === "object" && !Array.isArray(first)) {
               return first as Record<string, JsonValue>;
@@ -312,7 +358,10 @@ const parseResponseOutputJson = (payload: unknown): Record<string, JsonValue> | 
   }
 
   const messageContent = withChoices.choices?.[0]?.message?.content;
-  if (messageContent && typeof messageContent === "object" && !Array.isArray(messageContent)) {
+  if (
+    messageContent && typeof messageContent === "object" &&
+    !Array.isArray(messageContent)
+  ) {
     return messageContent as Record<string, JsonValue>;
   }
 
@@ -353,31 +402,41 @@ const parseResponseOutputText = (payload: unknown): string | null => {
             continue;
           }
 
-          const contentText =
-            normalizeTextValue(contentItem.text) ??
-            normalizeTextValue((contentItem as { output_text?: unknown }).output_text);
+          const contentText = normalizeTextValue(contentItem.text) ??
+            normalizeTextValue(
+              (contentItem as { output_text?: unknown }).output_text,
+            );
 
           if (
-            (contentItem.type === "output_text" || contentItem.type === "text" || typeof contentItem.type === "undefined") &&
+            (contentItem.type === "output_text" ||
+              contentItem.type === "text" ||
+              typeof contentItem.type === "undefined") &&
             contentText
           ) {
             parts.push(contentText);
           }
 
           const contentJson = (contentItem as { json?: unknown }).json;
-          if (contentJson && typeof contentJson === "object" && !Array.isArray(contentJson)) {
+          if (
+            contentJson && typeof contentJson === "object" &&
+            !Array.isArray(contentJson)
+          ) {
             parts.push(JSON.stringify(contentJson));
           }
         }
       } else {
-        const outputText = normalizeTextValue(outputItem.text) ?? normalizeTextValue(outputItem.output_text);
+        const outputText = normalizeTextValue(outputItem.text) ??
+          normalizeTextValue(outputItem.output_text);
         if (outputText) {
           parts.push(outputText);
         }
       }
 
       const outputJson = (outputItem as { json?: unknown }).json;
-      if (outputJson && typeof outputJson === "object" && !Array.isArray(outputJson)) {
+      if (
+        outputJson && typeof outputJson === "object" &&
+        !Array.isArray(outputJson)
+      ) {
         parts.push(JSON.stringify(outputJson));
       }
     }
@@ -401,7 +460,7 @@ const parseResponseOutputText = (payload: unknown): string | null => {
     const parts = choiceContent
       .map((part) =>
         normalizeTextValue((part as { text?: unknown }).text) ??
-        normalizeTextValue(part)
+          normalizeTextValue(part)
       )
       .filter((part): part is string => Boolean(part));
 
@@ -413,7 +472,11 @@ const parseResponseOutputText = (payload: unknown): string | null => {
   return null;
 };
 
-type ProviderResult<T> = { result: T; inputTokens: number; outputTokens: number };
+type ProviderResult<T> = {
+  result: T;
+  inputTokens: number;
+  outputTokens: number;
+};
 
 const callProvider = async <T>(params: {
   provider: string;
@@ -429,18 +492,24 @@ const callProvider = async <T>(params: {
 
   // ── Anthropic ────────────────────────────────────────────────────────────────
   if (params.provider === "anthropic") {
-    const endpoint =
-      (typeof params.modelConfig.endpoint === "string" && params.modelConfig.endpoint) ||
+    const endpoint = (typeof params.modelConfig.endpoint === "string" &&
+      params.modelConfig.endpoint) ||
       "https://api.anthropic.com/v1/messages";
-    const apiKeyEnv =
-      (typeof params.modelConfig.api_key_env === "string" && params.modelConfig.api_key_env) || "ANTHROPIC_API_KEY";
+    const apiKeyEnv = (typeof params.modelConfig.api_key_env === "string" &&
+      params.modelConfig.api_key_env) || "ANTHROPIC_API_KEY";
     const apiKey = Deno.env.get(apiKeyEnv);
 
     if (!apiKey) {
-      throw new ApiError(500, "llm_provider_key_missing", `Missing provider API key env: ${apiKeyEnv}`);
+      throw new ApiError(
+        500,
+        "llm_provider_key_missing",
+        `Missing provider API key env: ${apiKeyEnv}`,
+      );
     }
 
-    const maxTokens = typeof params.modelConfig.max_tokens === "number" ? params.modelConfig.max_tokens : 8096;
+    const maxTokens = typeof params.modelConfig.max_tokens === "number"
+      ? params.modelConfig.max_tokens
+      : 8096;
 
     let response: Response;
     try {
@@ -449,7 +518,7 @@ const callProvider = async <T>(params: {
         headers: {
           "x-api-key": apiKey,
           "anthropic-version": "2023-06-01",
-          "content-type": "application/json"
+          "content-type": "application/json",
         },
         signal: AbortSignal.timeout(timeoutMs),
         body: JSON.stringify({
@@ -457,34 +526,50 @@ const callProvider = async <T>(params: {
           max_tokens: maxTokens,
           system: params.systemPrompt,
           messages: [
-            { role: "user", content: JSON.stringify(params.userInput) }
-          ]
-        })
+            { role: "user", content: JSON.stringify(params.userInput) },
+          ],
+        }),
       });
     } catch (error) {
       if (error instanceof DOMException && error.name === "TimeoutError") {
-        throw new ApiError(504, "llm_provider_timeout", "LLM provider timed out", {
-          endpoint,
-          model: params.model,
-          timeout_ms: timeoutMs
-        });
+        throw new ApiError(
+          504,
+          "llm_provider_timeout",
+          "LLM provider timed out",
+          {
+            endpoint,
+            model: params.model,
+            timeout_ms: timeoutMs,
+          },
+        );
       }
       throw error;
     }
 
     if (!response.ok) {
       const body = await response.text();
-      throw new ApiError(502, "llm_provider_error", "LLM provider returned an error", body.slice(0, 1000));
+      throw new ApiError(
+        502,
+        "llm_provider_error",
+        "LLM provider returned an error",
+        body.slice(0, 1000),
+      );
     }
 
     const anthropicPayload = (await response.json()) as {
       content?: Array<{ type: string; text?: string }>;
       usage?: { input_tokens?: number; output_tokens?: number };
     };
-    const anthropicText = anthropicPayload?.content?.find((c) => c.type === "text")?.text ?? null;
+    const anthropicText = anthropicPayload?.content?.find((c) =>
+      c.type === "text"
+    )?.text ?? null;
 
     if (!anthropicText) {
-      throw new ApiError(502, "llm_empty_output", "Anthropic returned an empty output payload");
+      throw new ApiError(
+        502,
+        "llm_empty_output",
+        "Anthropic returned an empty output payload",
+      );
     }
 
     const anthropicParsed = parseJsonFromText(anthropicText);
@@ -492,28 +577,41 @@ const callProvider = async <T>(params: {
       return {
         result: anthropicParsed as T,
         inputTokens: anthropicPayload.usage?.input_tokens ?? 0,
-        outputTokens: anthropicPayload.usage?.output_tokens ?? 0
+        outputTokens: anthropicPayload.usage?.output_tokens ?? 0,
       };
     }
 
-    throw new ApiError(502, "llm_invalid_json", "Anthropic output is not valid JSON", anthropicText.slice(0, 1000));
+    throw new ApiError(
+      502,
+      "llm_invalid_json",
+      "Anthropic output is not valid JSON",
+      anthropicText.slice(0, 1000),
+    );
   }
 
   // ── OpenAI ───────────────────────────────────────────────────────────────────
   if (params.provider !== "openai") {
-    throw new ApiError(500, "llm_provider_not_supported", `Provider adapter not configured: ${params.provider}`);
+    throw new ApiError(
+      500,
+      "llm_provider_not_supported",
+      `Provider adapter not configured: ${params.provider}`,
+    );
   }
 
-  const endpoint =
-    (typeof params.modelConfig.endpoint === "string" && params.modelConfig.endpoint) ||
+  const endpoint = (typeof params.modelConfig.endpoint === "string" &&
+    params.modelConfig.endpoint) ||
     Deno.env.get("OPENAI_RESPONSES_ENDPOINT") ||
     "https://api.openai.com/v1/responses";
-  const apiKeyEnv =
-    (typeof params.modelConfig.api_key_env === "string" && params.modelConfig.api_key_env) || "OPENAI_API_KEY";
+  const apiKeyEnv = (typeof params.modelConfig.api_key_env === "string" &&
+    params.modelConfig.api_key_env) || "OPENAI_API_KEY";
   const apiKey = Deno.env.get(apiKeyEnv);
 
   if (!apiKey) {
-    throw new ApiError(500, "llm_provider_key_missing", `Missing provider API key env: ${apiKeyEnv}`);
+    throw new ApiError(
+      500,
+      "llm_provider_key_missing",
+      `Missing provider API key env: ${apiKeyEnv}`,
+    );
   }
 
   const requestConfig: Record<string, JsonValue> = { ...params.modelConfig };
@@ -526,36 +624,52 @@ const callProvider = async <T>(params: {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
-        "content-type": "application/json"
+        "content-type": "application/json",
       },
       signal: AbortSignal.timeout(timeoutMs),
       body: JSON.stringify({
         model: params.model,
         ...requestConfig,
         input: [
-          { role: "system", content: [{ type: "input_text", text: params.systemPrompt }] },
+          {
+            role: "system",
+            content: [{ type: "input_text", text: params.systemPrompt }],
+          },
           {
             role: "user",
-            content: [{ type: "input_text", text: JSON.stringify(params.userInput) }]
-          }
+            content: [{
+              type: "input_text",
+              text: JSON.stringify(params.userInput),
+            }],
+          },
         ],
-        text: { format: { type: "json_object" } }
-      })
+        text: { format: { type: "json_object" } },
+      }),
     });
   } catch (error) {
     if (error instanceof DOMException && error.name === "TimeoutError") {
-      throw new ApiError(504, "llm_provider_timeout", "LLM provider timed out", {
-        endpoint,
-        model: params.model,
-        timeout_ms: timeoutMs
-      });
+      throw new ApiError(
+        504,
+        "llm_provider_timeout",
+        "LLM provider timed out",
+        {
+          endpoint,
+          model: params.model,
+          timeout_ms: timeoutMs,
+        },
+      );
     }
     throw error;
   }
 
   if (!response.ok) {
     const body = await response.text();
-    throw new ApiError(502, "llm_provider_error", "LLM provider returned an error", body.slice(0, 1000));
+    throw new ApiError(
+      502,
+      "llm_provider_error",
+      "LLM provider returned an error",
+      body.slice(0, 1000),
+    );
   }
 
   const payload = (await response.json()) as unknown;
@@ -573,9 +687,16 @@ const callProvider = async <T>(params: {
   const outputText = parseResponseOutputText(payload);
 
   if (!outputText) {
-    throw new ApiError(502, "llm_empty_output", "LLM provider returned an empty output payload", {
-      payload_shape: payload && typeof payload === "object" ? Object.keys(payload as Record<string, unknown>) : "unknown"
-    });
+    throw new ApiError(
+      502,
+      "llm_empty_output",
+      "LLM provider returned an empty output payload",
+      {
+        payload_shape: payload && typeof payload === "object"
+          ? Object.keys(payload as Record<string, unknown>)
+          : "unknown",
+      },
+    );
   }
 
   const parsed = parseJsonFromText(outputText);
@@ -583,7 +704,12 @@ const callProvider = async <T>(params: {
     return { result: parsed as T, inputTokens, outputTokens };
   }
 
-  throw new ApiError(502, "llm_invalid_json", "LLM output is not valid JSON", outputText.slice(0, 1000));
+  throw new ApiError(
+    502,
+    "llm_invalid_json",
+    "LLM output is not valid JSON",
+    outputText.slice(0, 1000),
+  );
 };
 
 const callImageProvider = async (params: {
@@ -593,23 +719,35 @@ const callImageProvider = async (params: {
   prompt: string;
 }): Promise<string> => {
   if (params.provider !== "openai") {
-    throw new ApiError(500, "image_provider_not_supported", `Image provider adapter not configured: ${params.provider}`);
+    throw new ApiError(
+      500,
+      "image_provider_not_supported",
+      `Image provider adapter not configured: ${params.provider}`,
+    );
   }
 
-  const endpoint =
-    (typeof params.modelConfig.image_endpoint === "string" && params.modelConfig.image_endpoint) ||
+  const endpoint = (typeof params.modelConfig.image_endpoint === "string" &&
+    params.modelConfig.image_endpoint) ||
     Deno.env.get("OPENAI_IMAGES_ENDPOINT") ||
     "https://api.openai.com/v1/images/generations";
-  const apiKeyEnv =
-    (typeof params.modelConfig.api_key_env === "string" && params.modelConfig.api_key_env) || "OPENAI_API_KEY";
+  const apiKeyEnv = (typeof params.modelConfig.api_key_env === "string" &&
+    params.modelConfig.api_key_env) || "OPENAI_API_KEY";
   const apiKey = Deno.env.get(apiKeyEnv);
 
   if (!apiKey) {
-    throw new ApiError(500, "image_provider_key_missing", `Missing provider API key env: ${apiKeyEnv}`);
+    throw new ApiError(
+      500,
+      "image_provider_key_missing",
+      `Missing provider API key env: ${apiKeyEnv}`,
+    );
   }
 
-  const size = typeof params.modelConfig.size === "string" ? params.modelConfig.size : "1536x1024";
-  const quality = typeof params.modelConfig.quality === "string" ? params.modelConfig.quality : "high";
+  const size = typeof params.modelConfig.size === "string"
+    ? params.modelConfig.size
+    : "1536x1024";
+  const quality = typeof params.modelConfig.quality === "string"
+    ? params.modelConfig.quality
+    : "high";
   const timeoutCandidate = Number(params.modelConfig.timeout_ms);
   const timeoutMs = Number.isFinite(timeoutCandidate)
     ? Math.max(5_000, Math.min(180_000, timeoutCandidate))
@@ -621,7 +759,7 @@ const callImageProvider = async (params: {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
-        "content-type": "application/json"
+        "content-type": "application/json",
       },
       signal: AbortSignal.timeout(timeoutMs),
       body: JSON.stringify({
@@ -629,23 +767,33 @@ const callImageProvider = async (params: {
         prompt: params.prompt,
         size,
         quality,
-        response_format: "url"
-      })
+        response_format: "url",
+      }),
     });
   } catch (error) {
     if (error instanceof DOMException && error.name === "TimeoutError") {
-      throw new ApiError(504, "image_provider_timeout", "Image provider timed out", {
-        endpoint,
-        model: params.model,
-        timeout_ms: timeoutMs
-      });
+      throw new ApiError(
+        504,
+        "image_provider_timeout",
+        "Image provider timed out",
+        {
+          endpoint,
+          model: params.model,
+          timeout_ms: timeoutMs,
+        },
+      );
     }
     throw error;
   }
 
   if (!response.ok) {
     const body = await response.text();
-    throw new ApiError(502, "image_provider_error", "Image provider returned an error", body.slice(0, 1000));
+    throw new ApiError(
+      502,
+      "image_provider_error",
+      "Image provider returned an error",
+      body.slice(0, 1000),
+    );
   }
 
   const payload = (await response.json()) as {
@@ -661,17 +809,27 @@ const callImageProvider = async (params: {
     return `data:image/png;base64,${image.b64_json}`;
   }
 
-  throw new ApiError(502, "image_empty_output", "Image provider returned no image output");
+  throw new ApiError(
+    502,
+    "image_empty_output",
+    "Image provider returned no image output",
+  );
 };
 
 const classifyScope = async (
   client: SupabaseClient,
   input: GatewayInput,
   overrides?: ModelOverrideMap,
-  accum?: TokenAccum
+  accum?: TokenAccum,
 ): Promise<ClassificationResult> => {
-  const config = await getActiveConfig(client, "classify", overrides?.["classify"]);
-  const { result, inputTokens, outputTokens } = await callProvider<ClassificationResult>({
+  const config = await getActiveConfig(
+    client,
+    "classify",
+    overrides?.["classify"],
+  );
+  const { result, inputTokens, outputTokens } = await callProvider<
+    ClassificationResult
+  >({
     provider: config.provider,
     model: config.model,
     modelConfig: config.modelConfig,
@@ -680,33 +838,48 @@ const classifyScope = async (
       task: "classify_request",
       rule: config.rule,
       user_prompt: input.userPrompt,
-      context: input.context
-    }
+      context: input.context,
+    },
   });
 
   if (accum) {
     accum.input += inputTokens;
     accum.output += outputTokens;
-    accum.costUsd += (inputTokens * config.inputCostPer1m + outputTokens * config.outputCostPer1m) / 1_000_000;
+    accum.costUsd += (inputTokens * config.inputCostPer1m +
+      outputTokens * config.outputCostPer1m) / 1_000_000;
   }
 
   if (!result.label) {
-    throw new ApiError(422, "classification_failed", "Classification returned no label");
+    throw new ApiError(
+      422,
+      "classification_failed",
+      "Classification returned no label",
+    );
   }
 
   const acceptLabelsValue = config.rule.accept_labels;
   if (!Array.isArray(acceptLabelsValue)) {
-    throw new ApiError(500, "classification_rule_invalid", "classify rule must define accept_labels[]");
+    throw new ApiError(
+      500,
+      "classification_rule_invalid",
+      "classify rule must define accept_labels[]",
+    );
   }
 
-  const acceptLabels = acceptLabelsValue.filter((value): value is string => typeof value === "string");
+  const acceptLabels = acceptLabelsValue.filter((value): value is string =>
+    typeof value === "string"
+  );
   if (acceptLabels.length === 0) {
-    throw new ApiError(500, "classification_rule_invalid", "classify accept_labels[] cannot be empty");
+    throw new ApiError(
+      500,
+      "classification_rule_invalid",
+      "classify accept_labels[] cannot be empty",
+    );
   }
 
   return {
     ...result,
-    isAllowed: acceptLabels.includes(result.label)
+    isAllowed: acceptLabels.includes(result.label),
   };
 };
 
@@ -716,25 +889,22 @@ const normalizeRecipeShape = (candidate: unknown): RecipePayload | null => {
   }
 
   const recipe = candidate as Partial<RecipePayload> & Record<string, unknown>;
-  const titleCandidate =
-    typeof recipe.title === "string"
-      ? recipe.title
-      : typeof recipe.name === "string"
-        ? recipe.name
-        : typeof recipe.recipe_name === "string"
-          ? recipe.recipe_name
-          : typeof recipe.dish_name === "string"
-            ? recipe.dish_name
-            : "";
+  const titleCandidate = typeof recipe.title === "string"
+    ? recipe.title
+    : typeof recipe.name === "string"
+    ? recipe.name
+    : typeof recipe.recipe_name === "string"
+    ? recipe.recipe_name
+    : typeof recipe.dish_name === "string"
+    ? recipe.dish_name
+    : "";
   const normalizedTitle = titleCandidate.trim();
-  const ingredientsSource =
-    recipe.ingredients ??
+  const ingredientsSource = recipe.ingredients ??
     recipe.ingredient_list ??
     recipe.ingredients_by_category ??
     recipe.ingredient_groups ??
     recipe.grouped_ingredients;
-  const stepsSource =
-    recipe.steps ??
+  const stepsSource = recipe.steps ??
     recipe.instructions ??
     recipe.directions ??
     recipe.method ??
@@ -764,7 +934,10 @@ const normalizeRecipeShape = (candidate: unknown): RecipePayload | null => {
       const whole = Number(mixedFraction[1]);
       const numerator = Number(mixedFraction[2]);
       const denominator = Number(mixedFraction[3]);
-      if (Number.isFinite(whole) && Number.isFinite(numerator) && Number.isFinite(denominator) && denominator !== 0) {
+      if (
+        Number.isFinite(whole) && Number.isFinite(numerator) &&
+        Number.isFinite(denominator) && denominator !== 0
+      ) {
         return whole + numerator / denominator;
       }
     }
@@ -773,7 +946,10 @@ const normalizeRecipeShape = (candidate: unknown): RecipePayload | null => {
     if (fraction) {
       const numerator = Number(fraction[1]);
       const denominator = Number(fraction[2]);
-      if (Number.isFinite(numerator) && Number.isFinite(denominator) && denominator !== 0) {
+      if (
+        Number.isFinite(numerator) && Number.isFinite(denominator) &&
+        denominator !== 0
+      ) {
         return numerator / denominator;
       }
     }
@@ -806,11 +982,14 @@ const normalizeRecipeShape = (candidate: unknown): RecipePayload | null => {
     return firstToken?.trim() ?? "";
   };
 
-  const normalizeIngredientsInput = (input: unknown): Array<Record<string, unknown> | string> => {
+  const normalizeIngredientsInput = (
+    input: unknown,
+  ): Array<Record<string, unknown> | string> => {
     if (Array.isArray(input)) {
       return input.filter(
         (item): item is Record<string, unknown> | string =>
-          typeof item === "string" || (Boolean(item) && typeof item === "object" && !Array.isArray(item))
+          typeof item === "string" ||
+          (Boolean(item) && typeof item === "object" && !Array.isArray(item)),
       );
     }
 
@@ -834,7 +1013,10 @@ const normalizeRecipeShape = (candidate: unknown): RecipePayload | null => {
           }
 
           const withCategory = row as Record<string, unknown>;
-          if (typeof withCategory.category !== "string" || withCategory.category.trim().length === 0) {
+          if (
+            typeof withCategory.category !== "string" ||
+            withCategory.category.trim().length === 0
+          ) {
             flattened.push({ ...withCategory, category });
           } else {
             flattened.push(withCategory);
@@ -846,7 +1028,9 @@ const normalizeRecipeShape = (candidate: unknown): RecipePayload | null => {
     return flattened;
   };
 
-  const normalizeStepsInput = (input: unknown): Array<Record<string, unknown> | string> => {
+  const normalizeStepsInput = (
+    input: unknown,
+  ): Array<Record<string, unknown> | string> => {
     if (typeof input === "string") {
       return input
         .split(/\n+/)
@@ -856,13 +1040,17 @@ const normalizeRecipeShape = (candidate: unknown): RecipePayload | null => {
 
     if (Array.isArray(input)) {
       return input.filter((item): item is Record<string, unknown> | string =>
-        typeof item === "string" || (Boolean(item) && typeof item === "object" && !Array.isArray(item))
+        typeof item === "string" ||
+        (Boolean(item) && typeof item === "object" && !Array.isArray(item))
       );
     }
 
     if (input && typeof input === "object" && !Array.isArray(input)) {
-      return Object.values(input).filter((item): item is Record<string, unknown> | string =>
-        typeof item === "string" || (Boolean(item) && typeof item === "object" && !Array.isArray(item))
+      return Object.values(input).filter((
+        item,
+      ): item is Record<string, unknown> | string =>
+        typeof item === "string" ||
+        (Boolean(item) && typeof item === "object" && !Array.isArray(item))
       );
     }
 
@@ -890,16 +1078,18 @@ const normalizeRecipeShape = (candidate: unknown): RecipePayload | null => {
     return null;
   };
 
-  const servings =
-    parseServings(recipe.servings) ??
+  const servings = parseServings(recipe.servings) ??
     parseServings(recipe.serves) ??
     parseServings(recipe.yield) ??
     2;
 
   if (
     !normalizedTitle ||
-    (!Array.isArray(ingredientsSource) && (!ingredientsSource || typeof ingredientsSource !== "object")) ||
-    (!Array.isArray(stepsSource) && (!stepsSource || typeof stepsSource !== "object") && typeof stepsSource !== "string")
+    (!Array.isArray(ingredientsSource) &&
+      (!ingredientsSource || typeof ingredientsSource !== "object")) ||
+    (!Array.isArray(stepsSource) &&
+      (!stepsSource || typeof stepsSource !== "object") &&
+      typeof stepsSource !== "string")
   ) {
     return null;
   }
@@ -917,31 +1107,30 @@ const normalizeRecipeShape = (candidate: unknown): RecipePayload | null => {
           amount: 1,
           unit: "unit",
           preparation: undefined,
-          category: undefined
+          category: undefined,
         };
       }
 
-      const nameCandidate =
-        typeof ingredient.name === "string"
-          ? ingredient.name
-          : typeof ingredient.ingredient === "string"
-            ? ingredient.ingredient
-            : "";
+      const nameCandidate = typeof ingredient.name === "string"
+        ? ingredient.name
+        : typeof ingredient.ingredient === "string"
+        ? ingredient.ingredient
+        : "";
       const name = nameCandidate.trim();
-      const amountCandidate =
-        ingredient.amount ??
+      const amountCandidate = ingredient.amount ??
         ingredient.quantity ??
         ingredient.qty ??
         ingredient.value;
       const amount = parseNumericAmount(amountCandidate);
-      const unitCandidate =
-        typeof ingredient.unit === "string"
-          ? ingredient.unit
-          : typeof ingredient.units === "string"
-            ? ingredient.units
-            : "";
+      const unitCandidate = typeof ingredient.unit === "string"
+        ? ingredient.unit
+        : typeof ingredient.units === "string"
+        ? ingredient.units
+        : "";
       const unit = unitCandidate.trim();
-      const quantityText = typeof ingredient.quantity === "string" ? ingredient.quantity.trim() : "";
+      const quantityText = typeof ingredient.quantity === "string"
+        ? ingredient.quantity.trim()
+        : "";
       const fallbackAmount = parseNumericAmount(quantityText);
       const fallbackUnit = parseUnitFromQuantity(quantityText);
 
@@ -953,21 +1142,23 @@ const normalizeRecipeShape = (candidate: unknown): RecipePayload | null => {
         name,
         amount: amount ?? fallbackAmount ?? 1,
         unit: unit || fallbackUnit || "unit",
-        display_amount:
-          typeof ingredient.display_amount === "string" && ingredient.display_amount.trim().length > 0
-            ? ingredient.display_amount.trim()
-            : undefined,
-        preparation:
-          typeof ingredient.preparation === "string" && ingredient.preparation.trim().length > 0
-            ? ingredient.preparation.trim()
-            : undefined,
-        category:
-          typeof ingredient.category === "string" && ingredient.category.trim().length > 0
-            ? ingredient.category.trim()
-            : undefined
+        display_amount: typeof ingredient.display_amount === "string" &&
+            ingredient.display_amount.trim().length > 0
+          ? ingredient.display_amount.trim()
+          : undefined,
+        preparation: typeof ingredient.preparation === "string" &&
+            ingredient.preparation.trim().length > 0
+          ? ingredient.preparation.trim()
+          : undefined,
+        category: typeof ingredient.category === "string" &&
+            ingredient.category.trim().length > 0
+          ? ingredient.category.trim()
+          : undefined,
       };
     })
-    .filter((ingredient): ingredient is RecipePayload["ingredients"][number] => ingredient !== null);
+    .filter((ingredient): ingredient is RecipePayload["ingredients"][number] =>
+      ingredient !== null
+    );
 
   const steps = normalizeStepsInput(stepsSource)
     .map((step, stepIndex) => {
@@ -979,29 +1170,30 @@ const normalizeRecipeShape = (candidate: unknown): RecipePayload | null => {
 
         return {
           index: stepIndex + 1,
-          instruction
+          instruction,
         };
       }
 
-      const index = Number(step.index ?? step.step ?? step.step_number ?? (stepIndex + 1));
-      const instructionCandidate =
-        typeof step.instruction === "string"
-          ? step.instruction
-          : typeof step.text === "string"
-            ? step.text
-            : typeof step.description === "string"
-              ? step.description
-              : typeof step.content === "string"
-                ? step.content
-                : typeof step.action === "string"
-                  ? step.action
-                  : typeof step.method === "string"
-                    ? step.method
-                    : typeof step.step === "string"
-                      ? step.step
-                      : typeof step.title === "string"
-                        ? step.title
-              : "";
+      const index = Number(
+        step.index ?? step.step ?? step.step_number ?? (stepIndex + 1),
+      );
+      const instructionCandidate = typeof step.instruction === "string"
+        ? step.instruction
+        : typeof step.text === "string"
+        ? step.text
+        : typeof step.description === "string"
+        ? step.description
+        : typeof step.content === "string"
+        ? step.content
+        : typeof step.action === "string"
+        ? step.action
+        : typeof step.method === "string"
+        ? step.method
+        : typeof step.step === "string"
+        ? step.step
+        : typeof step.title === "string"
+        ? step.title
+        : "";
       const instruction = instructionCandidate.trim();
       if (!Number.isFinite(index) || index < 1 || !instruction) {
         return null;
@@ -1010,35 +1202,46 @@ const normalizeRecipeShape = (candidate: unknown): RecipePayload | null => {
       const rawInlineMeasurements = Array.isArray(step.inline_measurements)
         ? step.inline_measurements
         : Array.isArray(step.inlineMeasurements)
-          ? step.inlineMeasurements
-          : null;
+        ? step.inlineMeasurements
+        : null;
 
       return {
         index,
         instruction,
-        timer_seconds: Number.isFinite(Number(step.timer_seconds ?? step.timer)) ? Number(step.timer_seconds ?? step.timer) : undefined,
-        notes: typeof step.notes === "string" && step.notes.trim().length > 0 ? step.notes.trim() : undefined,
+        timer_seconds: Number.isFinite(Number(step.timer_seconds ?? step.timer))
+          ? Number(step.timer_seconds ?? step.timer)
+          : undefined,
+        notes: typeof step.notes === "string" && step.notes.trim().length > 0
+          ? step.notes.trim()
+          : undefined,
         inline_measurements: rawInlineMeasurements
           ? rawInlineMeasurements
-              .map((measurement: unknown) => {
-                const record = measurement as Record<string, unknown>;
-                const ingredient = typeof record.ingredient === "string" ? record.ingredient.trim() : "";
-                const amount = Number(record.amount);
-                const unit = typeof record.unit === "string" ? record.unit.trim() : "";
-                if (!ingredient || !Number.isFinite(amount) || !unit) {
-                  return null;
-                }
-                return {
-                  ingredient,
-                  amount,
-                  unit
-                };
-              })
-              .filter(
-                (measurement): measurement is NonNullable<RecipePayload["steps"][number]["inline_measurements"]>[number] =>
-                  measurement !== null
-              )
-          : undefined
+            .map((measurement: unknown) => {
+              const record = measurement as Record<string, unknown>;
+              const ingredient = typeof record.ingredient === "string"
+                ? record.ingredient.trim()
+                : "";
+              const amount = Number(record.amount);
+              const unit = typeof record.unit === "string"
+                ? record.unit.trim()
+                : "";
+              if (!ingredient || !Number.isFinite(amount) || !unit) {
+                return null;
+              }
+              return {
+                ingredient,
+                amount,
+                unit,
+              };
+            })
+            .filter(
+              (
+                measurement,
+              ): measurement is NonNullable<
+                RecipePayload["steps"][number]["inline_measurements"]
+              >[number] => measurement !== null,
+            )
+          : undefined,
       };
     })
     .filter((step): step is RecipePayload["steps"][number] => step !== null);
@@ -1047,7 +1250,7 @@ const normalizeRecipeShape = (candidate: unknown): RecipePayload | null => {
     .sort((a, b) => a.index - b.index)
     .map((step, index) => ({
       ...step,
-      index: index + 1
+      index: index + 1,
     }));
 
   if (ingredients.length === 0 || normalizedSteps.length === 0) {
@@ -1056,65 +1259,99 @@ const normalizeRecipeShape = (candidate: unknown): RecipePayload | null => {
 
   const attachments = Array.isArray(recipe.attachments)
     ? recipe.attachments
-        .map((attachment) => {
-          const title = typeof attachment.title === "string" ? attachment.title.trim() : "";
-          const relationType = typeof attachment.relation_type === "string" ? attachment.relation_type.trim() : "";
-          const nestedRecipe = normalizeRecipeShape(attachment.recipe);
+      .map((attachment) => {
+        const title = typeof attachment.title === "string"
+          ? attachment.title.trim()
+          : "";
+        const relationType = typeof attachment.relation_type === "string"
+          ? attachment.relation_type.trim()
+          : "";
+        const nestedRecipe = normalizeRecipeShape(attachment.recipe);
 
-          if (!title || !relationType || !nestedRecipe) {
-            return null;
-          }
+        if (!title || !relationType || !nestedRecipe) {
+          return null;
+        }
 
-          const nestedWithoutAttachments = { ...nestedRecipe } as Record<string, JsonValue>;
-          delete nestedWithoutAttachments.attachments;
+        const nestedWithoutAttachments = { ...nestedRecipe } as Record<
+          string,
+          JsonValue
+        >;
+        delete nestedWithoutAttachments.attachments;
 
-          return {
-            title,
-            relation_type: relationType,
-            recipe: nestedWithoutAttachments as Omit<RecipePayload, "attachments">
-          };
-        })
-        .filter((attachment): attachment is NonNullable<RecipePayload["attachments"]>[number] => attachment !== null)
+        return {
+          title,
+          relation_type: relationType,
+          recipe: nestedWithoutAttachments as Omit<
+            RecipePayload,
+            "attachments"
+          >,
+        };
+      })
+      .filter((
+        attachment,
+      ): attachment is NonNullable<RecipePayload["attachments"]>[number] =>
+        attachment !== null
+      )
     : undefined;
 
   // Build metadata, synthesizing timing from top-level fields if needed
   let metadata: Record<string, JsonValue> | undefined =
-    recipe.metadata && typeof recipe.metadata === "object" && !Array.isArray(recipe.metadata)
+    recipe.metadata && typeof recipe.metadata === "object" &&
+      !Array.isArray(recipe.metadata)
       ? (recipe.metadata as Record<string, JsonValue>)
       : undefined;
 
   // Extract top-level timing fields into metadata.timing if not already present
-  const prepMin = Number(recipe.prep_time_minutes ?? recipe.prepMinutes ?? recipe.prep_minutes);
-  const cookMin = Number(recipe.cook_time_minutes ?? recipe.cookMinutes ?? recipe.cook_minutes);
-  const totalMin = Number(recipe.total_time_minutes ?? recipe.totalMinutes ?? recipe.total_minutes);
-  const hasTopLevelTiming = Number.isFinite(prepMin) || Number.isFinite(cookMin) || Number.isFinite(totalMin);
+  const prepMin = Number(
+    recipe.prep_time_minutes ?? recipe.prepMinutes ?? recipe.prep_minutes,
+  );
+  const cookMin = Number(
+    recipe.cook_time_minutes ?? recipe.cookMinutes ?? recipe.cook_minutes,
+  );
+  const totalMin = Number(
+    recipe.total_time_minutes ?? recipe.totalMinutes ?? recipe.total_minutes,
+  );
+  const hasTopLevelTiming = Number.isFinite(prepMin) ||
+    Number.isFinite(cookMin) || Number.isFinite(totalMin);
   if (hasTopLevelTiming && (!metadata || !metadata.timing)) {
     metadata = metadata ?? {};
     metadata.timing = {
       ...(Number.isFinite(prepMin) ? { prep_minutes: prepMin } : {}),
       ...(Number.isFinite(cookMin) ? { cook_minutes: cookMin } : {}),
-      ...(Number.isFinite(totalMin) ? { total_minutes: totalMin } : (Number.isFinite(prepMin) && Number.isFinite(cookMin) ? { total_minutes: prepMin + cookMin } : {}))
+      ...(Number.isFinite(totalMin)
+        ? { total_minutes: totalMin }
+        : (Number.isFinite(prepMin) && Number.isFinite(cookMin)
+          ? { total_minutes: prepMin + cookMin }
+          : {})),
     };
   }
 
   return {
     title: normalizedTitle,
-    description: typeof recipe.description === "string" ? recipe.description.trim() : undefined,
+    description: typeof recipe.description === "string"
+      ? recipe.description.trim()
+      : undefined,
     servings,
     ingredients,
     steps: normalizedSteps,
     notes: typeof recipe.notes === "string" ? recipe.notes.trim() : undefined,
-    pairings: Array.isArray(recipe.pairings) ? recipe.pairings.filter((item): item is string => typeof item === "string") : [],
-    emoji: Array.isArray(recipe.emoji) ? recipe.emoji.filter((item): item is string => typeof item === "string") : [],
+    pairings: Array.isArray(recipe.pairings)
+      ? recipe.pairings.filter((item): item is string =>
+        typeof item === "string"
+      )
+      : [],
+    emoji: Array.isArray(recipe.emoji)
+      ? recipe.emoji.filter((item): item is string => typeof item === "string")
+      : [],
     metadata,
-    attachments
+    attachments,
   };
 };
 
 const normalizeAssistantReply = (candidate: unknown): AssistantReply | null => {
   if (typeof candidate === "string" && candidate.trim().length > 0) {
     return {
-      text: candidate.trim()
+      text: candidate.trim(),
     };
   }
 
@@ -1129,19 +1366,27 @@ const normalizeAssistantReply = (candidate: unknown): AssistantReply | null => {
 
   return {
     text: reply.text.trim(),
-    tone: typeof reply.tone === "string" && reply.tone.trim().length > 0 ? reply.tone.trim() : undefined,
-    focus_summary:
-      typeof reply.focus_summary === "string" && reply.focus_summary.trim().length > 0
-        ? reply.focus_summary.trim()
-        : undefined,
-    emoji: Array.isArray(reply.emoji) ? reply.emoji.filter((item): item is string => typeof item === "string") : undefined,
+    tone: typeof reply.tone === "string" && reply.tone.trim().length > 0
+      ? reply.tone.trim()
+      : undefined,
+    focus_summary: typeof reply.focus_summary === "string" &&
+        reply.focus_summary.trim().length > 0
+      ? reply.focus_summary.trim()
+      : undefined,
+    emoji: Array.isArray(reply.emoji)
+      ? reply.emoji.filter((item): item is string => typeof item === "string")
+      : undefined,
     suggested_next_actions: Array.isArray(reply.suggested_next_actions)
-      ? reply.suggested_next_actions.filter((item): item is string => typeof item === "string")
-      : undefined
+      ? reply.suggested_next_actions.filter((item): item is string =>
+        typeof item === "string"
+      )
+      : undefined,
   };
 };
 
-const normalizeOnboardingState = (candidate: unknown): OnboardingState | null => {
+const normalizeOnboardingState = (
+  candidate: unknown,
+): OnboardingState | null => {
   if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
     return null;
   }
@@ -1155,41 +1400,51 @@ const normalizeOnboardingState = (candidate: unknown): OnboardingState | null =>
 
   const completed = Boolean(state.completed);
   const progressValue = Number(state.progress);
-  const progress = Number.isFinite(progressValue) ? Math.max(0, Math.min(1, progressValue)) : completed ? 1 : 0;
+  const progress = Number.isFinite(progressValue)
+    ? Math.max(0, Math.min(1, progressValue))
+    : completed
+    ? 1
+    : 0;
 
   const missingTopics = Array.isArray(state.missing_topics)
-    ? state.missing_topics.filter((topic): topic is string => typeof topic === "string" && topic.trim().length > 0)
+    ? state.missing_topics.filter((topic): topic is string =>
+      typeof topic === "string" && topic.trim().length > 0
+    )
     : [];
 
-  const nestedState =
-    state.state && typeof state.state === "object" && !Array.isArray(state.state)
-      ? (state.state as Record<string, JsonValue>)
-      : {};
+  const nestedState = state.state && typeof state.state === "object" &&
+      !Array.isArray(state.state)
+    ? (state.state as Record<string, JsonValue>)
+    : {};
 
   return {
     completed,
     progress,
     missing_topics: missingTopics,
-    state: nestedState
+    state: nestedState,
   };
 };
 
-const normalizeOnboardingEnvelope = (candidate: unknown): OnboardingAssistantEnvelope | null => {
+const normalizeOnboardingEnvelope = (
+  candidate: unknown,
+): OnboardingAssistantEnvelope | null => {
   if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
     return null;
   }
 
   const payload = candidate as Record<string, unknown>;
-  const nestedAssistantReply =
-    payload.assistant_reply ??
-    ((payload.data as Record<string, unknown> | undefined)?.assistant_reply as unknown) ??
-    ((payload.result as Record<string, unknown> | undefined)?.assistant_reply as unknown) ??
+  const nestedAssistantReply = payload.assistant_reply ??
+    ((payload.data as Record<string, unknown> | undefined)
+      ?.assistant_reply as unknown) ??
+    ((payload.result as Record<string, unknown> | undefined)
+      ?.assistant_reply as unknown) ??
     (payload.assistant as unknown);
 
-  const nestedOnboardingState =
-    payload.onboarding_state ??
-    ((payload.data as Record<string, unknown> | undefined)?.onboarding_state as unknown) ??
-    ((payload.result as Record<string, unknown> | undefined)?.onboarding_state as unknown);
+  const nestedOnboardingState = payload.onboarding_state ??
+    ((payload.data as Record<string, unknown> | undefined)
+      ?.onboarding_state as unknown) ??
+    ((payload.result as Record<string, unknown> | undefined)
+      ?.onboarding_state as unknown);
 
   const assistantReply = normalizeAssistantReply(nestedAssistantReply);
   const onboardingState = normalizeOnboardingState(nestedOnboardingState);
@@ -1197,25 +1452,33 @@ const normalizeOnboardingEnvelope = (candidate: unknown): OnboardingAssistantEnv
     return null;
   }
 
-  const preferenceUpdates =
-    payload.preference_updates && typeof payload.preference_updates === "object" && !Array.isArray(payload.preference_updates)
-      ? (payload.preference_updates as Record<string, JsonValue>)
-      : payload.response_context &&
-            typeof payload.response_context === "object" &&
-            !Array.isArray(payload.response_context) &&
-            typeof (payload.response_context as Record<string, unknown>).preference_updates === "object" &&
-            !Array.isArray((payload.response_context as Record<string, unknown>).preference_updates)
-        ? ((payload.response_context as Record<string, unknown>).preference_updates as Record<string, JsonValue>)
-        : undefined;
+  const preferenceUpdates = payload.preference_updates &&
+      typeof payload.preference_updates === "object" &&
+      !Array.isArray(payload.preference_updates)
+    ? (payload.preference_updates as Record<string, JsonValue>)
+    : payload.response_context &&
+        typeof payload.response_context === "object" &&
+        !Array.isArray(payload.response_context) &&
+        typeof (payload.response_context as Record<string, unknown>)
+            .preference_updates === "object" &&
+        !Array.isArray(
+          (payload.response_context as Record<string, unknown>)
+            .preference_updates,
+        )
+    ? ((payload.response_context as Record<string, unknown>)
+      .preference_updates as Record<string, JsonValue>)
+    : undefined;
 
   return {
     assistant_reply: assistantReply,
     onboarding_state: onboardingState,
-    preference_updates: preferenceUpdates
+    preference_updates: preferenceUpdates,
   };
 };
 
-const normalizeCandidateRecipeSet = (candidate: unknown): ChatAssistantEnvelope["candidate_recipe_set"] | undefined => {
+const normalizeCandidateRecipeSet = (
+  candidate: unknown,
+): ChatAssistantEnvelope["candidate_recipe_set"] | undefined => {
   if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
     return undefined;
   }
@@ -1224,7 +1487,9 @@ const normalizeCandidateRecipeSet = (candidate: unknown): ChatAssistantEnvelope[
   const rawComponents = Array.isArray(raw.components) ? raw.components : [];
   const components = rawComponents
     .map((component) => {
-      if (!component || typeof component !== "object" || Array.isArray(component)) {
+      if (
+        !component || typeof component !== "object" || Array.isArray(component)
+      ) {
         return null;
       }
       const value = component as Record<string, unknown>;
@@ -1233,37 +1498,44 @@ const normalizeCandidateRecipeSet = (candidate: unknown): ChatAssistantEnvelope[
         return null;
       }
 
-      const role = typeof value.role === "string" ? value.role.trim().toLowerCase() : "main";
+      const role = typeof value.role === "string"
+        ? value.role.trim().toLowerCase()
+        : "main";
       const normalizedRole =
-        role === "main" || role === "side" || role === "appetizer" || role === "dessert" || role === "drink"
+        role === "main" || role === "side" || role === "appetizer" ||
+          role === "dessert" || role === "drink"
           ? role
           : "main";
 
       return {
-        component_id:
-          typeof value.component_id === "string" && value.component_id.trim().length > 0
-            ? value.component_id.trim()
-            : crypto.randomUUID(),
+        component_id: typeof value.component_id === "string" &&
+            value.component_id.trim().length > 0
+          ? value.component_id.trim()
+          : crypto.randomUUID(),
         role: normalizedRole,
-        title:
-          typeof value.title === "string" && value.title.trim().length > 0
-            ? value.title.trim()
-            : recipe.title,
-        recipe
+        title: typeof value.title === "string" && value.title.trim().length > 0
+          ? value.title.trim()
+          : recipe.title,
+        recipe,
       };
     })
-    .filter((component): component is NonNullable<ChatAssistantEnvelope["candidate_recipe_set"]>["components"][number] => Boolean(component))
+    .filter((
+      component,
+    ): component is NonNullable<
+      ChatAssistantEnvelope["candidate_recipe_set"]
+    >["components"][number] => Boolean(component))
     .slice(0, 3);
 
   if (components.length === 0) {
     return undefined;
   }
 
-  const activeComponentId =
-    typeof raw.active_component_id === "string" &&
-    components.some((component) => component.component_id === raw.active_component_id)
-      ? raw.active_component_id
-      : components[0].component_id;
+  const activeComponentId = typeof raw.active_component_id === "string" &&
+      components.some((component) =>
+        component.component_id === raw.active_component_id
+      )
+    ? raw.active_component_id
+    : components[0].component_id;
 
   const revision = Number(raw.revision);
 
@@ -1272,63 +1544,80 @@ const normalizeCandidateRecipeSet = (candidate: unknown): ChatAssistantEnvelope[
       typeof raw.candidate_id === "string" && raw.candidate_id.trim().length > 0
         ? raw.candidate_id.trim()
         : crypto.randomUUID(),
-    revision: Number.isFinite(revision) && revision >= 1 ? Math.trunc(revision) : 1,
+    revision: Number.isFinite(revision) && revision >= 1
+      ? Math.trunc(revision)
+      : 1,
     active_component_id: activeComponentId,
-    components
+    components,
   };
 };
 
-const normalizeResponseContext = (candidate: unknown): RecipeAssistantEnvelope["response_context"] | undefined => {
+const normalizeResponseContext = (
+  candidate: unknown,
+): RecipeAssistantEnvelope["response_context"] | undefined => {
   if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
     return undefined;
   }
 
   const contextObject = candidate as Record<string, unknown>;
-  const preferenceUpdates =
-    contextObject.preference_updates &&
-    typeof contextObject.preference_updates === "object" &&
-    !Array.isArray(contextObject.preference_updates)
-      ? (contextObject.preference_updates as Record<string, JsonValue>)
-      : undefined;
+  const preferenceUpdates = contextObject.preference_updates &&
+      typeof contextObject.preference_updates === "object" &&
+      !Array.isArray(contextObject.preference_updates)
+    ? (contextObject.preference_updates as Record<string, JsonValue>)
+    : undefined;
 
   return {
-    mode: typeof contextObject.mode === "string" ? contextObject.mode : undefined,
+    mode: typeof contextObject.mode === "string"
+      ? contextObject.mode
+      : undefined,
     changed_sections: Array.isArray(contextObject.changed_sections)
-      ? contextObject.changed_sections.filter((item): item is string => typeof item === "string")
+      ? contextObject.changed_sections.filter((item): item is string =>
+        typeof item === "string"
+      )
       : undefined,
     personalization_notes: Array.isArray(contextObject.personalization_notes)
-      ? contextObject.personalization_notes.filter((item): item is string => typeof item === "string")
+      ? contextObject.personalization_notes.filter((item): item is string =>
+        typeof item === "string"
+      )
       : undefined,
-    preference_updates: preferenceUpdates
+    preference_updates: preferenceUpdates,
   };
 };
 
-const normalizeRecipeEnvelope = (candidate: unknown): RecipeAssistantEnvelope | null => {
+const normalizeRecipeEnvelope = (
+  candidate: unknown,
+): RecipeAssistantEnvelope | null => {
   if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
     return null;
   }
 
   const payload = candidate as Record<string, unknown>;
-  const nestedRecipe =
-    (payload.recipe as unknown) ??
+  const nestedRecipe = (payload.recipe as unknown) ??
     (payload.recipe_payload as unknown) ??
     (payload.recipePayload as unknown) ??
-    ((payload.data as Record<string, unknown> | undefined)?.recipe as unknown) ??
-    ((payload.result as Record<string, unknown> | undefined)?.recipe as unknown);
-  const nestedAssistantReply =
-    payload.assistant_reply ??
+    ((payload.data as Record<string, unknown> | undefined)
+      ?.recipe as unknown) ??
+    ((payload.result as Record<string, unknown> | undefined)
+      ?.recipe as unknown);
+  const nestedAssistantReply = payload.assistant_reply ??
     payload.assistantReply ??
-    ((payload.data as Record<string, unknown> | undefined)?.assistant_reply as unknown) ??
-    ((payload.data as Record<string, unknown> | undefined)?.assistantReply as unknown) ??
-    ((payload.result as Record<string, unknown> | undefined)?.assistant_reply as unknown) ??
-    ((payload.result as Record<string, unknown> | undefined)?.assistantReply as unknown) ??
+    ((payload.data as Record<string, unknown> | undefined)
+      ?.assistant_reply as unknown) ??
+    ((payload.data as Record<string, unknown> | undefined)
+      ?.assistantReply as unknown) ??
+    ((payload.result as Record<string, unknown> | undefined)
+      ?.assistant_reply as unknown) ??
+    ((payload.result as Record<string, unknown> | undefined)
+      ?.assistantReply as unknown) ??
     (payload.assistant as unknown);
-  const nestedResponseContext =
-    payload.response_context ??
+  const nestedResponseContext = payload.response_context ??
     payload.responseContext ??
-    ((payload.data as Record<string, unknown> | undefined)?.response_context as unknown) ??
-    ((payload.data as Record<string, unknown> | undefined)?.responseContext as unknown) ??
-    ((payload.result as Record<string, unknown> | undefined)?.response_context as unknown);
+    ((payload.data as Record<string, unknown> | undefined)
+      ?.response_context as unknown) ??
+    ((payload.data as Record<string, unknown> | undefined)
+      ?.responseContext as unknown) ??
+    ((payload.result as Record<string, unknown> | undefined)
+      ?.response_context as unknown);
 
   const recipe = normalizeRecipeShape(nestedRecipe ?? payload);
   if (!recipe) {
@@ -1345,64 +1634,83 @@ const normalizeRecipeEnvelope = (candidate: unknown): RecipeAssistantEnvelope | 
   return {
     recipe,
     assistant_reply: assistantReply,
-    response_context: responseContext
+    response_context: responseContext,
   };
 };
 
-const normalizeChatEnvelope = (candidate: unknown): ChatAssistantEnvelope | null => {
+const normalizeChatEnvelope = (
+  candidate: unknown,
+): ChatAssistantEnvelope | null => {
   if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
     return null;
   }
 
   const payload = candidate as Record<string, unknown>;
-  const nestedAssistantReply =
-    payload.assistant_reply ??
-    ((payload.data as Record<string, unknown> | undefined)?.assistant_reply as unknown) ??
-    ((payload.result as Record<string, unknown> | undefined)?.assistant_reply as unknown) ??
+  const nestedAssistantReply = payload.assistant_reply ??
+    ((payload.data as Record<string, unknown> | undefined)
+      ?.assistant_reply as unknown) ??
+    ((payload.result as Record<string, unknown> | undefined)
+      ?.assistant_reply as unknown) ??
     payload.assistant;
 
-  const assistantReply = normalizeAssistantReply(nestedAssistantReply ?? payload);
+  const assistantReply = normalizeAssistantReply(
+    nestedAssistantReply ?? payload,
+  );
   if (!assistantReply) {
     return null;
   }
 
-  const nestedRecipe =
-    payload.recipe ??
-    ((payload.data as Record<string, unknown> | undefined)?.recipe as unknown) ??
-    ((payload.result as Record<string, unknown> | undefined)?.recipe as unknown);
+  const nestedRecipe = payload.recipe ??
+    ((payload.data as Record<string, unknown> | undefined)
+      ?.recipe as unknown) ??
+    ((payload.result as Record<string, unknown> | undefined)
+      ?.recipe as unknown);
 
   const recipe = normalizeRecipeShape(nestedRecipe);
-  const triggerRecipe = typeof payload.trigger_recipe === "boolean" ? payload.trigger_recipe : undefined;
+  const triggerRecipe = typeof payload.trigger_recipe === "boolean"
+    ? payload.trigger_recipe
+    : undefined;
   const candidateRecipeSet =
     normalizeCandidateRecipeSet(payload.candidate_recipe_set) ??
-    normalizeCandidateRecipeSet((payload.data as Record<string, unknown> | undefined)?.candidate_recipe_set) ??
-    normalizeCandidateRecipeSet((payload.result as Record<string, unknown> | undefined)?.candidate_recipe_set);
+      normalizeCandidateRecipeSet(
+        (payload.data as Record<string, unknown> | undefined)
+          ?.candidate_recipe_set,
+      ) ??
+      normalizeCandidateRecipeSet(
+        (payload.result as Record<string, unknown> | undefined)
+          ?.candidate_recipe_set,
+      );
 
-  const nestedResponseContext =
-    payload.response_context ??
-    ((payload.data as Record<string, unknown> | undefined)?.response_context as unknown) ??
-    ((payload.result as Record<string, unknown> | undefined)?.response_context as unknown);
+  const nestedResponseContext = payload.response_context ??
+    ((payload.data as Record<string, unknown> | undefined)
+      ?.response_context as unknown) ??
+    ((payload.result as Record<string, unknown> | undefined)
+      ?.response_context as unknown);
 
   return {
     assistant_reply: assistantReply,
     recipe: recipe ?? undefined,
     trigger_recipe: triggerRecipe,
     candidate_recipe_set: candidateRecipeSet,
-    response_context: normalizeResponseContext(nestedResponseContext)
+    response_context: normalizeResponseContext(nestedResponseContext),
   };
 };
 
-const deriveAssistantReplyFromRecipe = (recipe: RecipePayload): AssistantReply | null => {
-  const textCandidates = [recipe.notes, recipe.description, recipe.title].filter(
-    (value): value is string => typeof value === "string" && value.trim().length > 0
-  );
+const deriveAssistantReplyFromRecipe = (
+  recipe: RecipePayload,
+): AssistantReply | null => {
+  const textCandidates = [recipe.notes, recipe.description, recipe.title]
+    .filter(
+      (value): value is string =>
+        typeof value === "string" && value.trim().length > 0,
+    );
 
   if (textCandidates.length === 0) {
     return null;
   }
 
   return {
-    text: textCandidates[0].trim()
+    text: textCandidates[0].trim(),
   };
 };
 
@@ -1413,7 +1721,9 @@ const composeAssistantReply = async (params: {
   recipe: RecipePayload;
   accum?: TokenAccum;
 }): Promise<AssistantReply | null> => {
-  const { result: synthesized, inputTokens, outputTokens } = await callProvider<Record<string, JsonValue>>({
+  const { result: synthesized, inputTokens, outputTokens } = await callProvider<
+    Record<string, JsonValue>
+  >({
     provider: params.config.provider,
     model: params.config.model,
     modelConfig: params.config.modelConfig,
@@ -1423,24 +1733,30 @@ const composeAssistantReply = async (params: {
       rule: params.config.rule,
       prompt: params.prompt,
       context: params.context,
-      recipe: params.recipe as unknown as JsonValue
-    }
+      recipe: params.recipe as unknown as JsonValue,
+    },
   });
 
   if (params.accum) {
     params.accum.input += inputTokens;
     params.accum.output += outputTokens;
-    params.accum.costUsd +=
-      (inputTokens * params.config.inputCostPer1m + outputTokens * params.config.outputCostPer1m) / 1_000_000;
+    params.accum.costUsd += (inputTokens * params.config.inputCostPer1m +
+      outputTokens * params.config.outputCostPer1m) / 1_000_000;
   }
 
   return normalizeAssistantReply(synthesized.assistant_reply ?? synthesized);
 };
 
-const addTokens = (accum: TokenAccum, inputTokens: number, outputTokens: number, config: GatewayConfig): void => {
+const addTokens = (
+  accum: TokenAccum,
+  inputTokens: number,
+  outputTokens: number,
+  config: GatewayConfig,
+): void => {
   accum.input += inputTokens;
   accum.output += outputTokens;
-  accum.costUsd += (inputTokens * config.inputCostPer1m + outputTokens * config.outputCostPer1m) / 1_000_000;
+  accum.costUsd += (inputTokens * config.inputCostPer1m +
+    outputTokens * config.outputCostPer1m) / 1_000_000;
 };
 
 const generateRecipePayload = async (
@@ -1448,11 +1764,13 @@ const generateRecipePayload = async (
   scope: Extract<GatewayScope, "generate" | "tweak">,
   input: GatewayInput,
   overrides?: ModelOverrideMap,
-  accum?: TokenAccum
+  accum?: TokenAccum,
 ): Promise<RecipeAssistantEnvelope> => {
   const config = await getActiveConfig(client, scope, overrides?.[scope]);
 
-  const { result, inputTokens, outputTokens } = await callProvider<Record<string, JsonValue>>({
+  const { result, inputTokens, outputTokens } = await callProvider<
+    Record<string, JsonValue>
+  >({
     provider: config.provider,
     model: config.model,
     modelConfig: config.modelConfig,
@@ -1461,8 +1779,8 @@ const generateRecipePayload = async (
       task: scope === "generate" ? "generate_recipe" : "tweak_recipe",
       rule: config.rule,
       prompt: input.userPrompt,
-      context: input.context
-    }
+      context: input.context,
+    },
   });
   if (accum) addTokens(accum, inputTokens, outputTokens, config);
 
@@ -1478,40 +1796,45 @@ const generateRecipePayload = async (
       prompt: input.userPrompt,
       context: input.context,
       recipe: directRecipe,
-      accum
+      accum,
     });
 
     if (!synthesizedReply) {
       const derivedReply = deriveAssistantReplyFromRecipe(directRecipe);
       if (!derivedReply) {
-        throw new ApiError(422, "assistant_reply_missing", "LLM did not provide assistant reply content");
+        throw new ApiError(
+          422,
+          "assistant_reply_missing",
+          "LLM did not provide assistant reply content",
+        );
       }
 
       return {
         recipe: directRecipe,
-        assistant_reply: derivedReply
+        assistant_reply: derivedReply,
       };
     }
 
     return {
       recipe: directRecipe,
-      assistant_reply: synthesizedReply
+      assistant_reply: synthesizedReply,
     };
   }
 
-  const { result: repaired, inputTokens: ri, outputTokens: ro } = await callProvider<Record<string, JsonValue>>({
-    provider: config.provider,
-    model: config.model,
-    modelConfig: config.modelConfig,
-    systemPrompt: config.promptTemplate,
-    userInput: {
-      task: "repair_recipe_schema",
-      rule: config.rule,
-      prompt: input.userPrompt,
-      context: input.context,
-      invalid_payload: result
-    }
-  });
+  const { result: repaired, inputTokens: ri, outputTokens: ro } =
+    await callProvider<Record<string, JsonValue>>({
+      provider: config.provider,
+      model: config.model,
+      modelConfig: config.modelConfig,
+      systemPrompt: config.promptTemplate,
+      userInput: {
+        task: "repair_recipe_schema",
+        rule: config.rule,
+        prompt: input.userPrompt,
+        context: input.context,
+        invalid_payload: result,
+      },
+    });
   if (accum) addTokens(accum, ri, ro, config);
 
   const repairedEnvelope = normalizeRecipeEnvelope(repaired);
@@ -1526,40 +1849,46 @@ const generateRecipePayload = async (
       prompt: input.userPrompt,
       context: input.context,
       recipe: repairedRecipe,
-      accum
+      accum,
     });
 
     if (!synthesizedReply) {
       const derivedReply = deriveAssistantReplyFromRecipe(repairedRecipe);
       if (!derivedReply) {
-        throw new ApiError(422, "assistant_reply_missing", "LLM did not provide assistant reply content");
+        throw new ApiError(
+          422,
+          "assistant_reply_missing",
+          "LLM did not provide assistant reply content",
+        );
       }
 
       return {
         recipe: repairedRecipe,
-        assistant_reply: derivedReply
+        assistant_reply: derivedReply,
       };
     }
 
     return {
       recipe: repairedRecipe,
-      assistant_reply: synthesizedReply
+      assistant_reply: synthesizedReply,
     };
   }
 
-  const { result: strictRepaired, inputTokens: si, outputTokens: so } = await callProvider<Record<string, JsonValue>>({
-    provider: config.provider,
-    model: config.model,
-    modelConfig: config.modelConfig,
-    systemPrompt: `${config.promptTemplate}\n\nYou are in strict schema normalization mode. Return one valid JSON object with keys assistant_reply, recipe, and response_context. Do not include markdown or prose.`,
-    userInput: {
-      task: "normalize_recipe_envelope",
-      rule: config.rule,
-      prompt: input.userPrompt,
-      context: input.context,
-      invalid_payload: repaired
-    }
-  });
+  const { result: strictRepaired, inputTokens: si, outputTokens: so } =
+    await callProvider<Record<string, JsonValue>>({
+      provider: config.provider,
+      model: config.model,
+      modelConfig: config.modelConfig,
+      systemPrompt:
+        `${config.promptTemplate}\n\nYou are in strict schema normalization mode. Return one valid JSON object with keys assistant_reply, recipe, and response_context. Do not include markdown or prose.`,
+      userInput: {
+        task: "normalize_recipe_envelope",
+        rule: config.rule,
+        prompt: input.userPrompt,
+        context: input.context,
+        invalid_payload: repaired,
+      },
+    });
   if (accum) addTokens(accum, si, so, config);
 
   const strictEnvelope = normalizeRecipeEnvelope(strictRepaired);
@@ -1574,36 +1903,47 @@ const generateRecipePayload = async (
       prompt: input.userPrompt,
       context: input.context,
       recipe: strictRecipe,
-      accum
+      accum,
     });
 
     if (!synthesizedReply) {
       const derivedReply = deriveAssistantReplyFromRecipe(strictRecipe);
       if (!derivedReply) {
-        throw new ApiError(422, "assistant_reply_missing", "LLM did not provide assistant reply content");
+        throw new ApiError(
+          422,
+          "assistant_reply_missing",
+          "LLM did not provide assistant reply content",
+        );
       }
 
       return {
         recipe: strictRecipe,
-        assistant_reply: derivedReply
+        assistant_reply: derivedReply,
       };
     }
 
     return {
       recipe: strictRecipe,
-      assistant_reply: synthesizedReply
+      assistant_reply: synthesizedReply,
     };
   }
 
-  throw new ApiError(422, "recipe_schema_invalid", "Generated recipe did not match required envelope schema");
+  throw new ApiError(
+    422,
+    "recipe_schema_invalid",
+    "Generated recipe did not match required envelope schema",
+  );
 };
 
 const generateChatConversationPayload = async (
   client: SupabaseClient,
-  scope: Extract<GatewayScope, "chat" | "chat_ideation" | "chat_generation" | "chat_iteration" | "tweak">,
+  scope: Extract<
+    GatewayScope,
+    "chat" | "chat_ideation" | "chat_generation" | "chat_iteration" | "tweak"
+  >,
   input: GatewayInput,
   overrides?: ModelOverrideMap,
-  accum?: TokenAccum
+  accum?: TokenAccum,
 ): Promise<ChatAssistantEnvelope> => {
   const config = await (async () => {
     try {
@@ -1611,9 +1951,14 @@ const generateChatConversationPayload = async (
     } catch (error) {
       if (
         scope !== "chat" &&
-        (scope === "chat_ideation" || scope === "chat_generation" || scope === "chat_iteration") &&
+        (scope === "chat_ideation" || scope === "chat_generation" ||
+          scope === "chat_iteration") &&
         error instanceof ApiError &&
-        ["gateway_prompt_missing", "gateway_rule_missing", "gateway_route_missing"].includes(error.code)
+        [
+          "gateway_prompt_missing",
+          "gateway_rule_missing",
+          "gateway_route_missing",
+        ].includes(error.code)
       ) {
         return await getActiveConfig(client, "chat", overrides?.chat);
       }
@@ -1621,7 +1966,9 @@ const generateChatConversationPayload = async (
     }
   })();
 
-  const { result, inputTokens, outputTokens } = await callProvider<Record<string, JsonValue>>({
+  const { result, inputTokens, outputTokens } = await callProvider<
+    Record<string, JsonValue>
+  >({
     provider: config.provider,
     model: config.model,
     modelConfig: config.modelConfig,
@@ -1632,11 +1979,16 @@ const generateChatConversationPayload = async (
       contract: {
         format: "json_object",
         required_keys: ["assistant_reply"],
-        optional_keys: ["recipe", "candidate_recipe_set", "trigger_recipe", "response_context"]
+        optional_keys: [
+          "recipe",
+          "candidate_recipe_set",
+          "trigger_recipe",
+          "response_context",
+        ],
       },
       prompt: input.userPrompt,
-      context: input.context
-    }
+      context: input.context,
+    },
   });
   if (accum) addTokens(accum, inputTokens, outputTokens, config);
 
@@ -1650,7 +2002,7 @@ const generateChatConversationPayload = async (
     return {
       assistant_reply: recipeEnvelope.assistant_reply,
       recipe: recipeEnvelope.recipe,
-      response_context: recipeEnvelope.response_context
+      response_context: recipeEnvelope.response_context,
     };
   }
 
@@ -1661,40 +2013,46 @@ const generateChatConversationPayload = async (
       prompt: input.userPrompt,
       context: input.context,
       recipe: directRecipe,
-      accum
+      accum,
     });
 
     if (!synthesizedReply) {
       const derivedReply = deriveAssistantReplyFromRecipe(directRecipe);
       if (!derivedReply) {
-        throw new ApiError(422, "assistant_reply_missing", "LLM did not provide assistant reply content");
+        throw new ApiError(
+          422,
+          "assistant_reply_missing",
+          "LLM did not provide assistant reply content",
+        );
       }
 
       return {
         assistant_reply: derivedReply,
-        recipe: directRecipe
+        recipe: directRecipe,
       };
     }
 
     return {
       assistant_reply: synthesizedReply,
-      recipe: directRecipe
+      recipe: directRecipe,
     };
   }
 
-  const { result: repaired, inputTokens: ri, outputTokens: ro } = await callProvider<Record<string, JsonValue>>({
-    provider: config.provider,
-    model: config.model,
-    modelConfig: config.modelConfig,
-    systemPrompt: `${config.promptTemplate}\n\nYou are in strict schema normalization mode for chat. Return one valid JSON object with keys assistant_reply, optional recipe, optional candidate_recipe_set, optional trigger_recipe, and optional response_context. No markdown or prose.`,
-    userInput: {
-      task: "repair_chat_schema",
-      rule: config.rule,
-      prompt: input.userPrompt,
-      context: input.context,
-      invalid_payload: result
-    }
-  });
+  const { result: repaired, inputTokens: ri, outputTokens: ro } =
+    await callProvider<Record<string, JsonValue>>({
+      provider: config.provider,
+      model: config.model,
+      modelConfig: config.modelConfig,
+      systemPrompt:
+        `${config.promptTemplate}\n\nYou are in strict schema normalization mode for chat. Return one valid JSON object with keys assistant_reply, optional recipe, optional candidate_recipe_set, optional trigger_recipe, and optional response_context. No markdown or prose.`,
+      userInput: {
+        task: "repair_chat_schema",
+        rule: config.rule,
+        prompt: input.userPrompt,
+        context: input.context,
+        invalid_payload: result,
+      },
+    });
   if (accum) addTokens(accum, ri, ro, config);
 
   const repairedChatEnvelope = normalizeChatEnvelope(repaired);
@@ -1707,7 +2065,7 @@ const generateChatConversationPayload = async (
     return {
       assistant_reply: repairedRecipeEnvelope.assistant_reply,
       recipe: repairedRecipeEnvelope.recipe,
-      response_context: repairedRecipeEnvelope.response_context
+      response_context: repairedRecipeEnvelope.response_context,
     };
   }
 
@@ -1718,37 +2076,48 @@ const generateChatConversationPayload = async (
       prompt: input.userPrompt,
       context: input.context,
       recipe: repairedRecipe,
-      accum
+      accum,
     });
 
     if (!synthesizedReply) {
       const derivedReply = deriveAssistantReplyFromRecipe(repairedRecipe);
       if (!derivedReply) {
-        throw new ApiError(422, "assistant_reply_missing", "LLM did not provide assistant reply content");
+        throw new ApiError(
+          422,
+          "assistant_reply_missing",
+          "LLM did not provide assistant reply content",
+        );
       }
 
       return {
         assistant_reply: derivedReply,
-        recipe: repairedRecipe
+        recipe: repairedRecipe,
       };
     }
 
     return {
       assistant_reply: synthesizedReply,
-      recipe: repairedRecipe
+      recipe: repairedRecipe,
     };
   }
 
-  throw new ApiError(422, "chat_schema_invalid", "Chat reply did not match required envelope schema");
+  throw new ApiError(
+    422,
+    "chat_schema_invalid",
+    "Chat reply did not match required envelope schema",
+  );
 };
 
 const generateOutOfScopeAssistantReply = async (
   client: SupabaseClient,
-  scope: Extract<GatewayScope, "chat" | "chat_ideation" | "chat_generation" | "chat_iteration" | "tweak">,
+  scope: Extract<
+    GatewayScope,
+    "chat" | "chat_ideation" | "chat_generation" | "chat_iteration" | "tweak"
+  >,
   input: GatewayInput,
   classification: ClassificationResult,
   overrides?: ModelOverrideMap,
-  accum?: TokenAccum
+  accum?: TokenAccum,
 ): Promise<AssistantReply> => {
   const config = await (async () => {
     try {
@@ -1756,16 +2125,23 @@ const generateOutOfScopeAssistantReply = async (
     } catch (error) {
       if (
         scope !== "chat" &&
-        (scope === "chat_ideation" || scope === "chat_generation" || scope === "chat_iteration") &&
+        (scope === "chat_ideation" || scope === "chat_generation" ||
+          scope === "chat_iteration") &&
         error instanceof ApiError &&
-        ["gateway_prompt_missing", "gateway_rule_missing", "gateway_route_missing"].includes(error.code)
+        [
+          "gateway_prompt_missing",
+          "gateway_rule_missing",
+          "gateway_route_missing",
+        ].includes(error.code)
       ) {
         return await getActiveConfig(client, "chat", overrides?.chat);
       }
       throw error;
     }
   })();
-  const { result, inputTokens, outputTokens } = await callProvider<Record<string, JsonValue>>({
+  const { result, inputTokens, outputTokens } = await callProvider<
+    Record<string, JsonValue>
+  >({
     provider: config.provider,
     model: config.model,
     modelConfig: config.modelConfig,
@@ -1782,9 +2158,9 @@ Return strict JSON with only an "assistant_reply" object.`,
       prompt: input.userPrompt,
       context: {
         classification_label: classification.label,
-        classification_reason: classification.reason ?? null
-      }
-    }
+        classification_reason: classification.reason ?? null,
+      },
+    },
   });
   if (accum) addTokens(accum, inputTokens, outputTokens, config);
 
@@ -1794,24 +2170,28 @@ Return strict JSON with only an "assistant_reply" object.`,
   }
 
   const payload = result as Record<string, unknown>;
-  const assistantReply = normalizeAssistantReply(payload.assistant_reply ?? payload);
+  const assistantReply = normalizeAssistantReply(
+    payload.assistant_reply ?? payload,
+  );
   if (assistantReply) {
     return assistantReply;
   }
 
   return {
-    text: DEFAULT_OUT_OF_SCOPE_FALLBACK_TEXT
+    text: DEFAULT_OUT_OF_SCOPE_FALLBACK_TEXT,
   };
 };
 
 const generateOnboardingInterviewEnvelope = async (
   client: SupabaseClient,
   input: GatewayInput,
-  accum?: TokenAccum
+  accum?: TokenAccum,
 ): Promise<OnboardingAssistantEnvelope> => {
   const config = await getActiveConfig(client, "onboarding");
 
-  const { result, inputTokens, outputTokens } = await callProvider<Record<string, JsonValue>>({
+  const { result, inputTokens, outputTokens } = await callProvider<
+    Record<string, JsonValue>
+  >({
     provider: config.provider,
     model: config.model,
     modelConfig: config.modelConfig,
@@ -1820,8 +2200,8 @@ const generateOnboardingInterviewEnvelope = async (
       task: "onboarding_interview",
       rule: config.rule,
       prompt: input.userPrompt,
-      context: input.context
-    }
+      context: input.context,
+    },
   });
   if (accum) addTokens(accum, inputTokens, outputTokens, config);
 
@@ -1831,23 +2211,27 @@ const generateOnboardingInterviewEnvelope = async (
   }
 
   console.error("onboarding_envelope_normalization_failed", {
-    result_keys: result && typeof result === "object" ? Object.keys(result) : typeof result,
-    result_preview: JSON.stringify(result).slice(0, 800)
+    result_keys: result && typeof result === "object"
+      ? Object.keys(result)
+      : typeof result,
+    result_preview: JSON.stringify(result).slice(0, 800),
   });
 
-  const { result: repaired, inputTokens: ri, outputTokens: ro } = await callProvider<Record<string, JsonValue>>({
-    provider: config.provider,
-    model: config.model,
-    modelConfig: config.modelConfig,
-    systemPrompt: `${config.promptTemplate}\n\nCRITICAL: You MUST return ONLY a raw JSON object. No markdown fences, no explanation, no text before or after the JSON. The JSON object MUST have these exact top-level keys: "assistant_reply" (object with required "text" string field), "onboarding_state" (object with "completed" boolean, "progress" number 0-1, "missing_topics" string array, "state" object), and optionally "preference_updates" (object).`,
-    userInput: {
-      task: "repair_onboarding_schema",
-      rule: config.rule,
-      prompt: input.userPrompt,
-      context: input.context,
-      invalid_payload: result
-    }
-  });
+  const { result: repaired, inputTokens: ri, outputTokens: ro } =
+    await callProvider<Record<string, JsonValue>>({
+      provider: config.provider,
+      model: config.model,
+      modelConfig: config.modelConfig,
+      systemPrompt:
+        `${config.promptTemplate}\n\nCRITICAL: You MUST return ONLY a raw JSON object. No markdown fences, no explanation, no text before or after the JSON. The JSON object MUST have these exact top-level keys: "assistant_reply" (object with required "text" string field), "onboarding_state" (object with "completed" boolean, "progress" number 0-1, "missing_topics" string array, "state" object), and optionally "preference_updates" (object).`,
+      userInput: {
+        task: "repair_onboarding_schema",
+        rule: config.rule,
+        prompt: input.userPrompt,
+        context: input.context,
+        invalid_payload: result,
+      },
+    });
   if (accum) addTokens(accum, ri, ro, config);
 
   const repairedEnvelope = normalizeOnboardingEnvelope(repaired);
@@ -1856,11 +2240,17 @@ const generateOnboardingInterviewEnvelope = async (
   }
 
   console.error("onboarding_repair_also_failed", {
-    repaired_keys: repaired && typeof repaired === "object" ? Object.keys(repaired) : typeof repaired,
-    repaired_preview: JSON.stringify(repaired).slice(0, 800)
+    repaired_keys: repaired && typeof repaired === "object"
+      ? Object.keys(repaired)
+      : typeof repaired,
+    repaired_preview: JSON.stringify(repaired).slice(0, 800),
   });
 
-  throw new ApiError(422, "onboarding_schema_invalid", "Generated onboarding reply did not match required schema");
+  throw new ApiError(
+    422,
+    "onboarding_schema_invalid",
+    "Generated onboarding reply did not match required schema",
+  );
 };
 
 const logLlmEvent = async (
@@ -1871,7 +2261,7 @@ const logLlmEvent = async (
   latencyMs: number,
   safetyState: string,
   payload?: Record<string, JsonValue>,
-  tokens?: TokenAccum
+  tokens?: TokenAccum,
 ): Promise<void> => {
   const { error } = await client.from("events").insert({
     user_id: userId,
@@ -1883,7 +2273,7 @@ const logLlmEvent = async (
     token_output: tokens?.output ?? null,
     token_total: tokens ? tokens.input + tokens.output : null,
     cost_usd: tokens?.costUsd ?? null,
-    event_payload: { scope, ...(payload ?? {}) }
+    event_payload: { scope, ...(payload ?? {}) },
   });
 
   if (error) {
@@ -1904,31 +2294,75 @@ export const llmGateway = {
     const accum: TokenAccum = { input: 0, output: 0, costUsd: 0 };
 
     try {
-      const classification = await classifyScope(params.client, {
-        userPrompt: params.prompt,
-        context: params.context
-      }, params.modelOverrides, accum);
+      const classification = await classifyScope(
+        params.client,
+        {
+          userPrompt: params.prompt,
+          context: params.context,
+        },
+        params.modelOverrides,
+        accum,
+      );
 
       if (!classification.isAllowed) {
-        await logLlmEvent(params.client, params.userId, params.requestId, "generate", Date.now() - startedAt, "out_of_scope", {
-          classification_label: classification.label,
-          classification_reason: classification.reason ?? null
-        }, accum);
-        throw new ApiError(422, "request_out_of_scope", DEFAULT_OUT_OF_SCOPE_FALLBACK_TEXT);
+        await logLlmEvent(
+          params.client,
+          params.userId,
+          params.requestId,
+          "generate",
+          Date.now() - startedAt,
+          "out_of_scope",
+          {
+            classification_label: classification.label,
+            classification_reason: classification.reason ?? null,
+          },
+          accum,
+        );
+        throw new ApiError(
+          422,
+          "request_out_of_scope",
+          DEFAULT_OUT_OF_SCOPE_FALLBACK_TEXT,
+        );
       }
 
-      const recipeEnvelope = await generateRecipePayload(params.client, "generate", {
-        userPrompt: params.prompt,
-        context: params.context
-      }, params.modelOverrides, accum);
+      const recipeEnvelope = await generateRecipePayload(
+        params.client,
+        "generate",
+        {
+          userPrompt: params.prompt,
+          context: params.context,
+        },
+        params.modelOverrides,
+        accum,
+      );
 
-      await logLlmEvent(params.client, params.userId, params.requestId, "generate", Date.now() - startedAt, "ok", undefined, accum);
+      await logLlmEvent(
+        params.client,
+        params.userId,
+        params.requestId,
+        "generate",
+        Date.now() - startedAt,
+        "ok",
+        undefined,
+        accum,
+      );
       return recipeEnvelope;
     } catch (error) {
-      const errorCode = error instanceof ApiError ? error.code : "unknown_error";
-      await logLlmEvent(params.client, params.userId, params.requestId, "generate", Date.now() - startedAt, "error", {
-        error_code: errorCode
-      }, accum);
+      const errorCode = error instanceof ApiError
+        ? error.code
+        : "unknown_error";
+      await logLlmEvent(
+        params.client,
+        params.userId,
+        params.requestId,
+        "generate",
+        Date.now() - startedAt,
+        "error",
+        {
+          error_code: errorCode,
+        },
+        accum,
+      );
       throw error;
     }
   },
@@ -1945,31 +2379,75 @@ export const llmGateway = {
     const accum: TokenAccum = { input: 0, output: 0, costUsd: 0 };
 
     try {
-      const classification = await classifyScope(params.client, {
-        userPrompt: params.prompt,
-        context: params.context
-      }, params.modelOverrides, accum);
+      const classification = await classifyScope(
+        params.client,
+        {
+          userPrompt: params.prompt,
+          context: params.context,
+        },
+        params.modelOverrides,
+        accum,
+      );
 
       if (!classification.isAllowed) {
-        await logLlmEvent(params.client, params.userId, params.requestId, "tweak", Date.now() - startedAt, "out_of_scope", {
-          classification_label: classification.label,
-          classification_reason: classification.reason ?? null
-        }, accum);
-        throw new ApiError(422, "request_out_of_scope", DEFAULT_OUT_OF_SCOPE_FALLBACK_TEXT);
+        await logLlmEvent(
+          params.client,
+          params.userId,
+          params.requestId,
+          "tweak",
+          Date.now() - startedAt,
+          "out_of_scope",
+          {
+            classification_label: classification.label,
+            classification_reason: classification.reason ?? null,
+          },
+          accum,
+        );
+        throw new ApiError(
+          422,
+          "request_out_of_scope",
+          DEFAULT_OUT_OF_SCOPE_FALLBACK_TEXT,
+        );
       }
 
-      const recipeEnvelope = await generateRecipePayload(params.client, "tweak", {
-        userPrompt: params.prompt,
-        context: params.context
-      }, params.modelOverrides, accum);
+      const recipeEnvelope = await generateRecipePayload(
+        params.client,
+        "tweak",
+        {
+          userPrompt: params.prompt,
+          context: params.context,
+        },
+        params.modelOverrides,
+        accum,
+      );
 
-      await logLlmEvent(params.client, params.userId, params.requestId, "tweak", Date.now() - startedAt, "ok", undefined, accum);
+      await logLlmEvent(
+        params.client,
+        params.userId,
+        params.requestId,
+        "tweak",
+        Date.now() - startedAt,
+        "ok",
+        undefined,
+        accum,
+      );
       return recipeEnvelope;
     } catch (error) {
-      const errorCode = error instanceof ApiError ? error.code : "unknown_error";
-      await logLlmEvent(params.client, params.userId, params.requestId, "tweak", Date.now() - startedAt, "error", {
-        error_code: errorCode
-      }, accum);
+      const errorCode = error instanceof ApiError
+        ? error.code
+        : "unknown_error";
+      await logLlmEvent(
+        params.client,
+        params.userId,
+        params.requestId,
+        "tweak",
+        Date.now() - startedAt,
+        "error",
+        {
+          error_code: errorCode,
+        },
+        accum,
+      );
       throw error;
     }
   },
@@ -1980,22 +2458,35 @@ export const llmGateway = {
     requestId: string;
     prompt: string;
     context: Record<string, JsonValue>;
-    scopeHint?: Extract<GatewayScope, "chat" | "chat_ideation" | "chat_generation" | "chat_iteration" | "tweak">;
+    scopeHint?: Extract<
+      GatewayScope,
+      "chat" | "chat_ideation" | "chat_generation" | "chat_iteration" | "tweak"
+    >;
     modelOverrides?: ModelOverrideMap;
   }): Promise<ChatAssistantEnvelope> {
     const startedAt = Date.now();
     const accum: TokenAccum = { input: 0, output: 0, costUsd: 0 };
     const hasActiveRecipe = Boolean(
-      params.context.active_recipe && typeof params.context.active_recipe === "object" && !Array.isArray(params.context.active_recipe)
+      params.context.active_recipe &&
+        typeof params.context.active_recipe === "object" &&
+        !Array.isArray(params.context.active_recipe),
     );
-    const scope: Extract<GatewayScope, "chat" | "chat_ideation" | "chat_generation" | "chat_iteration" | "tweak"> =
-      params.scopeHint ?? (hasActiveRecipe ? "chat_iteration" : "chat_ideation");
+    const scope: Extract<
+      GatewayScope,
+      "chat" | "chat_ideation" | "chat_generation" | "chat_iteration" | "tweak"
+    > = params.scopeHint ??
+      (hasActiveRecipe ? "chat_iteration" : "chat_ideation");
 
     try {
-      const classification = await classifyScope(params.client, {
-        userPrompt: params.prompt,
-        context: params.context
-      }, params.modelOverrides, accum);
+      const classification = await classifyScope(
+        params.client,
+        {
+          userPrompt: params.prompt,
+          context: params.context,
+        },
+        params.modelOverrides,
+        accum,
+      );
 
       if (!classification.isAllowed) {
         const outOfScopeReply = await generateOutOfScopeAssistantReply(
@@ -2003,38 +2494,73 @@ export const llmGateway = {
           scope,
           {
             userPrompt: params.prompt,
-            context: params.context
+            context: params.context,
           },
           classification,
           params.modelOverrides,
-          accum
+          accum,
         );
-        await logLlmEvent(params.client, params.userId, params.requestId, scope, Date.now() - startedAt, "out_of_scope", {
-          classification_label: classification.label,
-          classification_reason: classification.reason ?? null
-        }, accum);
+        await logLlmEvent(
+          params.client,
+          params.userId,
+          params.requestId,
+          scope,
+          Date.now() - startedAt,
+          "out_of_scope",
+          {
+            classification_label: classification.label,
+            classification_reason: classification.reason ?? null,
+          },
+          accum,
+        );
         return {
           assistant_reply: outOfScopeReply,
           response_context: {
-            mode: "out_of_scope"
-          }
+            mode: "out_of_scope",
+          },
         };
       }
 
-      const envelope = await generateChatConversationPayload(params.client, scope, {
-        userPrompt: params.prompt,
-        context: params.context
-      }, params.modelOverrides, accum);
+      const envelope = await generateChatConversationPayload(
+        params.client,
+        scope,
+        {
+          userPrompt: params.prompt,
+          context: params.context,
+        },
+        params.modelOverrides,
+        accum,
+      );
 
-      await logLlmEvent(params.client, params.userId, params.requestId, scope, Date.now() - startedAt, "ok", {
-        chat_mode: envelope.recipe ? "recipe" : "ideation"
-      }, accum);
+      await logLlmEvent(
+        params.client,
+        params.userId,
+        params.requestId,
+        scope,
+        Date.now() - startedAt,
+        "ok",
+        {
+          chat_mode: envelope.recipe ? "recipe" : "ideation",
+        },
+        accum,
+      );
       return envelope;
     } catch (error) {
-      const errorCode = error instanceof ApiError ? error.code : "unknown_error";
-      await logLlmEvent(params.client, params.userId, params.requestId, scope, Date.now() - startedAt, "error", {
-        error_code: errorCode
-      }, accum);
+      const errorCode = error instanceof ApiError
+        ? error.code
+        : "unknown_error";
+      await logLlmEvent(
+        params.client,
+        params.userId,
+        params.requestId,
+        scope,
+        Date.now() - startedAt,
+        "error",
+        {
+          error_code: errorCode,
+        },
+        accum,
+      );
       throw error;
     }
   },
@@ -2051,7 +2577,9 @@ export const llmGateway = {
     try {
       const config = await getActiveConfig(params.client, "classify");
 
-      const { result: output, inputTokens, outputTokens } = await callProvider<{ categories: CategoryInference[] }>({
+      const { result: output, inputTokens, outputTokens } = await callProvider<
+        { categories: CategoryInference[] }
+      >({
         provider: config.provider,
         model: config.model,
         modelConfig: config.modelConfig,
@@ -2060,28 +2588,52 @@ export const llmGateway = {
           task: "infer_categories",
           rule: config.rule,
           recipe: params.recipe as unknown as JsonValue,
-          context: params.context
-        }
+          context: params.context,
+        },
       });
       addTokens(accum, inputTokens, outputTokens, config);
 
       const categories = (output.categories ?? [])
-        .filter((entry) => typeof entry.category === "string" && entry.category.trim().length > 0)
+        .filter((entry) =>
+          typeof entry.category === "string" && entry.category.trim().length > 0
+        )
         .map((entry) => {
           const numeric = Number(entry.confidence);
           return {
             category: entry.category.trim(),
-            confidence: Number.isFinite(numeric) ? Math.max(0, Math.min(1, numeric)) : 0.5
+            confidence: Number.isFinite(numeric)
+              ? Math.max(0, Math.min(1, numeric))
+              : 0.5,
           };
         });
 
-      await logLlmEvent(params.client, params.userId, params.requestId, "classify", Date.now() - startedAt, "ok", undefined, accum);
+      await logLlmEvent(
+        params.client,
+        params.userId,
+        params.requestId,
+        "classify",
+        Date.now() - startedAt,
+        "ok",
+        undefined,
+        accum,
+      );
       return categories;
     } catch (error) {
-      const errorCode = error instanceof ApiError ? error.code : "unknown_error";
-      await logLlmEvent(params.client, params.userId, params.requestId, "classify", Date.now() - startedAt, "error", {
-        error_code: errorCode
-      }, accum);
+      const errorCode = error instanceof ApiError
+        ? error.code
+        : "unknown_error";
+      await logLlmEvent(
+        params.client,
+        params.userId,
+        params.requestId,
+        "classify",
+        Date.now() - startedAt,
+        "error",
+        {
+          error_code: errorCode,
+        },
+        accum,
+      );
       throw error;
     }
   },
@@ -2104,7 +2656,9 @@ export const llmGateway = {
     const accum: TokenAccum = { input: 0, output: 0, costUsd: 0 };
     try {
       const config = await getActiveConfig(params.client, "classify");
-      const { result, inputTokens, outputTokens } = await callProvider<{ items?: unknown }>({
+      const { result, inputTokens, outputTokens } = await callProvider<
+        { items?: unknown }
+      >({
         provider: config.provider,
         model: config.model,
         modelConfig: config.modelConfig,
@@ -2122,17 +2676,17 @@ Requirements:
         userInput: {
           task: "normalize_preference_list",
           field: params.field,
-          entries: cleanedEntries
-        }
+          entries: cleanedEntries,
+        },
       });
       addTokens(accum, inputTokens, outputTokens, config);
 
       const rawItems = result.items;
       const normalized = Array.isArray(rawItems)
         ? rawItems
-            .filter((item): item is string => typeof item === "string")
-            .map((item) => item.trim())
-            .filter((item) => item.length > 0)
+          .filter((item): item is string => typeof item === "string")
+          .map((item) => item.trim())
+          .filter((item) => item.length > 0)
         : [];
 
       const seen = new Set<string>();
@@ -2146,7 +2700,10 @@ Requirements:
         unique.push(item);
       }
 
-      const safeOutput = (unique.length > 0 ? unique : cleanedEntries).slice(0, 32);
+      const safeOutput = (unique.length > 0 ? unique : cleanedEntries).slice(
+        0,
+        32,
+      );
       await logLlmEvent(
         params.client,
         params.userId,
@@ -2158,13 +2715,15 @@ Requirements:
           task: "normalize_preference_list",
           field: params.field,
           input_count: cleanedEntries.length,
-          output_count: safeOutput.length
+          output_count: safeOutput.length,
         },
-        accum
+        accum,
       );
       return safeOutput;
     } catch (error) {
-      const errorCode = error instanceof ApiError ? error.code : "unknown_error";
+      const errorCode = error instanceof ApiError
+        ? error.code
+        : "unknown_error";
       await logLlmEvent(
         params.client,
         params.userId,
@@ -2175,11 +2734,130 @@ Requirements:
         {
           task: "normalize_preference_list",
           field: params.field,
-          error_code: errorCode
+          error_code: errorCode,
         },
-        accum
+        accum,
       );
       return cleanedEntries.slice(0, 32);
+    }
+  },
+
+  async filterEquipmentPreferenceUpdates(params: {
+    client: SupabaseClient;
+    userId: string;
+    requestId: string;
+    latestUserMessage: string;
+    userMessages: string[];
+    candidateEquipment: string[];
+  }): Promise<string[]> {
+    const cleanedCandidates = params.candidateEquipment
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0);
+
+    if (cleanedCandidates.length === 0) {
+      return [];
+    }
+
+    const seenCandidates = new Set<string>();
+    const uniqueCandidates: string[] = [];
+    for (const candidate of cleanedCandidates) {
+      const key = candidate.toLocaleLowerCase();
+      if (seenCandidates.has(key)) {
+        continue;
+      }
+      seenCandidates.add(key);
+      uniqueCandidates.push(candidate);
+    }
+
+    const cleanedMessages = [params.latestUserMessage, ...params.userMessages]
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0)
+      .slice(0, 20);
+
+    const startedAt = Date.now();
+    const accum: TokenAccum = { input: 0, output: 0, costUsd: 0 };
+    try {
+      const config = await getActiveConfig(params.client, "classify");
+      const { result, inputTokens, outputTokens } = await callProvider<
+        { items?: unknown }
+      >({
+        provider: config.provider,
+        model: config.model,
+        modelConfig: config.modelConfig,
+        systemPrompt:
+          `You validate durable kitchen equipment preferences for a user profile.
+Return ONLY a JSON object with one key: "items" (array of strings).
+
+Requirements:
+- Keep only equipment the USER explicitly says they have access to in their own messages.
+- Exclude equipment inferred from generated recipes, assistant suggestions, or default assumptions.
+- Do not invent facts.
+- Prefer wording from candidate_equipment.
+- Remove duplicates.
+- Maximum 32 items.`,
+        userInput: {
+          task: "filter_equipment_preference_updates",
+          latest_user_message: params.latestUserMessage,
+          user_messages: cleanedMessages,
+          candidate_equipment: uniqueCandidates,
+        },
+      });
+      addTokens(accum, inputTokens, outputTokens, config);
+
+      const rawItems = result.items;
+      const normalized = Array.isArray(rawItems)
+        ? rawItems
+          .filter((item): item is string => typeof item === "string")
+          .map((item) => item.trim())
+          .filter((item) => item.length > 0)
+        : [];
+
+      const seen = new Set<string>();
+      const unique: string[] = [];
+      for (const item of normalized) {
+        const key = item.toLocaleLowerCase();
+        if (seen.has(key)) {
+          continue;
+        }
+        seen.add(key);
+        unique.push(item);
+      }
+
+      const safeOutput = unique.slice(0, 32);
+      await logLlmEvent(
+        params.client,
+        params.userId,
+        params.requestId,
+        "classify",
+        Date.now() - startedAt,
+        "ok",
+        {
+          task: "filter_equipment_preference_updates",
+          candidate_count: uniqueCandidates.length,
+          output_count: safeOutput.length,
+        },
+        accum,
+      );
+
+      return safeOutput;
+    } catch (error) {
+      const errorCode = error instanceof ApiError
+        ? error.code
+        : "unknown_error";
+      await logLlmEvent(
+        params.client,
+        params.userId,
+        params.requestId,
+        "classify",
+        Date.now() - startedAt,
+        "error",
+        {
+          task: "filter_equipment_preference_updates",
+          error_code: errorCode,
+        },
+        accum,
+      );
+      return [];
     }
   },
 
@@ -2194,22 +2872,46 @@ Requirements:
     const accum: TokenAccum = { input: 0, output: 0, costUsd: 0 };
 
     try {
-      const response = await generateOnboardingInterviewEnvelope(params.client, {
-        userPrompt: params.prompt,
-        context: params.context
-      }, accum);
+      const response = await generateOnboardingInterviewEnvelope(
+        params.client,
+        {
+          userPrompt: params.prompt,
+          context: params.context,
+        },
+        accum,
+      );
 
-      await logLlmEvent(params.client, params.userId, params.requestId, "onboarding", Date.now() - startedAt, "ok", {
-        completed: response.onboarding_state.completed,
-        missing_topics: response.onboarding_state.missing_topics
-      }, accum);
+      await logLlmEvent(
+        params.client,
+        params.userId,
+        params.requestId,
+        "onboarding",
+        Date.now() - startedAt,
+        "ok",
+        {
+          completed: response.onboarding_state.completed,
+          missing_topics: response.onboarding_state.missing_topics,
+        },
+        accum,
+      );
 
       return response;
     } catch (error) {
-      const errorCode = error instanceof ApiError ? error.code : "unknown_error";
-      await logLlmEvent(params.client, params.userId, params.requestId, "onboarding", Date.now() - startedAt, "error", {
-        error_code: errorCode
-      }, accum);
+      const errorCode = error instanceof ApiError
+        ? error.code
+        : "unknown_error";
+      await logLlmEvent(
+        params.client,
+        params.userId,
+        params.requestId,
+        "onboarding",
+        Date.now() - startedAt,
+        "error",
+        {
+          error_code: errorCode,
+        },
+        accum,
+      );
       throw error;
     }
   },
@@ -2225,26 +2927,45 @@ Requirements:
     try {
       const config = await getActiveConfig(params.client, "image");
 
-      const imagePrompt = `${config.promptTemplate}\n\n${JSON.stringify({
-        rule: config.rule,
-        recipe: params.recipe,
-        context: params.context
-      })}`;
+      const imagePrompt = `${config.promptTemplate}\n\n${
+        JSON.stringify({
+          rule: config.rule,
+          recipe: params.recipe,
+          context: params.context,
+        })
+      }`;
 
       const imageUrl = await callImageProvider({
         provider: config.provider,
         model: config.model,
         modelConfig: config.modelConfig,
-        prompt: imagePrompt
+        prompt: imagePrompt,
       });
 
-      await logLlmEvent(params.client, params.userId, params.requestId, "image", Date.now() - startedAt, "ok");
+      await logLlmEvent(
+        params.client,
+        params.userId,
+        params.requestId,
+        "image",
+        Date.now() - startedAt,
+        "ok",
+      );
       return imageUrl;
     } catch (error) {
-      const errorCode = error instanceof ApiError ? error.code : "unknown_error";
-      await logLlmEvent(params.client, params.userId, params.requestId, "image", Date.now() - startedAt, "error", {
-        error_code: errorCode
-      });
+      const errorCode = error instanceof ApiError
+        ? error.code
+        : "unknown_error";
+      await logLlmEvent(
+        params.client,
+        params.userId,
+        params.requestId,
+        "image",
+        Date.now() - startedAt,
+        "error",
+        {
+          error_code: errorCode,
+        },
+      );
       throw error;
     }
   },
@@ -2259,32 +2980,54 @@ Requirements:
     const accum: TokenAccum = { input: 0, output: 0, costUsd: 0 };
     const config = await getActiveConfig(params.client, "memory_extract");
 
-    const { result: output, inputTokens, outputTokens } = await callProvider<{ memories: MemoryCandidate[] }>({
+    const { result: output, inputTokens, outputTokens } = await callProvider<
+      { memories: MemoryCandidate[] }
+    >({
       provider: config.provider,
       model: config.model,
       modelConfig: config.modelConfig,
       systemPrompt: config.promptTemplate,
       userInput: {
         rule: config.rule,
-        context: params.context
-      }
+        context: params.context,
+      },
     });
     addTokens(accum, inputTokens, outputTokens, config);
 
     const records = (output.memories ?? [])
-      .filter((item) => typeof item.memory_type === "string" && item.memory_type.trim().length > 0)
+      .filter((item) =>
+        typeof item.memory_type === "string" &&
+        item.memory_type.trim().length > 0
+      )
       .map((item) => ({
         memory_type: item.memory_type.trim(),
-        memory_kind: typeof item.memory_kind === "string" ? item.memory_kind : "preference",
+        memory_kind: typeof item.memory_kind === "string"
+          ? item.memory_kind
+          : "preference",
         memory_content: item.memory_content,
-        confidence: Number.isFinite(Number(item.confidence)) ? Math.max(0, Math.min(1, Number(item.confidence))) : 0.5,
-        salience: Number.isFinite(Number(item.salience)) ? Math.max(0, Math.min(1, Number(item.salience))) : 0.5,
-        source: typeof item.source === "string" && item.source.trim().length > 0 ? item.source.trim() : "llm_extract"
+        confidence: Number.isFinite(Number(item.confidence))
+          ? Math.max(0, Math.min(1, Number(item.confidence)))
+          : 0.5,
+        salience: Number.isFinite(Number(item.salience))
+          ? Math.max(0, Math.min(1, Number(item.salience)))
+          : 0.5,
+        source: typeof item.source === "string" && item.source.trim().length > 0
+          ? item.source.trim()
+          : "llm_extract",
       }));
 
-    await logLlmEvent(params.client, params.userId, params.requestId, "memory_extract", Date.now() - startedAt, "ok", {
-      extracted_count: records.length
-    }, accum);
+    await logLlmEvent(
+      params.client,
+      params.userId,
+      params.requestId,
+      "memory_extract",
+      Date.now() - startedAt,
+      "ok",
+      {
+        extracted_count: records.length,
+      },
+      accum,
+    );
 
     return records;
   },
@@ -2301,7 +3044,9 @@ Requirements:
     const accum: TokenAccum = { input: 0, output: 0, costUsd: 0 };
     const config = await getActiveConfig(params.client, "memory_select");
 
-    const { result: output, inputTokens, outputTokens } = await callProvider<MemorySelection>({
+    const { result: output, inputTokens, outputTokens } = await callProvider<
+      MemorySelection
+    >({
       provider: config.provider,
       model: config.model,
       modelConfig: config.modelConfig,
@@ -2310,22 +3055,33 @@ Requirements:
         rule: config.rule,
         prompt: params.prompt,
         context: params.context,
-        memories: params.memories
-      }
+        memories: params.memories,
+      },
     });
     addTokens(accum, inputTokens, outputTokens, config);
 
     const selected = Array.isArray(output.selected_memory_ids)
-      ? output.selected_memory_ids.filter((value): value is string => typeof value === "string")
+      ? output.selected_memory_ids.filter((value): value is string =>
+        typeof value === "string"
+      )
       : [];
 
-    await logLlmEvent(params.client, params.userId, params.requestId, "memory_select", Date.now() - startedAt, "ok", {
-      selected_count: selected.length
-    }, accum);
+    await logLlmEvent(
+      params.client,
+      params.userId,
+      params.requestId,
+      "memory_select",
+      Date.now() - startedAt,
+      "ok",
+      {
+        selected_count: selected.length,
+      },
+      accum,
+    );
 
     return {
       selected_memory_ids: selected,
-      rationale: output.rationale
+      rationale: output.rationale,
     };
   },
 
@@ -2340,7 +3096,9 @@ Requirements:
     const accum: TokenAccum = { input: 0, output: 0, costUsd: 0 };
     const config = await getActiveConfig(params.client, "memory_summarize");
 
-    const { result: output, inputTokens, outputTokens } = await callProvider<MemorySummary>({
+    const { result: output, inputTokens, outputTokens } = await callProvider<
+      MemorySummary
+    >({
       provider: config.provider,
       model: config.model,
       modelConfig: config.modelConfig,
@@ -2348,16 +3106,27 @@ Requirements:
       userInput: {
         rule: config.rule,
         memories: params.memories,
-        context: params.context
-      }
+        context: params.context,
+      },
     });
     addTokens(accum, inputTokens, outputTokens, config);
 
-    await logLlmEvent(params.client, params.userId, params.requestId, "memory_summarize", Date.now() - startedAt, "ok", undefined, accum);
+    await logLlmEvent(
+      params.client,
+      params.userId,
+      params.requestId,
+      "memory_summarize",
+      Date.now() - startedAt,
+      "ok",
+      undefined,
+      accum,
+    );
 
     return {
       summary: output.summary ?? {},
-      token_estimate: Number.isFinite(Number(output.token_estimate)) ? Number(output.token_estimate) : 0
+      token_estimate: Number.isFinite(Number(output.token_estimate))
+        ? Number(output.token_estimate)
+        : 0,
     };
   },
 
@@ -2370,9 +3139,14 @@ Requirements:
   }): Promise<ConflictResolution> {
     const startedAt = Date.now();
     const accum: TokenAccum = { input: 0, output: 0, costUsd: 0 };
-    const config = await getActiveConfig(params.client, "memory_conflict_resolve");
+    const config = await getActiveConfig(
+      params.client,
+      "memory_conflict_resolve",
+    );
 
-    const { result: output, inputTokens, outputTokens } = await callProvider<ConflictResolution>({
+    const { result: output, inputTokens, outputTokens } = await callProvider<
+      ConflictResolution
+    >({
       provider: config.provider,
       model: config.model,
       modelConfig: config.modelConfig,
@@ -2380,17 +3154,28 @@ Requirements:
       userInput: {
         rule: config.rule,
         existing_memories: params.existingMemories,
-        candidate_memories: params.candidates
-      }
+        candidate_memories: params.candidates,
+      },
     });
     addTokens(accum, inputTokens, outputTokens, config);
 
-    await logLlmEvent(params.client, params.userId, params.requestId, "memory_conflict_resolve", Date.now() - startedAt, "ok", {
-      actions_count: Array.isArray(output.actions) ? output.actions.length : 0
-    }, accum);
+    await logLlmEvent(
+      params.client,
+      params.userId,
+      params.requestId,
+      "memory_conflict_resolve",
+      Date.now() - startedAt,
+      "ok",
+      {
+        actions_count: Array.isArray(output.actions)
+          ? output.actions.length
+          : 0,
+      },
+      accum,
+    );
 
     return {
-      actions: Array.isArray(output.actions) ? output.actions : []
+      actions: Array.isArray(output.actions) ? output.actions : [],
     };
-  }
+  },
 };

@@ -790,7 +790,7 @@ struct GenerateView: View {
 
     private var generateHeader: some View {
         HStack(alignment: .center, spacing: Spacing.md) {
-            Text("Generate")
+            Text("Generate Recipe")
                 .font(AlchemyFont.largeTitle)
                 .foregroundStyle(AlchemyColors.textPrimary)
                 .tracking(0.4)
@@ -803,7 +803,7 @@ struct GenerateView: View {
                     .resizable()
                     .scaledToFit()
                     .frame(width: 22, height: 22)
-                    .foregroundStyle(AlchemyColors.grey2)
+                    .foregroundStyle(AlchemyColors.deepDark)
                     .frame(width: 36, height: 36)
                     .background(
                         Circle().fill(Color.white.opacity(0.6))
