@@ -4,6 +4,7 @@
 # Node / monorepo
 node_modules
 .pnpm-store
+.tmp
 .next
 .open-next
 .wrangler
