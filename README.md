@@ -376,6 +376,33 @@ supabase db push --project-ref dwptbjcxrsmmgjmnumpg
 supabase functions deploy v1 --project-ref dwptbjcxrsmmgjmnumpg
 ```
 
+### GitHub CI for Supabase deploys (recommended)
+
+Workflow: `.github/workflows/supabase-deploy.yml`
+
+Required GitHub repository secrets:
+
+| Secret | Description |
+|---|---|
+| `SUPABASE_PAT` | Supabase personal access token for CLI/Management API |
+| `SUPABASE_DB_PASSWORD` | Postgres DB password for project `dwptbjcxrsmmgjmnumpg` |
+
+Notes:
+
+- `publishable` / `secret` project API keys are for your app's data/API calls.
+- GitHub CI deploys via Supabase CLI require a **management access token** (PAT) from Supabase account settings.
+
+Recommended setup:
+
+1. Create a GitHub environment named `production`.
+2. Move both secrets into that environment.
+3. Add required reviewers to the environment so deploys need approval.
+
+Trigger behavior:
+
+- Auto-runs on `main` pushes that change `supabase/migrations/**` or `supabase/functions/**`.
+- Manual run available via **Actions → Supabase Deploy → Run workflow**.
+
 ### Push Cloudflare API gateway (`api.cookwithalchemy.com`)
 
 ```bash

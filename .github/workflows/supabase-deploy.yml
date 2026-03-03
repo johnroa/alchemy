@@ -1,0 +1,55 @@
+name: Supabase Deploy
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "supabase/migrations/**"
+      - "supabase/functions/**"
+      - ".github/workflows/supabase-deploy.yml"
+
+concurrency:
+  group: supabase-deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    env:
+      PROJECT_REF: dwptbjcxrsmmgjmnumpg
+      SUPABASE_PAT: ${{ secrets.SUPABASE_PAT }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Validate required secrets
+        run: |
+          test -n "$SUPABASE_PAT" || (echo "Missing SUPABASE_PAT" && exit 1)
+          test -n "$SUPABASE_DB_PASSWORD" || (echo "Missing SUPABASE_DB_PASSWORD" && exit 1)
+
+      - name: Authenticate CLI
+        run: supabase login --token "$SUPABASE_PAT"
+
+      - name: Link project
+        run: |
+          supabase link --project-ref "$PROJECT_REF" -p "$SUPABASE_DB_PASSWORD"
+
+      - name: Push database migrations
+        run: supabase db push --linked -p "$SUPABASE_DB_PASSWORD"
+
+      - name: Deploy edge function v1
+        run: supabase functions deploy v1 --project-ref "$PROJECT_REF"
