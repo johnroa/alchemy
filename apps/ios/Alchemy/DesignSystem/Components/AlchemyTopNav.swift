@@ -1,0 +1,56 @@
+import SwiftUI
+
+struct AlchemyTopNav: View {
+    var title: String?
+    var horizontalPadding: CGFloat = Spacing.md
+    var topPadding: CGFloat = 20
+    var trailingIcon: String = "person.crop.circle.fill"
+    var trailingAction: (() -> Void)?
+
+    var body: some View {
+        VStack(spacing: Spacing.sm2) {
+            HStack {
+                Spacer()
+                if let trailingAction {
+                    Button(action: trailingAction) {
+                        Image(systemName: trailingIcon)
+                            .font(.system(size: 22, weight: .semibold))
+                            .foregroundStyle(AlchemyColors.grey2)
+                            .frame(width: 36, height: 36)
+                            .background(
+                                Circle().fill(Color.white.opacity(0.6))
+                            )
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    Circle()
+                        .fill(Color.clear)
+                        .frame(width: 36, height: 36)
+                }
+            }
+
+            if let title, !title.isEmpty {
+                Text(title)
+                    .font(AlchemyFont.largeTitle)
+                    .foregroundStyle(AlchemyColors.textPrimary)
+                    .tracking(0.4)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(.horizontal, horizontalPadding)
+        .padding(.top, topPadding)
+    }
+}
+
+#if DEBUG
+#Preview("Top Nav") {
+    ZStack {
+        AlchemyColors.deepDark.ignoresSafeArea()
+        VStack {
+            AlchemyTopNav(title: "Cookbook")
+            Spacer()
+        }
+    }
+    .preferredColorScheme(.dark)
+}
+#endif

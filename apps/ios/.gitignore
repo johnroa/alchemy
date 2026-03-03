@@ -1,0 +1,29 @@
+## Xcode
+*.xcodeproj/
+!*.xcodeproj/project.pbxproj
+!*.xcodeproj/xcshareddata/
+*.xcworkspace/
+xcuserdata/
+*.xccheckout
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+## Build
+build/
+DerivedData/
+*.build/
+
+## SPM
+.build/
+.swiftpm/
+
+## OS
+.DS_Store
+*.swp
+*~.nib
+
+## Secrets (never commit real values)
+# Configuration/*.xcconfig  # Uncomment if using real secrets

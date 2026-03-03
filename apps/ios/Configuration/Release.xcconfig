@@ -1,0 +1,7 @@
+// Release configuration
+API_BASE_URL = https:$()/$()/api.cookwithalchemy.com/v1
+SUPABASE_URL = https:$()/$()/dwptbjcxrsmmgjmnumpg.supabase.co
+SUPABASE_ANON_KEY = sb_publishable_cBmBOJbRp2-PdxdHGWTt_Q_9aG3s2WX
+
+SWIFT_ACTIVE_COMPILATION_CONDITIONS =
+SWIFT_OPTIMIZATION_LEVEL = -O

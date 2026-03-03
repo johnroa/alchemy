@@ -18,7 +18,7 @@ coverage
 .expo-shared
 web-build
 android
-ios
+apps/mobile/ios
 
 # Env files
 .env
