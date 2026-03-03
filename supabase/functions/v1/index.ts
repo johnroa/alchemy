@@ -778,17 +778,6 @@ const persistRecipe = async (params: {
     }
 
     recipeId = recipe.id;
-
-    const { error: publicationError } = await params.client
-      .from("explore_publications")
-      .upsert({ recipe_id: recipeId, status: "active", updated_at: now });
-
-    if (publicationError) {
-      if (!isRlsError(publicationError) && !isSchemaMissingError(publicationError)) {
-        throw new ApiError(500, "explore_publication_failed", "Could not publish recipe", publicationError.message);
-      }
-      console.warn("explore_publication_skipped", publicationError.message);
-    }
   }
 
   const { data: version, error: versionError } = await params.client
@@ -849,9 +838,8 @@ const persistRecipe = async (params: {
     }
   }
 
-  if (!params.heroImageUrl) {
-    await enqueueImageJob(params.client, recipeId, params.imageError);
-  }
+  // Image jobs are only enqueued when a recipe is explicitly saved to cookbook.
+  // Do NOT enqueue here — avoids triggering slow image generation on every draft/tweak.
 
   const { error: versionEventError } = await params.client.from("recipe_version_events").insert({
     recipe_version_id: version.id,
@@ -1001,6 +989,7 @@ const buildContextPack = async (params: {
   requestId: string;
   prompt: string;
   context: Record<string, JsonValue>;
+  selectionMode?: "llm" | "fast";
 }): Promise<ContextPack> => {
   const preferences = await getPreferences(params.userClient, params.userId);
   const memorySnapshot = await getMemorySnapshot(params.userClient, params.userId);
@@ -1012,6 +1001,16 @@ const buildContextPack = async (params: {
       memorySnapshot,
       selectedMemories: [],
       selectedMemoryIds: []
+    };
+  }
+
+  if (params.selectionMode === "fast") {
+    const selectedMemories = memories.slice(0, 12);
+    return {
+      preferences,
+      memorySnapshot,
+      selectedMemories,
+      selectedMemoryIds: selectedMemories.map((memory) => memory.id)
     };
   }
 
@@ -1052,7 +1051,25 @@ const updateMemoryFromInteraction = async (params: {
   userId: string;
   requestId: string;
   interactionContext: Record<string, JsonValue>;
+  mode?: "full" | "light";
 }): Promise<void> => {
+  if (params.mode === "light") {
+    await logChangelog({
+      serviceClient: params.serviceClient,
+      actorUserId: params.userId,
+      scope: "memory",
+      entityType: "memory_snapshot",
+      entityId: params.userId,
+      action: "interaction_observed",
+      requestId: params.requestId,
+      afterJson: {
+        mode: "light",
+        reason: "deferred_memory_processing"
+      }
+    });
+    return;
+  }
+
   const existingMemories = await getActiveMemories(params.userClient, params.userId, 200);
 
   let candidates: Array<{
@@ -1298,7 +1315,7 @@ const fetchDraftMessages = async (client: SupabaseClient, draftId: string): Prom
 
 const parseAssistantDraftPayload = (
   message: Pick<DraftMessageView, "content">
-): { recipe: RecipePayload; assistantReply: AssistantReply | null } | null => {
+): { recipe: RecipePayload | null; assistantReply: AssistantReply | null } | null => {
   try {
     const parsed = JSON.parse(message.content) as unknown;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
@@ -1307,37 +1324,47 @@ const parseAssistantDraftPayload = (
 
     const candidate = parsed as Record<string, unknown>;
     const envelopeRecipe = candidate.recipe as RecipePayload | undefined;
-    if (envelopeRecipe && envelopeRecipe.title && Array.isArray(envelopeRecipe.ingredients) && Array.isArray(envelopeRecipe.steps)) {
-      const replyCandidate = candidate.assistant_reply;
-      const assistantReply = (() => {
-        if (typeof replyCandidate === "string" && replyCandidate.trim().length > 0) {
-          return { text: replyCandidate.trim() } as AssistantReply;
-        }
 
-        if (
-          replyCandidate &&
-          typeof replyCandidate === "object" &&
-          !Array.isArray(replyCandidate) &&
-          typeof (replyCandidate as { text?: unknown }).text === "string"
-        ) {
-          return (replyCandidate as AssistantReply) ?? null;
-        }
+    const recipe =
+      envelopeRecipe && envelopeRecipe.title && Array.isArray(envelopeRecipe.ingredients) && Array.isArray(envelopeRecipe.steps)
+        ? envelopeRecipe
+        : (() => {
+            const directRecipe = parsed as RecipePayload;
+            if (directRecipe && directRecipe.title && Array.isArray(directRecipe.ingredients) && Array.isArray(directRecipe.steps)) {
+              return directRecipe;
+            }
+            return null;
+          })();
 
-        return null;
-      })();
-      return {
-        recipe: envelopeRecipe,
-        assistantReply
-      };
+    const replyCandidate =
+      candidate.assistant_reply ??
+      ((candidate.data as Record<string, unknown> | undefined)?.assistant_reply as unknown) ??
+      ((candidate.result as Record<string, unknown> | undefined)?.assistant_reply as unknown);
+    const assistantReply = (() => {
+      if (typeof replyCandidate === "string" && replyCandidate.trim().length > 0) {
+        return { text: replyCandidate.trim() } as AssistantReply;
+      }
+
+      if (
+        replyCandidate &&
+        typeof replyCandidate === "object" &&
+        !Array.isArray(replyCandidate) &&
+        typeof (replyCandidate as { text?: unknown }).text === "string"
+      ) {
+        return (replyCandidate as AssistantReply) ?? null;
+      }
+
+      return null;
+    })();
+
+    if (!recipe && !assistantReply) {
+      return null;
     }
 
-    const directRecipe = parsed as RecipePayload;
-    if (directRecipe && directRecipe.title && Array.isArray(directRecipe.ingredients) && Array.isArray(directRecipe.steps)) {
-      return {
-        recipe: directRecipe,
-        assistantReply: null
-      };
-    }
+    return {
+      recipe,
+      assistantReply
+    };
   } catch {
     return null;
   }
@@ -1353,12 +1380,48 @@ const extractLatestAssistantRecipe = (messages: DraftMessageView[]): RecipePaylo
     }
 
     const parsed = parseAssistantDraftPayload(message);
-    if (parsed) {
+    if (parsed?.recipe) {
       return parsed.recipe;
     }
   }
 
   return null;
+};
+
+const extractLatestAssistantReply = (messages: DraftMessageView[]): AssistantReply | null => {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.role !== "assistant") {
+      continue;
+    }
+
+    const parsed = parseAssistantDraftPayload(message);
+    if (parsed?.assistantReply) {
+      return parsed.assistantReply;
+    }
+  }
+
+  return null;
+};
+
+const renderDraftMessageForPrompt = (message: DraftMessageView): string => {
+  if (message.role !== "assistant") {
+    return message.content;
+  }
+
+  const parsed = parseAssistantDraftPayload(message);
+  if (parsed?.assistantReply?.text) {
+    return parsed.assistantReply.text;
+  }
+
+  if (parsed?.recipe) {
+    const summaryParts = [parsed.recipe.title, parsed.recipe.description, parsed.recipe.notes].filter(
+      (value): value is string => typeof value === "string" && value.trim().length > 0
+    );
+    return summaryParts.join(" — ");
+  }
+
+  return message.content;
 };
 
 const buildCookbookItems = async (client: SupabaseClient, userId: string): Promise<Array<Record<string, JsonValue>>> => {
@@ -2166,7 +2229,8 @@ Deno.serve(async (request) => {
         userId: auth.userId,
         requestId,
         prompt: body.prompt,
-        context: { vibe: body.vibe ?? null }
+        context: { vibe: body.vibe ?? null },
+        selectionMode: "fast"
       });
 
       const generation = await llmGateway.generateRecipe({
@@ -2248,104 +2312,12 @@ Deno.serve(async (request) => {
           recipe: recipePayload,
           preferences: effectivePreferences,
           selected_memory_ids: contextPack.selectedMemoryIds
-        }
+        },
+        mode: "light"
       });
 
       const recipe = await fetchRecipeView(client, saved.recipeId);
       return jsonResponse(200, { recipe, version: recipe.version, assistant_reply: generation.assistant_reply });
-    }
-
-    if (segments.length === 2 && segments[0] === "recipes" && segments[1] === "feed" && method === "GET") {
-      const limit = getLimit(url, 25);
-      const preferredRecipesQuery = await client
-        .from("recipes")
-        .select("id,title,hero_image_url,image_status,visibility,updated_at,current_version_id")
-        .eq("visibility", "public")
-        .order("updated_at", { ascending: false })
-        .limit(limit);
-
-      let recipes: Array<{
-        id: string;
-        title: string;
-        hero_image_url: string | null;
-        image_status: string;
-        visibility: string;
-        updated_at: string;
-        current_version_id: string | null;
-      }> = [];
-
-      if (preferredRecipesQuery.error) {
-        if (!isSchemaMissingError(preferredRecipesQuery.error)) {
-          throw new ApiError(500, "feed_fetch_failed", "Could not fetch recipe feed", preferredRecipesQuery.error.message);
-        }
-
-        const legacyRecipesQuery = await client
-          .from("recipes")
-          .select("id,title,hero_image_url,visibility,updated_at,current_version_id")
-          .eq("visibility", "public")
-          .order("updated_at", { ascending: false })
-          .limit(limit);
-
-        if (legacyRecipesQuery.error) {
-          throw new ApiError(500, "feed_fetch_failed", "Could not fetch recipe feed", legacyRecipesQuery.error.message);
-        }
-
-        recipes = (legacyRecipesQuery.data ?? []).map((row) => ({
-          ...row,
-          image_status: row.hero_image_url ? "ready" : "pending"
-        }));
-      } else {
-        recipes = (preferredRecipesQuery.data ?? []) as Array<{
-          id: string;
-          title: string;
-          hero_image_url: string | null;
-          image_status: string;
-          visibility: string;
-          updated_at: string;
-          current_version_id: string | null;
-        }>;
-      }
-
-      const versionIds = recipes
-        .map((recipe) => recipe.current_version_id)
-        .filter((id): id is string => Boolean(id));
-
-      let versionById = new Map<string, RecipePayload>();
-      if (versionIds.length > 0) {
-        const { data: versions, error: versionsError } = await client
-          .from("recipe_versions")
-          .select("id,payload")
-          .in("id", versionIds);
-
-        if (versionsError) {
-          throw new ApiError(500, "feed_version_fetch_failed", "Could not fetch recipe versions for feed", versionsError.message);
-        }
-
-        versionById = new Map((versions ?? []).map((version) => [version.id, version.payload as RecipePayload]));
-      }
-
-      const items = recipes.map((recipe) => {
-        const payload = recipe.current_version_id ? versionById.get(recipe.current_version_id) : undefined;
-        return {
-          id: recipe.id,
-          title: payload?.title ?? recipe.title,
-          summary: payload?.description ?? payload?.notes ?? "",
-          description: payload?.description,
-          image_url: recipe.hero_image_url,
-          image_status: recipe.image_status,
-          servings: payload?.servings ?? 0,
-          ingredients: payload?.ingredients ?? [],
-          steps: payload?.steps ?? [],
-          notes: payload?.notes,
-          pairings: payload?.pairings ?? [],
-          metadata: payload?.metadata,
-          emoji: payload?.emoji ?? [],
-          visibility: recipe.visibility,
-          updated_at: recipe.updated_at
-        };
-      });
-
-      return jsonResponse(200, { items });
     }
 
     if (segments.length === 2 && segments[0] === "recipes" && segments[1] === "cookbook" && method === "GET") {
@@ -2444,7 +2416,8 @@ Deno.serve(async (request) => {
             pairings: current.pairings,
             metadata: current.metadata
           }
-        }
+        },
+        selectionMode: "fast"
       });
 
       const tweak = await llmGateway.tweakRecipe({
@@ -2536,7 +2509,8 @@ Deno.serve(async (request) => {
           recipe_id: recipeId,
           updated_recipe: tweakedPayload,
           selected_memory_ids: contextPack.selectedMemoryIds
-        }
+        },
+        mode: "light"
       });
 
       const recipe = await fetchRecipeView(client, recipeId);
@@ -2741,6 +2715,17 @@ Deno.serve(async (request) => {
           requestId
         });
 
+        // Enqueue image generation now that the recipe is saved to cookbook
+        const { data: recipeImageCheck } = await client
+          .from("recipes")
+          .select("hero_image_url")
+          .eq("id", recipeId)
+          .maybeSingle();
+
+        if (!recipeImageCheck?.hero_image_url) {
+          await enqueueImageJob(client, recipeId);
+        }
+
         return jsonResponse(200, { saved: true });
       }
 
@@ -2939,7 +2924,8 @@ Deno.serve(async (request) => {
         userId: auth.userId,
         requestId,
         prompt: message,
-        context: {}
+        context: {},
+        selectionMode: "fast"
       });
 
       const { data: draft, error: draftError } = await client
@@ -2969,7 +2955,7 @@ Deno.serve(async (request) => {
         throw new ApiError(500, "draft_message_create_failed", "Could not store draft message", userMessageError.message);
       }
 
-      const assistantGeneration = await llmGateway.generateRecipe({
+      const assistantDraftResponse = await llmGateway.converseDraft({
         client: serviceClient,
         userId: auth.userId,
         requestId,
@@ -2986,18 +2972,29 @@ Deno.serve(async (request) => {
         userId: auth.userId,
         requestId,
         currentPreferences: contextPack.preferences,
-        preferenceUpdates: assistantGeneration.response_context?.preference_updates
+        preferenceUpdates: assistantDraftResponse.response_context?.preference_updates
       });
 
       const { error: assistantMessageError } = await client.from("recipe_draft_messages").insert({
         draft_id: draft.id,
         role: "assistant",
-        content: JSON.stringify(assistantGeneration),
-        metadata: { format: "assistant_recipe_envelope" }
+        content: JSON.stringify(assistantDraftResponse),
+        metadata: { format: "assistant_draft_envelope" }
       });
 
       if (assistantMessageError) {
         throw new ApiError(500, "draft_assistant_message_failed", "Could not store assistant draft message", assistantMessageError.message);
+      }
+
+      const interactionContext: Record<string, JsonValue> = {
+        prompt: message,
+        draft_id: draft.id,
+        assistant_reply: assistantDraftResponse.assistant_reply,
+        preferences: effectivePreferences,
+        selected_memory_ids: contextPack.selectedMemoryIds
+      };
+      if (assistantDraftResponse.recipe) {
+        interactionContext.assistant_recipe = assistantDraftResponse.recipe;
       }
 
       await updateMemoryFromInteraction({
@@ -3005,14 +3002,8 @@ Deno.serve(async (request) => {
         serviceClient,
         userId: auth.userId,
         requestId,
-        interactionContext: {
-          prompt: message,
-          draft_id: draft.id,
-          assistant_recipe: assistantGeneration.recipe,
-          assistant_reply: assistantGeneration.assistant_reply,
-          preferences: effectivePreferences,
-          selected_memory_ids: contextPack.selectedMemoryIds
-        }
+        interactionContext,
+        mode: "light"
       });
 
       const messages = await fetchDraftMessages(client, draft.id);
@@ -3033,8 +3024,8 @@ Deno.serve(async (request) => {
       return jsonResponse(200, {
         id: draft.id,
         messages,
-        active_recipe: assistantGeneration.recipe,
-        assistant_reply: assistantGeneration.assistant_reply,
+        active_recipe: assistantDraftResponse.recipe ?? null,
+        assistant_reply: assistantDraftResponse.assistant_reply,
         context_version: 1,
         memory_context_ids: contextPack.selectedMemoryIds,
         created_at: draft.created_at,
@@ -3057,12 +3048,7 @@ Deno.serve(async (request) => {
 
       const messages = await fetchDraftMessages(client, draftId);
       const latestAssistantRecipe = extractLatestAssistantRecipe(messages);
-      const latestAssistantReply =
-        [...messages]
-          .reverse()
-          .map((message) => parseAssistantDraftPayload(message))
-          .find((parsed): parsed is { recipe: RecipePayload; assistantReply: AssistantReply | null } => Boolean(parsed))
-          ?.assistantReply ?? null;
+      const latestAssistantReply = extractLatestAssistantReply(messages);
 
       return jsonResponse(200, {
         id: draft.id,
@@ -3102,7 +3088,8 @@ Deno.serve(async (request) => {
         prompt: message,
         context: {
           draft_context: (draft.context as Record<string, JsonValue>) ?? {}
-        }
+        },
+        selectionMode: "fast"
       });
 
       const { error: userMessageError } = await client.from("recipe_draft_messages").insert({
@@ -3116,8 +3103,9 @@ Deno.serve(async (request) => {
       }
 
       const threadMessages = await fetchDraftMessages(client, draftId);
+      const latestAssistantRecipe = extractLatestAssistantRecipe(threadMessages);
 
-      const assistantTweak = await llmGateway.tweakRecipe({
+      const assistantDraftResponse = await llmGateway.converseDraft({
         client: serviceClient,
         userId: auth.userId,
         requestId,
@@ -3125,6 +3113,7 @@ Deno.serve(async (request) => {
         context: {
           draft_context: (draft.context as Record<string, JsonValue>) ?? {},
           thread: threadMessages,
+          active_recipe: latestAssistantRecipe ?? undefined,
           preferences: contextPack.preferences,
           memory_snapshot: contextPack.memorySnapshot,
           selected_memories: contextPack.selectedMemories
@@ -3136,18 +3125,30 @@ Deno.serve(async (request) => {
         userId: auth.userId,
         requestId,
         currentPreferences: contextPack.preferences,
-        preferenceUpdates: assistantTweak.response_context?.preference_updates
+        preferenceUpdates: assistantDraftResponse.response_context?.preference_updates
       });
 
       const { error: assistantMessageError } = await client.from("recipe_draft_messages").insert({
         draft_id: draftId,
         role: "assistant",
-        content: JSON.stringify(assistantTweak),
-        metadata: { format: "assistant_recipe_envelope" }
+        content: JSON.stringify(assistantDraftResponse),
+        metadata: { format: "assistant_draft_envelope" }
       });
 
       if (assistantMessageError) {
         throw new ApiError(500, "draft_assistant_message_failed", "Could not store assistant draft message", assistantMessageError.message);
+      }
+
+      const interactionContext: Record<string, JsonValue> = {
+        prompt: message,
+        draft_id: draftId,
+        assistant_reply: assistantDraftResponse.assistant_reply,
+        thread_size: threadMessages.length,
+        preferences: effectivePreferences,
+        selected_memory_ids: contextPack.selectedMemoryIds
+      };
+      if (assistantDraftResponse.recipe) {
+        interactionContext.assistant_recipe = assistantDraftResponse.recipe;
       }
 
       await updateMemoryFromInteraction({
@@ -3155,24 +3156,18 @@ Deno.serve(async (request) => {
         serviceClient,
         userId: auth.userId,
         requestId,
-        interactionContext: {
-          prompt: message,
-          draft_id: draftId,
-          assistant_recipe: assistantTweak.recipe,
-          assistant_reply: assistantTweak.assistant_reply,
-          thread_size: threadMessages.length,
-          preferences: effectivePreferences,
-          selected_memory_ids: contextPack.selectedMemoryIds
-        }
+        interactionContext,
+        mode: "light"
       });
 
       const messages = await fetchDraftMessages(client, draftId);
+      const responseActiveRecipe = assistantDraftResponse.recipe ?? extractLatestAssistantRecipe(messages);
 
       return jsonResponse(200, {
         id: draftId,
         messages,
-        active_recipe: assistantTweak.recipe,
-        assistant_reply: assistantTweak.assistant_reply,
+        active_recipe: responseActiveRecipe ?? null,
+        assistant_reply: assistantDraftResponse.assistant_reply,
         context_version: 1,
         memory_context_ids: contextPack.selectedMemoryIds
       });
@@ -3201,7 +3196,7 @@ Deno.serve(async (request) => {
       }
 
       const consolidatedPrompt = messages
-        .map((message) => `[${message.role}] ${message.content}`)
+        .map((message) => `[${message.role}] ${renderDraftMessageForPrompt(message)}`)
         .join("\n");
 
       const contextPack = await buildContextPack({

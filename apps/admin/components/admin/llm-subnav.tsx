@@ -7,7 +7,8 @@ import { cn } from "@/lib/utils";
 const llmNavItems = [
   { href: "/provider-model", label: "Provider & Model" },
   { href: "/prompts", label: "Prompts" },
-  { href: "/rules", label: "Rules" }
+  { href: "/rules", label: "Rules" },
+  { href: "/memory", label: "Memory" }
 ];
 
 export function LlmSubnav(): React.JSX.Element {

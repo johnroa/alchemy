@@ -38,9 +38,13 @@ export const getDashboardData = async (): Promise<{
   safetyIncidentCount: number;
   emptyOutputCount: number;
   imagePendingCount: number;
+  imageProcessingCount: number;
+  imageReadyCount: number;
   imageFailedCount: number;
+  imageTotalCount: number;
   activeMemoryCount: number;
   recentErrors: Array<{ created_at: string; scope: string; reason: string }>;
+  recentActivity: Array<{ created_at: string; scope: string; entity_type: string; action: string }>;
 }> => {
   const client = getAdminClient();
 
@@ -49,7 +53,8 @@ export const getDashboardData = async (): Promise<{
     { data: flagsRows },
     { data: emptyOutputRows },
     { data: imageRows },
-    { data: memoryRows }
+    { data: memoryRows },
+    { data: activityRows }
   ] = await Promise.all([
     client.from("v_llm_cost_latency_rollup").select("request_count,avg_latency_ms,total_cost_usd"),
     client.from("v_abuse_rate_limit_flags").select("created_at,scope,reason").order("created_at", { ascending: false }).limit(8),
@@ -59,7 +64,8 @@ export const getDashboardData = async (): Promise<{
       .eq("event_type", "llm_call")
       .contains("event_payload", { error_code: "llm_empty_output" }),
     client.from("recipe_image_jobs").select("status"),
-    client.from("memories").select("status")
+    client.from("memories").select("status"),
+    client.from("changelog_events").select("created_at,scope,entity_type,action").order("created_at", { ascending: false }).limit(10)
   ]);
 
   const requestCount = (costRows ?? []).reduce((sum, row) => sum + Number(row.request_count ?? 0), 0);
@@ -70,7 +76,10 @@ export const getDashboardData = async (): Promise<{
   const totalCostUsd = (costRows ?? []).reduce((sum, row) => sum + Number(row.total_cost_usd ?? 0), 0);
 
   const imagePendingCount = (imageRows ?? []).filter((row) => row.status === "pending").length;
+  const imageProcessingCount = (imageRows ?? []).filter((row) => row.status === "processing").length;
+  const imageReadyCount = (imageRows ?? []).filter((row) => row.status === "ready").length;
   const imageFailedCount = (imageRows ?? []).filter((row) => row.status === "failed").length;
+  const imageTotalCount = (imageRows ?? []).length;
   const activeMemoryCount = (memoryRows ?? []).filter((row) => row.status === "active").length;
 
   return {
@@ -80,12 +89,21 @@ export const getDashboardData = async (): Promise<{
     safetyIncidentCount: (flagsRows ?? []).length,
     emptyOutputCount: (emptyOutputRows ?? []).length,
     imagePendingCount,
+    imageProcessingCount,
+    imageReadyCount,
     imageFailedCount,
+    imageTotalCount,
     activeMemoryCount,
     recentErrors: (flagsRows ?? []).map((row) => ({
       created_at: row.created_at as string,
       scope: (row.scope as string) ?? "unknown",
       reason: (row.reason as string) ?? "n/a"
+    })),
+    recentActivity: (activityRows ?? []).map((row) => ({
+      created_at: row.created_at as string,
+      scope: String(row.scope ?? "unknown"),
+      entity_type: String(row.entity_type ?? "unknown"),
+      action: String(row.action ?? "unknown")
     }))
   };
 };
@@ -704,54 +722,88 @@ export const getRecipeAuditDetail = async (recipeId: string): Promise<RecipeAudi
 
 export const getGraphData = async (): Promise<{
   entities: Array<{ id: string; entity_type: string; label: string }>;
-  edges: Array<{ id: string; from_entity_id: string; to_entity_id: string; confidence: number }>;
+  edges: Array<{ id: string; from_entity_id: string; to_entity_id: string; from_label: string; to_label: string; confidence: number }>;
 }> => {
   const client = getAdminClient();
 
-  const [{ data: entities }, { data: edges }] = await Promise.all([
-    client.from("graph_entities").select("id,entity_type,label").order("updated_at", { ascending: false }).limit(100),
-    client.from("graph_edges").select("id,from_entity_id,to_entity_id,confidence").order("created_at", { ascending: false }).limit(100)
+  const [{ data: entities, error: entitiesError }, { data: edges }] = await Promise.all([
+    client.from("graph_entities").select("id,entity_type,label").order("updated_at", { ascending: false }).limit(200),
+    client.from("graph_edges").select("id,from_entity_id,to_entity_id,confidence").order("confidence", { ascending: false }).limit(100)
   ]);
 
+  if (entitiesError && !isSchemaMissingError(entitiesError)) {
+    throw new Error(entitiesError.message);
+  }
+
+  const entityList = (entities ?? []) as Array<{ id: string; entity_type: string; label: string }>;
+  const entityLabelById = new Map(entityList.map((e) => [e.id, e.label]));
+
   return {
-    entities: (entities ?? []) as Array<{ id: string; entity_type: string; label: string }>,
-    edges: (edges ?? []) as Array<{ id: string; from_entity_id: string; to_entity_id: string; confidence: number }>
+    entities: entityList.slice(0, 100),
+    edges: ((edges ?? []) as Array<{ id: string; from_entity_id: string; to_entity_id: string; confidence: number }>).map((edge) => ({
+      ...edge,
+      from_label: entityLabelById.get(edge.from_entity_id) ?? edge.from_entity_id.slice(0, 8),
+      to_label: entityLabelById.get(edge.to_entity_id) ?? edge.to_entity_id.slice(0, 8)
+    }))
   };
 };
 
 export const getModerationData = async (): Promise<{
   queue: Array<{ recipe_id: string; status: string; moderation_notes: string | null; updated_at: string }>;
 }> => {
-  const client = getAdminClient();
-  const { data } = await client
-    .from("explore_publications")
-    .select("recipe_id,status,moderation_notes,updated_at")
-    .order("updated_at", { ascending: false })
-    .limit(100);
-
   return {
-    queue: (data ?? []) as Array<{ recipe_id: string; status: string; moderation_notes: string | null; updated_at: string }>
+    queue: []
   };
 };
 
 export const getMemoryData = async (): Promise<{
-  snapshots: Array<{ user_id: string; token_estimate: number; updated_at: string }>;
-  memories: Array<{ id: string; user_id: string; memory_type: string; memory_kind: string; status: string; confidence: number; salience: number; updated_at: string }>;
+  snapshots: Array<{ user_id: string; email: string | null; token_estimate: number; updated_at: string }>;
+  memories: Array<{ id: string; user_id: string; email: string | null; memory_type: string; memory_kind: string; status: string; confidence: number; salience: number; content: string | null; updated_at: string }>;
 }> => {
   const client = getAdminClient();
 
-  const [{ data: snapshots }, { data: memories }] = await Promise.all([
+  const [{ data: snapshots }, { data: memoriesRaw }] = await Promise.all([
     client.from("memory_snapshots").select("user_id,token_estimate,updated_at").order("updated_at", { ascending: false }).limit(100),
     client
       .from("memories")
-      .select("id,user_id,memory_type,memory_kind,status,confidence,salience,updated_at")
+      .select("id,user_id,memory_type,memory_kind,status,confidence,salience,content,updated_at")
       .order("updated_at", { ascending: false })
       .limit(150)
   ]);
 
+  const userIds = Array.from(
+    new Set([
+      ...(snapshots ?? []).map((s) => s.user_id as string),
+      ...(memoriesRaw ?? []).map((m) => m.user_id as string)
+    ])
+  );
+
+  const { data: users } =
+    userIds.length > 0
+      ? await client.from("users").select("id,email").in("id", userIds)
+      : { data: [] as Array<{ id: string; email: string | null }> };
+
+  const emailById = new Map((users ?? []).map((u) => [u.id, u.email as string | null]));
+
   return {
-    snapshots: (snapshots ?? []) as Array<{ user_id: string; token_estimate: number; updated_at: string }>,
-    memories: (memories ?? []) as Array<{ id: string; user_id: string; memory_type: string; memory_kind: string; status: string; confidence: number; salience: number; updated_at: string }>
+    snapshots: (snapshots ?? []).map((s) => ({
+      user_id: String(s.user_id),
+      email: emailById.get(String(s.user_id)) ?? null,
+      token_estimate: Number(s.token_estimate ?? 0),
+      updated_at: String(s.updated_at)
+    })),
+    memories: (memoriesRaw ?? []).map((m) => ({
+      id: String(m.id),
+      user_id: String(m.user_id),
+      email: emailById.get(String(m.user_id)) ?? null,
+      memory_type: String(m.memory_type ?? ""),
+      memory_kind: String(m.memory_kind ?? ""),
+      status: String(m.status ?? ""),
+      confidence: Number(m.confidence ?? 0),
+      salience: Number(m.salience ?? 0),
+      content: m.content ? String(m.content) : null,
+      updated_at: String(m.updated_at)
+    }))
   };
 };
 
@@ -804,7 +856,7 @@ export const getImagePipelineData = async (): Promise<{
 };
 
 export const getRequestTraceData = async (): Promise<{
-  events: Array<{ id: string; request_id: string | null; event_type: string; created_at: string; safety_state: string | null }>;
+  events: Array<{ id: string; request_id: string | null; event_type: string; created_at: string; safety_state: string | null; latency_ms: number | null; event_payload: Record<string, unknown> }>;
   changes: Array<{ id: string; request_id: string | null; scope: string; entity_type: string; action: string; created_at: string }>;
 }> => {
   const client = getAdminClient();
@@ -812,7 +864,7 @@ export const getRequestTraceData = async (): Promise<{
   const [{ data: events }, { data: changes }] = await Promise.all([
     client
       .from("events")
-      .select("id,request_id,event_type,created_at,safety_state")
+      .select("id,request_id,event_type,created_at,safety_state,latency_ms,event_payload")
       .order("created_at", { ascending: false })
       .limit(200),
     client
@@ -823,7 +875,15 @@ export const getRequestTraceData = async (): Promise<{
   ]);
 
   return {
-    events: (events ?? []) as Array<{ id: string; request_id: string | null; event_type: string; created_at: string; safety_state: string | null }>,
+    events: (events ?? []).map((row) => ({
+      id: String(row.id),
+      request_id: (row.request_id as string | null) ?? null,
+      event_type: String(row.event_type ?? ""),
+      created_at: String(row.created_at ?? ""),
+      safety_state: (row.safety_state as string | null) ?? null,
+      latency_ms: row.latency_ms != null ? Number(row.latency_ms) : null,
+      event_payload: toRecord(row.event_payload as never) as Record<string, unknown>
+    })),
     changes: (changes ?? []) as Array<{ id: string; request_id: string | null; scope: string; entity_type: string; action: string; created_at: string }>
   };
 };

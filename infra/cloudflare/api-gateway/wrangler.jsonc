@@ -3,6 +3,17 @@
   "name": "alchemy-api",
   "main": "src/index.ts",
   "compatibility_date": "2026-03-02",
+  "routes": [
+    {
+      "pattern": "api.cookwithalchemy.com",
+      "zone_name": "cookwithalchemy.com",
+      "custom_domain": true
+    }
+  ],
+  "vars": {
+    "SUPABASE_PROJECT_REF": "dwptbjcxrsmmgjmnumpg",
+    "SUPABASE_FUNCTIONS_BASE_URL": "https://dwptbjcxrsmmgjmnumpg.supabase.co/functions/v1/v1"
+  },
   "observability": {
     "enabled": true
   }

@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import type { Session, User } from "@supabase/supabase-js";
 import { supabase, supabaseConfigError } from "@/lib/supabase";
+import { queryClient } from "@/lib/query-client";
 
 type AuthContextValue = {
   initialized: boolean;
@@ -112,6 +113,7 @@ export function AuthProvider({ children }: { children: ReactNode }): React.JSX.E
       signOut: async (): Promise<void> => {
         await supabase.auth.signOut({ scope: "local" });
         setSession(null);
+        queryClient.clear();
       }
     }),
     [authError, initialized, session]

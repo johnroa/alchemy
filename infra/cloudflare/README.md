@@ -22,6 +22,8 @@
 
 - `NEXT_PUBLIC_SUPABASE_URL` = `https://<project-ref>.supabase.co`
 - `SUPABASE_SECRET_KEY` = Supabase project secret key
+- `API_BASE_URL` = `https://api.cookwithalchemy.com/v1`
+- `ADMIN_SIMULATION_BEARER_TOKEN` = JWT bearer token for a simulation user (used by admin simulation/image processing actions)
 
 Note: in Cloudflare Workers UI, these can be added as `Secret` entries.
 
@@ -39,9 +41,20 @@ Use a dedicated Cloudflare Worker as gateway:
 
 1. Deploy worker in `infra/cloudflare/api-gateway`.
 2. Add worker secret:
-   - `SUPABASE_FUNCTIONS_BASE_URL=https://dwptbjcxrsmmgjmnumpg.functions.supabase.co`
+   - `SUPABASE_FUNCTIONS_BASE_URL=https://dwptbjcxrsmmgjmnumpg.supabase.co/functions/v1/v1`
+   - Optional fallback runtime var (already in `wrangler.jsonc`): `SUPABASE_PROJECT_REF=dwptbjcxrsmmgjmnumpg`
 3. Attach custom domain `api.cookwithalchemy.com` directly to the worker.
 4. Remove any existing proxied CNAME for `api` that points to Supabase.
+
+### Variables/secrets keep "disappearing" in Cloudflare
+
+Cloudflare stores worker config by both worker service and environment (`Preview` vs `Production`).
+If values appear to reset, you are usually viewing a different environment or a different worker service.
+
+- Keep non-sensitive values in `wrangler.jsonc` under `vars`.
+- Keep sensitive values in Worker runtime secrets.
+- Set secrets in every environment you actively deploy (`Production`, and `Preview` if used).
+- Confirm custom domain is attached to the same worker service you are editing.
 
 The worker forwards `/v1/*` to Supabase Edge Functions, so mobile/admin keep using:
 

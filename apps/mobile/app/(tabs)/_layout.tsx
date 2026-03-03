@@ -1,78 +1,111 @@
 import { Tabs } from "expo-router";
 import { BlurView } from "expo-blur";
-import { StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import type { BottomTabBarProps } from "@react-navigation/bottom-tabs";
+import { alchemyColors } from "@/components/alchemy/theme";
+
+// ─── Tab config ────────────────────────────────────────────────────────────────
+
+const TABS = [
+  { name: "my-cookbook", emoji: "📖", label: "Cookbook" },
+  { name: "generate", emoji: "✦", label: "Generate" }
+] as const;
+
+// ─── Custom tab bar ────────────────────────────────────────────────────────────
+
+function AlchemyTabBar({ state, navigation }: BottomTabBarProps) {
+  const insets = useSafeAreaInsets();
+
+  return (
+    <View style={[styles.bar, { bottom: insets.bottom + 16 }]}>
+      <BlurView intensity={22} tint="dark" style={StyleSheet.absoluteFillObject} />
+      {TABS.map((tab) => {
+        const route = state.routes.find((r) => r.name === tab.name);
+        if (!route) return null;
+        const focused = state.routes[state.index]?.name === tab.name;
+
+        return (
+          <Pressable
+            key={tab.name}
+            style={styles.tabBtn}
+            onPress={() => {
+              if (!focused) navigation.navigate(tab.name);
+            }}
+          >
+            {focused && <View style={styles.activePill} />}
+            <Text style={[styles.tabEmoji, { opacity: focused ? 1 : 0.45 }]}>
+              {tab.emoji}
+            </Text>
+            <Text style={[styles.tabLabel, { color: focused ? alchemyColors.dark : "rgba(255,255,255,0.55)" }]}>
+              {tab.label}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
+// ─── Layout ────────────────────────────────────────────────────────────────────
 
 export default function TabsLayout(): React.JSX.Element {
   return (
     <Tabs
-      screenOptions={{
-        headerShown: false,
-        tabBarActiveTintColor: "#ECFDF5",
-        tabBarInactiveTintColor: "#94A3B8",
-        tabBarStyle: {
-          position: "absolute",
-          borderTopWidth: 0,
-          height: 90,
-          paddingTop: 10,
-          paddingBottom: 22,
-          backgroundColor: "transparent"
-        },
-        tabBarBackground: () => (
-          <View style={styles.tabBarWrap}>
-            <BlurView intensity={24} tint="dark" style={styles.tabBarGlass} />
-          </View>
-        ),
-        tabBarLabelStyle: { fontSize: 12, fontWeight: "600" }
-      }}
+      screenOptions={{ headerShown: false }}
+      tabBar={(props) => <AlchemyTabBar {...props} />}
     >
-      <Tabs.Screen
-        name="index"
-        options={{
-          href: null
-        }}
-      />
-      <Tabs.Screen
-        name="my-cookbook"
-        options={{
-          title: "My Cookbook",
-          tabBarLabel: "Cookbook",
-          tabBarIcon: ({ color }) => <Text style={[styles.icon, { color }]}>📖</Text>
-        }}
-      />
-      <Tabs.Screen
-        name="generate"
-        options={{
-          title: "Generate Recipe",
-          tabBarLabel: "Generate",
-          tabBarIcon: ({ color }) => <Text style={[styles.icon, { color }]}>✨</Text>
-        }}
-      />
-      <Tabs.Screen
-        name="explore"
-        options={{
-          title: "Explore",
-          tabBarIcon: ({ color }) => <Text style={[styles.icon, { color }]}>🔎</Text>
-        }}
-      />
+      <Tabs.Screen name="index" options={{ href: null }} />
+      <Tabs.Screen name="my-cookbook" />
+      <Tabs.Screen name="generate" />
     </Tabs>
   );
 }
 
+// ─── Styles ────────────────────────────────────────────────────────────────────
+
 const styles = StyleSheet.create({
-  tabBarWrap: {
-    flex: 1,
-    marginHorizontal: 14,
-    marginBottom: 12,
+  bar: {
+    position: "absolute",
+    left: 16,
+    right: 16,
+    height: 64,
     borderRadius: 999,
-    overflow: "hidden",
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.24)"
+    borderColor: "rgba(255,255,255,0.18)",
+    backgroundColor: "rgba(255,255,255,0.12)",
+    flexDirection: "row",
+    overflow: "hidden",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.22,
+    shadowRadius: 24,
+    elevation: 20
   },
-  tabBarGlass: {
+  tabBtn: {
     flex: 1,
-    backgroundColor: "rgba(15,23,42,0.42)"
+    flexDirection: "column",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 2
   },
-  icon: {
-    fontSize: 15
+  activePill: {
+    position: "absolute",
+    top: 8,
+    bottom: 8,
+    left: 12,
+    right: 12,
+    borderRadius: 999,
+    backgroundColor: "#EDEDED"
+  },
+  tabEmoji: {
+    fontSize: 18,
+    lineHeight: 22
+  },
+  tabLabel: {
+    fontSize: 11,
+    fontWeight: "500",
+    letterSpacing: 0.06,
+    lineHeight: 13
   }
 });

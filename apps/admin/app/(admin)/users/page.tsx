@@ -1,9 +1,7 @@
+import { Users } from "lucide-react";
 import { PageHeader } from "@/components/admin/page-header";
-import { UserActionsSheet } from "@/components/admin/user-actions-sheet";
-import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { UsersTable } from "@/components/admin/users-table";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { getUsersData } from "@/lib/admin-data";
 
 export default async function UsersPage(): Promise<React.JSX.Element> {
@@ -11,51 +9,23 @@ export default async function UsersPage(): Promise<React.JSX.Element> {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Users" description="Manage user status and memory controls." />
+      <PageHeader
+        title="Users"
+        description="Search users, inspect account status, and manage memory and access controls."
+      />
 
       <Card>
-        <CardHeader>
-          <CardTitle>User Directory</CardTitle>
+        <CardHeader className="flex flex-row items-center justify-between pb-3">
+          <div>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Users className="h-4 w-4 text-muted-foreground" />
+              User Directory
+            </CardTitle>
+            <CardDescription className="mt-0.5">{users.length} total accounts.</CardDescription>
+          </div>
         </CardHeader>
-        <CardContent className="space-y-4">
-          <Input placeholder="Search users by email or id" />
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>User</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Updated</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {users.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={4} className="text-muted-foreground">
-                    No users found.
-                  </TableCell>
-                </TableRow>
-              ) : (
-                users.map((user) => (
-                  <TableRow key={user.id}>
-                    <TableCell>
-                      <div className="space-y-1">
-                        <p className="font-medium">{user.email ?? "unknown"}</p>
-                        <p className="text-xs text-muted-foreground">{user.id}</p>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={user.status === "active" ? "default" : "destructive"}>{user.status}</Badge>
-                    </TableCell>
-                    <TableCell>{new Date(user.updated_at).toLocaleString()}</TableCell>
-                    <TableCell className="text-right">
-                      <UserActionsSheet userId={user.id} email={user.email} />
-                    </TableCell>
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
+        <CardContent className="pt-0">
+          <UsersTable users={users} />
         </CardContent>
       </Card>
     </div>

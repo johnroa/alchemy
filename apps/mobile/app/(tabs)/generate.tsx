@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Animated,
   FlatList,
   KeyboardAvoidingView,
   Platform,
@@ -9,6 +10,7 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  useWindowDimensions,
   View
 } from "react-native";
 import * as Haptics from "expo-haptics";
@@ -27,6 +29,10 @@ import {
   type RecipeStep
 } from "@/lib/api";
 import { useUiStore } from "@/lib/ui-store";
+import { AlchemyButton, AlchemyFilterChip } from "@/components/alchemy/primitives";
+import { alchemyColors, alchemyRadius, alchemyTypography } from "@/components/alchemy/theme";
+
+// ─── Types ─────────────────────────────────────────────────────────────────────
 
 type Message = {
   id: string;
@@ -92,23 +98,17 @@ type RawRecipe = {
   attachments?: unknown;
 };
 
+// ─── Normalizers ───────────────────────────────────────────────────────────────
+
 const normalizeIngredient = (value: unknown, index: number): WorkspaceIngredient | null => {
-  if (!value) {
-    return null;
-  }
+  if (!value) return null;
 
   if (typeof value === "string") {
     const name = value.trim();
-    if (!name) {
-      return null;
-    }
-
-    return { name };
+    return name ? { name } : null;
   }
 
-  if (typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
+  if (typeof value !== "object" || Array.isArray(value)) return null;
 
   const item = value as {
     name?: unknown;
@@ -121,56 +121,32 @@ const normalizeIngredient = (value: unknown, index: number): WorkspaceIngredient
     note?: unknown;
   };
 
-  const name = typeof item.name === "string" && item.name.trim().length > 0 ? item.name.trim() : `ingredient ${index + 1}`;
+  const name =
+    typeof item.name === "string" && item.name.trim().length > 0 ? item.name.trim() : `ingredient ${index + 1}`;
   const normalized: WorkspaceIngredient = { name };
 
-  if (typeof item.amount === "number" || typeof item.amount === "string") {
-    normalized.amount = item.amount;
-  }
-  if (typeof item.unit === "string" && item.unit.trim().length > 0) {
-    normalized.unit = item.unit.trim();
-  }
-  if (typeof item.quantity === "string" && item.quantity.trim().length > 0) {
-    normalized.quantity = item.quantity.trim();
-  }
-  if (typeof item.quantity === "number") {
-    normalized.quantity = String(item.quantity);
-  }
-  if (typeof item.category === "string" && item.category.trim().length > 0) {
-    normalized.category = item.category.trim();
-  }
-  if (typeof item.preparation === "string" && item.preparation.trim().length > 0) {
+  if (typeof item.amount === "number" || typeof item.amount === "string") normalized.amount = item.amount;
+  if (typeof item.unit === "string" && item.unit.trim()) normalized.unit = item.unit.trim();
+  if (typeof item.quantity === "string" && item.quantity.trim()) normalized.quantity = item.quantity.trim();
+  if (typeof item.quantity === "number") normalized.quantity = String(item.quantity);
+  if (typeof item.category === "string" && item.category.trim()) normalized.category = item.category.trim();
+  if (typeof item.preparation === "string" && item.preparation.trim())
     normalized.preparation = item.preparation.trim();
-  }
-  if (typeof item.notes === "string" && item.notes.trim().length > 0) {
-    normalized.notes = item.notes.trim();
-  } else if (typeof item.note === "string" && item.note.trim().length > 0) {
-    normalized.notes = item.note.trim();
-  }
+  if (typeof item.notes === "string" && item.notes.trim()) normalized.notes = item.notes.trim();
+  else if (typeof item.note === "string" && item.note.trim()) normalized.notes = item.note.trim();
 
   return normalized;
 };
 
 const normalizeStep = (value: unknown, index: number): WorkspaceStep | null => {
-  if (!value) {
-    return null;
-  }
+  if (!value) return null;
 
   if (typeof value === "string") {
     const instruction = value.trim();
-    if (!instruction) {
-      return null;
-    }
-
-    return {
-      index: index + 1,
-      instruction
-    };
+    return instruction ? { index: index + 1, instruction } : null;
   }
 
-  if (typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
+  if (typeof value !== "object" || Array.isArray(value)) return null;
 
   const step = value as {
     index?: unknown;
@@ -193,37 +169,23 @@ const normalizeStep = (value: unknown, index: number): WorkspaceStep | null => {
             ? step.description
             : "";
   const instruction = instructionCandidate.trim();
-  if (!instruction) {
-    return null;
-  }
+  if (!instruction) return null;
 
   const safeIndex = Number.isFinite(step.index) ? Number(step.index) : index + 1;
-  const normalized: WorkspaceStep = {
-    index: safeIndex,
-    instruction
-  };
+  const normalized: WorkspaceStep = { index: safeIndex, instruction };
 
-  if (typeof step.notes === "string" && step.notes.trim().length > 0) {
-    normalized.notes = step.notes.trim();
-  }
-
-  if (Array.isArray(step.inline_measurements)) {
+  if (typeof step.notes === "string" && step.notes.trim()) normalized.notes = step.notes.trim();
+  if (Array.isArray(step.inline_measurements))
     normalized.inline_measurements = step.inline_measurements as RecipeStep["inline_measurements"];
-  }
 
   return normalized;
 };
 
 const normalizeRecipe = (value: unknown): WorkspaceRecipe | null => {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
 
   const data = value as RawRecipe;
-
-  if (typeof data.title !== "string" || !Array.isArray(data.ingredients) || !Array.isArray(data.steps)) {
-    return null;
-  }
+  if (typeof data.title !== "string" || !Array.isArray(data.ingredients) || !Array.isArray(data.steps)) return null;
 
   const ingredients = data.ingredients
     .map((ingredient, index) => normalizeIngredient(ingredient, index))
@@ -240,50 +202,32 @@ const normalizeRecipe = (value: unknown): WorkspaceRecipe | null => {
     steps
   };
 
-  if (typeof data.id === "string") {
-    recipe.id = data.id;
-  }
-  if (typeof data.description === "string") {
-    recipe.description = data.description;
-  }
-  if (typeof data.summary === "string") {
-    recipe.summary = data.summary;
-  }
-  if (typeof data.notes === "string") {
-    recipe.notes = data.notes;
-  }
-  if (typeof data.image_url === "string" || data.image_url === null) {
+  if (typeof data.id === "string") recipe.id = data.id;
+  if (typeof data.description === "string") recipe.description = data.description;
+  if (typeof data.summary === "string") recipe.summary = data.summary;
+  if (typeof data.notes === "string") recipe.notes = data.notes;
+  if (typeof data.image_url === "string" || data.image_url === null)
     recipe.image_url = data.image_url as string | null;
-  }
-  if (typeof data.image_status === "string") {
-    recipe.image_status = data.image_status;
-  }
-  if (Array.isArray(data.pairings)) {
+  if (typeof data.image_status === "string") recipe.image_status = data.image_status;
+  if (Array.isArray(data.pairings))
     recipe.pairings = data.pairings.filter((item): item is string => typeof item === "string");
-  }
-  if (Array.isArray(data.emoji)) {
+  if (Array.isArray(data.emoji))
     recipe.emoji = data.emoji.filter((item): item is string => typeof item === "string");
-  }
-  if (data.metadata && typeof data.metadata === "object" && !Array.isArray(data.metadata)) {
+  if (data.metadata && typeof data.metadata === "object" && !Array.isArray(data.metadata))
     recipe.metadata = data.metadata as RecipeMetadata;
-  }
-  if (Array.isArray(data.attachments)) {
+  if (Array.isArray(data.attachments))
     recipe.attachments = data.attachments as NonNullable<WorkspaceRecipe["attachments"]>;
-  }
 
   return recipe;
 };
 
-const parseAssistantPayload = (content: string): { recipe: WorkspaceRecipe | null; assistantReply: AssistantReply | null } => {
+const parseAssistantPayload = (
+  content: string
+): { recipe: WorkspaceRecipe | null; assistantReply: AssistantReply | null } => {
   try {
     const parsed = JSON.parse(content) as unknown;
-
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      const payload = parsed as {
-        recipe?: unknown;
-        assistant_reply?: unknown;
-      };
-
+      const payload = parsed as { recipe?: unknown; assistant_reply?: unknown };
       const recipe = normalizeRecipe(payload.recipe ?? parsed);
       const replyCandidate = payload.assistant_reply;
       const assistantReply =
@@ -295,30 +239,51 @@ const parseAssistantPayload = (content: string): { recipe: WorkspaceRecipe | nul
               typeof (replyCandidate as { text?: unknown }).text === "string"
             ? (replyCandidate as AssistantReply)
             : null;
-
       return { recipe, assistantReply };
     }
   } catch {
     // no-op
   }
-
   return { recipe: null, assistantReply: null };
 };
 
-const recipeHeroImageFallback =
+// ─── Helpers ───────────────────────────────────────────────────────────────────
+
+const HERO_FALLBACK =
   "https://images.unsplash.com/photo-1556911220-bff31c812dba?auto=format&fit=crop&w=1600&q=80";
+
+const PANEL_MIN = 62;
+
+const formatMeasure = (ing: WorkspaceIngredient): string => {
+  const parts: string[] = [];
+  if (ing.amount !== undefined) parts.push(String(ing.amount));
+  if (ing.unit) parts.push(ing.unit);
+  else if (ing.amount === undefined && ing.quantity) parts.push(ing.quantity);
+  return parts.join(" ");
+};
+
+const formatIngredientName = (ing: WorkspaceIngredient): string => {
+  return ing.preparation ? `${ing.name}, ${ing.preparation}` : ing.name;
+};
+
+// ─── Screen ────────────────────────────────────────────────────────────────────
 
 export default function GenerateScreen(): React.JSX.Element {
   const params = useLocalSearchParams<{ recipeId?: string }>();
-  const editingRecipeId = typeof params.recipeId === "string" && params.recipeId.length > 0 ? params.recipeId : null;
+  const editingRecipeId =
+    typeof params.recipeId === "string" && params.recipeId.length > 0 ? params.recipeId : null;
 
   const [draftId, setDraftId] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [activeRecipe, setActiveRecipe] = useState<WorkspaceRecipe | null>(null);
+  const [suggestedActions, setSuggestedActions] = useState<string[]>([]);
   const [selectedTab, setSelectedTab] = useState(0);
+
   const insets = useSafeAreaInsets();
+  const { height: screenHeight } = useWindowDimensions();
+  const panelExpandedH = Math.floor(screenHeight * 0.56);
 
   const {
     generateChatMinimized,
@@ -329,6 +294,32 @@ export default function GenerateScreen(): React.JSX.Element {
     stepLayout
   } = useUiStore();
 
+  // Animated panel height
+  const panelAnim = useRef(
+    new Animated.Value(generateChatMinimized ? PANEL_MIN : panelExpandedH)
+  ).current;
+  const messagesRef = useRef<FlatList>(null);
+
+  useEffect(() => {
+    Animated.spring(panelAnim, {
+      toValue: generateChatMinimized ? PANEL_MIN : panelExpandedH,
+      useNativeDriver: false,
+      damping: 22,
+      mass: 0.9,
+      stiffness: 200
+    }).start();
+  }, [generateChatMinimized, panelExpandedH, panelAnim]);
+
+  // Scroll to latest message when panel opens or messages change
+  useEffect(() => {
+    if (messages.length > 0 && !generateChatMinimized) {
+      const timer = setTimeout(() => messagesRef.current?.scrollToEnd({ animated: true }), 120);
+      return () => clearTimeout(timer);
+    }
+  }, [messages.length, generateChatMinimized]);
+
+  // ── Queries & Mutations ────────────────────────────────────────────────────
+
   const existingRecipeQuery = useQuery({
     queryKey: ["recipes", editingRecipeId, "workspace"],
     queryFn: async () => api.getRecipe(editingRecipeId ?? ""),
@@ -337,14 +328,9 @@ export default function GenerateScreen(): React.JSX.Element {
   });
 
   useEffect(() => {
-    if (!existingRecipeQuery.data) {
-      return;
-    }
-
+    if (!existingRecipeQuery.data) return;
     const normalized = normalizeRecipe(existingRecipeQuery.data);
-    if (normalized) {
-      setActiveRecipe(normalized);
-    }
+    if (normalized) setActiveRecipe(normalized);
   }, [existingRecipeQuery.data]);
 
   const sendMutation = useMutation({
@@ -354,36 +340,30 @@ export default function GenerateScreen(): React.JSX.Element {
           const result = await api.tweakRecipe(editingRecipeId, message);
           return { kind: "tweak" as const, data: result, input: message };
         }
-
         const result = await api.createDraft(message);
         return { kind: "draft" as const, data: result, input: message };
       }
-
       const result = await api.continueDraft(draftId, message);
       return { kind: "draft" as const, data: result, input: message };
     },
     onSuccess: async (result) => {
       if (result.kind === "tweak") {
         const updatedRecipe = normalizeRecipe(result.data.recipe);
-        if (updatedRecipe) {
-          setActiveRecipe(updatedRecipe);
-        }
-
+        if (updatedRecipe) setActiveRecipe(updatedRecipe);
         const assistantText = result.data.assistant_reply?.text;
-
+        const nextSuggestions = Array.isArray(result.data.assistant_reply?.suggested_next_actions)
+          ? result.data.assistant_reply?.suggested_next_actions.filter(
+              (item): item is string => typeof item === "string"
+            )
+          : [];
         setMessages((current) => [
           ...current,
           { id: `user-${Date.now()}`, role: "user", content: result.input },
           ...(assistantText
-            ? ([
-                {
-                  id: `assistant-${Date.now()}`,
-                  role: "assistant" as const,
-                  content: assistantText
-                }
-              ] as Message[])
+            ? ([{ id: `assistant-${Date.now()}`, role: "assistant" as const, content: assistantText }] as Message[])
             : [])
         ]);
+        setSuggestedActions(nextSuggestions);
         setErrorMessage(null);
         setGenerateChatMinimized(true);
         await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -391,30 +371,15 @@ export default function GenerateScreen(): React.JSX.Element {
       }
 
       const draftData: DraftResponse = result.data;
-      if (!draftId) {
-        setDraftId(draftData.id);
-      }
+      if (!draftId) setDraftId(draftData.id);
 
       const parsedMessages: Message[] = draftData.messages.map((message, index) => {
         if (message.role === "assistant") {
           const parsed = parseAssistantPayload(message.content);
-          if (parsed.assistantReply?.text) {
-            return {
-              id: message.id,
-              role: "assistant",
-              content: parsed.assistantReply.text
-            };
-          }
-
-          if (parsed.recipe) {
-            return {
-              id: message.id,
-              role: "assistant",
-              content: parsed.recipe.title
-            };
-          }
+          if (parsed.assistantReply?.text)
+            return { id: message.id, role: "assistant", content: parsed.assistantReply.text };
+          if (parsed.recipe) return { id: message.id, role: "assistant", content: parsed.recipe.title };
         }
-
         return {
           id: message.id || `${message.role}-${index}`,
           role: message.role === "assistant" ? "assistant" : "user",
@@ -427,11 +392,16 @@ export default function GenerateScreen(): React.JSX.Element {
         .reverse()
         .map((message) => parseAssistantPayload(message.content).recipe)
         .find((item): item is WorkspaceRecipe => item !== null);
+      const nextRecipe = directRecipe ?? latestFromMessages ?? null;
 
-      setActiveRecipe(directRecipe ?? latestFromMessages ?? activeRecipe);
+      if (nextRecipe) setActiveRecipe(nextRecipe);
       setMessages(parsedMessages);
+      const nextSuggestions = Array.isArray(draftData.assistant_reply?.suggested_next_actions)
+        ? draftData.assistant_reply?.suggested_next_actions.filter((item): item is string => typeof item === "string")
+        : [];
+      setSuggestedActions(nextSuggestions);
       setErrorMessage(null);
-      setGenerateChatMinimized(true);
+      setGenerateChatMinimized(Boolean(nextRecipe));
       await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     },
     onError: (error) => {
@@ -441,28 +411,22 @@ export default function GenerateScreen(): React.JSX.Element {
 
   const finalizeMutation = useMutation({
     mutationFn: async () => {
-      if (!draftId) {
-        throw new Error("Create a draft first.");
-      }
-
+      if (!draftId) throw new Error("Create a draft first.");
       return api.finalizeDraft(draftId);
     },
     onSuccess: async (data) => {
       const nextRecipe = normalizeRecipe(data.recipe);
-      if (nextRecipe) {
-        setActiveRecipe(nextRecipe);
-      }
+      if (nextRecipe) setActiveRecipe(nextRecipe);
       const assistantText = data.assistant_reply?.text;
-      if (assistantText) {
+      if (assistantText)
         setMessages((current) => [
           ...current,
-          {
-            id: `assistant-finalize-${Date.now()}`,
-            role: "assistant",
-            content: assistantText
-          }
+          { id: `assistant-finalize-${Date.now()}`, role: "assistant", content: assistantText }
         ]);
-      }
+      const nextSuggestions = Array.isArray(data.assistant_reply?.suggested_next_actions)
+        ? data.assistant_reply?.suggested_next_actions.filter((item): item is string => typeof item === "string")
+        : [];
+      setSuggestedActions(nextSuggestions);
       setGenerateChatMinimized(true);
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     },
@@ -473,454 +437,719 @@ export default function GenerateScreen(): React.JSX.Element {
 
   const saveMutation = useMutation({
     mutationFn: async () => {
-      if (!activeRecipe?.id) {
-        throw new Error("Finalize recipe before saving to cookbook.");
-      }
-
+      if (!activeRecipe?.id) throw new Error("Finalize recipe before saving to cookbook.");
       return api.saveRecipe(activeRecipe.id);
     },
     onSuccess: async () => {
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     },
     onError: (error) => {
-      setErrorMessage(error instanceof Error ? error.message : "Could not save recipe to cookbook.");
+      setErrorMessage(error instanceof Error ? error.message : "Could not save recipe.");
     }
   });
 
-  const onSend = (): void => {
-    const value = input.trim();
-    if (!value) {
-      return;
-    }
-
-    sendMutation.mutate(value);
-    setInput("");
-  };
+  // ── Derived state ──────────────────────────────────────────────────────────
 
   const recipeTabs = useMemo(() => {
-    if (!activeRecipe) {
-      return [] as Array<{ key: string; label: string; recipe: WorkspaceRecipe }>;
-    }
-
+    if (!activeRecipe) return [] as Array<{ key: string; label: string; recipe: WorkspaceRecipe }>;
     const tabs: Array<{ key: string; label: string; recipe: WorkspaceRecipe }> = [
-      {
-        key: "main",
-        label: activeRecipe.title,
-        recipe: activeRecipe
-      }
+      { key: "main", label: activeRecipe.title, recipe: activeRecipe }
     ];
-
     for (const attachment of activeRecipe.attachments ?? []) {
       if ("recipe" in attachment && attachment.recipe) {
         const nested = normalizeRecipe(attachment.recipe);
-        if (!nested) {
-          continue;
-        }
-
-        const label = "relation_type" in attachment && attachment.relation_type
-          ? `${attachment.relation_type}: ${nested.title}`
-          : nested.title;
-
-        const key = "attachment_id" in attachment && attachment.attachment_id
-          ? attachment.attachment_id
-          : `${label}-${tabs.length}`;
-
-        tabs.push({
-          key,
-          label,
-          recipe: nested
-        });
+        if (!nested) continue;
+        const label =
+          "relation_type" in attachment && attachment.relation_type
+            ? `${attachment.relation_type}: ${nested.title}`
+            : nested.title;
+        const key =
+          "attachment_id" in attachment && attachment.attachment_id
+            ? attachment.attachment_id
+            : `${label}-${tabs.length}`;
+        tabs.push({ key, label, recipe: nested });
       }
     }
-
     return tabs;
   }, [activeRecipe]);
 
   useEffect(() => {
-    if (selectedTab >= recipeTabs.length && recipeTabs.length > 0) {
-      setSelectedTab(0);
-    }
+    if (selectedTab >= recipeTabs.length && recipeTabs.length > 0) setSelectedTab(0);
   }, [recipeTabs.length, selectedTab]);
 
   const currentRecipe = recipeTabs[selectedTab]?.recipe ?? activeRecipe;
+
   const ingredientGroupingView = useMemo(() => {
     const groups: Array<{ label: string; items: WorkspaceIngredient[] }> = [];
-    if (!currentRecipe) {
-      return { groups, hasExplicitCategory: false };
-    }
-
+    if (!currentRecipe) return { groups, hasExplicitCategory: false };
     const byKey = new Map<string, WorkspaceIngredient[]>();
     let hasExplicitCategory = false;
-
     for (const ingredient of currentRecipe.ingredients) {
       const rawCategory = ingredient.category?.trim();
-      if (rawCategory) {
-        hasExplicitCategory = true;
-      }
+      if (rawCategory) hasExplicitCategory = true;
       const category = rawCategory && rawCategory.length > 0 ? rawCategory : "Ingredients";
       const bucket = byKey.get(category) ?? [];
       bucket.push(ingredient);
       byKey.set(category, bucket);
     }
-
-    for (const [label, items] of byKey.entries()) {
-      groups.push({ label, items });
-    }
-
-    return {
-      groups,
-      hasExplicitCategory
-    };
+    for (const [label, items] of byKey.entries()) groups.push({ label, items });
+    return { groups, hasExplicitCategory };
   }, [currentRecipe]);
+
   const canRenderCategoryGroups = ingredientGrouping === "category" && ingredientGroupingView.hasExplicitCategory;
-  const workspaceImage = currentRecipe?.image_url ?? activeRecipe?.image_url ?? recipeHeroImageFallback;
-  const tabBarClearance = 96 + insets.bottom;
-  const chatBottomOffset = tabBarClearance;
-  const recipeBottomPadding = tabBarClearance + 280;
+
+  // ── Layout constants ───────────────────────────────────────────────────────
+
+  const tabBarClearance = insets.bottom + 88;
+  const bgImage = currentRecipe?.image_url ?? activeRecipe?.image_url ?? HERO_FALLBACK;
+
+  // ── Handlers ───────────────────────────────────────────────────────────────
+
+  const onSend = (): void => {
+    const value = input.trim();
+    if (!value || sendMutation.isPending) return;
+    sendMutation.mutate(value);
+    setInput("");
+  };
+
+  // ── Render ─────────────────────────────────────────────────────────────────
+
+  const lastMessage = messages[messages.length - 1];
 
   return (
-    <KeyboardAvoidingView
-      behavior={Platform.select({ ios: "padding", android: undefined })}
-      style={styles.container}
-      keyboardVerticalOffset={86}
-    >
-      <Image source={workspaceImage} style={StyleSheet.absoluteFillObject} contentFit="cover" transition={250} />
-      <LinearGradient colors={["rgba(2,6,23,0.55)", "rgba(2,6,23,0.9)"]} style={StyleSheet.absoluteFillObject} />
+    <View style={styles.root}>
+      {/* ── Background: hero image + gradient (only when recipe is loaded) ── */}
+      {currentRecipe ? (
+        <>
+          <Image
+            source={bgImage}
+            contentFit="cover"
+            style={StyleSheet.absoluteFillObject}
+            transition={600}
+          />
+          <LinearGradient
+            colors={["rgba(6,15,26,0.38)", "rgba(6,15,26,0.70)", alchemyColors.deepDark]}
+            locations={[0, 0.42, 1]}
+            style={StyleSheet.absoluteFillObject}
+          />
+        </>
+      ) : null}
 
-      <View style={styles.heroBar}>
-        <Text style={styles.heroTitle}>What do you want to make today?</Text>
-        <Text style={styles.heroSubtitle}>Recipe-first workspace with adaptive chef chat.</Text>
-      </View>
+      {/* ── Bottom scrim: darkens recipe canvas behind the panel ── */}
+      <LinearGradient
+        colors={["transparent", "rgba(4,10,20,0.96)"]}
+        locations={[0, 1]}
+        style={styles.bottomScrim}
+        pointerEvents="none"
+      />
 
-      <ScrollView contentContainerStyle={[styles.recipeScroll, { paddingBottom: recipeBottomPadding }]}>
-        {sendMutation.isPending && !activeRecipe ? (
-          <View style={styles.stateCard}>
-            <ActivityIndicator color="#FFFFFF" />
-            <Text style={styles.stateLabel}>Composing your recipe...</Text>
+      {/* ── Recipe canvas (scrollable) ── */}
+      <ScrollView
+        style={StyleSheet.absoluteFillObject}
+        contentContainerStyle={[
+          styles.scrollContent,
+          { paddingTop: insets.top + 28, paddingBottom: tabBarClearance + PANEL_MIN + 40 }
+        ]}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+      >
+        {/* Error banner — visible in all states */}
+        {errorMessage ? (
+          <View style={styles.errorBanner}>
+            <Text style={styles.errorBannerText}>{errorMessage}</Text>
           </View>
-        ) : errorMessage && !activeRecipe ? (
-          <View style={styles.stateCard}>
-            <Text style={styles.errorTitle}>Something went wrong</Text>
-            <Text style={styles.stateLabel}>{errorMessage}</Text>
+        ) : null}
+
+        {sendMutation.isPending && !activeRecipe ? (
+          // Loading state
+          <View style={styles.loadingWrap}>
+            <ActivityIndicator color="rgba(255,255,255,0.55)" />
+            <Text style={styles.loadingText}>Composing your recipe...</Text>
           </View>
         ) : !currentRecipe ? (
-          <View style={styles.stateCard}>
-            <Text style={styles.emptyTitle}>No recipe yet</Text>
-            <Text style={styles.stateLabel}>Start with “chicken parm for a romantic dinner for 2”.</Text>
+          // Empty state
+          <View style={styles.emptyWrap}>
+            <Text style={styles.emptyTitle}>Generate Recipe</Text>
+            <Text style={styles.emptySubtitle}>
+              Tell the chef assistant what you'd like to cook. Start with ideas, then refine.
+            </Text>
           </View>
         ) : (
+          // Recipe content
           <>
-            <View style={styles.recipeHeaderCard}>
-              <Text style={styles.recipeTitle}>{currentRecipe.title}</Text>
-              <Text style={styles.recipeMeta}>
-                {currentRecipe.servings} servings · {measurementMode.toUpperCase()} · {stepLayout}
+            {/* Updating indicator (tweaking) */}
+            {sendMutation.isPending ? (
+              <View style={styles.updatingRow}>
+                <ActivityIndicator size="small" color={alchemyColors.grey2} />
+                <Text style={styles.updatingText}>Updating recipe...</Text>
+              </View>
+            ) : null}
+
+            {/* Title */}
+            <Text style={styles.recipeTitle}>{currentRecipe.title}</Text>
+
+            {/* Description */}
+            {(currentRecipe.summary ?? currentRecipe.description) ? (
+              <Text style={styles.recipeDescription}>
+                {currentRecipe.summary ?? currentRecipe.description}
               </Text>
-              <Text style={styles.recipeDescription}>{currentRecipe.summary ?? currentRecipe.description ?? ""}</Text>
+            ) : null}
+
+            {/* Meta: time + servings */}
+            <View style={styles.metaRow}>
+              {currentRecipe.servings > 0 ? (
+                <Text style={styles.metaItem}>Serves {currentRecipe.servings}</Text>
+              ) : null}
+              {(measurementMode !== "us" || stepLayout !== "detailed") ? (
+                <Text style={styles.metaItem}>{measurementMode.toUpperCase()}</Text>
+              ) : null}
             </View>
 
+            {/* Attachment tabs (when multiple recipes) */}
             {recipeTabs.length > 1 ? (
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabRow}>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.tabRow}
+              >
                 {recipeTabs.map((tab, index) => (
-                  <Pressable
+                  <AlchemyFilterChip
                     key={tab.key}
-                    style={[styles.tabPill, selectedTab === index ? styles.tabPillActive : undefined]}
+                    label={tab.label}
+                    active={selectedTab === index}
                     onPress={() => setSelectedTab(index)}
-                  >
-                    <Text style={[styles.tabPillText, selectedTab === index ? styles.tabPillTextActive : undefined]} numberOfLines={1}>
-                      {tab.label}
-                    </Text>
-                  </Pressable>
+                  />
                 ))}
               </ScrollView>
             ) : null}
 
-            <View style={styles.sectionCard}>
-              <Text style={styles.sectionTitle}>{canRenderCategoryGroups ? "Ingredients (by category)" : "Ingredients"}</Text>
-              {canRenderCategoryGroups
-                ? ingredientGroupingView.groups.map((group) => (
-                    <View key={group.label} style={styles.ingredientGroup}>
-                      <Text style={styles.ingredientGroupTitle}>{group.label}</Text>
-                      {group.items.map((ingredient, index) => (
-                        <Text
-                          key={`${group.label}-${ingredient.name}-${index}-${ingredient.quantity ?? ingredient.amount ?? ""}`}
-                          style={styles.sectionText}
-                        >
-                          •{" "}
-                          {[
-                            ingredient.amount !== undefined ? String(ingredient.amount) : undefined,
-                            ingredient.unit,
-                            ingredient.amount === undefined ? ingredient.quantity : undefined,
-                            ingredient.name
-                          ]
-                            .filter((part): part is string => typeof part === "string" && part.trim().length > 0)
-                            .join(" ")}
-                          {ingredient.preparation ? `, ${ingredient.preparation}` : ""}
-                          {ingredient.notes ? ` (${ingredient.notes})` : ""}
-                        </Text>
-                      ))}
-                    </View>
-                  ))
-                : currentRecipe.ingredients.map((ingredient, index) => (
-                    <Text
-                      key={`${ingredient.name}-${index}-${ingredient.quantity ?? ingredient.amount ?? ""}`}
-                      style={styles.sectionText}
-                    >
-                      •{" "}
-                      {[
-                        ingredient.amount !== undefined ? String(ingredient.amount) : undefined,
-                        ingredient.unit,
-                        ingredient.amount === undefined ? ingredient.quantity : undefined,
-                        ingredient.name
-                      ]
-                        .filter((part): part is string => typeof part === "string" && part.trim().length > 0)
-                        .join(" ")}
-                      {ingredient.preparation ? `, ${ingredient.preparation}` : ""}
-                      {ingredient.notes ? ` (${ingredient.notes})` : ""}
-                    </Text>
-                  ))}
-            </View>
+            {/* ── Ingredients ── */}
+            <View style={styles.divider} />
+            <Text style={styles.sectionHeader}>Ingredients</Text>
 
-            <View style={styles.sectionCard}>
-              <Text style={styles.sectionTitle}>Steps</Text>
-              {currentRecipe.steps.map((step, idx) => {
-                const safeInstruction = typeof step?.instruction === "string" ? step.instruction : "";
-                const safeStepIndex = Number.isFinite(step?.index) ? step.index : idx + 1;
-                const safeInlineMeasurements = Array.isArray(step?.inline_measurements) ? step.inline_measurements : [];
-                const safeKey = `${safeStepIndex}-${idx}-${safeInstruction.slice(0, 32)}`;
+            {canRenderCategoryGroups
+              ? ingredientGroupingView.groups.map((group) => (
+                  <View key={group.label} style={styles.ingredientGroup}>
+                    <Text style={styles.ingredientGroupLabel}>{group.label}</Text>
+                    {group.items.map((ing, i) => (
+                      <View key={`${group.label}-${ing.name}-${i}`} style={styles.ingredientRow}>
+                        <Text style={styles.ingredientMeasure}>{formatMeasure(ing)}</Text>
+                        <Text style={styles.ingredientName}>{formatIngredientName(ing)}</Text>
+                      </View>
+                    ))}
+                  </View>
+                ))
+              : currentRecipe.ingredients.map((ing, i) => (
+                  <View key={`${ing.name}-${i}-${ing.amount ?? ""}`} style={styles.ingredientRow}>
+                    <Text style={styles.ingredientMeasure}>{formatMeasure(ing)}</Text>
+                    <Text style={styles.ingredientName}>{formatIngredientName(ing)}</Text>
+                  </View>
+                ))}
 
-                return (
-                <View key={safeKey} style={styles.stepRow}>
-                  <Text style={styles.stepIndex}>{safeStepIndex}.</Text>
+            {/* ── Method ── */}
+            <View style={styles.divider} />
+            <Text style={styles.sectionHeader}>Method</Text>
+
+            {currentRecipe.steps.map((step, idx) => {
+              const instruction = typeof step?.instruction === "string" ? step.instruction : "";
+              const stepNum = Number.isFinite(step?.index) ? step.index : idx + 1;
+              const safeInline = Array.isArray(step?.inline_measurements) ? step.inline_measurements : [];
+              return (
+                <View key={`step-${stepNum}-${idx}`} style={styles.stepRow}>
+                  <Text style={styles.stepNum}>{stepNum}</Text>
                   <View style={styles.stepBody}>
-                    <Text style={styles.sectionText}>{safeInstruction}</Text>
-                    {inlineMeasurements && safeInlineMeasurements.length > 0 ? (
-                      <Text style={styles.inlineText}>
-                        Inline: {safeInlineMeasurements.map((item) => `${item.amount} ${item.unit} ${item.ingredient}`).join(" · ")}
+                    <Text style={styles.stepText}>{instruction}</Text>
+                    {inlineMeasurements && safeInline.length > 0 ? (
+                      <Text style={styles.stepInline}>
+                        {safeInline
+                          .map((item) => `${item.amount} ${item.unit} ${item.ingredient}`)
+                          .join(" · ")}
                       </Text>
                     ) : null}
-                    {typeof step?.notes === "string" && step.notes.length > 0 ? <Text style={styles.inlineText}>{step.notes}</Text> : null}
+                    {typeof step?.notes === "string" && step.notes.length > 0 ? (
+                      <Text style={styles.stepInline}>{step.notes}</Text>
+                    ) : null}
                   </View>
                 </View>
-              )})}
-            </View>
+              );
+            })}
 
-            {currentRecipe.metadata ? (
-              <View style={styles.sectionCard}>
-                <Text style={styles.sectionTitle}>Metadata</Text>
-                <Text style={styles.sectionText}>{JSON.stringify(currentRecipe.metadata, null, 2)}</Text>
-              </View>
-            ) : null}
+            {/* ── Actions ── */}
+            <View style={styles.actionSection}>
+              {errorMessage ? <Text style={styles.errorText}>{errorMessage}</Text> : null}
 
-            <View style={styles.actionRow}>
-              <Pressable
-                style={styles.actionButton}
-                onPress={() => {
-                  if (!draftId) {
-                    return;
-                  }
-                  finalizeMutation.mutate();
-                }}
-                disabled={finalizeMutation.isPending || !draftId}
-              >
-                <Text style={styles.actionButtonText}>
-                  {draftId ? (finalizeMutation.isPending ? "Finalizing..." : "Finalize Recipe") : "Direct Edit Mode"}
-                </Text>
-              </Pressable>
-              <Pressable
-                style={[styles.actionButton, styles.secondaryActionButton]}
-                onPress={() => saveMutation.mutate()}
-                disabled={saveMutation.isPending}
-              >
-                <Text style={styles.actionButtonText}>{saveMutation.isPending ? "Saving..." : "Add to My Cookbook"}</Text>
-              </Pressable>
+              {draftId && !activeRecipe?.id ? (
+                <AlchemyButton
+                  label="Finalize Recipe"
+                  onPress={() => finalizeMutation.mutate()}
+                  loading={finalizeMutation.isPending}
+                  disabled={finalizeMutation.isPending}
+                />
+              ) : activeRecipe?.id ? (
+                <AlchemyButton
+                  label="Save to My Cookbook"
+                  onPress={() => saveMutation.mutate()}
+                  loading={saveMutation.isPending}
+                  disabled={saveMutation.isPending}
+                />
+              ) : null}
             </View>
           </>
         )}
       </ScrollView>
 
-      <BlurView
-        intensity={28}
-        tint="dark"
-        style={[styles.chatOverlay, { bottom: chatBottomOffset }, generateChatMinimized ? styles.chatOverlayMin : undefined]}
+      {/* ── Floating glass chat panel (keyboard-aware) ── */}
+      <KeyboardAvoidingView
+        style={StyleSheet.absoluteFillObject}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        keyboardVerticalOffset={0}
+        pointerEvents="box-none"
       >
-        <Pressable
-          style={styles.overlayHandle}
-          onPress={() => setGenerateChatMinimized(!generateChatMinimized)}
-        >
-          <Text style={styles.overlayHandleText}>{generateChatMinimized ? "Open Chat" : "Minimize Chat"}</Text>
-          <Text style={styles.overlaySubtle}>{messages[messages.length - 1]?.content ?? "Ready for your next tweak."}</Text>
-        </Pressable>
+        <View style={{ flex: 1 }} pointerEvents="none" />
 
-        {!generateChatMinimized ? (
-          <>
-            <FlatList
-              data={messages}
-              keyExtractor={(item) => item.id}
-              contentContainerStyle={styles.messageList}
-              renderItem={({ item }) => (
-                <View style={[styles.bubble, item.role === "user" ? styles.userBubble : styles.assistantBubble]}>
-                  <Text style={[styles.bubbleText, item.role === "user" ? styles.userText : styles.assistantText]}>{item.content}</Text>
-                </View>
-              )}
-            />
-            <View style={styles.inputRow}>
-              <TextInput
-                placeholder="Ask for tweaks, pairings, or attachments..."
-                value={input}
-                onChangeText={setInput}
-                style={styles.input}
-                multiline
-                placeholderTextColor="#94A3B8"
-              />
-              <Pressable style={styles.sendButton} onPress={onSend}>
-                <Text style={styles.sendButtonText}>Send</Text>
+        <Animated.View
+          style={[
+            styles.chatPanel,
+            { height: panelAnim, marginBottom: tabBarClearance }
+          ]}
+        >
+          {/* Glass background — purely visual, never a layout container */}
+          <BlurView intensity={50} tint="dark" style={StyleSheet.absoluteFillObject} />
+
+          {generateChatMinimized ? (
+            // ── Collapsed pill ──
+            <Pressable
+              style={styles.pill}
+              onPress={() => setGenerateChatMinimized(false)}
+            >
+              <Text style={styles.pillGlyph}>✦</Text>
+              <Text style={styles.pillPreview} numberOfLines={1}>
+                {lastMessage?.content ?? "Ask for ideas, pick one to generate..."}
+              </Text>
+              <Text style={styles.pillChevron}>↑</Text>
+            </Pressable>
+          ) : (
+            // ── Expanded sheet ──
+            <View style={styles.sheet}>
+              {/* Drag handle + dismiss */}
+              <Pressable
+                style={styles.handleArea}
+                onPress={() => setGenerateChatMinimized(true)}
+              >
+                <View style={styles.handle} />
               </Pressable>
+
+              {/* Message list */}
+              <FlatList
+                ref={messagesRef}
+                data={messages}
+                keyExtractor={(item) => item.id}
+                style={styles.messageList}
+                contentContainerStyle={styles.messageListPad}
+                showsVerticalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
+                ListEmptyComponent={
+                  <Text style={styles.emptyChat}>
+                    Start by telling me what you'd like to cook. Ask for ideas, pick one, then ask
+                    for tweaks.
+                  </Text>
+                }
+                renderItem={({ item }) => (
+                  <View
+                    style={[
+                      styles.bubble,
+                      item.role === "user" ? styles.userBubble : styles.assistantBubble
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.bubbleText,
+                        item.role === "user" ? styles.userBubbleText : styles.assistantBubbleText
+                      ]}
+                    >
+                      {item.content}
+                    </Text>
+                  </View>
+                )}
+              />
+
+              {/* Suggested next actions */}
+              {suggestedActions.length > 0 ? (
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.suggestionsRow}
+                  keyboardShouldPersistTaps="handled"
+                >
+                  {suggestedActions.map((action, i) => (
+                    <AlchemyFilterChip
+                      key={`${action}-${i}`}
+                      label={action.length > 28 ? `${action.slice(0, 28)}…` : action}
+                      active={false}
+                      onPress={() => setInput(action)}
+                    />
+                  ))}
+                </ScrollView>
+              ) : null}
+
+              {/* Input row */}
+              <View style={styles.inputRow}>
+                <TextInput
+                  value={input}
+                  onChangeText={setInput}
+                  placeholder="Ask for ideas or tweaks..."
+                  placeholderTextColor={alchemyColors.grey1}
+                  style={styles.chatInput}
+                  multiline
+                  maxLength={600}
+                  returnKeyType="send"
+                  onSubmitEditing={onSend}
+                  blurOnSubmit
+                />
+                <Pressable
+                  style={[
+                    styles.sendBtn,
+                    (!input.trim() || sendMutation.isPending) && styles.sendBtnDisabled
+                  ]}
+                  onPress={onSend}
+                  disabled={!input.trim() || sendMutation.isPending}
+                >
+                  {sendMutation.isPending ? (
+                    <ActivityIndicator color={alchemyColors.dark} size="small" />
+                  ) : (
+                    <Text style={styles.sendBtnGlyph}>↑</Text>
+                  )}
+                </Pressable>
+              </View>
             </View>
-          </>
-        ) : null}
-      </BlurView>
-    </KeyboardAvoidingView>
+          )}
+        </Animated.View>
+      </KeyboardAvoidingView>
+    </View>
   );
 }
 
+// ─── Styles ────────────────────────────────────────────────────────────────────
+
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#020617" },
-  heroBar: {
-    paddingTop: 62,
-    paddingHorizontal: 18,
-    paddingBottom: 10,
-    gap: 4
+  root: {
+    flex: 1,
+    backgroundColor: alchemyColors.deepDark
   },
-  heroTitle: { color: "#FFFFFF", fontSize: 28, fontWeight: "700" },
-  heroSubtitle: { color: "#CBD5E1", fontSize: 14 },
-  recipeScroll: {
-    padding: 16,
-    gap: 10
+  scrollContent: {
+    paddingHorizontal: 20
   },
-  stateCard: {
-    minHeight: 220,
-    borderRadius: 18,
-    padding: 18,
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.22)",
-    backgroundColor: "rgba(15,23,42,0.42)",
+
+  // ── Empty / loading states ──
+  emptyWrap: {
+    paddingTop: 60,
+    gap: 14
+  },
+  emptyTitle: {
+    ...alchemyTypography.titleXL,
+    color: alchemyColors.white
+  },
+  emptySubtitle: {
+    ...alchemyTypography.bodyLight,
+    color: alchemyColors.grey1,
+    lineHeight: 26
+  },
+  loadingWrap: {
+    paddingTop: 120,
     alignItems: "center",
-    justifyContent: "center",
-    gap: 8
+    gap: 16
   },
-  stateLabel: { color: "#CBD5E1", textAlign: "center" },
-  errorTitle: { color: "#FCA5A5", fontWeight: "700", fontSize: 18 },
-  emptyTitle: { color: "#FFFFFF", fontWeight: "700", fontSize: 18 },
-  recipeHeaderCard: {
-    borderRadius: 18,
+  loadingText: {
+    ...alchemyTypography.bodyLight,
+    color: alchemyColors.grey1
+  },
+
+  // ── Recipe canvas ──
+  updatingRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginBottom: 12,
+    opacity: 0.7
+  },
+  updatingText: {
+    ...alchemyTypography.captionLight,
+    color: alchemyColors.grey2
+  },
+  recipeTitle: {
+    ...alchemyTypography.titleXL,
+    color: alchemyColors.white,
+    marginBottom: 12
+  },
+  recipeDescription: {
+    ...alchemyTypography.bodySmall,
+    color: "rgba(255,255,255,0.75)",
+    lineHeight: 24,
+    marginBottom: 14
+  },
+  metaRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 16,
+    marginBottom: 24
+  },
+  metaItem: {
+    ...alchemyTypography.captionLight,
+    color: alchemyColors.grey2,
+    letterSpacing: 0.3
+  },
+  tabRow: {
+    gap: 8,
+    paddingBottom: 20,
+    flexDirection: "row",
+    alignItems: "center"
+  },
+  divider: {
+    height: 1,
+    backgroundColor: "rgba(27,40,55,0.9)",
+    marginBottom: 18
+  },
+  sectionHeader: {
+    ...alchemyTypography.caption,
+    color: alchemyColors.grey2,
+    letterSpacing: 0.8,
+    marginBottom: 14
+  },
+  ingredientGroup: {
+    marginBottom: 16
+  },
+  ingredientGroupLabel: {
+    ...alchemyTypography.caption,
+    color: alchemyColors.grey2,
+    letterSpacing: 0.5,
+    marginBottom: 8,
+    textTransform: "capitalize"
+  },
+  ingredientRow: {
+    flexDirection: "row",
+    alignItems: "baseline",
+    gap: 12,
+    marginBottom: 8
+  },
+  ingredientMeasure: {
+    ...alchemyTypography.captionLight,
+    color: alchemyColors.grey1,
+    width: 64,
+    textAlign: "right",
+    flexShrink: 0
+  },
+  ingredientName: {
+    ...alchemyTypography.captionLight,
+    color: alchemyColors.grey4,
+    flex: 1
+  },
+  stepRow: {
+    flexDirection: "row",
+    gap: 14,
+    marginBottom: 18,
+    alignItems: "flex-start"
+  },
+  stepNum: {
+    ...alchemyTypography.caption,
+    color: alchemyColors.grey2,
+    lineHeight: 21,
+    width: 20,
+    textAlign: "right",
+    paddingTop: 1
+  },
+  stepBody: {
+    flex: 1,
+    gap: 5
+  },
+  stepText: {
+    ...alchemyTypography.captionLight,
+    color: alchemyColors.grey4,
+    lineHeight: 22
+  },
+  stepInline: {
+    ...alchemyTypography.micro,
+    color: alchemyColors.grey1
+  },
+  actionSection: {
+    marginTop: 36,
+    gap: 12,
+    paddingBottom: 8
+  },
+  errorText: {
+    ...alchemyTypography.captionLight,
+    color: alchemyColors.danger,
+    textAlign: "center"
+  },
+
+  // ── Bottom scrim ──
+  bottomScrim: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: 280,
+    pointerEvents: "none"
+  },
+
+  // ── Error banner ──
+  errorBanner: {
+    backgroundColor: "rgba(248,113,113,0.12)",
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.2)",
-    backgroundColor: "rgba(15,23,42,0.42)",
-    padding: 16,
-    gap: 6
+    borderColor: "rgba(248,113,113,0.3)",
+    borderRadius: alchemyRadius.sm,
+    padding: 12,
+    marginBottom: 16
   },
-  recipeTitle: { color: "#FFFFFF", fontSize: 24, fontWeight: "700" },
-  recipeMeta: { color: "#A7F3D0", fontSize: 13, fontWeight: "600" },
-  recipeDescription: { color: "#E2E8F0", fontSize: 14, lineHeight: 20 },
-  tabRow: { gap: 8, paddingTop: 8, paddingBottom: 2 },
-  tabPill: {
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: "rgba(203,213,225,0.36)",
-    backgroundColor: "rgba(15,23,42,0.48)",
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    maxWidth: 240
+  errorBannerText: {
+    ...alchemyTypography.captionLight,
+    color: alchemyColors.danger,
+    lineHeight: 20
   },
-  tabPillActive: {
-    borderColor: "rgba(16,185,129,0.65)",
-    backgroundColor: "rgba(6,78,59,0.86)"
-  },
-  tabPillText: { color: "#CBD5E1", fontWeight: "600", fontSize: 12 },
-  tabPillTextActive: { color: "#ECFDF5" },
-  sectionCard: {
-    borderRadius: 16,
+
+  // ── Chat panel ──
+  chatPanel: {
+    marginHorizontal: 12,
+    borderRadius: alchemyRadius.xl,
+    overflow: "hidden",
+    backgroundColor: "rgba(8,16,28,0.82)",
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.18)",
-    backgroundColor: "rgba(15,23,42,0.42)",
-    padding: 14,
-    gap: 8,
-    marginTop: 10
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: -6 },
+    shadowOpacity: 0.55,
+    shadowRadius: 32,
+    elevation: 20
   },
-  sectionTitle: { color: "#FFFFFF", fontSize: 16, fontWeight: "700" },
-  ingredientGroup: { gap: 6, marginBottom: 6 },
-  ingredientGroupTitle: { color: "#A7F3D0", fontSize: 13, fontWeight: "700", textTransform: "capitalize" },
-  sectionText: { color: "#E2E8F0", fontSize: 14, lineHeight: 20 },
-  stepRow: { flexDirection: "row", gap: 8 },
-  stepIndex: { color: "#A7F3D0", fontWeight: "700", width: 18 },
-  stepBody: { flex: 1, gap: 3 },
-  inlineText: { color: "#94A3B8", fontSize: 12 },
-  actionRow: { flexDirection: "row", gap: 10, marginTop: 12 },
-  actionButton: {
+  // ── Pill (collapsed) ──
+  pill: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 20,
+    gap: 12
+  },
+  pillGlyph: {
+    fontSize: 16,
+    color: alchemyColors.grey2
+  },
+  pillPreview: {
+    flex: 1,
+    ...alchemyTypography.bodySmall,
+    color: alchemyColors.grey4,
+    letterSpacing: -0.1
+  },
+  pillChevron: {
+    fontSize: 18,
+    color: alchemyColors.grey2,
+    fontWeight: "600"
+  },
+
+  // ── Sheet (expanded) ──
+  sheet: {
+    flex: 1
+  },
+  handleArea: {
+    alignItems: "center",
+    paddingTop: 12,
+    paddingBottom: 6
+  },
+  handle: {
+    width: 36,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: "rgba(255,255,255,0.25)"
+  },
+  messageList: {
+    flex: 1
+  },
+  messageListPad: {
+    flexGrow: 1,
+    justifyContent: "flex-end",
+    padding: 14,
+    gap: 10
+  },
+  emptyChat: {
+    ...alchemyTypography.bodySmall,
+    color: alchemyColors.grey1,
+    textAlign: "center",
+    paddingHorizontal: 20,
+    paddingTop: 16,
+    lineHeight: 22
+  },
+  bubble: {
+    maxWidth: "82%",
+    borderRadius: 20,
+    paddingVertical: 10,
+    paddingHorizontal: 14
+  },
+  userBubble: {
+    alignSelf: "flex-end",
+    backgroundColor: alchemyColors.grey4,
+    borderBottomRightRadius: 4
+  },
+  assistantBubble: {
+    alignSelf: "flex-start",
+    backgroundColor: "rgba(27,40,55,0.92)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.08)",
+    borderBottomLeftRadius: 4
+  },
+  bubbleText: {
+    ...alchemyTypography.bodySmall,
+    lineHeight: 20
+  },
+  userBubbleText: {
+    color: alchemyColors.dark
+  },
+  assistantBubbleText: {
+    color: alchemyColors.grey4
+  },
+  suggestionsRow: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    gap: 8,
+    flexDirection: "row",
+    alignItems: "center"
+  },
+  inputRow: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    paddingHorizontal: 14,
+    paddingBottom: 14,
+    paddingTop: 8,
+    gap: 10,
+    borderTopWidth: 1,
+    borderTopColor: "rgba(255,255,255,0.07)"
+  },
+  chatInput: {
     flex: 1,
     minHeight: 44,
-    borderRadius: 12,
-    backgroundColor: "rgba(5,150,105,0.9)",
+    maxHeight: 100,
+    borderRadius: alchemyRadius.lg,
+    borderWidth: 1.5,
+    borderColor: "rgba(255,255,255,0.1)",
+    backgroundColor: "rgba(6,15,26,0.55)",
+    color: alchemyColors.grey4,
+    ...alchemyTypography.bodySmall,
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+    lineHeight: 20
+  },
+  sendBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 999,
+    backgroundColor: alchemyColors.grey4,
     alignItems: "center",
     justifyContent: "center"
   },
-  secondaryActionButton: {
-    backgroundColor: "rgba(15,23,42,0.88)",
-    borderWidth: 1,
-    borderColor: "rgba(148,163,184,0.45)"
+  sendBtnDisabled: {
+    opacity: 0.32
   },
-  actionButtonText: { color: "#FFFFFF", fontWeight: "700", fontSize: 13, textAlign: "center" },
-  chatOverlay: {
-    position: "absolute",
-    left: 12,
-    right: 12,
-    borderRadius: 18,
-    overflow: "hidden",
-    borderWidth: 1,
-    borderColor: "rgba(148,163,184,0.42)",
-    maxHeight: 320
-  },
-  chatOverlayMin: {
-    maxHeight: 88
-  },
-  overlayHandle: {
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: "rgba(148,163,184,0.3)",
-    gap: 2
-  },
-  overlayHandleText: { color: "#ECFDF5", fontWeight: "700" },
-  overlaySubtle: { color: "#CBD5E1", fontSize: 12 },
-  messageList: { padding: 10, gap: 8, maxHeight: 170 },
-  bubble: { borderRadius: 14, padding: 10 },
-  userBubble: { alignSelf: "flex-end", backgroundColor: "rgba(5,150,105,0.92)" },
-  assistantBubble: { alignSelf: "flex-start", backgroundColor: "rgba(30,41,59,0.92)" },
-  bubbleText: { fontSize: 13, lineHeight: 18 },
-  userText: { color: "#FFFFFF" },
-  assistantText: { color: "#E2E8F0" },
-  inputRow: { flexDirection: "row", gap: 8, alignItems: "flex-end", padding: 10 },
-  input: {
-    flex: 1,
-    minHeight: 42,
-    maxHeight: 90,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: "rgba(148,163,184,0.45)",
-    backgroundColor: "rgba(15,23,42,0.65)",
-    color: "#FFFFFF",
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    fontSize: 13
-  },
-  sendButton: {
-    minHeight: 42,
-    minWidth: 66,
-    borderRadius: 12,
-    backgroundColor: "rgba(5,150,105,0.96)",
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 12
-  },
-  sendButtonText: { color: "#FFFFFF", fontWeight: "700" }
+  sendBtnGlyph: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: alchemyColors.dark,
+    lineHeight: 24
+  }
 });

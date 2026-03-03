@@ -34,9 +34,17 @@ export const errorResponse = (requestId: string, error: unknown): Response => {
     return jsonResponse(error.status, payload);
   }
 
+  const details =
+    error instanceof Error
+      ? { name: error.name, message: error.message }
+      : typeof error === "string"
+        ? { message: error }
+        : undefined;
+
   const payload: ErrorEnvelope = {
     code: "internal_error",
     message: "Unexpected server error",
+    details,
     request_id: requestId
   };
   return jsonResponse(500, payload);

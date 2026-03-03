@@ -1,0 +1,91 @@
+# Alchemy — Claude Instructions
+
+## Project
+Alchemy is an iOS-first, API-driven recipe app. Users set dietary/skill/equipment preferences, generate recipes via LLM, iteratively tweak them, and organize favorites. An admin UI manages users, LLM config, and rules.
+
+## Monorepo Structure
+```
+apps/mobile/          Expo 52 React Native (iOS-first)
+apps/admin/           Next.js 15 admin dashboard
+infra/cloudflare/     Cloudflare Worker API gateway (TypeScript)
+supabase/             Auth, Postgres, Edge Functions (LLM gateway)
+packages/contracts/   OpenAPI schema + generated TypeScript types
+packages/shared/      Shared utilities
+```
+
+## Non-Negotiables
+- Strict TypeScript. No `any`.
+- Minimal diffs. Do not touch unrelated code.
+- Do not add dependencies unless explicitly asked.
+- All LLM calls go through `supabase/functions/v1/` — never from the client.
+- The client is API-driven. No business logic beyond UI/UX orchestration.
+- Every user-facing screen needs loading, empty, and error states.
+- No silent data loss. Offline reads from cache are fine.
+
+## Mobile Stack (`apps/mobile/`)
+- **Expo Router** — file-based routing
+- **TanStack Query v5** — all server state, caching, retries
+- **Zustand v5** — UI-only state (toggles, ephemeral drafts); never server data
+- **React Native Reanimated 3 + Gesture Handler** — animations and gestures
+- **Supabase JS** — auth session via `lib/auth.tsx` and `lib/supabase.ts`
+- **Custom design system** — `components/alchemy/primitives.tsx` + `theme.ts`
+- API calls go through `lib/api.ts` → Cloudflare Worker
+
+### Mobile Conventions
+Query keys:
+```ts
+['me']
+['preferences']
+['recipes', 'feed', filters]
+['recipes', id]
+['collections']
+['collections', id]
+['search', query, filters]
+```
+
+Zustand (`lib/ui-store.ts`) is for: measurement display mode, servings scaling, ephemeral draft text, temporary filter state. Not for recipes or preferences.
+
+Route structure:
+```
+/sign-in, /register, /onboarding       auth/setup flows
+/(tabs)/generate                        prompt-to-recipe
+/(tabs)/my-cookbook                     saved recipes + collections
+/preferences, /settings                 user config
+```
+
+UI standards:
+- Touch targets ≥ 44×44
+- Skeleton loaders for primary content
+- Pull-to-refresh where appropriate
+- Subtle haptics for key actions (save, generate, tweak)
+- Keyboard avoidance on all inputs
+- Dark mode supported
+
+## Admin Stack (`apps/admin/`)
+- **Next.js 15** (App Router)
+- **Tailwind CSS + shadcn/ui** (Radix UI + CVA + tailwind-merge)
+- **Lucide React** icons
+- **Sonner** for toasts
+- Deployed via OpenNext on Cloudflare
+
+Admin route structure: `app/(admin)/` — dashboard, moderation, provider-model, changelog, image-pipeline, memory, request-trace, simulations, version-causality.
+
+## API Gateway (`infra/cloudflare/api-gateway/`)
+- Cloudflare Worker, TypeScript
+- Routes requests to Supabase edge functions
+- Auth validation at the gateway level
+- Contract types from `packages/contracts/src/generated.ts`
+
+## Backend (`supabase/`)
+- **Auth**: Supabase Auth (token-based; client uses `lib/auth.tsx`)
+- **DB**: Postgres — users, preferences, recipes, recipe_versions, collections, memories, events
+- **Edge Functions** (`functions/v1/`): LLM gateway, structured output, prompt templates
+- LLM config (models, prompts, rules) lives in DB and is loaded at runtime — editable via admin UI
+
+## Security
+- No secrets in client code
+- Tokens in platform secure storage only
+- LLM prompts not logged client-side
+
+## When Blocked
+State what is missing, give the smallest set of options, default to the simplest option that preserves API-first correctness and premium UI feel.

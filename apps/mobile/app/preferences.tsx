@@ -14,7 +14,8 @@ const emptyPreferences: PreferenceProfile = {
   cuisines: [],
   aversions: [],
   cooking_for: "",
-  max_difficulty: 3
+  max_difficulty: 3,
+  presentation_preferences: {}
 };
 
 export default function PreferencesScreen(): React.JSX.Element {
@@ -25,17 +26,32 @@ export default function PreferencesScreen(): React.JSX.Element {
     enabled: isAuthenticated
   });
   const [form, setForm] = useState<PreferenceProfile>(emptyPreferences);
+  const [equipmentInput, setEquipmentInput] = useState("");
+  const [dietaryPreferencesInput, setDietaryPreferencesInput] = useState("");
+  const [dietaryRestrictionsInput, setDietaryRestrictionsInput] = useState("");
+  const [cuisinesInput, setCuisinesInput] = useState("");
+  const [aversionsInput, setAversionsInput] = useState("");
 
   useEffect(() => {
     if (query.data) {
-      setForm(query.data);
+      setForm({ ...emptyPreferences, ...query.data });
+      setEquipmentInput((query.data.equipment ?? []).join(", "));
+      setDietaryPreferencesInput((query.data.dietary_preferences ?? []).join(", "));
+      setDietaryRestrictionsInput((query.data.dietary_restrictions ?? []).join(", "));
+      setCuisinesInput((query.data.cuisines ?? []).join(", "));
+      setAversionsInput((query.data.aversions ?? []).join(", "));
     }
   }, [query.data]);
 
   const mutation = useMutation({
     mutationFn: async (payload: PreferenceProfile) => api.updatePreferences(payload),
     onSuccess: async (data) => {
-      setForm(data);
+      setForm({ ...emptyPreferences, ...data });
+      setEquipmentInput((data.equipment ?? []).join(", "));
+      setDietaryPreferencesInput((data.dietary_preferences ?? []).join(", "));
+      setDietaryRestrictionsInput((data.dietary_restrictions ?? []).join(", "));
+      setCuisinesInput((data.cuisines ?? []).join(", "));
+      setAversionsInput((data.aversions ?? []).join(", "));
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     }
   });
@@ -73,20 +89,20 @@ export default function PreferencesScreen(): React.JSX.Element {
       <Field
         label="Equipment"
         placeholder="la cornue stove, cast iron, vitamix"
-        value={(form.equipment ?? []).join(", ")}
-        onChangeText={(value) => setForm((prev) => ({ ...prev, equipment: splitList(value) }))}
+        value={equipmentInput}
+        onChangeText={setEquipmentInput}
       />
       <Field
         label="Dietary preferences"
         placeholder="high-protein, mediterranean"
-        value={(form.dietary_preferences ?? []).join(", ")}
-        onChangeText={(value) => setForm((prev) => ({ ...prev, dietary_preferences: splitList(value) }))}
+        value={dietaryPreferencesInput}
+        onChangeText={setDietaryPreferencesInput}
       />
       <Field
         label="Dietary restrictions"
         placeholder="gluten-free, nut-free"
-        value={(form.dietary_restrictions ?? []).join(", ")}
-        onChangeText={(value) => setForm((prev) => ({ ...prev, dietary_restrictions: splitList(value) }))}
+        value={dietaryRestrictionsInput}
+        onChangeText={setDietaryRestrictionsInput}
       />
       <Field
         label="Skill level"
@@ -97,14 +113,14 @@ export default function PreferencesScreen(): React.JSX.Element {
       <Field
         label="Cuisines"
         placeholder="italian, japanese"
-        value={(form.cuisines ?? []).join(", ")}
-        onChangeText={(value) => setForm((prev) => ({ ...prev, cuisines: splitList(value) }))}
+        value={cuisinesInput}
+        onChangeText={setCuisinesInput}
       />
       <Field
         label="Aversions"
         placeholder="cilantro, anchovy"
-        value={(form.aversions ?? []).join(", ")}
-        onChangeText={(value) => setForm((prev) => ({ ...prev, aversions: splitList(value) }))}
+        value={aversionsInput}
+        onChangeText={setAversionsInput}
       />
       <Field
         label="Who you cook for"
@@ -119,7 +135,19 @@ export default function PreferencesScreen(): React.JSX.Element {
         onChangeText={(value) => setForm((prev) => ({ ...prev, max_difficulty: normalizeDifficulty(value) }))}
       />
 
-      <Pressable style={styles.saveButton} onPress={() => mutation.mutate(form)}>
+      <Pressable
+        style={styles.saveButton}
+        onPress={() =>
+          mutation.mutate({
+            ...form,
+            equipment: splitList(equipmentInput),
+            dietary_preferences: splitList(dietaryPreferencesInput),
+            dietary_restrictions: splitList(dietaryRestrictionsInput),
+            cuisines: splitList(cuisinesInput),
+            aversions: splitList(aversionsInput)
+          })
+        }
+      >
         <Text style={styles.saveButtonText}>{mutation.isPending ? "Saving..." : "Save Preferences"}</Text>
       </Pressable>
     </ScrollView>
@@ -141,6 +169,9 @@ function Field(props: {
         value={props.value}
         onChangeText={props.onChangeText}
         multiline={props.multiline}
+        autoCorrect={false}
+        keyboardType="default"
+        blurOnSubmit={false}
         style={[styles.input, props.multiline ? styles.multiline : undefined]}
       />
     </View>

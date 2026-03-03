@@ -1,5 +1,9 @@
 type Env = {
-  SUPABASE_FUNCTIONS_BASE_URL: string;
+  SUPABASE_FUNCTIONS_BASE_URL?: string;
+  SUPABASE_URL?: string;
+  NEXT_PUBLIC_SUPABASE_URL?: string;
+  EXPO_PUBLIC_SUPABASE_URL?: string;
+  SUPABASE_PROJECT_REF?: string;
 };
 
 const corsHeaders = {
@@ -34,7 +38,77 @@ const normalizeBase = (value: string | undefined): string => {
     throw new Error("SUPABASE_FUNCTIONS_BASE_URL must be an absolute URL");
   }
 
-  return trimmed.replace(/\/+$/, "");
+  const parsed = new URL(trimmed);
+  const pathname = parsed.pathname.replace(/\/+$/, "");
+
+  if (pathname.endsWith("/functions/v1/v1")) {
+    return `${parsed.origin}/functions/v1/v1`;
+  }
+
+  if (pathname.endsWith("/functions/v1")) {
+    return `${parsed.origin}/functions/v1/v1`;
+  }
+
+  if (parsed.host.endsWith(".functions.supabase.co")) {
+    if (pathname.endsWith("/v1/v1")) {
+      return `${parsed.origin}/v1/v1`;
+    }
+    if (pathname.endsWith("/v1")) {
+      return `${parsed.origin}/v1/v1`;
+    }
+    return `${parsed.origin}/v1/v1`;
+  }
+
+  if (parsed.host.endsWith(".supabase.co")) {
+    return `${parsed.origin}/functions/v1/v1`;
+  }
+
+  return `${parsed.origin}${pathname}/functions/v1/v1`;
+};
+
+const inferFunctionsBaseFromSupabaseUrl = (value: string | undefined): string | null => {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (!/^https?:\/\//i.test(trimmed)) {
+    return null;
+  }
+
+  try {
+    const parsed = new URL(trimmed);
+    const projectRef = parsed.host.split(".")[0];
+    if (!projectRef) {
+      return null;
+    }
+    return `https://${projectRef}.supabase.co/functions/v1/v1`;
+  } catch {
+    return null;
+  }
+};
+
+const resolveUpstreamBase = (env: Env): string => {
+  if (env.SUPABASE_FUNCTIONS_BASE_URL?.trim()) {
+    return normalizeBase(env.SUPABASE_FUNCTIONS_BASE_URL);
+  }
+
+  const inferredFromUrl =
+    inferFunctionsBaseFromSupabaseUrl(env.SUPABASE_URL) ??
+    inferFunctionsBaseFromSupabaseUrl(env.NEXT_PUBLIC_SUPABASE_URL) ??
+    inferFunctionsBaseFromSupabaseUrl(env.EXPO_PUBLIC_SUPABASE_URL);
+
+  if (inferredFromUrl) {
+    return inferredFromUrl;
+  }
+
+  const projectRef = env.SUPABASE_PROJECT_REF?.trim();
+  if (projectRef) {
+    return `https://${projectRef}.supabase.co/functions/v1/v1`;
+  }
+
+  throw new Error(
+    "Missing SUPABASE_FUNCTIONS_BASE_URL (or SUPABASE_URL / SUPABASE_PROJECT_REF for fallback resolution)"
+  );
 };
 
 export default {
@@ -55,7 +129,7 @@ export default {
 
     let upstreamBase: string;
     try {
-      upstreamBase = normalizeBase(env.SUPABASE_FUNCTIONS_BASE_URL);
+      upstreamBase = resolveUpstreamBase(env);
     } catch (error) {
       return errorEnvelope(
         500,
@@ -65,7 +139,9 @@ export default {
       );
     }
 
-    const upstreamUrl = `${upstreamBase}${url.pathname}${url.search}`;
+    const upstreamPath = url.pathname.replace(/^\/v1/, "");
+    const normalizedUpstreamPath = upstreamPath.startsWith("/") ? upstreamPath : `/${upstreamPath}`;
+    const upstreamUrl = `${upstreamBase}${normalizedUpstreamPath}${url.search}`;
     const upstreamRequest = new Request(upstreamUrl, request);
     const upstreamResponse = await fetch(upstreamRequest);
 

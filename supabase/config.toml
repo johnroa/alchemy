@@ -2,3 +2,6 @@ project_id = "alchemy"
 
 [functions.v1]
 verify_jwt = false
+
+[auth.email]
+enable_confirmations = false

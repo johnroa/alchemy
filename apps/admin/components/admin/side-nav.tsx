@@ -2,7 +2,21 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Bot, FlaskConical, Home, Network, ScrollText, ShieldAlert, Users } from "lucide-react";
+import {
+  Activity,
+  Bot,
+  FlaskConical,
+  FolderGit2,
+  History,
+  Home,
+  Image,
+  Network,
+  Radar,
+  ScrollText,
+  ShieldAlert,
+  Sparkles,
+  Users
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const navGroups = [
@@ -11,22 +25,33 @@ const navGroups = [
     items: [
       { href: "/dashboard", label: "Dashboard", icon: Home },
       { href: "/users", label: "Users", icon: Users },
-      { href: "/moderation", label: "Moderation", icon: ShieldAlert }
+      { href: "/moderation", label: "Moderation", icon: ShieldAlert },
+      { href: "/simulations", label: "Simulations", icon: Activity }
     ]
   },
   {
-    category: "LLM Control",
+    category: "Intelligence",
     items: [
       { href: "/provider-model", label: "Provider & Model", icon: Bot },
       { href: "/prompts", label: "Prompts", icon: Bot },
-      { href: "/rules", label: "Rules", icon: ScrollText }
+      { href: "/rules", label: "Rules", icon: ScrollText },
+      { href: "/memory", label: "Memory", icon: Sparkles }
     ]
   },
   {
-    category: "Recipe Data",
+    category: "Content",
     items: [
       { href: "/recipes", label: "Recipes", icon: FlaskConical },
-      { href: "/graph", label: "Graph", icon: Network }
+      { href: "/graph", label: "Graph", icon: Network },
+      { href: "/image-pipeline", label: "Image Pipeline", icon: Image }
+    ]
+  },
+  {
+    category: "Audit",
+    items: [
+      { href: "/changelog", label: "Changelog", icon: History },
+      { href: "/request-trace", label: "Request Trace", icon: Radar },
+      { href: "/version-causality", label: "Version Causality", icon: FolderGit2 }
     ]
   }
 ];
@@ -35,28 +60,34 @@ export function SideNav(): React.JSX.Element {
   const pathname = usePathname();
 
   return (
-    <nav className="space-y-4">
+    <nav className="space-y-5">
       {navGroups.map((group) => (
-        <div key={group.category} className="space-y-1">
-          <p className="px-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">{group.category}</p>
-          {group.items.map((item) => {
-            const Icon = item.icon;
-            const active = pathname.startsWith(item.href);
+        <div key={group.category}>
+          <p className="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/70">
+            {group.category}
+          </p>
+          <div className="space-y-0.5">
+            {group.items.map((item) => {
+              const Icon = item.icon;
+              const active = pathname.startsWith(item.href);
 
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                className={cn(
-                  "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
-                  active ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-muted"
-                )}
-              >
-                <Icon className="h-4 w-4" />
-                {item.label}
-              </Link>
-            );
-          })}
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className={cn(
+                    "flex items-center gap-2.5 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                    active
+                      ? "bg-primary/10 text-primary"
+                      : "text-muted-foreground hover:bg-zinc-100 hover:text-foreground"
+                  )}
+                >
+                  <Icon className={cn("h-4 w-4 flex-none", active ? "text-primary" : "text-muted-foreground/70")} />
+                  {item.label}
+                </Link>
+              );
+            })}
+          </div>
         </div>
       ))}
     </nav>

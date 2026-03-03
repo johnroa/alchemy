@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { getRecipeAuditDetail, getRecipeAuditIndexData } from "@/lib/admin-data";
+import { cn } from "@/lib/utils";
 
 type RecipesPageSearchParams = {
   q?: string;
@@ -17,98 +18,56 @@ type RecipesPageSearchParams = {
 };
 
 const truncate = (value: string, max = 280): string => {
-  if (value.length <= max) {
-    return value;
-  }
-
+  if (value.length <= max) return value;
   return `${value.slice(0, max - 1)}…`;
 };
 
 const normalizeAssistantReply = (value: unknown): string | null => {
-  if (!value) {
-    return null;
-  }
-
+  if (!value) return null;
   if (typeof value === "string") {
     const trimmed = value.trim();
     return trimmed.length > 0 ? trimmed : null;
   }
-
   if (typeof value === "object" && !Array.isArray(value)) {
     const reply = (value as { text?: unknown }).text;
-    if (typeof reply === "string" && reply.trim().length > 0) {
-      return reply.trim();
-    }
+    if (typeof reply === "string" && reply.trim().length > 0) return reply.trim();
   }
-
   return null;
 };
 
 const draftMessagePreview = (role: string, content: string): string => {
-  if (role !== "assistant") {
-    return truncate(content, 260);
-  }
-
+  if (role !== "assistant") return truncate(content, 200);
   try {
     const parsed = JSON.parse(content) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return truncate(content, 260);
-    }
-
-    const envelope = parsed as {
-      assistant_reply?: unknown;
-      recipe?: { title?: unknown };
-    };
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return truncate(content, 200);
+    const envelope = parsed as { assistant_reply?: unknown; recipe?: { title?: unknown } };
     const assistantReply = normalizeAssistantReply(envelope.assistant_reply);
     const recipeTitle = typeof envelope.recipe?.title === "string" ? envelope.recipe.title.trim() : "";
-
-    if (assistantReply && recipeTitle) {
-      return truncate(`${assistantReply} (recipe: ${recipeTitle})`, 260);
-    }
-
-    if (assistantReply) {
-      return truncate(assistantReply, 260);
-    }
-
-    if (recipeTitle) {
-      return truncate(`Updated recipe: ${recipeTitle}`, 260);
-    }
+    if (assistantReply && recipeTitle) return truncate(`${assistantReply} (recipe: ${recipeTitle})`, 200);
+    if (assistantReply) return truncate(assistantReply, 200);
+    if (recipeTitle) return truncate(`Updated recipe: ${recipeTitle}`, 200);
   } catch {
-    return truncate(content, 260);
+    return truncate(content, 200);
   }
-
-  return truncate(content, 260);
+  return truncate(content, 200);
 };
 
 const buildRecipesHref = (params: { q?: string; recipe?: string }): string => {
   const query = new URLSearchParams();
-
-  if (params.q?.trim()) {
-    query.set("q", params.q.trim());
-  }
-  if (params.recipe?.trim()) {
-    query.set("recipe", params.recipe.trim());
-  }
-
+  if (params.q?.trim()) query.set("q", params.q.trim());
+  if (params.recipe?.trim()) query.set("recipe", params.recipe.trim());
   const queryString = query.toString();
   return queryString.length > 0 ? `/recipes?${queryString}` : "/recipes";
 };
 
 const shortId = (value: string): string => {
-  if (value.length < 14) {
-    return value;
-  }
-
-  return `${value.slice(0, 8)}…${value.slice(-6)}`;
+  if (value.length < 14) return value;
+  return `${value.slice(0, 8)}…${value.slice(-4)}`;
 };
 
 const imageStatusBadgeClass = (status: string): string => {
-  if (status === "ready") {
-    return "border-emerald-300/60 bg-emerald-50 text-emerald-700";
-  }
-  if (status === "failed") {
-    return "border-red-300/60 bg-red-50 text-red-700";
-  }
+  if (status === "ready") return "border-emerald-300/60 bg-emerald-50 text-emerald-700";
+  if (status === "failed") return "border-red-300/60 bg-red-50 text-red-700";
   return "border-amber-300/60 bg-amber-50 text-amber-700";
 };
 
@@ -127,306 +86,310 @@ export default async function RecipesPage({
   const unresolvedOwners = rows.filter((row) => !row.owner_email).length;
 
   return (
-    <div className="space-y-6">
-      <PageHeader
-        title="Recipes Console"
-        description="Full operational audit: recipe inventory, version lineage, user prompts/messages, attachment graph, and request-linked mutation history."
-      />
+    <div className="space-y-4">
+      {/* Header row with inline totals */}
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <PageHeader
+          title="Recipes Console"
+          description="Inventory, version lineage, prompt trail, attachment graph, and changelog."
+        />
+        <div className="flex flex-wrap gap-2 pt-1">
+          <Badge variant="outline" className="gap-1">
+            <BookOpen className="h-3 w-3" /> {totals.recipes} recipes
+          </Badge>
+          <Badge variant="outline" className="gap-1">
+            <GitBranch className="h-3 w-3" /> {totals.versions} versions
+          </Badge>
+          <Badge variant="outline" className="gap-1">
+            <Link2 className="h-3 w-3" /> {totals.attachments} attachments
+          </Badge>
+          <Badge variant="outline" className="gap-1">
+            <UserCircle2 className="h-3 w-3" /> {totals.saves} saves
+          </Badge>
+        </div>
+      </div>
 
-      {unresolvedOwners > 0 ? (
+      {unresolvedOwners > 0 && (
         <Alert className="border-amber-300/60 bg-amber-50/70">
           <AlertCircle className="h-4 w-4 text-amber-700" />
           <AlertTitle className="text-amber-900">Owner profiles need backfill</AlertTitle>
           <AlertDescription className="text-amber-800">
-            {unresolvedOwners} recipes are owned by user IDs that do not yet have email metadata in `users`.
+            {unresolvedOwners} recipes have user IDs with no email metadata in `users`.
           </AlertDescription>
         </Alert>
-      ) : null}
+      )}
 
-      <div className="grid gap-4 md:grid-cols-5">
-        <Card>
+      {/* Two-column split layout */}
+      <div className="grid gap-6 lg:grid-cols-[320px_1fr] items-start">
+        {/* Recipe List — sticky scrollable */}
+        <Card className="sticky top-0">
           <CardHeader className="pb-2">
-            <BookOpen className="h-4 w-4 text-muted-foreground" />
-            <CardDescription>Total Recipes</CardDescription>
-            <CardTitle className="text-3xl">{totals.recipes}</CardTitle>
-          </CardHeader>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <GitBranch className="h-4 w-4 text-muted-foreground" />
-            <CardDescription>Total Versions</CardDescription>
-            <CardTitle className="text-3xl">{totals.versions}</CardTitle>
-          </CardHeader>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <Link2 className="h-4 w-4 text-muted-foreground" />
-            <CardDescription>Attached Recipes</CardDescription>
-            <CardTitle className="text-3xl">{totals.attachments}</CardTitle>
-          </CardHeader>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <BookOpen className="h-4 w-4 text-muted-foreground" />
-            <CardDescription>Cookbook Saves</CardDescription>
-            <CardTitle className="text-3xl">{totals.saves}</CardTitle>
-          </CardHeader>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <UserCircle2 className="h-4 w-4 text-muted-foreground" />
-            <CardDescription>Draft-Backed Recipes</CardDescription>
-            <CardTitle className="text-3xl">{totals.draftBacked}</CardTitle>
-          </CardHeader>
-        </Card>
-      </div>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Recipe Inventory</CardTitle>
-          <CardDescription>
-            Every recipe record with owner, save traction, attachment count, current version metadata, and direct inspect action.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <form action="/recipes" method="get" className="flex flex-wrap items-center gap-2">
-            <Input name="q" defaultValue={q} placeholder="Search by recipe id, title, owner id, draft id..." className="max-w-xl" />
-            <Button type="submit">Search</Button>
-            <Link href="/recipes">
-              <Button type="button" variant="outline">
-                Clear
+            <form action="/recipes" method="get" className="flex gap-2">
+              <Input
+                name="q"
+                defaultValue={q}
+                placeholder="Search recipes…"
+                className="h-8 text-sm"
+              />
+              <Button type="submit" size="sm" className="h-8 px-3">
+                Search
               </Button>
-            </Link>
-          </form>
-
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Recipe</TableHead>
-                <TableHead>Owner</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Counts</TableHead>
-                <TableHead>Current Version</TableHead>
-                <TableHead>Updated</TableHead>
-                <TableHead className="text-right">Inspect</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {rows.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={7} className="text-muted-foreground">
-                    No recipes match the current filters.
-                  </TableCell>
-                </TableRow>
-              ) : (
-                rows.map((row) => (
-                  <TableRow key={row.id}>
-                    <TableCell>
-                      <div className="space-y-1">
-                        <p className="font-medium">{row.title}</p>
-                        <p className="font-mono text-xs text-muted-foreground">{row.id}</p>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="space-y-1">
-                        <p className="font-medium">{row.owner_email ?? "Profile unresolved"}</p>
-                        <p className="font-mono text-xs text-muted-foreground">{shortId(row.owner_user_id)}</p>
-                        {!row.owner_email ? (
-                          <Badge variant="outline" className="border-amber-300/60 bg-amber-50 text-amber-800">
-                            Missing email metadata
-                          </Badge>
-                        ) : null}
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <Badge variant="outline">{row.visibility}</Badge>
-                        <Badge variant="outline" className={imageStatusBadgeClass(row.image_status)}>
-                          <ImageIcon className="mr-1 h-3 w-3" />
-                          {row.image_status}
-                        </Badge>
-                        <Badge variant={row.source_draft_id ? "default" : "secondary"}>
-                          {row.source_draft_id ? "draft-backed" : "direct"}
-                        </Badge>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex flex-wrap gap-1.5">
-                        <Badge variant="secondary">{row.version_count} versions</Badge>
-                        <Badge variant="secondary">{row.attachment_count} attachments</Badge>
-                        <Badge variant="secondary">{row.save_count} saves</Badge>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="space-y-1">
-                        <p className="font-mono text-xs">{row.current_version_id ? shortId(row.current_version_id) : "n/a"}</p>
-                        <p className="text-xs text-muted-foreground">{truncate(row.latest_diff_summary ?? "n/a", 90)}</p>
-                        {row.latest_request_id ? (
-                          <p className="font-mono text-[10px] text-muted-foreground">req {shortId(row.latest_request_id)}</p>
-                        ) : null}
-                      </div>
-                    </TableCell>
-                    <TableCell>{new Date(row.updated_at).toLocaleString()}</TableCell>
-                    <TableCell className="text-right">
-                      <Link
-                        href={buildRecipesHref({
-                          q,
-                          recipe: row.id
-                        })}
-                      >
-                        <Button variant={detail?.recipe.id === row.id ? "default" : "outline"} size="sm">
-                          Inspect
-                        </Button>
-                      </Link>
-                    </TableCell>
-                  </TableRow>
-                ))
+              {q && (
+                <Link href="/recipes">
+                  <Button type="button" variant="outline" size="sm" className="h-8 px-2">
+                    ✕
+                  </Button>
+                </Link>
               )}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
+            </form>
+          </CardHeader>
+          <div className="overflow-y-auto" style={{ maxHeight: "calc(100vh - 220px)" }}>
+            {rows.length === 0 ? (
+              <p className="px-4 py-8 text-center text-sm text-muted-foreground">No recipes match.</p>
+            ) : (
+              rows.map((row) => (
+                <Link key={row.id} href={buildRecipesHref({ q, recipe: row.id })}>
+                  <div
+                    className={cn(
+                      "border-b px-4 py-3 transition-colors hover:bg-zinc-50",
+                      detail?.recipe.id === row.id
+                        ? "border-l-2 border-l-primary bg-primary/5"
+                        : "border-l-2 border-l-transparent"
+                    )}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium">{row.title}</p>
+                        <p className="truncate text-xs text-muted-foreground">
+                          {row.owner_email ?? "No owner"}
+                        </p>
+                      </div>
+                      <Badge
+                        variant="outline"
+                        className={cn("flex-none text-[10px]", imageStatusBadgeClass(row.image_status))}
+                      >
+                        <ImageIcon className="mr-1 h-2.5 w-2.5" />
+                        {row.image_status}
+                      </Badge>
+                    </div>
+                    <div className="mt-1.5 flex gap-3 text-[10px] text-muted-foreground">
+                      <span>{row.version_count}v</span>
+                      <span>{row.save_count} saves</span>
+                      <span>{row.attachment_count} att</span>
+                      <span className="ml-auto">{new Date(row.updated_at).toLocaleDateString()}</span>
+                    </div>
+                  </div>
+                </Link>
+              ))
+            )}
+          </div>
+        </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Recipe Deep Audit</CardTitle>
-          <CardDescription>
-            Version timeline, user prompt trail, revision map, attachment links, and request-linked changelog for one recipe.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
+        {/* Deep Audit Panel */}
+        <div>
           {!detail ? (
-            <div className="rounded-md border border-dashed p-6 text-sm text-muted-foreground">
-              Select a recipe from the inventory table to inspect full lineage.
-            </div>
+            <Card>
+              <CardContent className="flex flex-col items-center gap-3 py-20 text-center">
+                <BookOpen className="h-10 w-10 text-muted-foreground/30" />
+                <p className="text-sm font-medium text-muted-foreground">Select a recipe to inspect</p>
+                <p className="text-xs text-muted-foreground/60">
+                  Click any recipe from the list to view its full audit trail.
+                </p>
+              </CardContent>
+            </Card>
           ) : (
             <div className="space-y-4">
-              <div className="grid gap-3 lg:grid-cols-2">
-                <div className="rounded-lg border p-3">
-                  <p className="text-xs uppercase tracking-wide text-muted-foreground">Recipe</p>
-                  <p className="mt-1 text-lg font-semibold">{detail.recipe.title}</p>
-                  <p className="font-mono text-xs text-muted-foreground">{detail.recipe.id}</p>
-                  <p className="mt-2 text-sm text-muted-foreground">
-                    Owner: {detail.recipe.owner_email ?? "unknown"} · {detail.recipe.visibility} · {detail.recipe.image_status}
-                  </p>
-                </div>
-                <div className="rounded-lg border p-3">
-                  <p className="text-xs uppercase tracking-wide text-muted-foreground">Draft + Current</p>
-                  <p className="mt-1 text-sm">
-                    Source draft: <span className="font-mono text-xs">{detail.recipe.source_draft_id ?? "n/a"}</span>
-                  </p>
-                  <p className="text-sm">
-                    Current version: <span className="font-mono text-xs">{detail.recipe.current_version_id ?? "n/a"}</span>
-                  </p>
-                  <p className="mt-2 text-sm text-muted-foreground">
-                    Created {new Date(detail.recipe.created_at).toLocaleString()} · Updated{" "}
-                    {new Date(detail.recipe.updated_at).toLocaleString()}
-                  </p>
-                </div>
-              </div>
+              {/* Recipe meta header */}
+              <Card>
+                <CardHeader className="pb-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <CardTitle className="text-base">{detail.recipe.title}</CardTitle>
+                      <CardDescription>
+                        {detail.recipe.owner_email ?? "Unknown owner"} · {detail.recipe.visibility}
+                      </CardDescription>
+                      <p className="mt-1 font-mono text-[11px] text-muted-foreground">{detail.recipe.id}</p>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      <Badge variant="outline" className={imageStatusBadgeClass(detail.recipe.image_status)}>
+                        <ImageIcon className="mr-1 h-3 w-3" />
+                        {detail.recipe.image_status}
+                      </Badge>
+                      <Badge variant="secondary">{detail.versions.length} versions</Badge>
+                      {detail.attachments.length > 0 && (
+                        <Badge variant="secondary">{detail.attachments.length} attachments</Badge>
+                      )}
+                    </div>
+                  </div>
+                  {detail.recipe.source_draft_id && (
+                    <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                      <span>
+                        Draft: <span className="font-mono">{shortId(detail.recipe.source_draft_id)}</span>
+                      </span>
+                      {detail.recipe.current_version_id && (
+                        <span>
+                          Current: <span className="font-mono">{shortId(detail.recipe.current_version_id)}</span>
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </CardHeader>
+              </Card>
 
+              {/* Tabs */}
               <Tabs defaultValue="timeline" className="w-full">
                 <TabsList className="grid w-full grid-cols-4">
                   <TabsTrigger value="timeline">Timeline</TabsTrigger>
-                  <TabsTrigger value="prompts">Prompts</TabsTrigger>
+                  <TabsTrigger value="prompts">
+                    Prompts
+                    {detail.draft_messages.length > 0 && (
+                      <Badge variant="secondary" className="ml-1.5 text-[10px]">
+                        {detail.draft_messages.length}
+                      </Badge>
+                    )}
+                  </TabsTrigger>
                   <TabsTrigger value="causality">Revision Map</TabsTrigger>
-                  <TabsTrigger value="changes">Changelog</TabsTrigger>
+                  <TabsTrigger value="changes">
+                    Changelog
+                    {detail.changelog.length > 0 && (
+                      <Badge variant="secondary" className="ml-1.5 text-[10px]">
+                        {detail.changelog.length}
+                      </Badge>
+                    )}
+                  </TabsTrigger>
                 </TabsList>
 
+                {/* Timeline */}
                 <TabsContent value="timeline">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Version</TableHead>
-                        <TableHead>Parent</TableHead>
-                        <TableHead>Diff Summary</TableHead>
-                        <TableHead>Counts</TableHead>
-                        <TableHead>Event</TableHead>
-                        <TableHead>Request</TableHead>
-                        <TableHead>Created</TableHead>
-                        <TableHead className="text-right">Action</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {detail.versions.length === 0 ? (
-                        <TableRow>
-                          <TableCell colSpan={8} className="text-muted-foreground">
-                            No versions found for this recipe.
-                          </TableCell>
-                        </TableRow>
-                      ) : (
-                        detail.versions.map((version) => (
-                          <TableRow key={version.id}>
-                            <TableCell className="font-mono text-xs">{version.id}</TableCell>
-                            <TableCell className="font-mono text-xs">{version.parent_version_id ?? "root"}</TableCell>
-                            <TableCell>{truncate(version.diff_summary ?? "n/a", 90)}</TableCell>
-                            <TableCell>{version.ingredient_count} ing · {version.step_count} steps</TableCell>
-                            <TableCell>{version.event_type ?? "n/a"}</TableCell>
-                            <TableCell className="font-mono text-xs">{version.request_id ?? "n/a"}</TableCell>
-                            <TableCell>{new Date(version.created_at).toLocaleString()}</TableCell>
-                            <TableCell className="text-right">
-                              <RevertVersionDialog recipeId={detail.recipe.id} versionId={version.id} />
-                            </TableCell>
-                          </TableRow>
-                        ))
-                      )}
-                    </TableBody>
-                  </Table>
-                </TabsContent>
-
-                <TabsContent value="prompts">
-                  <div className="space-y-3">
-                    <div className="rounded-md border p-3 text-sm text-muted-foreground">
-                      User message trail from draft chat is shown exactly; tweak prompts also appear in version diff summaries.
-                    </div>
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>When</TableHead>
-                          <TableHead>Role</TableHead>
-                          <TableHead>Message Preview</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {detail.draft_messages.length === 0 ? (
+                  <Card>
+                    <CardContent className="p-0">
+                      <Table>
+                        <TableHeader>
                           <TableRow>
-                            <TableCell colSpan={3} className="text-muted-foreground">
-                              No draft messages captured for this recipe.
-                            </TableCell>
+                            <TableHead>Version</TableHead>
+                            <TableHead>Parent</TableHead>
+                            <TableHead>Summary</TableHead>
+                            <TableHead>Shape</TableHead>
+                            <TableHead>Event</TableHead>
+                            <TableHead>Created</TableHead>
+                            <TableHead className="text-right">Revert</TableHead>
                           </TableRow>
-                        ) : (
-                          detail.draft_messages.map((message) => (
-                            <TableRow key={message.id}>
-                              <TableCell>{new Date(message.created_at).toLocaleString()}</TableCell>
-                              <TableCell>
-                                <Badge variant={message.role === "user" ? "default" : "outline"}>{message.role}</Badge>
+                        </TableHeader>
+                        <TableBody>
+                          {detail.versions.length === 0 ? (
+                            <TableRow>
+                              <TableCell colSpan={7} className="py-8 text-center text-muted-foreground">
+                                No versions found.
                               </TableCell>
-                              <TableCell className="text-sm">{draftMessagePreview(message.role, message.content)}</TableCell>
                             </TableRow>
-                          ))
-                        )}
-                      </TableBody>
-                    </Table>
-                  </div>
+                          ) : (
+                            detail.versions.map((version, index) => (
+                              <TableRow key={version.id}>
+                                <TableCell>
+                                  <div>
+                                    <p className="text-xs font-medium">v{index + 1}</p>
+                                    <p className="font-mono text-[10px] text-muted-foreground">{shortId(version.id)}</p>
+                                  </div>
+                                </TableCell>
+                                <TableCell className="font-mono text-xs text-muted-foreground">
+                                  {version.parent_version_id ? shortId(version.parent_version_id) : <span className="italic">root</span>}
+                                </TableCell>
+                                <TableCell className="max-w-[220px] text-xs">
+                                  {truncate(version.diff_summary ?? "—", 80)}
+                                </TableCell>
+                                <TableCell className="text-xs text-muted-foreground">
+                                  {version.ingredient_count}i · {version.step_count}s
+                                </TableCell>
+                                <TableCell>
+                                  {version.event_type ? (
+                                    <Badge variant="outline" className="text-[10px]">{version.event_type}</Badge>
+                                  ) : <span className="text-xs text-muted-foreground">—</span>}
+                                </TableCell>
+                                <TableCell className="text-xs text-muted-foreground">
+                                  {new Date(version.created_at).toLocaleString()}
+                                </TableCell>
+                                <TableCell className="text-right">
+                                  <RevertVersionDialog recipeId={detail.recipe.id} versionId={version.id} />
+                                </TableCell>
+                              </TableRow>
+                            ))
+                          )}
+                        </TableBody>
+                      </Table>
+                    </CardContent>
+                  </Card>
                 </TabsContent>
 
+                {/* Prompts */}
+                <TabsContent value="prompts">
+                  <Card>
+                    <CardContent className="p-0">
+                      {detail.draft_messages.length === 0 ? (
+                        <div className="py-10 text-center text-sm text-muted-foreground">
+                          No draft messages captured for this recipe.
+                        </div>
+                      ) : (
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead className="w-40">When</TableHead>
+                              <TableHead className="w-24">Role</TableHead>
+                              <TableHead>Message</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {detail.draft_messages.map((message) => (
+                              <TableRow key={message.id}>
+                                <TableCell className="text-xs text-muted-foreground">
+                                  {new Date(message.created_at).toLocaleString()}
+                                </TableCell>
+                                <TableCell>
+                                  <Badge
+                                    variant={message.role === "user" ? "default" : "outline"}
+                                    className={message.role === "assistant" ? "border-violet-300 bg-violet-50 text-violet-700" : undefined}
+                                  >
+                                    {message.role}
+                                  </Badge>
+                                </TableCell>
+                                <TableCell className="text-sm">
+                                  {draftMessagePreview(message.role, message.content)}
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      )}
+                    </CardContent>
+                  </Card>
+                </TabsContent>
+
+                {/* Revision Map */}
                 <TabsContent value="causality">
                   <div className="grid gap-4 xl:grid-cols-2">
                     <Card>
                       <CardHeader>
-                        <CardTitle className="text-base">Version Lineage</CardTitle>
-                        <CardDescription>Parent-child map of revisions.</CardDescription>
+                        <CardTitle className="text-sm">Version Lineage</CardTitle>
+                        <CardDescription>Parent-child chain of all revisions.</CardDescription>
                       </CardHeader>
                       <CardContent className="space-y-2">
                         {detail.versions.length === 0 ? (
-                          <p className="text-sm text-muted-foreground">No lineage nodes.</p>
+                          <p className="text-sm text-muted-foreground">No lineage.</p>
                         ) : (
                           detail.versions.map((version, index) => (
                             <div key={version.id} className="rounded-md border p-2 text-sm">
-                              <p className="font-medium">v{index + 1}</p>
-                              <p className="font-mono text-xs">id: {version.id}</p>
-                              <p className="font-mono text-xs">parent: {version.parent_version_id ?? "root"}</p>
-                              <p className="text-xs text-muted-foreground">request: {version.request_id ?? "n/a"}</p>
+                              <div className="flex items-center justify-between">
+                                <p className="font-medium">v{index + 1}</p>
+                                {version.event_type && (
+                                  <Badge variant="outline" className="text-[10px]">{version.event_type}</Badge>
+                                )}
+                              </div>
+                              <p className="font-mono text-xs text-muted-foreground">{shortId(version.id)}</p>
+                              <p className="font-mono text-xs text-muted-foreground">
+                                ↖ {version.parent_version_id ? shortId(version.parent_version_id) : "root"}
+                              </p>
+                              {version.request_id && (
+                                <p className="text-xs text-muted-foreground">req: {shortId(version.request_id)}</p>
+                              )}
                             </div>
                           ))
                         )}
@@ -435,38 +398,40 @@ export default async function RecipesPage({
 
                     <Card>
                       <CardHeader>
-                        <CardTitle className="text-base">Attachment Graph</CardTitle>
-                        <CardDescription>Sides/appetizers/desserts linked to this main recipe.</CardDescription>
+                        <CardTitle className="text-sm">Attachment Graph</CardTitle>
+                        <CardDescription>Linked sides, appetizers, and desserts.</CardDescription>
                       </CardHeader>
-                      <CardContent>
+                      <CardContent className="p-0">
                         <Table>
                           <TableHeader>
                             <TableRow>
                               <TableHead>Relation</TableHead>
                               <TableHead>Child Recipe</TableHead>
-                              <TableHead>Position</TableHead>
-                              <TableHead>Updated</TableHead>
+                              <TableHead>#</TableHead>
                             </TableRow>
                           </TableHeader>
                           <TableBody>
                             {detail.attachments.length === 0 ? (
                               <TableRow>
-                                <TableCell colSpan={4} className="text-muted-foreground">
-                                  No attachments linked to this recipe.
+                                <TableCell colSpan={3} className="py-6 text-center text-muted-foreground">
+                                  No attachments.
                                 </TableCell>
                               </TableRow>
                             ) : (
                               detail.attachments.map((attachment) => (
                                 <TableRow key={attachment.id}>
                                   <TableCell>
-                                    <Badge variant="outline">{attachment.relation_type}</Badge>
+                                    <Badge variant="outline" className="text-xs">{attachment.relation_type}</Badge>
                                   </TableCell>
                                   <TableCell>
-                                    <p className="text-sm">{attachment.child_recipe_title ?? "Untitled child recipe"}</p>
-                                    <p className="font-mono text-xs text-muted-foreground">{attachment.child_recipe_id}</p>
+                                    <p className="text-sm">{attachment.child_recipe_title ?? "Untitled"}</p>
+                                    <p className="font-mono text-[10px] text-muted-foreground">
+                                      {shortId(attachment.child_recipe_id)}
+                                    </p>
                                   </TableCell>
-                                  <TableCell>{attachment.position}</TableCell>
-                                  <TableCell>{new Date(attachment.updated_at).toLocaleString()}</TableCell>
+                                  <TableCell>
+                                    <Badge variant="secondary">#{attachment.position}</Badge>
+                                  </TableCell>
                                 </TableRow>
                               ))
                             )}
@@ -477,48 +442,70 @@ export default async function RecipesPage({
                   </div>
                 </TabsContent>
 
+                {/* Changelog */}
                 <TabsContent value="changes">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>When</TableHead>
-                        <TableHead>Scope</TableHead>
-                        <TableHead>Entity</TableHead>
-                        <TableHead>Action</TableHead>
-                        <TableHead>Request</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {detail.changelog.length === 0 ? (
-                        <TableRow>
-                          <TableCell colSpan={5} className="text-muted-foreground">
-                            No changelog entries found for this recipe and its request chain.
-                          </TableCell>
-                        </TableRow>
-                      ) : (
-                        detail.changelog.map((item) => (
-                          <TableRow key={item.id}>
-                            <TableCell>{new Date(item.created_at).toLocaleString()}</TableCell>
-                            <TableCell>
-                              <Badge variant="outline">{item.scope}</Badge>
-                            </TableCell>
-                            <TableCell className="text-xs text-muted-foreground">
-                              {item.entity_type}
-                              {item.entity_id ? `:${item.entity_id}` : ""}
-                            </TableCell>
-                            <TableCell>{item.action}</TableCell>
-                            <TableCell className="font-mono text-xs">{item.request_id ?? "n/a"}</TableCell>
+                  <Card>
+                    <CardContent className="p-0">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>When</TableHead>
+                            <TableHead>Scope</TableHead>
+                            <TableHead>Entity</TableHead>
+                            <TableHead>Action</TableHead>
+                            <TableHead>Request</TableHead>
                           </TableRow>
-                        ))
-                      )}
-                    </TableBody>
-                  </Table>
+                        </TableHeader>
+                        <TableBody>
+                          {detail.changelog.length === 0 ? (
+                            <TableRow>
+                              <TableCell colSpan={5} className="py-8 text-center text-muted-foreground">
+                                No changelog entries found.
+                              </TableCell>
+                            </TableRow>
+                          ) : (
+                            detail.changelog.map((item) => (
+                              <TableRow key={item.id}>
+                                <TableCell className="text-xs text-muted-foreground">
+                                  {new Date(item.created_at).toLocaleString()}
+                                </TableCell>
+                                <TableCell>
+                                  <Badge variant="outline" className="text-xs">{item.scope}</Badge>
+                                </TableCell>
+                                <TableCell className="text-xs text-muted-foreground">
+                                  {item.entity_type}
+                                  {item.entity_id ? `:${item.entity_id.slice(0, 6)}` : ""}
+                                </TableCell>
+                                <TableCell>
+                                  <Badge
+                                    variant="outline"
+                                    className={
+                                      item.action === "create"
+                                        ? "border-emerald-300/60 bg-emerald-50 text-emerald-700 text-xs"
+                                        : item.action === "delete"
+                                          ? "border-red-300/60 bg-red-50 text-red-700 text-xs"
+                                          : "text-xs"
+                                    }
+                                  >
+                                    {item.action}
+                                  </Badge>
+                                </TableCell>
+                                <TableCell className="font-mono text-xs text-muted-foreground">
+                                  {item.request_id ? shortId(item.request_id) : "—"}
+                                </TableCell>
+                              </TableRow>
+                            ))
+                          )}
+                        </TableBody>
+                      </Table>
+                    </CardContent>
+                  </Card>
                 </TabsContent>
               </Tabs>
             </div>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      </div>
     </div>
   );
 }

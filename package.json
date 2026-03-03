@@ -13,6 +13,7 @@
     "dev:mobile:ios": "pnpm --filter @alchemy/mobile ios",
     "dev:mobile:ios:clear": "pnpm --filter @alchemy/mobile ios:clear",
     "logs:mobile:ios": "pnpm --filter @alchemy/mobile ios:logs",
-    "contracts:generate": "pnpm --filter @alchemy/contracts generate"
+    "contracts:generate": "pnpm --filter @alchemy/contracts generate",
+    "simulate:api": "node ./scripts/simulate-api-ux.mjs"
   }
 }

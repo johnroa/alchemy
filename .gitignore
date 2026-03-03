@@ -5,6 +5,9 @@
 node_modules
 .pnpm-store
 .next
+.open-next
+.wrangler
+.vercel
 dist
 build
 coverage
@@ -22,6 +25,7 @@ ios
 
 # Supabase local
 .supabase
+supabase/.temp
 
 # Local browser automation traces
 .playwright-cli

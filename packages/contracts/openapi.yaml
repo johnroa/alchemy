@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: Alchemy API
-  version: 1.0.0
-  description: API contract for the Alchemy mobile app and admin UI.
+  version: 1.1.0
+  description: API contract for Alchemy mobile and admin workflows.
 servers:
   - url: https://api.cookwithalchemy.com/v1
 security:
@@ -10,7 +10,7 @@ security:
 paths:
   /recipes/generate:
     post:
-      summary: Generate a recipe from user intent and preferences
+      summary: Generate a recipe from user intent and memory-aware context
       requestBody:
         required: true
         content:
@@ -60,19 +60,26 @@ paths:
                 $ref: '#/components/schemas/Recipe'
         default:
           $ref: '#/components/responses/ErrorResponse'
-  /recipes/feed:
+  /recipes/{id}/history:
     get:
-      summary: Personalized explore feed
+      summary: Get recipe version history with causal draft/thread context
       parameters:
-        - in: query
-          name: limit
-          schema:
-            type: integer
-            minimum: 1
-            maximum: 100
+        - $ref: '#/components/parameters/RecipeId'
       responses:
         '200':
-          description: Feed response
+          description: Recipe history
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecipeHistoryResponse'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /recipes/cookbook:
+    get:
+      summary: Saved cookbook recipes grouped with category precedence
+      responses:
+        '200':
+          description: Cookbook response
           content:
             application/json:
               schema:
@@ -82,12 +89,12 @@ paths:
                   items:
                     type: array
                     items:
-                      $ref: '#/components/schemas/Recipe'
+                      $ref: '#/components/schemas/RecipeCard'
         default:
           $ref: '#/components/responses/ErrorResponse'
   /recipes/{id}/save:
     post:
-      summary: Save a recipe
+      summary: Save a recipe to cookbook
       parameters:
         - $ref: '#/components/parameters/RecipeId'
       responses:
@@ -118,6 +125,86 @@ paths:
                 properties:
                   saved:
                     type: boolean
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /recipes/{id}/attachments:
+    post:
+      summary: Create and attach a child recipe (side/appetizer/etc)
+      parameters:
+        - $ref: '#/components/parameters/RecipeId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAttachmentRequest'
+      responses:
+        '200':
+          description: Parent recipe with updated attachments
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [recipe, attachment_id]
+                properties:
+                  recipe:
+                    $ref: '#/components/schemas/Recipe'
+                  attachment_id:
+                    type: string
+                    format: uuid
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /recipes/{id}/attachments/{attachment_id}:
+    patch:
+      summary: Update attachment position or relation type
+      parameters:
+        - $ref: '#/components/parameters/RecipeId'
+        - in: path
+          name: attachment_id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateAttachmentRequest'
+      responses:
+        '200':
+          description: Parent recipe with updated attachments
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [recipe]
+                properties:
+                  recipe:
+                    $ref: '#/components/schemas/Recipe'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+    delete:
+      summary: Remove attachment link
+      parameters:
+        - $ref: '#/components/parameters/RecipeId'
+        - in: path
+          name: attachment_id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Parent recipe with updated attachments
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [recipe]
+                properties:
+                  recipe:
+                    $ref: '#/components/schemas/Recipe'
         default:
           $ref: '#/components/responses/ErrorResponse'
   /collections:
@@ -220,6 +307,136 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PreferenceProfile'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /onboarding/state:
+    get:
+      summary: Get onboarding completion state for authenticated user
+      responses:
+        '200':
+          description: Onboarding state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OnboardingState'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /onboarding/chat:
+    post:
+      summary: Continue onboarding interview and persist preference updates
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OnboardingChatRequest'
+      responses:
+        '200':
+          description: Onboarding assistant response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OnboardingChatResponse'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /memories:
+    get:
+      summary: Get active user memories and snapshot
+      responses:
+        '200':
+          description: Memory response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemoryListResponse'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /memories/forget:
+    post:
+      summary: Soft-delete a specific memory
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [memory_id]
+              properties:
+                memory_id:
+                  type: string
+                  format: uuid
+      responses:
+        '200':
+          description: Forget status
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok]
+                properties:
+                  ok:
+                    type: boolean
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /memories/reset:
+    post:
+      summary: Reset all user memories
+      responses:
+        '200':
+          description: Reset status
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok]
+                properties:
+                  ok:
+                    type: boolean
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /changelog:
+    get:
+      summary: User-scoped changelog timeline
+      responses:
+        '200':
+          description: Changelog response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChangelogResponse'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /image-jobs/process:
+    post:
+      summary: Process pending image jobs for authenticated user
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                limit:
+                  type: integer
+                  minimum: 1
+                  maximum: 20
+      responses:
+        '200':
+          description: Processing summary
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [processed, ready, failed, pending]
+                properties:
+                  processed:
+                    type: integer
+                  ready:
+                    type: integer
+                  failed:
+                    type: integer
+                  pending:
+                    type: integer
         default:
           $ref: '#/components/responses/ErrorResponse'
   /recipe-drafts:
@@ -431,6 +648,18 @@ components:
           type: string
         preparation:
           type: string
+        category:
+          type: string
+    InlineMeasurement:
+      type: object
+      required: [ingredient, amount, unit]
+      properties:
+        ingredient:
+          type: string
+        amount:
+          type: number
+        unit:
+          type: string
     Step:
       type: object
       required: [index, instruction]
@@ -443,6 +672,96 @@ components:
           type: integer
         notes:
           type: string
+        inline_measurements:
+          type: array
+          items:
+            $ref: '#/components/schemas/InlineMeasurement'
+    Nutrition:
+      type: object
+      properties:
+        calories:
+          type: number
+        protein_g:
+          type: number
+        carbs_g:
+          type: number
+        fat_g:
+          type: number
+        fiber_g:
+          type: number
+        sugar_g:
+          type: number
+        sodium_mg:
+          type: number
+    RecipeMetadata:
+      type: object
+      properties:
+        vibe:
+          type: string
+        flavor_profile:
+          type: array
+          items:
+            type: string
+        nutrition:
+          $ref: '#/components/schemas/Nutrition'
+        difficulty:
+          type: string
+        allergens:
+          type: array
+          items:
+            type: string
+        substitutions:
+          type: array
+          items:
+            type: object
+            properties:
+              from:
+                type: string
+              to:
+                type: string
+              note:
+                type: string
+        timing:
+          type: object
+          properties:
+            prep_minutes:
+              type: integer
+            cook_minutes:
+              type: integer
+            total_minutes:
+              type: integer
+        cuisine_tags:
+          type: array
+          items:
+            type: string
+        occasion_tags:
+          type: array
+          items:
+            type: string
+        pairing_rationale:
+          type: array
+          items:
+            type: string
+        serving_notes:
+          type: array
+          items:
+            type: string
+        additionalProperties:
+          type: object
+          additionalProperties: true
+    RecipeAttachment:
+      type: object
+      required: [attachment_id, relation_type, position, recipe]
+      properties:
+        attachment_id:
+          type: string
+          format: uuid
+        relation_type:
+          type: string
+        position:
+          type: integer
+        recipe:
+          $ref: '#/components/schemas/Recipe'
     Recipe:
       type: object
       required: [id, title, servings, ingredients, steps, updated_at, visibility]
@@ -459,6 +778,9 @@ components:
         image_url:
           type: string
           format: uri
+        image_status:
+          type: string
+          enum: [pending, ready, failed]
         servings:
           type: integer
         ingredients:
@@ -475,9 +797,43 @@ components:
           type: array
           items:
             type: string
+        emoji:
+          type: array
+          items:
+            type: string
+        metadata:
+          $ref: '#/components/schemas/RecipeMetadata'
+        attachments:
+          type: array
+          items:
+            $ref: '#/components/schemas/RecipeAttachment'
         visibility:
           type: string
           enum: [public, private]
+        updated_at:
+          type: string
+          format: date-time
+        version:
+          $ref: '#/components/schemas/RecipeVersion'
+    RecipeCard:
+      type: object
+      required: [id, title, summary, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        summary:
+          type: string
+        image_url:
+          type: string
+          format: uri
+        image_status:
+          type: string
+          enum: [pending, ready, failed]
+        category:
+          type: string
         updated_at:
           type: string
           format: date-time
@@ -499,10 +855,122 @@ components:
         created_at:
           type: string
           format: date-time
+    RecipeHistoryResponse:
+      type: object
+      required: [recipe_id, versions, draft_messages]
+      properties:
+        recipe_id:
+          type: string
+          format: uuid
+        source_draft_id:
+          type: string
+          format: uuid
+        versions:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+                format: uuid
+              parent_version_id:
+                type: string
+                format: uuid
+              diff_summary:
+                type: string
+              created_at:
+                type: string
+                format: date-time
+        version_events:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        draft_messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/RecipeDraftMessage'
+    Memory:
+      type: object
+      required: [id, memory_type, memory_kind, confidence, salience, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        memory_type:
+          type: string
+        memory_kind:
+          type: string
+        memory_content:
+          type: object
+          additionalProperties: true
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+        salience:
+          type: number
+          minimum: 0
+          maximum: 1
+        status:
+          type: string
+        updated_at:
+          type: string
+          format: date-time
+    MemoryListResponse:
+      type: object
+      required: [items, snapshot]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Memory'
+        snapshot:
+          type: object
+          additionalProperties: true
+    ChangelogEvent:
+      type: object
+      required: [id, scope, entity_type, action, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        scope:
+          type: string
+        entity_type:
+          type: string
+        entity_id:
+          type: string
+        action:
+          type: string
+        request_id:
+          type: string
+        before_json:
+          type: object
+          additionalProperties: true
+        after_json:
+          type: object
+          additionalProperties: true
+        metadata:
+          type: object
+          additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
+    ChangelogResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChangelogEvent'
     PreferenceProfile:
       type: object
       required: [dietary_preferences, skill_level, equipment]
       properties:
+        free_form:
+          type: string
         dietary_preferences:
           type: array
           items:
@@ -531,6 +999,80 @@ components:
           type: integer
           minimum: 1
           maximum: 5
+        presentation_preferences:
+          type: object
+          additionalProperties: true
+    AssistantReply:
+      type: object
+      required: [text]
+      properties:
+        text:
+          type: string
+        tone:
+          type: string
+        emoji:
+          type: array
+          items:
+            type: string
+        suggested_next_actions:
+          type: array
+          items:
+            type: string
+        focus_summary:
+          type: string
+    OnboardingState:
+      type: object
+      required: [completed, progress, missing_topics, state]
+      properties:
+        completed:
+          type: boolean
+        progress:
+          type: number
+          minimum: 0
+          maximum: 1
+        missing_topics:
+          type: array
+          items:
+            type: string
+        state:
+          type: object
+          additionalProperties: true
+    OnboardingChatMessage:
+      type: object
+      required: [role, content]
+      properties:
+        role:
+          type: string
+          enum: [assistant, user]
+        content:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    OnboardingChatRequest:
+      type: object
+      required: [message, transcript]
+      properties:
+        message:
+          type: string
+        transcript:
+          type: array
+          items:
+            $ref: '#/components/schemas/OnboardingChatMessage'
+        state:
+          type: object
+          additionalProperties: true
+    OnboardingChatResponse:
+      type: object
+      required: [assistant_reply, onboarding_state]
+      properties:
+        assistant_reply:
+          $ref: '#/components/schemas/AssistantReply'
+        onboarding_state:
+          $ref: '#/components/schemas/OnboardingState'
+        preference_updates:
+          type: object
+          additionalProperties: true
     GenerateRecipeRequest:
       type: object
       required: [prompt]
@@ -539,8 +1081,6 @@ components:
           type: string
         vibe:
           type: string
-        preference_context:
-          $ref: '#/components/schemas/PreferenceProfile'
     GenerateRecipeResponse:
       type: object
       required: [recipe, version]
@@ -549,6 +1089,8 @@ components:
           $ref: '#/components/schemas/Recipe'
         version:
           $ref: '#/components/schemas/RecipeVersion'
+        assistant_reply:
+          $ref: '#/components/schemas/AssistantReply'
     TweakRecipeRequest:
       type: object
       required: [message]
@@ -563,9 +1105,31 @@ components:
           $ref: '#/components/schemas/Recipe'
         version:
           $ref: '#/components/schemas/RecipeVersion'
+        assistant_reply:
+          $ref: '#/components/schemas/AssistantReply'
+    CreateAttachmentRequest:
+      type: object
+      required: [relation_type]
+      properties:
+        relation_type:
+          type: string
+        position:
+          type: integer
+        prompt:
+          type: string
+        recipe:
+          type: object
+          additionalProperties: true
+    UpdateAttachmentRequest:
+      type: object
+      properties:
+        relation_type:
+          type: string
+        position:
+          type: integer
     RecipeDraftMessage:
       type: object
-      required: [id, role, content, created_at]
+      required: [id, role, content]
       properties:
         id:
           type: string
@@ -580,7 +1144,7 @@ components:
           format: date-time
     RecipeDraft:
       type: object
-      required: [id, messages, created_at, updated_at]
+      required: [id, messages]
       properties:
         id:
           type: string
@@ -589,6 +1153,15 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/RecipeDraftMessage'
+        active_recipe:
+          $ref: '#/components/schemas/Recipe'
+        assistant_reply:
+          $ref: '#/components/schemas/AssistantReply'
+        memory_context_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
         created_at:
           type: string
           format: date-time
@@ -603,6 +1176,8 @@ components:
           $ref: '#/components/schemas/Recipe'
         version:
           $ref: '#/components/schemas/RecipeVersion'
+        assistant_reply:
+          $ref: '#/components/schemas/AssistantReply'
     Collection:
       type: object
       required: [id, name, created_at]
