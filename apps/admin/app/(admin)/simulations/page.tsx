@@ -20,7 +20,7 @@ export default async function SimulationsPage(): Promise<React.JSX.Element> {
     <div className="space-y-6">
       <PageHeader
         title="Simulation Runner"
-        description="Operational end-to-end API simulation runs — test the full UX pipeline against live endpoints."
+        description="Live end-to-end simulation runs with real-time trace streaming, full chat/candidate/commit visibility, and latency timing per step."
       />
 
       <div className="grid gap-4 sm:grid-cols-3">
@@ -46,7 +46,7 @@ export default async function SimulationsPage(): Promise<React.JSX.Element> {
         />
       </div>
 
-      <SimulationRunnerCard />
+      <SimulationRunnerCard registryModels={data.registryModels} />
 
       <Card>
         <CardHeader className="flex flex-row items-center justify-between pb-3">
