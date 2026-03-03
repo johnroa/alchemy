@@ -70,17 +70,17 @@ const run = async () => {
     }
   };
 
-  const draft = await step("create_draft", async () => {
-    const res = await request("/recipe-drafts", {
+  const chat = await step("chat_start", async () => {
+    const res = await request("/chat", {
       method: "POST",
       body: JSON.stringify({ message: "chicken parm" })
     });
-    assert(typeof res.id === "string", "draft id missing");
-    return { draft_id: res.id, message_count: Array.isArray(res.messages) ? res.messages.length : 0 };
+    assert(typeof res.id === "string", "chat id missing");
+    return { chat_id: res.id, message_count: Array.isArray(res.messages) ? res.messages.length : 0 };
   });
 
-  await step("draft_message_tweak", async () => {
-    const res = await request(`/recipe-drafts/${draft.draft_id}/messages`, {
+  await step("chat_refine", async () => {
+    const res = await request(`/chat/${chat.chat_id}/messages`, {
       method: "POST",
       body: JSON.stringify({ message: "what can i add to make it spicy?" })
     });
@@ -88,8 +88,8 @@ const run = async () => {
     return { message_count: res.messages.length };
   });
 
-  await step("draft_message_attachment", async () => {
-    const res = await request(`/recipe-drafts/${draft.draft_id}/messages`, {
+  await step("chat_attachment_request", async () => {
+    const res = await request(`/chat/${chat.chat_id}/messages`, {
       method: "POST",
       body: JSON.stringify({ message: "add a side and appetizer and attach them" })
     });
@@ -97,9 +97,9 @@ const run = async () => {
     return { message_count: res.messages.length };
   });
 
-  const finalized = await step("finalize_draft", async () => {
-    const res = await request(`/recipe-drafts/${draft.draft_id}/finalize`, { method: "POST" });
-    assert(res.recipe?.id, "finalized recipe id missing");
+  const generated = await step("generate_recipe", async () => {
+    const res = await request(`/chat/${chat.chat_id}/generate`, { method: "POST" });
+    assert(res.recipe?.id, "generated recipe id missing");
     return {
       recipe_id: res.recipe.id,
       attachment_count: Array.isArray(res.recipe.attachments) ? res.recipe.attachments.length : 0,
@@ -108,15 +108,15 @@ const run = async () => {
   });
 
   await step("save_recipe", async () => {
-    const res = await request(`/recipes/${finalized.recipe_id}/save`, { method: "POST" });
+    const res = await request(`/recipes/${generated.recipe_id}/save`, { method: "POST" });
     assert(res.saved === true, "recipe save failed");
     return res;
   });
 
   await step("fetch_recipe_history", async () => {
-    const res = await request(`/recipes/${finalized.recipe_id}/history`);
+    const res = await request(`/recipes/${generated.recipe_id}/history`);
     assert(Array.isArray(res.versions), "history missing versions");
-    return { version_count: res.versions.length, draft_message_count: Array.isArray(res.draft_messages) ? res.draft_messages.length : 0 };
+    return { version_count: res.versions.length, chat_message_count: Array.isArray(res.chat_messages) ? res.chat_messages.length : 0 };
   });
 
   await step("fetch_cookbook", async () => {

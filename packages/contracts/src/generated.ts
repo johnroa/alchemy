@@ -4,6 +4,50 @@
  */
 
 export interface paths {
+    "/healthz": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Health check */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Service health */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @enum {string} */
+                            status: "ok";
+                            service: string;
+                            /** Format: date-time */
+                            timestamp: string;
+                            request_id: string;
+                        };
+                    };
+                };
+                default: components["responses"]["ErrorResponse"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/recipes/generate": {
         parameters: {
             query?: never;
@@ -134,7 +178,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get recipe version history with causal draft/thread context */
+        /** Get recipe version history with causal chat/thread context */
         get: {
             parameters: {
                 query?: never;
@@ -654,7 +698,9 @@ export interface paths {
         /** Get active user memories and snapshot */
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    limit?: number;
+                };
                 header?: never;
                 path?: never;
                 cookie?: never;
@@ -776,7 +822,9 @@ export interface paths {
         /** User-scoped changelog timeline */
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    limit?: number;
+                };
                 header?: never;
                 path?: never;
                 cookie?: never;
@@ -851,7 +899,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/recipe-drafts": {
+    "/chat": {
         parameters: {
             query?: never;
             header?: never;
@@ -860,7 +908,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Start a new recipe draft chat session */
+        /** Start a new chat session */
         post: {
             parameters: {
                 query?: never;
@@ -876,13 +924,13 @@ export interface paths {
                 };
             };
             responses: {
-                /** @description Draft created */
+                /** @description Chat session created */
                 200: {
                     headers: {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": components["schemas"]["RecipeDraft"];
+                        "application/json": components["schemas"]["ChatSession"];
                     };
                 };
                 default: components["responses"]["ErrorResponse"];
@@ -894,14 +942,14 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/recipe-drafts/{id}": {
+    "/chat/{id}": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Get recipe draft thread */
+        /** Get chat session thread */
         get: {
             parameters: {
                 query?: never;
@@ -913,13 +961,13 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description Draft */
+                /** @description Chat session */
                 200: {
                     headers: {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": components["schemas"]["RecipeDraft"];
+                        "application/json": components["schemas"]["ChatSession"];
                     };
                 };
                 default: components["responses"]["ErrorResponse"];
@@ -933,7 +981,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/recipe-drafts/{id}/messages": {
+    "/chat/{id}/messages": {
         parameters: {
             query?: never;
             header?: never;
@@ -942,7 +990,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Add a message to recipe draft thread */
+        /** Add a message to chat session thread */
         post: {
             parameters: {
                 query?: never;
@@ -960,13 +1008,13 @@ export interface paths {
                 };
             };
             responses: {
-                /** @description Updated draft */
+                /** @description Updated chat session */
                 200: {
                     headers: {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": components["schemas"]["RecipeDraft"];
+                        "application/json": components["schemas"]["ChatSession"];
                     };
                 };
                 default: components["responses"]["ErrorResponse"];
@@ -978,7 +1026,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/recipe-drafts/{id}/finalize": {
+    "/chat/{id}/generate": {
         parameters: {
             query?: never;
             header?: never;
@@ -987,7 +1035,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Finalize draft into persisted recipe + version */
+        /** Generate persisted recipe + version from chat session */
         post: {
             parameters: {
                 query?: never;
@@ -1005,7 +1053,7 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": components["schemas"]["RecipeFinalizeResponse"];
+                        "application/json": components["schemas"]["ChatGenerateResponse"];
                     };
                 };
                 default: components["responses"]["ErrorResponse"];
@@ -1224,7 +1272,7 @@ export interface components {
             description?: string;
             summary?: string;
             /** Format: uri */
-            image_url?: string;
+            image_url?: string | null;
             /** @enum {string} */
             image_status?: "pending" | "ready" | "failed";
             servings: number;
@@ -1247,7 +1295,7 @@ export interface components {
             title: string;
             summary: string;
             /** Format: uri */
-            image_url?: string;
+            image_url?: string | null;
             /** @enum {string} */
             image_status?: "pending" | "ready" | "failed";
             category?: string;
@@ -1260,8 +1308,8 @@ export interface components {
             /** Format: uuid */
             recipe_id: string;
             /** Format: uuid */
-            parent_version_id?: string;
-            diff_summary?: string;
+            parent_version_id?: string | null;
+            diff_summary?: string | null;
             /** Format: date-time */
             created_at: string;
         };
@@ -1269,20 +1317,25 @@ export interface components {
             /** Format: uuid */
             recipe_id: string;
             /** Format: uuid */
-            source_draft_id?: string;
+            source_chat_id?: string | null;
             versions: {
                 /** Format: uuid */
                 id?: string;
                 /** Format: uuid */
-                parent_version_id?: string;
-                diff_summary?: string;
+                parent_version_id?: string | null;
+                diff_summary?: string | null;
                 /** Format: date-time */
                 created_at?: string;
+                payload?: {
+                    [key: string]: unknown;
+                };
+                /** Format: uuid */
+                created_by?: string | null;
             }[];
             version_events?: {
                 [key: string]: unknown;
             }[];
-            draft_messages: components["schemas"]["RecipeDraftMessage"][];
+            chat_messages: components["schemas"]["ChatMessage"][];
         };
         Memory: {
             /** Format: uuid */
@@ -1309,15 +1362,15 @@ export interface components {
             id: string;
             scope: string;
             entity_type: string;
-            entity_id?: string;
+            entity_id?: string | null;
             action: string;
             request_id?: string;
             before_json?: {
                 [key: string]: unknown;
-            };
+            } | null;
             after_json?: {
                 [key: string]: unknown;
-            };
+            } | null;
             metadata?: {
                 [key: string]: unknown;
             };
@@ -1364,8 +1417,8 @@ export interface components {
             created_at?: string;
         };
         OnboardingChatRequest: {
-            message: string;
-            transcript: components["schemas"]["OnboardingChatMessage"][];
+            message?: string;
+            transcript?: components["schemas"]["OnboardingChatMessage"][];
             state?: {
                 [key: string]: unknown;
             };
@@ -1406,28 +1459,35 @@ export interface components {
             relation_type?: string;
             position?: number;
         };
-        RecipeDraftMessage: {
+        ChatMessage: {
             /** Format: uuid */
             id: string;
             /** @enum {string} */
             role: "user" | "assistant" | "system";
             content: string;
+            metadata?: {
+                [key: string]: unknown;
+            };
             /** Format: date-time */
-            created_at?: string;
+            created_at: string;
         };
-        RecipeDraft: {
+        ChatSession: {
             /** Format: uuid */
             id: string;
-            messages: components["schemas"]["RecipeDraftMessage"][];
+            messages: components["schemas"]["ChatMessage"][];
             active_recipe?: components["schemas"]["Recipe"];
             assistant_reply?: components["schemas"]["AssistantReply"];
             memory_context_ids?: string[];
+            context_version?: number;
+            context?: {
+                [key: string]: unknown;
+            };
             /** Format: date-time */
             created_at?: string;
             /** Format: date-time */
             updated_at?: string;
         };
-        RecipeFinalizeResponse: {
+        ChatGenerateResponse: {
             recipe: components["schemas"]["Recipe"];
             version: components["schemas"]["RecipeVersion"];
             assistant_reply?: components["schemas"]["AssistantReply"];

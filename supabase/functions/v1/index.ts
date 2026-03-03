@@ -2,7 +2,7 @@ import type { SupabaseClient } from "npm:@supabase/supabase-js@2";
 import { requireAuth } from "../_shared/auth.ts";
 import { ApiError, errorResponse, jsonResponse, requireJsonBody } from "../_shared/errors.ts";
 import { createServiceClient, createUserClient } from "../_shared/db.ts";
-import { llmGateway } from "../_shared/llm-gateway.ts";
+import { llmGateway, type ModelOverrideMap } from "../_shared/llm-gateway.ts";
 import type { AssistantReply, JsonValue, MemoryRecord, OnboardingState, RecipePayload } from "../_shared/types.ts";
 
 type PreferenceContext = {
@@ -25,7 +25,7 @@ type ContextPack = {
   selectedMemoryIds: string[];
 };
 
-type DraftMessageView = {
+type ChatMessageView = {
   id: string;
   role: string;
   content: string;
@@ -719,7 +719,7 @@ const persistRecipe = async (params: {
   userId: string;
   requestId: string;
   payload: RecipePayload;
-  sourceDraftId?: string;
+  sourceChatId?: string;
   recipeId?: string;
   parentVersionId?: string;
   diffSummary?: string;
@@ -745,7 +745,7 @@ const persistRecipe = async (params: {
         image_last_error: params.imageError ?? null,
         image_generation_attempts: params.heroImageUrl ? 1 : 0,
         visibility: "public",
-        source_draft_id: params.sourceDraftId,
+        source_chat_id: params.sourceChatId,
         updated_at: now
       })
       .select("id")
@@ -764,7 +764,7 @@ const persistRecipe = async (params: {
           title: params.payload.title,
           hero_image_url: params.heroImageUrl,
           visibility: "public",
-          source_draft_id: params.sourceDraftId,
+          source_chat_id: params.sourceChatId,
           updated_at: now
         })
         .select("id")
@@ -839,14 +839,14 @@ const persistRecipe = async (params: {
   }
 
   // Image jobs are only enqueued when a recipe is explicitly saved to cookbook.
-  // Do NOT enqueue here — avoids triggering slow image generation on every draft/tweak.
+  // Do NOT enqueue here — avoids triggering slow image generation on every chatSession/tweak.
 
   const { error: versionEventError } = await params.client.from("recipe_version_events").insert({
     recipe_version_id: version.id,
     event_type: params.parentVersionId ? "recipe_tweak" : "recipe_create",
     request_id: params.requestId,
     metadata: {
-      source_draft_id: params.sourceDraftId ?? null,
+      source_chat_id: params.sourceChatId ?? null,
       diff_summary: params.diffSummary ?? null,
       selected_memory_ids: params.selectedMemoryIds ?? []
     }
@@ -1299,22 +1299,22 @@ const syncRecipeAttachments = async (params: {
   }
 };
 
-const fetchDraftMessages = async (client: SupabaseClient, draftId: string): Promise<DraftMessageView[]> => {
+const fetchChatMessages = async (client: SupabaseClient, chatId: string): Promise<ChatMessageView[]> => {
   const { data: messages, error } = await client
-    .from("recipe_draft_messages")
+    .from("chat_messages")
     .select("id,role,content,metadata,created_at")
-    .eq("draft_id", draftId)
+    .eq("chat_id", chatId)
     .order("created_at", { ascending: true });
 
   if (error) {
-    throw new ApiError(500, "draft_messages_fetch_failed", "Could not fetch draft messages", error.message);
+    throw new ApiError(500, "chat_messages_fetch_failed", "Could not fetch chat messages", error.message);
   }
 
-  return (messages ?? []) as DraftMessageView[];
+  return (messages ?? []) as ChatMessageView[];
 };
 
-const parseAssistantDraftPayload = (
-  message: Pick<DraftMessageView, "content">
+const parseAssistantChatPayload = (
+  message: Pick<ChatMessageView, "content">
 ): { recipe: RecipePayload | null; assistantReply: AssistantReply | null } | null => {
   try {
     const parsed = JSON.parse(message.content) as unknown;
@@ -1372,14 +1372,14 @@ const parseAssistantDraftPayload = (
   return null;
 };
 
-const extractLatestAssistantRecipe = (messages: DraftMessageView[]): RecipePayload | null => {
+const extractLatestAssistantRecipe = (messages: ChatMessageView[]): RecipePayload | null => {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
     if (message.role !== "assistant") {
       continue;
     }
 
-    const parsed = parseAssistantDraftPayload(message);
+    const parsed = parseAssistantChatPayload(message);
     if (parsed?.recipe) {
       return parsed.recipe;
     }
@@ -1388,14 +1388,14 @@ const extractLatestAssistantRecipe = (messages: DraftMessageView[]): RecipePaylo
   return null;
 };
 
-const extractLatestAssistantReply = (messages: DraftMessageView[]): AssistantReply | null => {
+const extractLatestAssistantReply = (messages: ChatMessageView[]): AssistantReply | null => {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
     if (message.role !== "assistant") {
       continue;
     }
 
-    const parsed = parseAssistantDraftPayload(message);
+    const parsed = parseAssistantChatPayload(message);
     if (parsed?.assistantReply) {
       return parsed.assistantReply;
     }
@@ -1404,12 +1404,12 @@ const extractLatestAssistantReply = (messages: DraftMessageView[]): AssistantRep
   return null;
 };
 
-const renderDraftMessageForPrompt = (message: DraftMessageView): string => {
+const renderChatMessageForPrompt = (message: ChatMessageView): string => {
   if (message.role !== "assistant") {
     return message.content;
   }
 
-  const parsed = parseAssistantDraftPayload(message);
+  const parsed = parseAssistantChatPayload(message);
   if (parsed?.assistantReply?.text) {
     return parsed.assistantReply.text;
   }
@@ -1769,7 +1769,8 @@ Deno.serve(async (request) => {
 
   try {
     const url = new URL(request.url);
-    const segments = normalizePath(url.pathname);
+    const rawSegments = normalizePath(url.pathname);
+    const segments = [...rawSegments];
     const method = request.method.toUpperCase();
 
     if (segments.length === 1 && segments[0] === "healthz" && method === "GET") {
@@ -1784,6 +1785,16 @@ Deno.serve(async (request) => {
     const auth = await requireAuth(request);
     const client = createUserClient(auth.authHeader);
     const serviceClient = createServiceClient();
+
+    let modelOverrides: ModelOverrideMap | undefined;
+    const simOverridesHeader = request.headers.get("x-sim-model-overrides");
+    if (simOverridesHeader) {
+      try {
+        modelOverrides = JSON.parse(simOverridesHeader) as ModelOverrideMap;
+      } catch {
+        // ignore malformed override header
+      }
+    }
     await ensureUserProfile(client, {
       userId: auth.userId,
       email: auth.email,
@@ -1869,7 +1880,8 @@ Deno.serve(async (request) => {
           workflow: "onboarding",
           transcript,
           state
-        }
+        },
+        selectionMode: "fast"
       });
 
       const interview = await llmGateway.runOnboardingInterview({
@@ -1952,35 +1964,42 @@ Deno.serve(async (request) => {
         );
       }
 
-      await updateMemoryFromInteraction({
-        userClient: client,
-        serviceClient,
-        userId: auth.userId,
-        requestId,
-        interactionContext: {
-          workflow: "onboarding",
-          user_message: normalizedMessage,
-          transcript,
-          assistant_reply: interview.assistant_reply,
-          onboarding_state: onboardingState,
-          preference_updates: interview.preference_updates ?? {},
-          effective_preferences: persistedPreferences as unknown as Record<string, JsonValue>
+      // Fire-and-forget: memory pipeline + changelog run in background so the
+      // response returns immediately (~10s saved per round-trip).
+      void (async () => {
+        try {
+          await updateMemoryFromInteraction({
+            userClient: client,
+            serviceClient,
+            userId: auth.userId,
+            requestId,
+            interactionContext: {
+              workflow: "onboarding",
+              user_message: normalizedMessage,
+              transcript,
+              assistant_reply: interview.assistant_reply,
+              onboarding_state: onboardingState,
+              preference_updates: interview.preference_updates ?? {},
+              effective_preferences: persistedPreferences as unknown as Record<string, JsonValue>
+            }
+          });
+          await logChangelog({
+            serviceClient,
+            actorUserId: auth.userId,
+            scope: "onboarding",
+            entityType: "preferences",
+            entityId: auth.userId,
+            action: onboardingState.completed ? "completed" : "step",
+            requestId,
+            afterJson: {
+              onboarding_state: onboardingState,
+              preference_updates: interview.preference_updates ?? {}
+            }
+          });
+        } catch (bgError) {
+          console.error("onboarding_background_task_failed", bgError);
         }
-      });
-
-      await logChangelog({
-        serviceClient,
-        actorUserId: auth.userId,
-        scope: "onboarding",
-        entityType: "preferences",
-        entityId: auth.userId,
-        action: onboardingState.completed ? "completed" : "step",
-        requestId,
-        afterJson: {
-          onboarding_state: onboardingState,
-          preference_updates: interview.preference_updates ?? {}
-        }
-      });
+      })();
 
       return jsonResponse(200, {
         assistant_reply: interview.assistant_reply,
@@ -2336,7 +2355,7 @@ Deno.serve(async (request) => {
 
       const { data: recipe, error: recipeError } = await client
         .from("recipes")
-        .select("id,source_draft_id")
+        .select("id,source_chat_id")
         .eq("id", recipeId)
         .maybeSingle();
 
@@ -2377,17 +2396,17 @@ Deno.serve(async (request) => {
         }
       }
 
-      let draftMessages: DraftMessageView[] = [];
-      if (recipe.source_draft_id) {
-        draftMessages = await fetchDraftMessages(client, recipe.source_draft_id);
+      let chatMessages: ChatMessageView[] = [];
+      if (recipe.source_chat_id) {
+        chatMessages = await fetchChatMessages(client, recipe.source_chat_id);
       }
 
       return jsonResponse(200, {
         recipe_id: recipeId,
-        source_draft_id: recipe.source_draft_id,
+        source_chat_id: recipe.source_chat_id,
         versions: versions ?? [],
         version_events: events,
-        draft_messages: draftMessages
+        chat_messages: chatMessages
       });
     }
 
@@ -2911,7 +2930,7 @@ Deno.serve(async (request) => {
       return jsonResponse(200, { entities: entities ?? [], edges: responseEdges });
     }
 
-    if (segments.length === 1 && segments[0] === "recipe-drafts" && method === "POST") {
+    if (segments.length === 1 && segments[0] === "chat" && method === "POST") {
       const body = await requireJsonBody<{ message: string }>(request);
       const message = body.message?.trim();
       if (!message) {
@@ -2928,8 +2947,8 @@ Deno.serve(async (request) => {
         selectionMode: "fast"
       });
 
-      const { data: draft, error: draftError } = await client
-        .from("recipe_drafts")
+      const { data: chatSession, error: chatError } = await client
+        .from("chat_sessions")
         .insert({
           owner_user_id: auth.userId,
           context: {
@@ -2941,21 +2960,21 @@ Deno.serve(async (request) => {
         .select("id,created_at,updated_at")
         .single();
 
-      if (draftError || !draft) {
-        throw new ApiError(500, "draft_create_failed", "Could not create recipe draft", draftError?.message);
+      if (chatError || !chatSession) {
+        throw new ApiError(500, "chat_create_failed", "Could not create chat session", chatError?.message);
       }
 
-      const { error: userMessageError } = await client.from("recipe_draft_messages").insert({
-        draft_id: draft.id,
+      const { error: userMessageError } = await client.from("chat_messages").insert({
+        chat_id: chatSession.id,
         role: "user",
         content: message
       });
 
       if (userMessageError) {
-        throw new ApiError(500, "draft_message_create_failed", "Could not store draft message", userMessageError.message);
+        throw new ApiError(500, "chat_message_create_failed", "Could not store chat message", userMessageError.message);
       }
 
-      const assistantDraftResponse = await llmGateway.converseDraft({
+      const assistantChatResponse = await llmGateway.converseChat({
         client: serviceClient,
         userId: auth.userId,
         requestId,
@@ -2964,7 +2983,8 @@ Deno.serve(async (request) => {
           preferences: contextPack.preferences,
           memory_snapshot: contextPack.memorySnapshot,
           selected_memories: contextPack.selectedMemories
-        }
+        },
+        modelOverrides
       });
       const effectivePreferences = await applyModelPreferenceUpdates({
         client,
@@ -2972,29 +2992,29 @@ Deno.serve(async (request) => {
         userId: auth.userId,
         requestId,
         currentPreferences: contextPack.preferences,
-        preferenceUpdates: assistantDraftResponse.response_context?.preference_updates
+        preferenceUpdates: assistantChatResponse.response_context?.preference_updates
       });
 
-      const { error: assistantMessageError } = await client.from("recipe_draft_messages").insert({
-        draft_id: draft.id,
+      const { error: assistantMessageError } = await client.from("chat_messages").insert({
+        chat_id: chatSession.id,
         role: "assistant",
-        content: JSON.stringify(assistantDraftResponse),
-        metadata: { format: "assistant_draft_envelope" }
+        content: JSON.stringify(assistantChatResponse),
+        metadata: { format: "assistant_chat_envelope" }
       });
 
       if (assistantMessageError) {
-        throw new ApiError(500, "draft_assistant_message_failed", "Could not store assistant draft message", assistantMessageError.message);
+        throw new ApiError(500, "chat_assistant_message_failed", "Could not store assistant chat message", assistantMessageError.message);
       }
 
       const interactionContext: Record<string, JsonValue> = {
         prompt: message,
-        draft_id: draft.id,
-        assistant_reply: assistantDraftResponse.assistant_reply,
+        chat_id: chatSession.id,
+        assistant_reply: assistantChatResponse.assistant_reply,
         preferences: effectivePreferences,
         selected_memory_ids: contextPack.selectedMemoryIds
       };
-      if (assistantDraftResponse.recipe) {
-        interactionContext.assistant_recipe = assistantDraftResponse.recipe;
+      if (assistantChatResponse.recipe) {
+        interactionContext.assistant_recipe = assistantChatResponse.recipe;
       }
 
       await updateMemoryFromInteraction({
@@ -3006,14 +3026,14 @@ Deno.serve(async (request) => {
         mode: "light"
       });
 
-      const messages = await fetchDraftMessages(client, draft.id);
+      const messages = await fetchChatMessages(client, chatSession.id);
 
       await logChangelog({
         serviceClient,
         actorUserId: auth.userId,
-        scope: "draft",
-        entityType: "recipe_draft",
-        entityId: draft.id,
+        scope: "chat",
+        entityType: "chat_session",
+        entityId: chatSession.id,
         action: "created",
         requestId,
         afterJson: {
@@ -3022,47 +3042,47 @@ Deno.serve(async (request) => {
       });
 
       return jsonResponse(200, {
-        id: draft.id,
+        id: chatSession.id,
         messages,
-        active_recipe: assistantDraftResponse.recipe ?? null,
-        assistant_reply: assistantDraftResponse.assistant_reply,
+        active_recipe: assistantChatResponse.recipe ?? null,
+        assistant_reply: assistantChatResponse.assistant_reply,
         context_version: 1,
         memory_context_ids: contextPack.selectedMemoryIds,
-        created_at: draft.created_at,
-        updated_at: draft.updated_at
+        created_at: chatSession.created_at,
+        updated_at: chatSession.updated_at
       });
     }
 
-    if (segments.length === 2 && segments[0] === "recipe-drafts" && method === "GET") {
-      const draftId = parseUuid(segments[1]);
+    if (segments.length === 2 && segments[0] === "chat" && method === "GET") {
+      const chatId = parseUuid(segments[1]);
 
-      const { data: draft, error: draftError } = await client
-        .from("recipe_drafts")
+      const { data: chatSession, error: chatError } = await client
+        .from("chat_sessions")
         .select("id,created_at,updated_at,context")
-        .eq("id", draftId)
+        .eq("id", chatId)
         .maybeSingle();
 
-      if (draftError || !draft) {
-        throw new ApiError(404, "draft_not_found", "Recipe draft not found", draftError?.message);
+      if (chatError || !chatSession) {
+        throw new ApiError(404, "chat_not_found", "Chat session not found", chatError?.message);
       }
 
-      const messages = await fetchDraftMessages(client, draftId);
+      const messages = await fetchChatMessages(client, chatId);
       const latestAssistantRecipe = extractLatestAssistantRecipe(messages);
       const latestAssistantReply = extractLatestAssistantReply(messages);
 
       return jsonResponse(200, {
-        id: draft.id,
+        id: chatSession.id,
         messages,
         active_recipe: latestAssistantRecipe,
         assistant_reply: latestAssistantReply,
-        context: draft.context,
-        created_at: draft.created_at,
-        updated_at: draft.updated_at
+        context: chatSession.context,
+        created_at: chatSession.created_at,
+        updated_at: chatSession.updated_at
       });
     }
 
-    if (segments.length === 3 && segments[0] === "recipe-drafts" && segments[2] === "messages" && method === "POST") {
-      const draftId = parseUuid(segments[1]);
+    if (segments.length === 3 && segments[0] === "chat" && segments[2] === "messages" && method === "POST") {
+      const chatId = parseUuid(segments[1]);
       const body = await requireJsonBody<{ message: string }>(request);
       const message = body.message?.trim();
 
@@ -3070,14 +3090,14 @@ Deno.serve(async (request) => {
         throw new ApiError(400, "invalid_message", "message is required");
       }
 
-      const { data: draft, error: draftError } = await client
-        .from("recipe_drafts")
+      const { data: chatSession, error: chatError } = await client
+        .from("chat_sessions")
         .select("id,context")
-        .eq("id", draftId)
+        .eq("id", chatId)
         .maybeSingle();
 
-      if (draftError || !draft) {
-        throw new ApiError(404, "draft_not_found", "Recipe draft not found", draftError?.message);
+      if (chatError || !chatSession) {
+        throw new ApiError(404, "chat_not_found", "Chat session not found", chatError?.message);
       }
 
       const contextPack = await buildContextPack({
@@ -3087,37 +3107,38 @@ Deno.serve(async (request) => {
         requestId,
         prompt: message,
         context: {
-          draft_context: (draft.context as Record<string, JsonValue>) ?? {}
+          chat_context: (chatSession.context as Record<string, JsonValue>) ?? {}
         },
         selectionMode: "fast"
       });
 
-      const { error: userMessageError } = await client.from("recipe_draft_messages").insert({
-        draft_id: draftId,
+      const { error: userMessageError } = await client.from("chat_messages").insert({
+        chat_id: chatId,
         role: "user",
         content: message
       });
 
       if (userMessageError) {
-        throw new ApiError(500, "draft_message_create_failed", "Could not store draft message", userMessageError.message);
+        throw new ApiError(500, "chat_message_create_failed", "Could not store chat message", userMessageError.message);
       }
 
-      const threadMessages = await fetchDraftMessages(client, draftId);
+      const threadMessages = await fetchChatMessages(client, chatId);
       const latestAssistantRecipe = extractLatestAssistantRecipe(threadMessages);
 
-      const assistantDraftResponse = await llmGateway.converseDraft({
+      const assistantChatResponse = await llmGateway.converseChat({
         client: serviceClient,
         userId: auth.userId,
         requestId,
         prompt: message,
         context: {
-          draft_context: (draft.context as Record<string, JsonValue>) ?? {},
+          chat_context: (chatSession.context as Record<string, JsonValue>) ?? {},
           thread: threadMessages,
           active_recipe: latestAssistantRecipe ?? undefined,
           preferences: contextPack.preferences,
           memory_snapshot: contextPack.memorySnapshot,
           selected_memories: contextPack.selectedMemories
-        }
+        },
+        modelOverrides
       });
       const effectivePreferences = await applyModelPreferenceUpdates({
         client,
@@ -3125,30 +3146,30 @@ Deno.serve(async (request) => {
         userId: auth.userId,
         requestId,
         currentPreferences: contextPack.preferences,
-        preferenceUpdates: assistantDraftResponse.response_context?.preference_updates
+        preferenceUpdates: assistantChatResponse.response_context?.preference_updates
       });
 
-      const { error: assistantMessageError } = await client.from("recipe_draft_messages").insert({
-        draft_id: draftId,
+      const { error: assistantMessageError } = await client.from("chat_messages").insert({
+        chat_id: chatId,
         role: "assistant",
-        content: JSON.stringify(assistantDraftResponse),
-        metadata: { format: "assistant_draft_envelope" }
+        content: JSON.stringify(assistantChatResponse),
+        metadata: { format: "assistant_chat_envelope" }
       });
 
       if (assistantMessageError) {
-        throw new ApiError(500, "draft_assistant_message_failed", "Could not store assistant draft message", assistantMessageError.message);
+        throw new ApiError(500, "chat_assistant_message_failed", "Could not store assistant chat message", assistantMessageError.message);
       }
 
       const interactionContext: Record<string, JsonValue> = {
         prompt: message,
-        draft_id: draftId,
-        assistant_reply: assistantDraftResponse.assistant_reply,
+        chat_id: chatId,
+        assistant_reply: assistantChatResponse.assistant_reply,
         thread_size: threadMessages.length,
         preferences: effectivePreferences,
         selected_memory_ids: contextPack.selectedMemoryIds
       };
-      if (assistantDraftResponse.recipe) {
-        interactionContext.assistant_recipe = assistantDraftResponse.recipe;
+      if (assistantChatResponse.recipe) {
+        interactionContext.assistant_recipe = assistantChatResponse.recipe;
       }
 
       await updateMemoryFromInteraction({
@@ -3160,43 +3181,43 @@ Deno.serve(async (request) => {
         mode: "light"
       });
 
-      const messages = await fetchDraftMessages(client, draftId);
-      const responseActiveRecipe = assistantDraftResponse.recipe ?? extractLatestAssistantRecipe(messages);
+      const messages = await fetchChatMessages(client, chatId);
+      const responseActiveRecipe = assistantChatResponse.recipe ?? extractLatestAssistantRecipe(messages);
 
       return jsonResponse(200, {
-        id: draftId,
+        id: chatId,
         messages,
         active_recipe: responseActiveRecipe ?? null,
-        assistant_reply: assistantDraftResponse.assistant_reply,
+        assistant_reply: assistantChatResponse.assistant_reply,
         context_version: 1,
         memory_context_ids: contextPack.selectedMemoryIds
       });
     }
 
-    if (segments.length === 3 && segments[0] === "recipe-drafts" && segments[2] === "finalize" && method === "POST") {
-      const draftId = parseUuid(segments[1]);
+    if (segments.length === 3 && segments[0] === "chat" && segments[2] === "generate" && method === "POST") {
+      const chatId = parseUuid(segments[1]);
 
-      const { data: draft, error: draftError } = await client
-        .from("recipe_drafts")
+      const { data: chatSession, error: chatError } = await client
+        .from("chat_sessions")
         .select("id,context,status")
-        .eq("id", draftId)
+        .eq("id", chatId)
         .maybeSingle();
 
-      if (draftError || !draft) {
-        throw new ApiError(404, "draft_not_found", "Recipe draft not found", draftError?.message);
+      if (chatError || !chatSession) {
+        throw new ApiError(404, "chat_not_found", "Chat session not found", chatError?.message);
       }
 
-      if (draft.status !== "open") {
-        throw new ApiError(409, "draft_not_open", "Only open drafts can be finalized");
+      if (chatSession.status !== "open") {
+        throw new ApiError(409, "chat_not_open", "Only open chat sessions can generate a recipe");
       }
 
-      const messages = await fetchDraftMessages(client, draftId);
+      const messages = await fetchChatMessages(client, chatId);
       if (messages.length === 0) {
-        throw new ApiError(400, "draft_empty", "Draft does not contain any messages");
+        throw new ApiError(400, "chat_empty", "Chat session does not contain any messages");
       }
 
       const consolidatedPrompt = messages
-        .map((message) => `[${message.role}] ${renderDraftMessageForPrompt(message)}`)
+        .map((message) => `[${message.role}] ${renderChatMessageForPrompt(message)}`)
         .join("\n");
 
       const contextPack = await buildContextPack({
@@ -3206,7 +3227,7 @@ Deno.serve(async (request) => {
         requestId,
         prompt: consolidatedPrompt,
         context: {
-          draft_context: (draft.context as Record<string, JsonValue>) ?? {},
+          chat_context: (chatSession.context as Record<string, JsonValue>) ?? {},
           thread_size: messages.length
         }
       });
@@ -3217,12 +3238,13 @@ Deno.serve(async (request) => {
         requestId,
         prompt: consolidatedPrompt,
         context: {
-          draft_context: (draft.context as Record<string, JsonValue>) ?? {},
+          chat_context: (chatSession.context as Record<string, JsonValue>) ?? {},
           thread: messages,
           preferences: contextPack.preferences,
           memory_snapshot: contextPack.memorySnapshot,
           selected_memories: contextPack.selectedMemories
-        }
+        },
+        modelOverrides
       });
       const recipePayload = finalizedGeneration.recipe;
       const effectivePreferences = await applyModelPreferenceUpdates({
@@ -3244,7 +3266,7 @@ Deno.serve(async (request) => {
         requestId,
         recipe: recipePayload,
         context: {
-          draft_context: (draft.context as Record<string, JsonValue>) ?? {},
+          chat_context: (chatSession.context as Record<string, JsonValue>) ?? {},
           preferences: effectivePreferences,
           memory_snapshot: contextPack.memorySnapshot
         }
@@ -3256,8 +3278,8 @@ Deno.serve(async (request) => {
         userId: auth.userId,
         requestId,
         payload: recipePayload,
-        sourceDraftId: draftId,
-        diffSummary: "Finalized from draft chat",
+        sourceChatId: chatId,
+        diffSummary: "Generated from chat session",
         selectedMemoryIds: contextPack.selectedMemoryIds
       });
 
@@ -3283,13 +3305,13 @@ Deno.serve(async (request) => {
         contextPack: effectiveContextPack
       });
 
-      const { error: draftFinalizeError } = await client
-        .from("recipe_drafts")
+      const { error: chatStatusError } = await client
+        .from("chat_sessions")
         .update({ status: "finalized", updated_at: new Date().toISOString() })
-        .eq("id", draftId);
+        .eq("id", chatId);
 
-      if (draftFinalizeError) {
-        throw new ApiError(500, "draft_finalize_update_failed", "Could not finalize draft status", draftFinalizeError.message);
+      if (chatStatusError) {
+        throw new ApiError(500, "chat_generate_update_failed", "Could not update chat session status", chatStatusError.message);
       }
 
       await updateMemoryFromInteraction({
@@ -3298,7 +3320,7 @@ Deno.serve(async (request) => {
         userId: auth.userId,
         requestId,
         interactionContext: {
-          draft_id: draftId,
+          chat_id: chatId,
           consolidated_prompt: consolidatedPrompt,
           finalized_recipe: recipePayload,
           preferences: effectivePreferences,
@@ -3309,10 +3331,10 @@ Deno.serve(async (request) => {
       await logChangelog({
         serviceClient,
         actorUserId: auth.userId,
-        scope: "draft",
-        entityType: "recipe_draft",
-        entityId: draftId,
-        action: "finalized",
+        scope: "chat",
+        entityType: "chat_session",
+        entityId: chatId,
+        action: "generated_recipe",
         requestId,
         afterJson: {
           recipe_id: saved.recipeId
