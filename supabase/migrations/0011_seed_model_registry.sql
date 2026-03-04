@@ -1,6 +1,22 @@
 -- Seed llm_model_registry with OpenAI + Anthropic models and per-token pricing (2026-03).
 -- Safe to re-run: uses on conflict do update.
 
+create table if not exists public.llm_model_registry (
+  id uuid primary key default gen_random_uuid(),
+  provider text not null,
+  model text not null,
+  display_name text not null,
+  input_cost_per_1m_tokens numeric(10,4) not null default 0,
+  output_cost_per_1m_tokens numeric(10,4) not null default 0,
+  context_window_tokens int,
+  max_output_tokens int,
+  is_available boolean not null default true,
+  notes text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (provider, model)
+);
+
 insert into public.llm_model_registry
   (provider, model, display_name, input_cost_per_1m_tokens, output_cost_per_1m_tokens, context_window_tokens, max_output_tokens, notes)
 values
