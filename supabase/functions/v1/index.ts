@@ -988,6 +988,7 @@ type RecipeViewOptions = {
 };
 
 type CanonicalRecipeIngredientRow = {
+  id: string;
   position: number;
   ingredient_id: string | null;
   source_name: string;
@@ -999,6 +1000,7 @@ type CanonicalRecipeIngredientRow = {
   normalized_status: NormalizedStatus;
   category: string | null;
   component: string | null;
+  metadata: Record<string, JsonValue>;
 };
 
 const defaultRecipeViewOptions: RecipeViewOptions = {
@@ -1023,6 +1025,37 @@ const listifyText = (value: unknown): string[] => {
     .filter((item) => item.length > 0);
 };
 
+const ENRICHMENT_PERSIST_CONFIDENCE = 0.85;
+const ENRICHMENT_TRACK_CONFIDENCE = 0.65;
+
+const clampConfidence = (value: unknown, fallback = 0.5): number => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return fallback;
+  }
+  return Math.max(0, Math.min(1, numeric));
+};
+
+const shouldPersistEnrichment = (confidence: unknown): boolean =>
+  clampConfidence(confidence, 0) >= ENRICHMENT_PERSIST_CONFIDENCE;
+
+const listifyMaybeText = (value: unknown): string[] => {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? [trimmed] : [];
+  }
+  return listifyText(value);
+};
+
+const normalizeTermKey = (value: string): string =>
+  value
+    .trim()
+    .toLocaleLowerCase()
+    .normalize("NFKD")
+    .replace(/[^a-z0-9\s:_-]/g, " ")
+    .replace(/\s+/g, "_")
+    .replace(/^_+|_+$/g, "");
+
 const fetchCanonicalIngredientRows = async (
   client: SupabaseClient,
   recipeVersionId: string,
@@ -1030,7 +1063,7 @@ const fetchCanonicalIngredientRows = async (
   const rowsResult = await client
     .from("recipe_ingredients")
     .select(
-      "position,ingredient_id,source_name,source_amount,source_unit,normalized_amount_si,normalized_unit,unit_kind,normalized_status,category,component",
+      "id,position,ingredient_id,source_name,source_amount,source_unit,normalized_amount_si,normalized_unit,unit_kind,normalized_status,category,component,metadata",
     )
     .eq("recipe_version_id", recipeVersionId)
     .order("position", { ascending: true });
@@ -1051,6 +1084,7 @@ const fetchCanonicalIngredientRows = async (
   }
 
   return (rowsResult.data ?? []).map((row) => ({
+    id: String(row.id ?? ""),
     position: Number(row.position ?? 0),
     ingredient_id: row.ingredient_id ?? null,
     source_name: String(row.source_name ?? ""),
@@ -1067,6 +1101,10 @@ const fetchCanonicalIngredientRows = async (
       : "needs_retry",
     category: row.category ? String(row.category) : null,
     component: row.component ? String(row.component) : null,
+    metadata: row.metadata && typeof row.metadata === "object" &&
+        !Array.isArray(row.metadata)
+      ? row.metadata as Record<string, JsonValue>
+      : {},
   }));
 };
 
@@ -1254,169 +1292,10 @@ const persistCanonicalRecipeIngredients = async (params: {
     return;
   }
 
-  const now = new Date().toISOString();
   const ingredientIdByAliasKey = await loadIngredientIdsByAliasKey(
     params.serviceClient,
     keySet,
   );
-
-  const fallbackByAlias = new Map<string, {
-    source_name: string;
-    fallback_canonical_name: string;
-  }>();
-  for (const row of canonicalRows) {
-    if (!row.normalized_key || fallbackByAlias.has(row.normalized_key)) {
-      continue;
-    }
-    fallbackByAlias.set(row.normalized_key, {
-      source_name: row.source_name,
-      fallback_canonical_name: row.canonical_name,
-    });
-  }
-
-  const unresolvedAliases = keySet
-    .filter((aliasKey) => !ingredientIdByAliasKey.has(aliasKey))
-    .map((aliasKey) => {
-      const fallback = fallbackByAlias.get(aliasKey);
-      return {
-        alias_key: aliasKey,
-        source_name: fallback?.source_name ?? aliasKey,
-        fallback_canonical_name: fallback?.fallback_canonical_name ?? aliasKey,
-      };
-    });
-
-  const canonicalByAlias = await resolveAliasCanonicalIdentity({
-    serviceClient: params.serviceClient,
-    userId: params.userId,
-    requestId: params.requestId,
-    unresolvedAliases,
-  });
-  for (const alias of unresolvedAliases) {
-    if (canonicalByAlias.has(alias.alias_key)) {
-      continue;
-    }
-    const identity = deriveCanonicalIngredientIdentity(
-      alias.fallback_canonical_name,
-      alias.source_name,
-    );
-    if (!identity.canonicalKey) {
-      continue;
-    }
-    canonicalByAlias.set(alias.alias_key, {
-      canonical_key: identity.canonicalKey,
-      canonical_name: identity.canonicalName,
-      confidence: 0.8,
-    });
-  }
-
-  if (unresolvedAliases.length > 0) {
-    const ingredientRowsByKey = new Map<string, {
-      canonical_name: string;
-      normalized_key: string;
-      metadata: Record<string, JsonValue>;
-    }>();
-
-    for (const alias of unresolvedAliases) {
-      const resolved = canonicalByAlias.get(alias.alias_key);
-
-      if (!resolved || !resolved.canonical_key) {
-        continue;
-      }
-
-      if (!ingredientRowsByKey.has(resolved.canonical_key)) {
-        ingredientRowsByKey.set(resolved.canonical_key, {
-          canonical_name: resolved.canonical_name,
-          normalized_key: resolved.canonical_key,
-          metadata: {
-            source: "llm",
-            last_seen_at: now,
-          },
-        });
-      }
-    }
-
-    const ingredientRows = Array.from(ingredientRowsByKey.values());
-    if (ingredientRows.length > 0) {
-      const { error: ingredientsError } = await params.serviceClient
-        .from("ingredients")
-        .upsert(ingredientRows, {
-          onConflict: "normalized_key",
-          ignoreDuplicates: true,
-        });
-
-      if (ingredientsError) {
-        throw new ApiError(
-          500,
-          "canonical_ingredient_upsert_failed",
-          "Could not persist canonical ingredients",
-          ingredientsError.message,
-        );
-      }
-
-      const ingredientByCanonicalKey = await loadIngredientsByNormalizedKey(
-        params.serviceClient,
-        ingredientRows.map((row) => row.normalized_key),
-      );
-
-      for (const alias of unresolvedAliases) {
-        const resolved = canonicalByAlias.get(alias.alias_key);
-        if (!resolved) {
-          continue;
-        }
-        const ingredient = ingredientByCanonicalKey.get(resolved.canonical_key);
-        if (ingredient?.id) {
-          ingredientIdByAliasKey.set(alias.alias_key, ingredient.id);
-        }
-      }
-
-      const aliasRows = unresolvedAliases
-        .map((alias) => {
-          const resolved = canonicalByAlias.get(alias.alias_key);
-          const ingredientId = ingredientIdByAliasKey.get(alias.alias_key);
-          if (!resolved || !ingredientId) {
-            return null;
-          }
-          return {
-            alias_key: alias.alias_key,
-            ingredient_id: ingredientId,
-            source: "llm",
-            confidence: resolved.confidence,
-          };
-        })
-        .filter((row): row is {
-          alias_key: string;
-          ingredient_id: string;
-          source: string;
-          confidence: number;
-        } => row !== null);
-
-      if (aliasRows.length > 0) {
-        const { error: aliasError } = await params.serviceClient
-          .from("ingredient_aliases")
-          .upsert(aliasRows, {
-            onConflict: "alias_key",
-            ignoreDuplicates: true,
-          });
-
-        if (aliasError) {
-          throw new ApiError(
-            500,
-            "ingredient_alias_upsert_failed",
-            "Could not persist ingredient aliases",
-            aliasError.message,
-          );
-        }
-      }
-    }
-  }
-
-  const persistedAliasMap = await loadIngredientIdsByAliasKey(
-    params.serviceClient,
-    keySet,
-  );
-  const resolvedIngredientIdByAlias = persistedAliasMap.size > 0
-    ? persistedAliasMap
-    : ingredientIdByAliasKey;
 
   const { error: clearError } = await params.serviceClient
     .from("recipe_ingredients")
@@ -1433,19 +1312,25 @@ const persistCanonicalRecipeIngredients = async (params: {
 
   const rowsToInsert = canonicalRows.map((row) => ({
     recipe_version_id: params.recipeVersionId,
-    ingredient_id: resolvedIngredientIdByAlias.get(row.normalized_key) ?? null,
+    ingredient_id: ingredientIdByAliasKey.get(row.normalized_key) ?? null,
     source_name: row.source_name,
     source_amount: row.source_amount,
     source_unit: row.source_unit,
     normalized_amount_si: row.normalized_amount_si,
     normalized_unit: row.normalized_unit,
     unit_kind: row.unit_kind,
-    normalized_status: row.normalized_status,
+    normalized_status:
+      row.normalized_status === "normalized" &&
+        ingredientIdByAliasKey.has(row.normalized_key)
+        ? "normalized"
+        : "needs_retry",
     category: row.category,
     component: row.component,
     position: row.position,
     metadata: {
       preparation: row.preparation ?? null,
+      alias_key: row.normalized_key,
+      needs_ingredient_resolution: !ingredientIdByAliasKey.has(row.normalized_key),
     },
   }));
 

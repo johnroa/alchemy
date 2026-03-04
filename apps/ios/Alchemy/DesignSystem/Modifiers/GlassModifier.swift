@@ -282,59 +282,59 @@ private struct ChatLiquidPanelBackgroundModifier<S: Shape>: ViewModifier {
         let extraOpacity = reduceTransparency ? 0.12 : 0
         let animate = !reduceMotion
 
-        TimelineView(.periodic(from: .now, by: animate ? (1.0 / 30.0) : 60.0)) { timeline in
+        TimelineView(.periodic(from: .now, by: animate ? (1.0 / 24.0) : 60.0)) { timeline in
             let time = timeline.date.timeIntervalSinceReferenceDate
-            let cycle: Float = 2.8
+            let cycle: Float = 11.0
             let normalizedTime = (Float(time) + animationSeed) / cycle
             let keyframe = floor(normalizedTime)
             let nextKeyframe = keyframe + 1
             let blend = smoothstep(normalizedTime - keyframe)
 
-            let meshOffsetX0 = randomRange(seed: keyframe * 19 + animationSeed + 1, min: -0.16, max: 0.16)
-            let meshOffsetY0 = randomRange(seed: keyframe * 19 + animationSeed + 2, min: -0.14, max: 0.14)
-            let meshOffsetX1 = randomRange(seed: nextKeyframe * 19 + animationSeed + 1, min: -0.16, max: 0.16)
-            let meshOffsetY1 = randomRange(seed: nextKeyframe * 19 + animationSeed + 2, min: -0.14, max: 0.14)
+            let meshOffsetX0 = randomRange(seed: keyframe * 19 + animationSeed + 1, min: -0.1, max: 0.1)
+            let meshOffsetY0 = randomRange(seed: keyframe * 19 + animationSeed + 2, min: -0.08, max: 0.08)
+            let meshOffsetX1 = randomRange(seed: nextKeyframe * 19 + animationSeed + 1, min: -0.1, max: 0.1)
+            let meshOffsetY1 = randomRange(seed: nextKeyframe * 19 + animationSeed + 2, min: -0.08, max: 0.08)
             let meshOffsetX = lerp(meshOffsetX0, meshOffsetX1, blend)
             let meshOffsetY = lerp(meshOffsetY0, meshOffsetY1, blend)
 
             let coolStrength = lerp(
-                randomRange(seed: keyframe * 19 + animationSeed + 3, min: 0.82, max: 1.2),
-                randomRange(seed: nextKeyframe * 19 + animationSeed + 3, min: 0.82, max: 1.2),
+                randomRange(seed: keyframe * 19 + animationSeed + 3, min: 0.9, max: 1.08),
+                randomRange(seed: nextKeyframe * 19 + animationSeed + 3, min: 0.9, max: 1.08),
                 blend
             )
             let warmStrength = lerp(
-                randomRange(seed: keyframe * 19 + animationSeed + 4, min: 0.78, max: 1.22),
-                randomRange(seed: nextKeyframe * 19 + animationSeed + 4, min: 0.78, max: 1.22),
+                randomRange(seed: keyframe * 19 + animationSeed + 4, min: 0.88, max: 1.1),
+                randomRange(seed: nextKeyframe * 19 + animationSeed + 4, min: 0.88, max: 1.1),
                 blend
             )
             let bloomDriftX = CGFloat(lerp(
-                randomRange(seed: keyframe * 19 + animationSeed + 5, min: -0.14, max: 0.14),
-                randomRange(seed: nextKeyframe * 19 + animationSeed + 5, min: -0.14, max: 0.14),
+                randomRange(seed: keyframe * 19 + animationSeed + 5, min: -0.09, max: 0.09),
+                randomRange(seed: nextKeyframe * 19 + animationSeed + 5, min: -0.09, max: 0.09),
                 blend
             ))
             let bloomDriftY = CGFloat(lerp(
-                randomRange(seed: keyframe * 19 + animationSeed + 6, min: -0.12, max: 0.12),
-                randomRange(seed: nextKeyframe * 19 + animationSeed + 6, min: -0.12, max: 0.12),
+                randomRange(seed: keyframe * 19 + animationSeed + 6, min: -0.08, max: 0.08),
+                randomRange(seed: nextKeyframe * 19 + animationSeed + 6, min: -0.08, max: 0.08),
                 blend
             ))
             let hueRotation = Double(lerp(
-                randomRange(seed: keyframe * 19 + animationSeed + 7, min: -16, max: 16),
-                randomRange(seed: nextKeyframe * 19 + animationSeed + 7, min: -16, max: 16),
+                randomRange(seed: keyframe * 19 + animationSeed + 7, min: -8, max: 8),
+                randomRange(seed: nextKeyframe * 19 + animationSeed + 7, min: -8, max: 8),
                 blend
             ))
             let saturation = CGFloat(lerp(
-                randomRange(seed: keyframe * 19 + animationSeed + 8, min: 0.96, max: 1.14),
-                randomRange(seed: nextKeyframe * 19 + animationSeed + 8, min: 0.96, max: 1.14),
+                randomRange(seed: keyframe * 19 + animationSeed + 8, min: 0.98, max: 1.08),
+                randomRange(seed: nextKeyframe * 19 + animationSeed + 8, min: 0.98, max: 1.08),
                 blend
             ))
 
             ZStack {
                 shape
                     .fill(.ultraThinMaterial)
-                    .opacity(0.62)
+                    .opacity(0.56)
 
                 shape
-                    .fill(Color(hex: 0x080F1C).opacity(0.2))
+                    .fill(Color(hex: 0x080F1C).opacity(0.13))
 
                 shape.fill(
                     MeshGradient(
@@ -357,14 +357,14 @@ private struct ChatLiquidPanelBackgroundModifier<S: Shape>: ViewModifier {
                 )
                 .hueRotation(.degrees(hueRotation))
                 .saturation(saturation)
-                .opacity(0.64)
+                .opacity(0.46)
 
                 shape
                     .fill(
                         LinearGradient(
                             stops: [
                                 .init(color: Color.white.opacity(0.08), location: 0),
-                                .init(color: Color.white.opacity(0.02), location: 0.24),
+                                .init(color: Color.white.opacity(0.018), location: 0.24),
                                 .init(color: .clear, location: 0.62)
                             ],
                             startPoint: .top,
@@ -385,7 +385,7 @@ private struct ChatLiquidPanelBackgroundModifier<S: Shape>: ViewModifier {
                         )
                     )
                     .blendMode(.plusLighter)
-                    .opacity(0.24)
+                    .opacity(0.13)
                 shape
                     .fill(
                         RadialGradient(
@@ -399,14 +399,14 @@ private struct ChatLiquidPanelBackgroundModifier<S: Shape>: ViewModifier {
                         )
                     )
                     .blendMode(.plusLighter)
-                    .opacity(0.2)
+                    .opacity(0.1)
 
                 shape.fill(
                     LinearGradient(
                         stops: [
-                            .init(color: ChatGlassPalette.panelBaseA.opacity(0.22 + extraOpacity), location: 0),
-                            .init(color: ChatGlassPalette.panelBaseB.opacity(0.18 + extraOpacity), location: 0.54),
-                            .init(color: ChatGlassPalette.panelBaseC.opacity(0.24 + extraOpacity), location: 1)
+                            .init(color: ChatGlassPalette.panelBaseA.opacity(0.16 + extraOpacity), location: 0),
+                            .init(color: ChatGlassPalette.panelBaseB.opacity(0.13 + extraOpacity), location: 0.54),
+                            .init(color: ChatGlassPalette.panelBaseC.opacity(0.18 + extraOpacity), location: 1)
                         ],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
@@ -416,14 +416,14 @@ private struct ChatLiquidPanelBackgroundModifier<S: Shape>: ViewModifier {
                 shape
                     .fill(
                         RadialGradient(
-                            colors: [ChatGlassPalette.coolInfusion.opacity(0.09), .clear],
+                            colors: [ChatGlassPalette.coolInfusion.opacity(0.06), .clear],
                             center: UnitPoint(x: 0.24 + (0.06 * bloomDriftX), y: 0.44 + (0.04 * bloomDriftY)),
                             startRadius: 8,
                             endRadius: 420
                         )
                     )
                     .blendMode(.screen)
-                    .opacity(0.4)
+                    .opacity(0.24)
 
                 shape
                     .fill(
@@ -448,8 +448,8 @@ private struct ChatLiquidPanelBackgroundModifier<S: Shape>: ViewModifier {
                     )
                     .scaleEffect(x: 1.9, y: 1)
                     .offset(x: 102 * CGFloat(blend * 2 - 1))
-                    .blur(radius: 14)
-                    .opacity(animate ? 0.11 : 0.06)
+                    .blur(radius: 16)
+                    .opacity(animate ? 0.07 : 0.03)
                     .mask(shape)
 
                 shape.stroke(ChatGlassPalette.strokeSoft.opacity(0.9), lineWidth: 0.78)
@@ -458,7 +458,7 @@ private struct ChatLiquidPanelBackgroundModifier<S: Shape>: ViewModifier {
                     .blur(radius: 6)
                     .opacity(0.22)
             }
-            .shadow(color: .black.opacity(0.1), radius: 12, x: 0, y: 6)
+            .shadow(color: .black.opacity(0.08), radius: 10, x: 0, y: 5)
         }
     }
 

@@ -5,6 +5,7 @@
 node_modules
 .pnpm-store
 .tmp
+.tmp-*
 .next
 .open-next
 .wrangler

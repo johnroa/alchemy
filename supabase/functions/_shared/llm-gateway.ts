@@ -3092,6 +3092,566 @@ Requirements:
     }
   },
 
+  async splitIngredientPhrases(params: {
+    client: SupabaseClient;
+    userId: string;
+    requestId: string;
+    sourceNames: string[];
+  }): Promise<IngredientPhraseSplit[]> {
+    const cleaned = params.sourceNames
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0);
+    if (cleaned.length === 0) {
+      return [];
+    }
+
+    const deduped: string[] = [];
+    const seen = new Set<string>();
+    for (const value of cleaned) {
+      const key = value.toLocaleLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      deduped.push(value);
+    }
+
+    const fallback = deduped.map((source_name) => ({
+      source_name,
+      items: [{ name: source_name, confidence: 0.5 }],
+    }));
+
+    const startedAt = Date.now();
+    const accum: TokenAccum = { input: 0, output: 0, costUsd: 0 };
+    try {
+      const config = await getActiveConfig(params.client, "classify");
+      const { result, inputTokens, outputTokens } = await callProvider<
+        { items?: unknown }
+      >({
+        provider: config.provider,
+        model: config.model,
+        modelConfig: config.modelConfig,
+        systemPrompt: `Split ingredient phrases into atomic ingredients for normalization.
+Return ONLY JSON with key "items", where each item is:
+{
+  "source_name": string,
+  "items": [{"name": string, "confidence": number 0..1}]
+}
+Rules:
+- Preserve ingredient meaning; do not hallucinate.
+- Keep meaningful qualifiers (black pepper != pepper).
+- If the source phrase is already atomic, return exactly one item with the same name.
+- If uncertain, return one item equal to source_name with confidence <= 0.6.
+- Max 4 split items per source phrase.
+- No markdown, no commentary.`,
+        userInput: {
+          task: "split_ingredient_phrases",
+          source_names: deduped,
+        },
+      });
+      addTokens(accum, inputTokens, outputTokens, config);
+
+      const rawItems = Array.isArray(result.items) ? result.items : [];
+      const bySource = new Map<string, IngredientPhraseSplit>();
+      for (const rawItem of rawItems) {
+        if (!rawItem || typeof rawItem !== "object" || Array.isArray(rawItem)) {
+          continue;
+        }
+        const sourceName = (rawItem as { source_name?: unknown }).source_name;
+        const parts = (rawItem as { items?: unknown }).items;
+        if (typeof sourceName !== "string" || !Array.isArray(parts)) {
+          continue;
+        }
+        const source_key = sourceName.trim().toLocaleLowerCase();
+        if (!seen.has(source_key)) {
+          continue;
+        }
+        const normalizedParts = parts
+          .map((part) => {
+            if (typeof part === "string") {
+              const trimmed = part.trim();
+              if (!trimmed) return null;
+              return { name: trimmed, confidence: 0.7 };
+            }
+            if (!part || typeof part !== "object" || Array.isArray(part)) {
+              return null;
+            }
+            const name = (part as { name?: unknown }).name;
+            const confidenceRaw = (part as { confidence?: unknown }).confidence;
+            if (typeof name !== "string" || name.trim().length === 0) {
+              return null;
+            }
+            const numeric = Number(confidenceRaw);
+            return {
+              name: name.trim(),
+              confidence: Number.isFinite(numeric)
+                ? Math.max(0, Math.min(1, numeric))
+                : 0.7,
+            };
+          })
+          .filter((item): item is { name: string; confidence: number } =>
+            item !== null
+          );
+
+        if (normalizedParts.length === 0) {
+          continue;
+        }
+
+        const dedupedParts: Array<{ name: string; confidence: number }> = [];
+        const seenPart = new Set<string>();
+        for (const part of normalizedParts) {
+          const key = part.name.toLocaleLowerCase();
+          if (seenPart.has(key)) continue;
+          seenPart.add(key);
+          dedupedParts.push(part);
+        }
+
+        bySource.set(source_key, {
+          source_name: sourceName.trim(),
+          items: dedupedParts.slice(0, 4),
+        });
+      }
+
+      const output = fallback.map((entry) =>
+        bySource.get(entry.source_name.toLocaleLowerCase()) ?? entry
+      );
+
+      await logLlmEvent(
+        params.client,
+        params.userId,
+        params.requestId,
+        "classify",
+        Date.now() - startedAt,
+        "ok",
+        {
+          task: "split_ingredient_phrases",
+          input_count: deduped.length,
+          output_count: output.length,
+        },
+        accum,
+      );
+      return output;
+    } catch (error) {
+      const errorCode = error instanceof ApiError
+        ? error.code
+        : "unknown_error";
+      await logLlmEvent(
+        params.client,
+        params.userId,
+        params.requestId,
+        "classify",
+        Date.now() - startedAt,
+        "error",
+        {
+          task: "split_ingredient_phrases",
+          input_count: deduped.length,
+          error_code: errorCode,
+        },
+        accum,
+      );
+      return fallback;
+    }
+  },
+
+  async enrichIngredients(params: {
+    client: SupabaseClient;
+    userId: string;
+    requestId: string;
+    ingredients: Array<{ canonical_name: string; ingredient_id?: string }>;
+  }): Promise<IngredientSemanticEnrichment[]> {
+    const cleaned = params.ingredients
+      .map((entry) => ({
+        canonical_name: entry.canonical_name.trim(),
+        ingredient_id: typeof entry.ingredient_id === "string"
+          ? entry.ingredient_id
+          : undefined,
+      }))
+      .filter((entry) => entry.canonical_name.length > 0);
+
+    if (cleaned.length === 0) {
+      return [];
+    }
+
+    const dedupedByName = new Map<string, { canonical_name: string; ingredient_id?: string }>();
+    for (const item of cleaned) {
+      const key = item.canonical_name.toLocaleLowerCase();
+      if (dedupedByName.has(key)) continue;
+      dedupedByName.set(key, item);
+    }
+    const deduped = Array.from(dedupedByName.values());
+    const allowed = new Set(deduped.map((item) => item.canonical_name.toLocaleLowerCase()));
+
+    const startedAt = Date.now();
+    const accum: TokenAccum = { input: 0, output: 0, costUsd: 0 };
+    try {
+      const config = await getActiveConfig(params.client, "classify");
+      const { result, inputTokens, outputTokens } = await callProvider<
+        { items?: unknown }
+      >({
+        provider: config.provider,
+        model: config.model,
+        modelConfig: config.modelConfig,
+        systemPrompt: `Enrich canonical ingredients with structured food metadata.
+Return ONLY JSON object with key "items". Each item shape:
+{
+  "canonical_name": string,
+  "confidence": number 0..1,
+  "metadata": object,
+  "ontology_terms": [
+    {"term_type": string, "term_key": string, "label": string, "relation_type": string, "confidence": number 0..1}
+  ]
+}
+Rules:
+- Do not invent unsupported facts.
+- Keep confidence conservative.
+- metadata may include: functional_classes, diet_compatibility, allergen_profile, flavor_notes, aroma_notes, heat_level, texture_effect, processing_level, storage_sensitivity, additive_classes, ingredient_family, food_group.
+- If uncertain, output lower confidence.
+- No markdown, no commentary.`,
+        userInput: {
+          task: "ingredient_enrichment_v2",
+          ingredients: deduped,
+        },
+      });
+      addTokens(accum, inputTokens, outputTokens, config);
+
+      const rawItems = Array.isArray(result.items) ? result.items : [];
+      const output = rawItems
+        .map((rawItem) => {
+          if (!rawItem || typeof rawItem !== "object" || Array.isArray(rawItem)) {
+            return null;
+          }
+          const canonicalName = (rawItem as { canonical_name?: unknown })
+            .canonical_name;
+          const confidenceRaw = (rawItem as { confidence?: unknown }).confidence;
+          const metadataRaw = (rawItem as { metadata?: unknown }).metadata;
+          const ontologyRaw = (rawItem as { ontology_terms?: unknown }).ontology_terms;
+
+          if (typeof canonicalName !== "string" || canonicalName.trim().length === 0) {
+            return null;
+          }
+          const key = canonicalName.trim().toLocaleLowerCase();
+          if (!allowed.has(key)) {
+            return null;
+          }
+
+          const numeric = Number(confidenceRaw);
+          const confidence = Number.isFinite(numeric)
+            ? Math.max(0, Math.min(1, numeric))
+            : 0.5;
+          const metadata = metadataRaw && typeof metadataRaw === "object" &&
+              !Array.isArray(metadataRaw)
+            ? metadataRaw as Record<string, JsonValue>
+            : {};
+          const ontologyTerms = Array.isArray(ontologyRaw)
+            ? ontologyRaw
+              .map((term) => {
+                if (!term || typeof term !== "object" || Array.isArray(term)) {
+                  return null;
+                }
+                const termType = (term as { term_type?: unknown }).term_type;
+                const termKey = (term as { term_key?: unknown }).term_key;
+                const label = (term as { label?: unknown }).label;
+                const relationType = (term as { relation_type?: unknown }).relation_type;
+                const termConfidenceRaw = (term as { confidence?: unknown }).confidence;
+                if (
+                  typeof termType !== "string" ||
+                  typeof termKey !== "string" ||
+                  typeof label !== "string" ||
+                  typeof relationType !== "string"
+                ) {
+                  return null;
+                }
+                const termNumeric = Number(termConfidenceRaw);
+                return {
+                  term_type: termType.trim(),
+                  term_key: termKey.trim().toLocaleLowerCase(),
+                  label: label.trim(),
+                  relation_type: relationType.trim(),
+                  confidence: Number.isFinite(termNumeric)
+                    ? Math.max(0, Math.min(1, termNumeric))
+                    : confidence,
+                };
+              })
+              .filter((entry): entry is OntologySuggestion => entry !== null)
+            : [];
+
+          return {
+            canonical_name: canonicalName.trim(),
+            confidence,
+            metadata,
+            ontology_terms: ontologyTerms,
+          };
+        })
+        .filter((entry): entry is IngredientSemanticEnrichment => entry !== null);
+
+      await logLlmEvent(
+        params.client,
+        params.userId,
+        params.requestId,
+        "classify",
+        Date.now() - startedAt,
+        "ok",
+        {
+          task: "ingredient_enrichment_v2",
+          input_count: deduped.length,
+          output_count: output.length,
+        },
+        accum,
+      );
+      return output;
+    } catch (error) {
+      const errorCode = error instanceof ApiError
+        ? error.code
+        : "unknown_error";
+      await logLlmEvent(
+        params.client,
+        params.userId,
+        params.requestId,
+        "classify",
+        Date.now() - startedAt,
+        "error",
+        {
+          task: "ingredient_enrichment_v2",
+          input_count: deduped.length,
+          error_code: errorCode,
+        },
+        accum,
+      );
+      return [];
+    }
+  },
+
+  async enrichRecipeMetadata(params: {
+    client: SupabaseClient;
+    userId: string;
+    requestId: string;
+    recipe: RecipePayload;
+    ingredientNames: string[];
+  }): Promise<RecipeSemanticEnrichment> {
+    const startedAt = Date.now();
+    const accum: TokenAccum = { input: 0, output: 0, costUsd: 0 };
+    try {
+      const config = await getActiveConfig(params.client, "classify");
+      const { result, inputTokens, outputTokens } = await callProvider<
+        { confidence?: unknown; metadata?: unknown }
+      >({
+        provider: config.provider,
+        model: config.model,
+        modelConfig: config.modelConfig,
+        systemPrompt: `Enrich a recipe with strict structured metadata.
+Return ONLY JSON object:
+{
+  "confidence": number 0..1,
+  "metadata": object
+}
+Rules:
+- metadata keys may include: diet_tags, health_flags, allergen_flags, spice_level, flavor_axes, skill_level, complexity_score, cuisine, course_type, occasion_tags, seasonality, techniques, equipment, practical, storage_reheat_profile.
+- Keep conservative confidence.
+- Do not include markdown or explanations.`,
+        userInput: {
+          task: "recipe_metadata_enrichment_v2",
+          recipe: params.recipe as unknown as JsonValue,
+          ingredient_names: params.ingredientNames,
+        },
+      });
+      addTokens(accum, inputTokens, outputTokens, config);
+
+      const rawMetadata = result.metadata;
+      const metadata = rawMetadata && typeof rawMetadata === "object" &&
+          !Array.isArray(rawMetadata)
+        ? rawMetadata as Record<string, JsonValue>
+        : {};
+      const rawConfidence = Number(result.confidence);
+      const confidence = Number.isFinite(rawConfidence)
+        ? Math.max(0, Math.min(1, rawConfidence))
+        : 0.5;
+
+      await logLlmEvent(
+        params.client,
+        params.userId,
+        params.requestId,
+        "classify",
+        Date.now() - startedAt,
+        "ok",
+        {
+          task: "recipe_metadata_enrichment_v2",
+          ingredient_count: params.ingredientNames.length,
+        },
+        accum,
+      );
+
+      return { confidence, metadata };
+    } catch (error) {
+      const errorCode = error instanceof ApiError
+        ? error.code
+        : "unknown_error";
+      await logLlmEvent(
+        params.client,
+        params.userId,
+        params.requestId,
+        "classify",
+        Date.now() - startedAt,
+        "error",
+        {
+          task: "recipe_metadata_enrichment_v2",
+          error_code: errorCode,
+        },
+        accum,
+      );
+      return { confidence: 0, metadata: {} };
+    }
+  },
+
+  async inferIngredientRelations(params: {
+    client: SupabaseClient;
+    userId: string;
+    requestId: string;
+    ingredientNames: string[];
+  }): Promise<IngredientSemanticRelation[]> {
+    const cleaned = params.ingredientNames
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0);
+    if (cleaned.length < 2) {
+      return [];
+    }
+
+    const deduped: string[] = [];
+    const seen = new Set<string>();
+    for (const value of cleaned) {
+      const key = value.toLocaleLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      deduped.push(value);
+    }
+    if (deduped.length < 2) {
+      return [];
+    }
+
+    const allowed = new Set(deduped.map((value) => value.toLocaleLowerCase()));
+    const allowedRelations = new Set([
+      "complements",
+      "substitutes_for",
+      "same_family_as",
+      "derived_from",
+      "conflicts_with",
+    ]);
+
+    const startedAt = Date.now();
+    const accum: TokenAccum = { input: 0, output: 0, costUsd: 0 };
+    try {
+      const config = await getActiveConfig(params.client, "classify");
+      const { result, inputTokens, outputTokens } = await callProvider<
+        { items?: unknown }
+      >({
+        provider: config.provider,
+        model: config.model,
+        modelConfig: config.modelConfig,
+        systemPrompt: `Infer semantic ingredient relations for a recipe graph.
+Return ONLY JSON object with key "items". Each item:
+{
+  "from_canonical_name": string,
+  "to_canonical_name": string,
+  "relation_type": "complements"|"substitutes_for"|"same_family_as"|"derived_from"|"conflicts_with",
+  "confidence": number 0..1,
+  "rationale": string
+}
+Rules:
+- Use only provided ingredient names.
+- Do not emit symmetric duplicates.
+- Keep confidence conservative.
+- No markdown or commentary.`,
+        userInput: {
+          task: "ingredient_relation_inference_v2",
+          ingredient_names: deduped,
+        },
+      });
+      addTokens(accum, inputTokens, outputTokens, config);
+
+      const rawItems = Array.isArray(result.items) ? result.items : [];
+      const output = rawItems
+        .map((rawItem) => {
+          if (!rawItem || typeof rawItem !== "object" || Array.isArray(rawItem)) {
+            return null;
+          }
+          const from = (rawItem as { from_canonical_name?: unknown })
+            .from_canonical_name;
+          const to = (rawItem as { to_canonical_name?: unknown }).to_canonical_name;
+          const relationType = (rawItem as { relation_type?: unknown }).relation_type;
+          const confidenceRaw = (rawItem as { confidence?: unknown }).confidence;
+          const rationaleRaw = (rawItem as { rationale?: unknown }).rationale;
+
+          if (
+            typeof from !== "string" ||
+            typeof to !== "string" ||
+            typeof relationType !== "string"
+          ) {
+            return null;
+          }
+
+          const fromKey = from.trim().toLocaleLowerCase();
+          const toKey = to.trim().toLocaleLowerCase();
+          const relationKey = relationType.trim().toLocaleLowerCase();
+          if (
+            fromKey.length === 0 ||
+            toKey.length === 0 ||
+            fromKey === toKey ||
+            !allowed.has(fromKey) ||
+            !allowed.has(toKey) ||
+            !allowedRelations.has(relationKey)
+          ) {
+            return null;
+          }
+
+          const numeric = Number(confidenceRaw);
+          return {
+            from_canonical_name: from.trim(),
+            to_canonical_name: to.trim(),
+            relation_type: relationKey,
+            confidence: Number.isFinite(numeric)
+              ? Math.max(0, Math.min(1, numeric))
+              : 0.5,
+            rationale: typeof rationaleRaw === "string" && rationaleRaw.trim().length > 0
+              ? rationaleRaw.trim()
+              : undefined,
+          };
+        })
+        .filter((entry): entry is IngredientSemanticRelation => entry !== null);
+
+      await logLlmEvent(
+        params.client,
+        params.userId,
+        params.requestId,
+        "classify",
+        Date.now() - startedAt,
+        "ok",
+        {
+          task: "ingredient_relation_inference_v2",
+          ingredient_count: deduped.length,
+          output_count: output.length,
+        },
+        accum,
+      );
+      return output;
+    } catch (error) {
+      const errorCode = error instanceof ApiError
+        ? error.code
+        : "unknown_error";
+      await logLlmEvent(
+        params.client,
+        params.userId,
+        params.requestId,
+        "classify",
+        Date.now() - startedAt,
+        "error",
+        {
+          task: "ingredient_relation_inference_v2",
+          ingredient_count: deduped.length,
+          error_code: errorCode,
+        },
+        accum,
+      );
+      return [];
+    }
+  },
+
   async normalizePreferenceList(params: {
     client: SupabaseClient;
     userId: string;
