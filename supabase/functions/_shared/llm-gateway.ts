@@ -360,9 +360,26 @@ const parseJsonFromText = (raw: string): Record<string, JsonValue> | null => {
     attempts.push(fenced);
   }
 
+  const fencedBlockMatch = directAttempt.match(
+    /```(?:json)?\s*([\s\S]*?)```/i,
+  );
+  if (fencedBlockMatch?.[1]) {
+    const fencedBlock = fencedBlockMatch[1].trim();
+    if (fencedBlock.length > 0) {
+      attempts.push(fencedBlock);
+    }
+  }
+
   const extracted = extractFirstJsonValue(directAttempt);
   if (extracted && extracted !== directAttempt) {
     attempts.push(extracted);
+  }
+
+  if (fenced.length > 0) {
+    const extractedFromFenced = extractFirstJsonValue(fenced);
+    if (extractedFromFenced && extractedFromFenced !== fenced) {
+      attempts.push(extractedFromFenced);
+    }
   }
 
   for (const attempt of attempts) {
@@ -2395,8 +2412,8 @@ const generateChatConversationPayload = async (
   const runtimeModelConfig: Record<string, JsonValue> = {
     ...config.modelConfig,
   };
-  const outputTokenCap = scope === "chat_ideation" ? 700 : 1_800;
-  const timeoutCapMs = scope === "chat_ideation" ? 18_000 : 12_000;
+  const outputTokenCap = scope === "chat_ideation" ? 700 : 2_600;
+  const timeoutCapMs = scope === "chat_ideation" ? 18_000 : 18_000;
   const runtimeProvider = config.provider;
   const runtimeModel = config.model;
 
@@ -2433,6 +2450,9 @@ const generateChatConversationPayload = async (
 - candidate_recipe_set is required in this response.
 - Keep each recipe concise and practical: usually 5-7 ingredients and 3-4 steps.
 - Omit optional verbose fields unless explicitly requested.
+- Do not emit markdown, code fences, commentary, or extra top-level fields.
+- Allowed top-level keys only: assistant_reply, candidate_recipe_set, response_context.
+- Allowed recipe fields: title, servings, ingredients[{name,amount,unit}], steps[{index,instruction}].
 - response_context.intent MUST be "in_scope_generate".`
     : scope === "chat_iteration"
     ? `Runtime constraints:
@@ -2441,6 +2461,9 @@ const generateChatConversationPayload = async (
 - candidate_recipe_set is required in this response.
 - Keep each recipe concise and practical: usually 5-7 ingredients and 3-4 steps.
 - Omit optional verbose fields unless explicitly requested.
+- Do not emit markdown, code fences, commentary, or extra top-level fields.
+- Allowed top-level keys only: assistant_reply, candidate_recipe_set, response_context.
+- Allowed recipe fields: title, servings, ingredients[{name,amount,unit}], steps[{index,instruction}].
 - response_context.intent MUST be "in_scope_generate".`
     : `Runtime constraints:
 - Keep assistant replies concise and practical.
@@ -2512,8 +2535,18 @@ const generateChatConversationPayload = async (
       ...runtimeModelConfig,
       temperature: 0,
     };
+    if (scope !== "chat_ideation") {
+      const retryOutputCap = Number(retryConfig.max_output_tokens);
+      if (!Number.isFinite(retryOutputCap) || retryOutputCap < 3_200) {
+        retryConfig.max_output_tokens = 3_200;
+      }
+      const retryTimeout = Number(retryConfig.timeout_ms);
+      if (!Number.isFinite(retryTimeout) || retryTimeout < 25_000) {
+        retryConfig.timeout_ms = 25_000;
+      }
+    }
     rawResult = await executeCall(
-      "CRITICAL: Return one strict JSON object only. No markdown, no prose, no code fences.",
+      "CRITICAL: Return one strict JSON object only. No markdown, no prose, no code fences, no extra keys.",
       retryConfig,
     );
   }
