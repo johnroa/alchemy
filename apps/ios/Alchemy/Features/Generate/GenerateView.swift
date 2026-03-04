@@ -42,7 +42,7 @@ struct GenerateView: View {
     }
 
     private var bottomDockPadding: CGFloat {
-        keyboard.isVisible ? 8 : (Sizing.tabBarHeight + 26)
+        keyboard.isVisible ? 8 : (Sizing.tabBarHeight + 38)
     }
 
     var body: some View {
@@ -66,6 +66,8 @@ struct GenerateView: View {
                 if showsChatPanel {
                     chatPanel
                         .padding(.horizontal, Spacing.xs)
+                        .padding(.top, Spacing.lg2)
+                        .ignoresSafeArea(.container, edges: .bottom)
                         .zIndex(5)
                 }
 
@@ -126,6 +128,9 @@ struct GenerateView: View {
                     isCandidateChatExpanded = false
                 }
             }
+        }
+        .onAppear {
+            isInputFocused = false
         }
     }
 

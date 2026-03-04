@@ -111,35 +111,36 @@ private struct ChatLiquidSurfaceModifier: ViewModifier {
         let extraOpacity = reduceTransparency ? 0.12 : 0
         let isAnimated = role.animatedSheen && !reduceMotion
         let isBubble = role == .assistantBubble || role == .userBubble
-        let materialOpacity = isBubble ? 0.96 : 0.82
-        let darkFillOpacity = isBubble ? 0.06 : 0.14
-        let driftOpacity = isBubble ? 0.22 : 0.34
-        let coolBloomOpacity = isBubble ? 0.16 : 0.22
-        let warmBloomOpacity = isBubble ? 0.08 : 0.16
-        let tintBloomOpacity = isBubble ? 0.16 : 0.28
-        let strokeWidth = isBubble ? 0.66 : (focused ? 0.92 : 0.78)
-        let glowOpacity = isBubble ? 0.12 : 0.22
-        let shadowOpacity = isBubble ? 0.04 : 0.08
+        let isComposer = role == .composer
+        let materialOpacity = isBubble ? 0.94 : (isComposer ? 0.74 : 0.8)
+        let darkFillOpacity = isBubble ? 0.04 : (isComposer ? 0.05 : 0.1)
+        let driftOpacity = isBubble ? 0.16 : (isComposer ? 0.13 : 0.24)
+        let coolBloomOpacity = isBubble ? 0.11 : (isComposer ? 0.1 : 0.17)
+        let warmBloomOpacity = isBubble ? 0.05 : (isComposer ? 0.05 : 0.11)
+        let tintBloomOpacity = isBubble ? 0.12 : (isComposer ? 0.1 : 0.2)
+        let strokeWidth = isBubble ? 0.62 : (isComposer ? (focused ? 0.74 : 0.62) : (focused ? 0.86 : 0.74))
+        let glowOpacity = isBubble ? 0.08 : (isComposer ? 0.09 : 0.16)
+        let shadowOpacity = isBubble ? 0.03 : (isComposer ? 0.03 : 0.06)
 
-        return TimelineView(.periodic(from: .now, by: isAnimated ? (1.0 / 24.0) : 60.0)) { timeline in
+        return TimelineView(.periodic(from: .now, by: isAnimated ? (1.0 / 20.0) : 60.0)) { timeline in
             let time = timeline.date.timeIntervalSinceReferenceDate + animationSeed
-            let phase = CGFloat(sin(time * 0.16))
-            let colorDrift = CGFloat(sin(time * 0.07))
-            let shimmerOpacity = isAnimated ? (isBubble ? 0.04 : 0.08) : (isBubble ? 0.01 : 0.03)
+            let phase = CGFloat(sin(time * 0.09))
+            let colorDrift = CGFloat(sin(time * 0.035))
+            let shimmerOpacity = isAnimated ? (isBubble ? 0.02 : 0.045) : (isBubble ? 0.006 : 0.016)
             let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
             let deepBlue = Color(
                 hue: 0.58 + (0.02 * Double(colorDrift)),
                 saturation: 0.68,
                 brightness: 0.44,
-                opacity: 0.12 + (focused ? 0.02 : 0)
+                opacity: 0.08 + (focused ? 0.015 : 0)
             )
             let deepMagenta = Color(
                 hue: 0.89 + (0.03 * Double(sin(time * 0.051 + 1.2))),
                 saturation: 0.56,
                 brightness: 0.38,
-                opacity: 0.09
+                opacity: 0.06
             )
-            let deepShadow = Color(hex: 0x0B1424).opacity(0.14)
+            let deepShadow = Color(hex: 0x0B1424).opacity(0.1)
 
             ZStack {
                 shape
@@ -154,8 +155,8 @@ private struct ChatLiquidSurfaceModifier: ViewModifier {
                     .fill(
                         LinearGradient(
                             colors: [
-                                Color.white.opacity(isBubble ? 0.12 : 0.11),
-                                Color.white.opacity(isBubble ? 0.04 : 0.03),
+                                Color.white.opacity(isBubble ? 0.1 : (isComposer ? 0.08 : 0.1)),
+                                Color.white.opacity(isBubble ? 0.03 : (isComposer ? 0.02 : 0.03)),
                                 .clear
                             ],
                             startPoint: .top,
@@ -178,12 +179,12 @@ private struct ChatLiquidSurfaceModifier: ViewModifier {
                     .fill(
                         RadialGradient(
                             colors: [
-                                Color(hex: 0xAAB7FF).opacity(0.12),
+                                Color(hex: 0xAAB7FF).opacity(0.08),
                                 .clear
                             ],
                             center: UnitPoint(x: 0.22 + (0.07 * phase), y: 0.24),
                             startRadius: 10,
-                            endRadius: 200
+                            endRadius: 220
                         )
                     )
                     .blendMode(.plusLighter)
@@ -244,7 +245,7 @@ private struct ChatLiquidSurfaceModifier: ViewModifier {
                         )
                     )
                     .scaleEffect(x: 1.85, y: 1)
-                    .offset(x: 94 * phase)
+                    .offset(x: 72 * phase)
                     .blur(radius: 10)
                     .opacity(shimmerOpacity)
                     .mask(shape)
