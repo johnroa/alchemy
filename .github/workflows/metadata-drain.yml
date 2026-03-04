@@ -1,0 +1,76 @@
+name: Metadata Queue Drain
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/5 * * * *"
+
+concurrency:
+  group: metadata-drain
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  drain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    env:
+      PROJECT_REF: dwptbjcxrsmmgjmnumpg
+      API_BASE_URL: https://api.cookwithalchemy.com/v1
+      SIM_USER_EMAIL: sim-1772428603705@cookwithalchemy.com
+      SIM_USER_PASSWORD: AlchemySim2026
+      SUPABASE_PAT: ${{ secrets.SUPABASE_PAT }}
+
+    steps:
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Validate required secrets
+        run: |
+          test -n "$SUPABASE_PAT" || (echo "Missing SUPABASE_PAT" && exit 1)
+
+      - name: Authenticate CLI
+        run: supabase login --token "$SUPABASE_PAT"
+
+      - name: Fetch service role key
+        id: keys
+        run: |
+          SERVICE_KEY=$(supabase projects api-keys --project-ref "$PROJECT_REF" -o json | jq -r '.[] | select(.name=="service_role") | .api_key' | head -n 1)
+          test -n "$SERVICE_KEY" || (echo "Could not resolve service role key" && exit 1)
+          echo "service_key=$SERVICE_KEY" >> "$GITHUB_OUTPUT"
+
+      - name: Acquire simulation token
+        id: token
+        run: |
+          SERVICE_KEY='${{ steps.keys.outputs.service_key }}'
+          SUPABASE_URL="https://${PROJECT_REF}.supabase.co"
+          TOKEN=$(curl -sS "$SUPABASE_URL/auth/v1/token?grant_type=password" \
+            -H "apikey: $SERVICE_KEY" \
+            -H "Content-Type: application/json" \
+            -d "{\"email\":\"${SIM_USER_EMAIL}\",\"password\":\"${SIM_USER_PASSWORD}\"}" | jq -r '.access_token')
+          test -n "$TOKEN" || (echo "Could not acquire simulation token" && exit 1)
+          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
+
+      - name: Drain queue batches
+        run: |
+          TOKEN='${{ steps.token.outputs.token }}'
+          for i in 1 2 3 4; do
+            echo "processing batch $i"
+            RESPONSE=$(curl -sS "$API_BASE_URL/metadata-jobs/process" \
+              -H "Authorization: Bearer $TOKEN" \
+              -H "Content-Type: application/json" \
+              -d '{"limit":25}')
+
+            echo "$RESPONSE" | jq -c '{processed,ready,failed,pending,queue}'
+
+            PROCESSED=$(echo "$RESPONSE" | jq -r '.processed // 0')
+            if [ "$PROCESSED" -eq 0 ]; then
+              break
+            fi
+            sleep 2
+          done
