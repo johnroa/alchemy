@@ -49,7 +49,7 @@ jobs:
           supabase link --project-ref "$PROJECT_REF" -p "$SUPABASE_DB_PASSWORD"
 
       - name: Push database migrations
-        run: supabase db push --linked -p "$SUPABASE_DB_PASSWORD"
+        run: supabase db push --linked --include-all -p "$SUPABASE_DB_PASSWORD"
 
       - name: Deploy edge function v1
         run: supabase functions deploy v1 --project-ref "$PROJECT_REF"
