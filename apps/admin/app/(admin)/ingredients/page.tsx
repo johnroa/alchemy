@@ -1,4 +1,5 @@
 import { ArrowDownRight, ArrowUpRight } from "lucide-react";
+import { IngredientsRegistryExplorer } from "@/components/admin/ingredients-registry-explorer";
 import { PageHeader } from "@/components/admin/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -123,7 +124,6 @@ export default async function IngredientsPage(): Promise<React.JSX.Element> {
     }
   ];
 
-  const totalIngredients = totals.ingredients;
   const totalAliases = totals.aliases;
   const unresolvedCount = totals.unresolved_rows;
 
@@ -232,71 +232,7 @@ export default async function IngredientsPage(): Promise<React.JSX.Element> {
         </div>
       </section>
 
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between pb-3">
-          <div>
-            <CardTitle className="text-base">Canonical Ingredient Registry</CardTitle>
-            <CardDescription>Normalized ingredient identities with LLM enrichment + graph coverage stats.</CardDescription>
-          </div>
-          <Badge variant="outline" className="font-mono text-xs">{totalIngredients} rows</Badge>
-        </CardHeader>
-        <CardContent className="pt-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Normalized Key</TableHead>
-                <TableHead>Enrichment</TableHead>
-                <TableHead>Ontology</TableHead>
-                <TableHead>Pairs</TableHead>
-                <TableHead>Aliases</TableHead>
-                <TableHead>Usage</TableHead>
-                <TableHead>Updated</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {data.ingredients.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={8} className="py-8 text-center text-muted-foreground">No canonical ingredients found.</TableCell>
-                </TableRow>
-              ) : (
-                data.ingredients.map((ingredient) => (
-                  <TableRow key={ingredient.id}>
-                    <TableCell>
-                      <p className="font-medium">{ingredient.canonical_name}</p>
-                      <p className="font-mono text-[11px] text-muted-foreground">{ingredient.id}</p>
-                    </TableCell>
-                    <TableCell className="font-mono text-xs text-muted-foreground">{ingredient.normalized_key}</TableCell>
-                    <TableCell>
-                      {ingredient.enrichment_confidence != null ? (
-                        <Badge variant="outline" className="text-[10px]">
-                          {ingredient.enrichment_confidence.toFixed(2)}
-                        </Badge>
-                      ) : (
-                        <span className="text-xs text-muted-foreground">—</span>
-                      )}
-                      <p className="mt-1 text-[11px] text-muted-foreground">{ingredient.metadata_key_count} keys</p>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant="outline" className="text-[10px]">{ingredient.ontology_link_count}</Badge>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant="outline" className="text-[10px]">{ingredient.pair_link_count}</Badge>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant="outline" className="text-[10px]">{ingredient.alias_count}</Badge>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant="secondary" className="text-[10px]">{ingredient.usage_count}</Badge>
-                    </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">{new Date(ingredient.updated_at).toLocaleString()}</TableCell>
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
+      <IngredientsRegistryExplorer ingredients={data.ingredients} />
 
       <div className="grid gap-4 xl:grid-cols-2">
         <Card>

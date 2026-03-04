@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { AlertCircle, BookOpen, GitBranch, ImageIcon, Link2, Network, UserCircle2 } from "lucide-react";
+import { AlertCircle, ArrowDownRight, ArrowUpRight, BookOpen, ImageIcon, Network } from "lucide-react";
 import { PageHeader } from "@/components/admin/page-header";
 import { RevertVersionDialog } from "@/components/admin/revert-version-dialog";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -15,7 +15,18 @@ import { cn } from "@/lib/utils";
 type RecipesPageSearchParams = {
   q?: string;
   recipe?: string;
+  status?: string;
+  sort?: string;
 };
+
+type RecipeStatusFilter = "all" | "ready" | "pending" | "failed";
+type RecipeSortOrder =
+  | "updated_desc"
+  | "updated_asc"
+  | "title_asc"
+  | "title_desc"
+  | "versions_desc"
+  | "saves_desc";
 
 const truncate = (value: string, max = 280): string => {
   if (value.length <= max) return value;
@@ -63,12 +74,74 @@ const chatMessagePreview = (role: string, content: string): string => {
   return truncate(content, 200);
 };
 
-const buildRecipesHref = (params: { q?: string; recipe?: string }): string => {
+const buildRecipesHref = (params: {
+  q?: string;
+  recipe?: string;
+  status?: RecipeStatusFilter;
+  sort?: RecipeSortOrder;
+}): string => {
   const query = new URLSearchParams();
   if (params.q?.trim()) query.set("q", params.q.trim());
   if (params.recipe?.trim()) query.set("recipe", params.recipe.trim());
+  if (params.status && params.status !== "all") query.set("status", params.status);
+  if (params.sort && params.sort !== "updated_desc") query.set("sort", params.sort);
   const queryString = query.toString();
   return queryString.length > 0 ? `/recipes?${queryString}` : "/recipes";
+};
+
+const STATUS_OPTIONS: Array<{ value: RecipeStatusFilter; label: string }> = [
+  { value: "all", label: "All statuses" },
+  { value: "ready", label: "Ready images" },
+  { value: "pending", label: "Pending images" },
+  { value: "failed", label: "Failed images" }
+];
+
+const SORT_OPTIONS: Array<{ value: RecipeSortOrder; label: string }> = [
+  { value: "updated_desc", label: "Updated ↓" },
+  { value: "updated_asc", label: "Updated ↑" },
+  { value: "title_asc", label: "Title A-Z" },
+  { value: "title_desc", label: "Title Z-A" },
+  { value: "versions_desc", label: "Versions ↓" },
+  { value: "saves_desc", label: "Saves ↓" }
+];
+
+const parseStatusFilter = (value: string | undefined): RecipeStatusFilter => {
+  if (value === "ready" || value === "pending" || value === "failed") {
+    return value;
+  }
+  return "all";
+};
+
+const parseSortOrder = (value: string | undefined): RecipeSortOrder => {
+  if (
+    value === "updated_asc" ||
+    value === "title_asc" ||
+    value === "title_desc" ||
+    value === "versions_desc" ||
+    value === "saves_desc"
+  ) {
+    return value;
+  }
+  return "updated_desc";
+};
+
+const isInWindow = (value: string, start: number, end: number): boolean => {
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return false;
+  return timestamp >= start && timestamp < end;
+};
+
+const windowDelta = (current: number, previous: number): { current: number; previous: number; absolute: number; percent: number | null } => {
+  const absolute = current - previous;
+  if (previous === 0) {
+    return { current, previous, absolute, percent: null };
+  }
+  return {
+    current,
+    previous,
+    absolute,
+    percent: (absolute / previous) * 100
+  };
 };
 
 const shortId = (value: string): string => {
@@ -112,36 +185,136 @@ export default async function RecipesPage({
   const params = await searchParams;
   const q = typeof params.q === "string" ? params.q : "";
   const requestedRecipeId = typeof params.recipe === "string" ? params.recipe : "";
+  const status = parseStatusFilter(typeof params.status === "string" ? params.status : undefined);
+  const sort = parseSortOrder(typeof params.sort === "string" ? params.sort : undefined);
 
   const { rows, totals } = await getRecipeAuditIndexData(q);
-  const selectedRecipeId = requestedRecipeId || rows[0]?.id;
+  const filteredRows = rows.filter((row) => (status === "all" ? true : row.image_status === status));
+  const sortedRows = [...filteredRows].sort((left, right) => {
+    if (sort === "updated_desc") return Date.parse(right.updated_at) - Date.parse(left.updated_at);
+    if (sort === "updated_asc") return Date.parse(left.updated_at) - Date.parse(right.updated_at);
+    if (sort === "title_asc") return left.title.localeCompare(right.title);
+    if (sort === "title_desc") return right.title.localeCompare(left.title);
+    if (sort === "versions_desc") return right.version_count - left.version_count;
+    if (sort === "saves_desc") return right.save_count - left.save_count;
+    return 0;
+  });
+
+  const selectedRecipeId = sortedRows.some((row) => row.id === requestedRecipeId)
+    ? requestedRecipeId
+    : sortedRows[0]?.id;
   const detail = selectedRecipeId ? await getRecipeAuditDetail(selectedRecipeId) : null;
-  const unresolvedOwners = rows.filter((row) => !row.owner_email).length;
+  const unresolvedOwners = sortedRows.filter((row) => !row.owner_email).length;
   const loopState = detail?.chat ? getContextLoopState(detail.chat.context) : null;
   const candidateSummary = detail?.chat ? getContextCandidateSummary(detail.chat.context) : null;
 
+  const shownRecipeCount = sortedRows.length;
+  const readyImageCount = sortedRows.filter((row) => row.image_status === "ready").length;
+  const failedImageCount = sortedRows.filter((row) => row.image_status === "failed").length;
+  const pendingImageCount = sortedRows.filter((row) => row.image_status === "pending").length;
+  const avgVersionsPerRecipe = shownRecipeCount > 0
+    ? sortedRows.reduce((sum, row) => sum + row.version_count, 0) / shownRecipeCount
+    : 0;
+  const attachmentDensity = shownRecipeCount > 0
+    ? sortedRows.reduce((sum, row) => sum + row.attachment_count, 0) / shownRecipeCount
+    : 0;
+  const chatBackedRate = totals.recipes > 0 ? (totals.chatBacked / totals.recipes) * 100 : 0;
+  const readyImageRate = shownRecipeCount > 0 ? (readyImageCount / shownRecipeCount) * 100 : 0;
+
+  const now = Date.now();
+  const currentWindowStart = now - 24 * 60 * 60 * 1000;
+  const previousWindowStart = now - 48 * 60 * 60 * 1000;
+  const newRecipesDelta = windowDelta(
+    sortedRows.filter((row) => isInWindow(row.created_at, currentWindowStart, now)).length,
+    sortedRows.filter((row) => isInWindow(row.created_at, previousWindowStart, currentWindowStart)).length
+  );
+  const updatedRecipesDelta = windowDelta(
+    sortedRows.filter((row) => isInWindow(row.updated_at, currentWindowStart, now)).length,
+    sortedRows.filter((row) => isInWindow(row.updated_at, previousWindowStart, currentWindowStart)).length
+  );
+
   return (
-    <div className="space-y-4">
-      {/* Header row with inline totals */}
+    <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <PageHeader
           title="Recipes Console"
           description="Inventory, version lineage, prompt trail, attachment graph, and changelog."
         />
-        <div className="flex flex-wrap gap-2 pt-1">
-          <Badge variant="outline" className="gap-1">
-            <BookOpen className="h-3 w-3" /> {totals.recipes} recipes
-          </Badge>
-          <Badge variant="outline" className="gap-1">
-            <GitBranch className="h-3 w-3" /> {totals.versions} versions
-          </Badge>
-          <Badge variant="outline" className="gap-1">
-            <Link2 className="h-3 w-3" /> {totals.attachments} attachments
-          </Badge>
-          <Badge variant="outline" className="gap-1">
-            <UserCircle2 className="h-3 w-3" /> {totals.saves} saves
-          </Badge>
-        </div>
+        <Badge variant="outline" className="font-mono text-xs">
+          Showing {shownRecipeCount} / {totals.recipes}
+        </Badge>
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-6">
+        <Card className="border-blue-200/80 bg-blue-50/30">
+          <CardHeader className="pb-2">
+            <CardDescription className="text-[11px] uppercase tracking-wider text-muted-foreground">Recipes</CardDescription>
+            <CardTitle className="text-3xl tabular-nums">{shownRecipeCount.toLocaleString()}</CardTitle>
+          </CardHeader>
+          <CardContent className="pt-0 text-xs text-muted-foreground">
+            {totals.recipes.toLocaleString()} total indexed
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardDescription className="text-[11px] uppercase tracking-wider text-muted-foreground">Avg Versions</CardDescription>
+            <CardTitle className="text-3xl tabular-nums">{avgVersionsPerRecipe.toFixed(2)}</CardTitle>
+          </CardHeader>
+          <CardContent className="pt-0 text-xs text-muted-foreground">
+            {totals.versions.toLocaleString()} versions total
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardDescription className="text-[11px] uppercase tracking-wider text-muted-foreground">Chat-backed</CardDescription>
+            <CardTitle className="text-3xl tabular-nums">{chatBackedRate.toFixed(1)}%</CardTitle>
+          </CardHeader>
+          <CardContent className="pt-0 text-xs text-muted-foreground">
+            {totals.chatBacked.toLocaleString()} recipes linked to chats
+          </CardContent>
+        </Card>
+        <Card className={cn(readyImageRate >= 70 ? "border-emerald-200/80 bg-emerald-50/25" : "border-zinc-200")}>
+          <CardHeader className="pb-2">
+            <CardDescription className="text-[11px] uppercase tracking-wider text-muted-foreground">Ready Image Rate</CardDescription>
+            <CardTitle className="text-3xl tabular-nums">{readyImageRate.toFixed(1)}%</CardTitle>
+          </CardHeader>
+          <CardContent className="pt-0 text-xs text-muted-foreground">
+            {readyImageCount} ready · {pendingImageCount} pending · {failedImageCount} failed
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardDescription className="text-[11px] uppercase tracking-wider text-muted-foreground">Attachment Density</CardDescription>
+            <CardTitle className="text-3xl tabular-nums">{attachmentDensity.toFixed(2)}</CardTitle>
+          </CardHeader>
+          <CardContent className="pt-0 text-xs text-muted-foreground">
+            {totals.attachments.toLocaleString()} linked recipes
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="space-y-1 pb-2">
+            <CardDescription className="text-[11px] uppercase tracking-wider text-muted-foreground">24h New / Updated</CardDescription>
+            <CardTitle className="text-xl tabular-nums">
+              {newRecipesDelta.current} / {updatedRecipesDelta.current}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-1 pt-0 text-xs text-muted-foreground">
+            <div className="flex items-center gap-1">
+              {newRecipesDelta.absolute >= 0 ? <ArrowUpRight className="h-3 w-3 text-emerald-600" /> : <ArrowDownRight className="h-3 w-3 text-red-600" />}
+              <span>
+                New: {newRecipesDelta.absolute >= 0 ? "+" : ""}{newRecipesDelta.absolute}
+                {newRecipesDelta.percent == null ? " (new)" : ` (${newRecipesDelta.percent >= 0 ? "+" : ""}${newRecipesDelta.percent.toFixed(1)}%)`}
+              </span>
+            </div>
+            <div className="flex items-center gap-1">
+              {updatedRecipesDelta.absolute >= 0 ? <ArrowUpRight className="h-3 w-3 text-emerald-600" /> : <ArrowDownRight className="h-3 w-3 text-red-600" />}
+              <span>
+                Updated: {updatedRecipesDelta.absolute >= 0 ? "+" : ""}{updatedRecipesDelta.absolute}
+                {updatedRecipesDelta.percent == null ? " (new)" : ` (${updatedRecipesDelta.percent >= 0 ? "+" : ""}${updatedRecipesDelta.percent.toFixed(1)}%)`}
+              </span>
+            </div>
+          </CardContent>
+        </Card>
       </div>
 
       {unresolvedOwners > 0 && (
@@ -158,7 +331,7 @@ export default async function RecipesPage({
       <div className="grid gap-6 lg:grid-cols-[320px_1fr] items-start">
         {/* Recipe List — sticky scrollable */}
         <Card className="sticky top-0">
-          <CardHeader className="pb-2">
+          <CardHeader className="space-y-3 pb-2">
             <form action="/recipes" method="get" className="flex gap-2">
               <Input
                 name="q"
@@ -166,24 +339,65 @@ export default async function RecipesPage({
                 placeholder="Search recipes…"
                 className="h-8 text-sm"
               />
+              <input type="hidden" name="status" value={status} />
+              <input type="hidden" name="sort" value={sort} />
               <Button type="submit" size="sm" className="h-8 px-3">
                 Search
               </Button>
               {q && (
-                <Link href="/recipes">
+                <Link href={buildRecipesHref({ status, sort })}>
                   <Button type="button" variant="outline" size="sm" className="h-8 px-2">
                     ✕
                   </Button>
                 </Link>
               )}
             </form>
+
+            <div className="space-y-2">
+              <div className="flex flex-wrap gap-1">
+                {STATUS_OPTIONS.map((option) => (
+                  <Link
+                    key={option.value}
+                    href={buildRecipesHref({ q, status: option.value, sort })}
+                  >
+                    <Badge
+                      variant="outline"
+                      className={cn(
+                        "cursor-pointer text-[10px]",
+                        status === option.value && "border-primary/60 bg-primary/10 text-primary"
+                      )}
+                    >
+                      {option.label}
+                    </Badge>
+                  </Link>
+                ))}
+              </div>
+              <div className="flex flex-wrap gap-1">
+                {SORT_OPTIONS.map((option) => (
+                  <Link
+                    key={option.value}
+                    href={buildRecipesHref({ q, status, sort: option.value })}
+                  >
+                    <Badge
+                      variant="outline"
+                      className={cn(
+                        "cursor-pointer text-[10px]",
+                        sort === option.value && "border-primary/60 bg-primary/10 text-primary"
+                      )}
+                    >
+                      {option.label}
+                    </Badge>
+                  </Link>
+                ))}
+              </div>
+            </div>
           </CardHeader>
-          <div className="overflow-y-auto" style={{ maxHeight: "calc(100vh - 220px)" }}>
-            {rows.length === 0 ? (
+          <div className="overflow-y-auto" style={{ maxHeight: "calc(100vh - 260px)" }}>
+            {sortedRows.length === 0 ? (
               <p className="px-4 py-8 text-center text-sm text-muted-foreground">No recipes match.</p>
             ) : (
-              rows.map((row) => (
-                <Link key={row.id} href={buildRecipesHref({ q, recipe: row.id })}>
+              sortedRows.map((row) => (
+                <Link key={row.id} href={buildRecipesHref({ q, recipe: row.id, status, sort })}>
                   <div
                     className={cn(
                       "border-b px-4 py-3 transition-colors hover:bg-zinc-50",
@@ -194,7 +408,7 @@ export default async function RecipesPage({
                   >
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
-                        <p className="truncate text-sm font-medium">{row.title}</p>
+                        <p className="truncate text-sm font-semibold">{row.title}</p>
                         <p className="truncate text-xs text-muted-foreground">
                           {row.owner_email ?? "No owner"}
                         </p>
@@ -208,9 +422,9 @@ export default async function RecipesPage({
                       </Badge>
                     </div>
                     <div className="mt-1.5 flex gap-3 text-[10px] text-muted-foreground">
-                      <span>{row.version_count}v</span>
+                      <span>{row.version_count} versions</span>
                       <span>{row.save_count} saves</span>
-                      <span>{row.attachment_count} att</span>
+                      <span>{row.attachment_count} links</span>
                       <span className="ml-auto">{new Date(row.updated_at).toLocaleDateString()}</span>
                     </div>
                   </div>
