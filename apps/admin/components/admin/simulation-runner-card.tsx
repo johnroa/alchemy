@@ -1053,71 +1053,89 @@ export function SimulationRunnerCard({ registryModels }: { registryModels: Regis
     setRunning(true);
     setResult(emptyResult());
 
-    const response = await fetch("/api/admin/simulations/run?stream=1", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        scenario: "default_api_ux",
-        variant,
-        seed,
-        run_group_id: runGroupId,
-        model_overrides: buildOverridePayload(overrides)
-      })
-    });
+    try {
+      const response = await fetch("/api/admin/simulations/run?stream=1", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          scenario: "default_api_ux",
+          variant,
+          seed,
+          run_group_id: runGroupId,
+          model_overrides: buildOverridePayload(overrides)
+        })
+      });
 
-    if (!response.ok || !response.body) {
-      setRunning(false);
-      const fallback = (await response.text().catch(() => "Simulation request failed")) || "Simulation request failed";
-      const failed = { ...emptyResult(), ok: false, error: fallback };
+      if (!response.ok || !response.body) {
+        const fallback = (await response.text().catch(() => "Simulation request failed")) || "Simulation request failed";
+        const failed = { ...emptyResult(), ok: false, error: fallback };
+        setResult(failed);
+        toast.error(`Run ${variant} failed`);
+        return;
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let current = emptyResult();
+      let finalPayload: SimResult | null = null;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          break;
+        }
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          const event = parseStreamEvent(line);
+          if (!event) {
+            continue;
+          }
+
+          if (event.type === "result") {
+            finalPayload = event.payload;
+            current = event.payload;
+            setResult({ ...current, steps: [...current.steps], trace: [...current.trace] });
+            continue;
+          }
+
+          current = applyTraceEvent(current, event);
+          setResult({ ...current, steps: [...current.steps], trace: [...current.trace] });
+        }
+      }
+
+      const trailingEvent = parseStreamEvent(buffer);
+      if (trailingEvent) {
+        if (trailingEvent.type === "result") {
+          finalPayload = trailingEvent.payload;
+          current = trailingEvent.payload;
+          setResult({ ...current, steps: [...current.steps], trace: [...current.trace] });
+        } else {
+          current = applyTraceEvent(current, trailingEvent);
+          setResult({ ...current, steps: [...current.steps], trace: [...current.trace] });
+        }
+      }
+
+      if (!finalPayload) {
+        finalPayload = current;
+      }
+
+      if (finalPayload.ok) {
+        toast.success(`Run ${variant} complete · ${finalPayload.request_id}`);
+      } else {
+        toast.error(finalPayload.error ?? `Run ${variant} failed`);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const failed = { ...emptyResult(), ok: false, error: message };
       setResult(failed);
       toast.error(`Run ${variant} failed`);
-      return;
-    }
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    let current = emptyResult();
-    let finalPayload: SimResult | null = null;
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() ?? "";
-
-      for (const line of lines) {
-        const event = parseStreamEvent(line);
-        if (!event) {
-          continue;
-        }
-
-        if (event.type === "result") {
-          finalPayload = event.payload;
-          current = event.payload;
-          setResult({ ...current, steps: [...current.steps], trace: [...current.trace] });
-          continue;
-        }
-
-        current = applyTraceEvent(current, event);
-        setResult({ ...current, steps: [...current.steps], trace: [...current.trace] });
-      }
-    }
-
-    if (!finalPayload) {
-      finalPayload = current;
-    }
-
-    setRunning(false);
-
-    if (finalPayload.ok) {
-      toast.success(`Run ${variant} complete · ${finalPayload.request_id}`);
-    } else {
-      toast.error(finalPayload.error ?? `Run ${variant} failed`);
+    } finally {
+      setRunning(false);
     }
   };
 

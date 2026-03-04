@@ -245,6 +245,10 @@ const extractRequestId = (
   return null;
 };
 
+const sleep = async (ms: number): Promise<void> => {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+};
+
 const requestJson = async <T>(params: {
   apiBase: string;
   token: string;
@@ -252,51 +256,72 @@ const requestJson = async <T>(params: {
   method?: "GET" | "POST" | "PATCH" | "DELETE";
   body?: Record<string, unknown>;
   modelOverrides?: Record<string, ModelOverride>;
+  retryAttempts?: number;
 }): Promise<ApiCallResult<T>> => {
-  const headers: Record<string, string> = {
-    "content-type": "application/json",
-    authorization: `Bearer ${params.token}`
-  };
+  const maxAttempts = Math.max(1, Math.min(4, Math.trunc(params.retryAttempts ?? 1)));
+  let lastError: Error | null = null;
 
-  if (params.modelOverrides && Object.keys(params.modelOverrides).length > 0) {
-    headers["x-sim-model-overrides"] = JSON.stringify(params.modelOverrides);
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const headers: Record<string, string> = {
+        "content-type": "application/json",
+        authorization: `Bearer ${params.token}`
+      };
+
+      if (params.modelOverrides && Object.keys(params.modelOverrides).length > 0) {
+        headers["x-sim-model-overrides"] = JSON.stringify(params.modelOverrides);
+      }
+
+      const init: RequestInit = {
+        method: params.method ?? "GET",
+        headers
+      };
+
+      if (params.body) {
+        init.body = JSON.stringify(params.body);
+      }
+
+      const response = await fetch(`${params.apiBase}${params.path}`, init);
+      const payloadText = await response.text();
+
+      let payload: unknown = payloadText;
+      try {
+        payload = JSON.parse(payloadText);
+      } catch {
+        // keep raw string payload
+      }
+
+      if (!response.ok) {
+        const retryableStatus = response.status === 429 || response.status >= 500;
+        const message = `HTTP ${response.status} ${params.method ?? "GET"} ${params.path}: ${
+          typeof payload === "string" ? payload : JSON.stringify(payload)
+        }`;
+
+        if (retryableStatus && attempt < maxAttempts) {
+          await sleep(150 * attempt);
+          continue;
+        }
+        throw new Error(message);
+      }
+
+      return {
+        data: payload as T,
+        request_id: extractRequestId(
+          payload,
+          response.headers.get("x-alchemy-request-id"),
+          response.headers.get("x-request-id")
+        )
+      };
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      if (attempt >= maxAttempts) {
+        break;
+      }
+      await sleep(150 * attempt);
+    }
   }
 
-  const init: RequestInit = {
-    method: params.method ?? "GET",
-    headers
-  };
-
-  if (params.body) {
-    init.body = JSON.stringify(params.body);
-  }
-
-  const response = await fetch(`${params.apiBase}${params.path}`, init);
-  const payloadText = await response.text();
-
-  let payload: unknown = payloadText;
-  try {
-    payload = JSON.parse(payloadText);
-  } catch {
-    // keep raw string payload
-  }
-
-  if (!response.ok) {
-    throw new Error(
-      `HTTP ${response.status} ${params.method ?? "GET"} ${params.path}: ${
-        typeof payload === "string" ? payload : JSON.stringify(payload)
-      }`
-    );
-  }
-
-  return {
-    data: payload as T,
-    request_id: extractRequestId(
-      payload,
-      response.headers.get("x-alchemy-request-id"),
-      response.headers.get("x-request-id")
-    )
-  };
+  throw lastError ?? new Error(`Request failed: ${params.method ?? "GET"} ${params.path}`);
 };
 
 const assertCondition = (condition: boolean, message: string): void => {
@@ -747,7 +772,8 @@ const runSimulation = async (params: {
         path: "/chat",
         method: "POST",
         body: { message: prompts.start },
-        modelOverrides: params.modelOverrides
+        modelOverrides: params.modelOverrides,
+        retryAttempts: 2
       });
       const apiMs = Date.now() - apiStartedAt;
       const response = api.data;
@@ -776,7 +802,8 @@ const runSimulation = async (params: {
         path: `/chat/${chat.chat_id}/messages`,
         method: "POST",
         body: { message: prompts.refine },
-        modelOverrides: params.modelOverrides
+        modelOverrides: params.modelOverrides,
+        retryAttempts: 2
       });
       const apiMs = Date.now() - apiStartedAt;
       const response = api.data;
@@ -829,44 +856,68 @@ const runSimulation = async (params: {
         };
       }
 
-      const generationPrompt = prompts.trigger;
+      const generationPrompts = [
+        prompts.trigger,
+        "Please generate the full recipe set now.",
+        "Generate now and return the recipe."
+      ];
 
-      const apiStartedAt = Date.now();
-      const api = await requestJson<ChatApiResponse>({
-        apiBase,
-        token,
-        path: `/chat/${chat.chat_id}/messages`,
-        method: "POST",
-        body: { message: generationPrompt },
-        modelOverrides: params.modelOverrides
-      });
-      const apiMs = Date.now() - apiStartedAt;
-      const response = api.data;
-      const { tokenUsage, dbMs, llmMs } = await loadTokenUsageWithTiming(api.request_id);
+      const attemptSummaries: Array<Record<string, unknown>> = [];
 
-      const components = summarizeComponents(response.candidate_recipe_set);
-      if (components.length > 0) {
-        return {
+      for (let idx = 0; idx < generationPrompts.length; idx += 1) {
+        const generationPrompt = generationPrompts[idx]!;
+        const apiStartedAt = Date.now();
+        const api = await requestJson<ChatApiResponse>({
+          apiBase,
+          token,
+          path: `/chat/${chat.chat_id}/messages`,
+          method: "POST",
+          body: { message: generationPrompt },
+          modelOverrides: params.modelOverrides,
+          retryAttempts: 2
+        });
+        const apiMs = Date.now() - apiStartedAt;
+        const response = api.data;
+        const { tokenUsage, dbMs, llmMs } = await loadTokenUsageWithTiming(api.request_id);
+
+        const components = summarizeComponents(response.candidate_recipe_set);
+        const loopState = response.loop_state ?? "unknown";
+        const assistantReply = extractAssistantText(response);
+        attemptSummaries.push({
+          attempt: idx + 1,
           generation_prompt: generationPrompt,
-          generation_source: "chat_generation_trigger",
           api_request_id: api.request_id,
-          token_usage: tokenUsage,
-          timing: { api_ms: apiMs, db_ms: dbMs, llm_ms: llmMs },
-          loop_state: response.loop_state ?? "unknown",
-          candidate_id: response.candidate_recipe_set?.candidate_id ?? "",
-          revision: response.candidate_recipe_set?.revision ?? null,
-          active_component_id: response.candidate_recipe_set?.active_component_id ?? null,
+          loop_state: loopState,
           candidate_count: components.length,
-          candidate_summary: components,
-          candidate_snapshot: projectCandidateForTrace(response.candidate_recipe_set),
-          assistant_reply: extractAssistantText(response),
-          thread_tail: Array.isArray(response.messages) ? response.messages.slice(-6) : []
-        };
+          assistant_reply: assistantReply
+        });
+
+        if (components.length > 0) {
+          return {
+            generation_prompt: generationPrompt,
+            generation_attempt: idx + 1,
+            generation_attempts: attemptSummaries,
+            generation_source: "chat_generation_trigger",
+            api_request_id: api.request_id,
+            token_usage: tokenUsage,
+            timing: { api_ms: apiMs, db_ms: dbMs, llm_ms: llmMs },
+            loop_state: loopState,
+            candidate_id: response.candidate_recipe_set?.candidate_id ?? "",
+            revision: response.candidate_recipe_set?.revision ?? null,
+            active_component_id: response.candidate_recipe_set?.active_component_id ?? null,
+            candidate_count: components.length,
+            candidate_summary: components,
+            candidate_snapshot: projectCandidateForTrace(response.candidate_recipe_set),
+            assistant_reply: assistantReply,
+            thread_tail: Array.isArray(response.messages) ? response.messages.slice(-6) : []
+          };
+        }
       }
 
+      const lastAttempt = attemptSummaries[attemptSummaries.length - 1];
       throw new Error(
-        `Generation trigger did not produce a candidate recipe set: no candidate (loop_state=${
-          response.loop_state ?? "unknown"
+        `Generation trigger did not produce a candidate recipe set after ${generationPrompts.length} attempts (loop_state=${
+          String(lastAttempt?.["loop_state"] ?? "unknown")
         })`
       );
     });
@@ -879,7 +930,8 @@ const runSimulation = async (params: {
         path: `/chat/${chat.chat_id}/messages`,
         method: "POST",
         body: { message: prompts.iterate },
-        modelOverrides: params.modelOverrides
+        modelOverrides: params.modelOverrides,
+        retryAttempts: 2
       });
       const apiMs = Date.now() - apiStartedAt;
       const response = api.data;
@@ -932,7 +984,8 @@ const runSimulation = async (params: {
           action: "set_active_component",
           component_id: activeId
         },
-        modelOverrides: params.modelOverrides
+        modelOverrides: params.modelOverrides,
+        retryAttempts: 2
       });
       const apiMs = Date.now() - apiStartedAt;
       const response = api.data;
@@ -957,7 +1010,8 @@ const runSimulation = async (params: {
         path: `/chat/${chat.chat_id}/commit`,
         method: "POST",
         body: {},
-        modelOverrides: params.modelOverrides
+        modelOverrides: params.modelOverrides,
+        retryAttempts: 2
       });
       const apiMs = Date.now() - apiStartedAt;
       const response = api.data;
@@ -997,7 +1051,8 @@ const runSimulation = async (params: {
         token,
         path: `/recipes/${primaryRecipeId}?units=metric&group_by=component&inline_measurements=true`,
         method: "GET",
-        modelOverrides: params.modelOverrides
+        modelOverrides: params.modelOverrides,
+        retryAttempts: 2
       });
       const apiMs = Date.now() - apiStartedAt;
       const recipe = api.data;
@@ -1022,7 +1077,8 @@ const runSimulation = async (params: {
         token,
         path: "/recipes/cookbook",
         method: "GET",
-        modelOverrides: params.modelOverrides
+        modelOverrides: params.modelOverrides,
+        retryAttempts: 2
       });
       const apiMs = Date.now() - apiStartedAt;
       const response = api.data;
