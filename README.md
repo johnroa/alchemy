@@ -280,53 +280,29 @@ set name = excluded.name,
     is_active = excluded.is_active;
 ```
 
-### Pushing migrations
+### Applying migrations (CI-only)
 
-```bash
-# link once per machine/workspace
-supabase link --project-ref dwptbjcxrsmmgjmnumpg
+Supabase schema/function deploys are handled by GitHub Actions only.
 
-# then push migrations (DB password required)
-supabase db push --password "$SUPABASE_DB_PASSWORD"
-```
+1. Add or update files in `supabase/migrations/**` and/or `supabase/functions/**`.
+2. Push to `main`.
+3. Watch `.github/workflows/supabase-deploy.yml` in GitHub Actions.
 
-### Troubleshooting `db push` auth failures
+No direct local `supabase db push` / `supabase functions deploy` deploy path is used for production.
 
-If you see:
+### Troubleshooting Supabase CI migration failures
+
+If CI fails with:
 
 ```text
-failed SASL auth (FATAL: password authentication failed for user "postgres.<project-ref>")
+Found local migration files to be inserted before the last migration on remote database.
 ```
 
-`supabase login` is not enough by itself. CLI login authenticates Supabase Management API calls, but `supabase db push` still connects directly to Postgres and requires the database password.
+The migration chain is out of order relative to remote history. Fix by:
 
-Use:
-
-```bash
-# 1) Link project with DB password from Supabase Dashboard → Project Settings → Database
-supabase link --project-ref dwptbjcxrsmmgjmnumpg --password '<db-password>'
-
-# 2) Push migrations
-supabase db push --password '<db-password>'
-```
-
-If you only need to push seed/backfill data (not schema changes) and DB password is unavailable, use service-role + PostgREST as an emergency path:
-
-```bash
-PROJECT_REF=dwptbjcxrsmmgjmnumpg
-SUPABASE_URL="https://${PROJECT_REF}.supabase.co"
-SERVICE_ROLE_KEY="$(supabase projects api-keys --project-ref "$PROJECT_REF" --output json | jq -r '.[] | select(.name=="service_role") | .api_key')"
-
-# Example: verify active onboarding prompt/rule
-curl "$SUPABASE_URL/rest/v1/llm_prompts?scope=eq.onboarding&is_active=eq.true&select=id,scope,version,name" \
-  -H "apikey: $SERVICE_ROLE_KEY" \
-  -H "Authorization: Bearer $SERVICE_ROLE_KEY"
-curl "$SUPABASE_URL/rest/v1/llm_rules?scope=eq.onboarding&is_active=eq.true&select=id,scope,version,name" \
-  -H "apikey: $SERVICE_ROLE_KEY" \
-  -H "Authorization: Bearer $SERVICE_ROLE_KEY"
-```
-
-Use this fallback only for controlled operational fixes. For normal schema + migration history, prefer `supabase db push`.
+1. Ensuring migration filenames are monotonic and correctly ordered.
+2. Re-running the deploy workflow with `--include-all` enabled in CI when intentionally reconciling history.
+3. Avoiding ad-hoc/manual production DB pushes outside CI.
 
 ### Migration history
 
@@ -362,17 +338,7 @@ Use this fallback only for controlled operational fixes. For normal schema + mig
 
 ### Deploying edge functions
 
-```bash
-# Deploy the v1 edge function
-supabase functions deploy v1
-
-# Set secrets (if not already set)
-supabase secrets set OPENAI_API_KEY=<key>
-supabase secrets set ANTHROPIC_API_KEY=<key>
-
-# List current secrets (shows digests only)
-supabase secrets list
-```
+Edge function deploys are performed by GitHub Actions (`.github/workflows/supabase-deploy.yml`) from `main` pushes. Do not deploy Supabase functions directly from local machines.
 
 ---
 
@@ -419,19 +385,10 @@ All commands run from repo root (`/Users/john/Projects/alchemy`).
 ### One-time auth
 
 ```bash
-supabase login
 npx wrangler login
 ```
 
-### Push Supabase (schema + edge function)
-
-```bash
-supabase link --project-ref dwptbjcxrsmmgjmnumpg
-supabase db push --password "$SUPABASE_DB_PASSWORD"
-supabase functions deploy v1
-```
-
-### GitHub CI for Supabase deploys (recommended)
+### Supabase deploys (GitHub CI only)
 
 Workflow: `.github/workflows/supabase-deploy.yml`
 
@@ -485,31 +442,25 @@ curl https://api.cookwithalchemy.com/v1/healthz
 # 1. Install deps
 pnpm install
 
-# 2. Auth (one-time)
-supabase login
+# 2. Auth (one-time for Cloudflare deploys)
 npx wrangler login
 
-# 3. Apply DB migrations
-supabase link --project-ref dwptbjcxrsmmgjmnumpg
-supabase db push --password "$SUPABASE_DB_PASSWORD"
-
-# 4. Deploy edge function
-supabase functions deploy v1
-
-# 5. Deploy API gateway
+# 3. Deploy API gateway
 npx wrangler deploy --config infra/cloudflare/api-gateway/wrangler.jsonc
 
-# 6. Deploy admin
+# 4. Deploy admin
 pnpm --filter @alchemy/admin cf:build
 pnpm --filter @alchemy/admin exec opennextjs-cloudflare deploy
 
-# 7. Generate contract types (after any OpenAPI changes)
+# 5. Generate contract types (after any OpenAPI changes)
 pnpm --filter @alchemy/contracts generate
 
-# 8. Run apps locally
+# 6. Run apps locally
 pnpm dev:admin          # Next.js admin at localhost:3000
 pnpm dev:mobile:ios     # Expo iOS simulator
 ```
+
+Supabase schema/functions are deployed by CI from `main` pushes (not from local CLI).
 
 ---
 
