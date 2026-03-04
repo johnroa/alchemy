@@ -22,8 +22,8 @@ import {
   deriveCanonicalIngredientIdentity,
   type GroupByPreference,
   type IngredientGroup,
-  normalizeIngredientKey,
   type NormalizedStatus,
+  normalizeIngredientKey,
   projectIngredientsForOutput,
   projectInlineMeasurements,
   resolvePresentationOptions,
@@ -506,13 +506,20 @@ const ensureUserProfile = async (
     avatarUrl?: string | null;
   },
 ): Promise<void> => {
-  const { error } = await client.from("users").upsert({
-    id: params.userId,
-    email: params.email ?? null,
-    full_name: params.fullName ?? null,
-    avatar_url: params.avatarUrl ?? null,
-    updated_at: new Date().toISOString(),
-  });
+  // Insert-once path for request hot loops; avoid rewriting the user row on every API call.
+  const { error } = await client.from("users").upsert(
+    {
+      id: params.userId,
+      email: params.email ?? null,
+      full_name: params.fullName ?? null,
+      avatar_url: params.avatarUrl ?? null,
+      updated_at: new Date().toISOString(),
+    },
+    {
+      onConflict: "id",
+      ignoreDuplicates: true,
+    },
+  );
   if (error) {
     throw new ApiError(
       500,
@@ -1057,6 +1064,13 @@ const normalizeTermKey = (value: string): string =>
     .replace(/\s+/g, "_")
     .replace(/^_+|_+$/g, "");
 
+const parseCsvParam = (value: string | null): string[] => {
+  if (!value) return [];
+  return value.split(",")
+    .map((entry) => entry.trim().toLocaleLowerCase())
+    .filter((entry) => entry.length > 0);
+};
+
 const fetchCanonicalIngredientRows = async (
   client: SupabaseClient,
   recipeVersionId: string,
@@ -1219,11 +1233,13 @@ const resolveAliasCanonicalIdentity = async (params: {
     source_name: string;
     fallback_canonical_name: string;
   }>;
-}): Promise<Map<string, {
-  canonical_key: string;
-  canonical_name: string;
-  confidence: number;
-}>> => {
+}): Promise<
+  Map<string, {
+    canonical_key: string;
+    canonical_name: string;
+    confidence: number;
+  }>
+> => {
   if (params.unresolvedAliases.length === 0) {
     return new Map();
   }
@@ -1551,8 +1567,9 @@ const resolveCanonicalRecipeIngredientsAsync = async (params: {
     for (const row of unresolvedRows) {
       const components = rowComponents.get(row.id) ?? [];
       const withIds = components.map((component) => {
-        const ingredientId = ingredientIdByAliasKey.get(component.canonical_key) ??
-          null;
+        const ingredientId =
+          ingredientIdByAliasKey.get(component.canonical_key) ??
+            null;
         return {
           ...component,
           ingredient_id: ingredientId,
@@ -1574,7 +1591,8 @@ const resolveCanonicalRecipeIngredientsAsync = async (params: {
 
       const nextMetadata: Record<string, JsonValue> = {
         ...(row.metadata ?? {}),
-        alias_key: row.metadata?.alias_key ?? normalizeIngredientKey(row.source_name),
+        alias_key: row.metadata?.alias_key ??
+          normalizeIngredientKey(row.source_name),
         needs_ingredient_resolution: !best?.ingredient_id,
         components: withIds.map((component) => ({
           canonical_name: component.canonical_name,
@@ -1627,7 +1645,7 @@ const resolveCanonicalRecipeIngredientsAsync = async (params: {
       status: "failed",
       outputPayload: {},
       confidenceSummary: {},
-      rejectionCount,
+      rejectionCount: rejectedCount,
       metadata: {
         error: error instanceof Error ? error.message : "unknown_error",
       },
@@ -1687,18 +1705,19 @@ const persistCanonicalRecipeIngredients = async (params: {
     normalized_amount_si: row.normalized_amount_si,
     normalized_unit: row.normalized_unit,
     unit_kind: row.unit_kind,
-    normalized_status:
-      row.normalized_status === "normalized" &&
+    normalized_status: row.normalized_status === "normalized" &&
         ingredientIdByAliasKey.has(row.normalized_key)
-        ? "normalized"
-        : "needs_retry",
+      ? "normalized"
+      : "needs_retry",
     category: row.category,
     component: row.component,
     position: row.position,
     metadata: {
       preparation: row.preparation ?? null,
       alias_key: row.normalized_key,
-      needs_ingredient_resolution: !ingredientIdByAliasKey.has(row.normalized_key),
+      needs_ingredient_resolution: !ingredientIdByAliasKey.has(
+        row.normalized_key,
+      ),
     },
   }));
 
@@ -1720,30 +1739,578 @@ const enqueueRecipeMetadataJob = async (params: {
   recipeId: string;
   recipeVersionId: string;
 }): Promise<void> => {
+  const nowIso = new Date().toISOString();
   const { error } = await params.serviceClient.from("recipe_metadata_jobs")
     .upsert(
       {
         recipe_id: params.recipeId,
         recipe_version_id: params.recipeVersionId,
         status: "pending",
+        stage: "queued",
         attempts: 0,
         max_attempts: 5,
-        next_attempt_at: new Date().toISOString(),
+        next_attempt_at: nowIso,
         locked_at: null,
         locked_by: null,
         last_error: null,
-        updated_at: new Date().toISOString(),
+        last_stage_error: null,
+        stage_attempts: {},
+        rejection_counts: {},
+        current_run_id: null,
+        updated_at: nowIso,
       },
       { onConflict: "recipe_version_id" },
     );
 
-  if (error) {
+  if (error && !isSchemaMissingError(error)) {
     throw new ApiError(
       500,
       "recipe_metadata_enqueue_failed",
       "Could not enqueue metadata job",
       error.message,
     );
+  }
+
+  if (error && isSchemaMissingError(error)) {
+    const { error: legacyError } = await params.serviceClient.from(
+      "recipe_metadata_jobs",
+    ).upsert(
+      {
+        recipe_id: params.recipeId,
+        recipe_version_id: params.recipeVersionId,
+        status: "pending",
+        attempts: 0,
+        max_attempts: 5,
+        next_attempt_at: nowIso,
+        locked_at: null,
+        locked_by: null,
+        last_error: null,
+        updated_at: nowIso,
+      },
+      { onConflict: "recipe_version_id" },
+    );
+
+    if (legacyError) {
+      throw new ApiError(
+        500,
+        "recipe_metadata_enqueue_failed",
+        "Could not enqueue metadata job",
+        legacyError.message,
+      );
+    }
+  }
+};
+
+const upsertIngredientPairStats = async (params: {
+  serviceClient: SupabaseClient;
+  ingredientIds: string[];
+}): Promise<void> => {
+  const unique = Array.from(
+    new Set(params.ingredientIds.filter((id) => id.length > 0)),
+  );
+  if (unique.length < 2) {
+    return;
+  }
+
+  for (let i = 0; i < unique.length; i += 1) {
+    for (let j = i + 1; j < unique.length; j += 1) {
+      const left = unique[i]!;
+      const right = unique[j]!;
+      const [ingredientA, ingredientB] = left < right
+        ? [left, right]
+        : [right, left];
+
+      const { data: existing, error: fetchError } = await params.serviceClient
+        .from("ingredient_pair_stats")
+        .select("co_occurrence_count,recipe_count")
+        .eq("ingredient_a_id", ingredientA)
+        .eq("ingredient_b_id", ingredientB)
+        .maybeSingle();
+
+      if (
+        fetchError && !isSchemaMissingError(fetchError) &&
+        !isRlsError(fetchError)
+      ) {
+        throw new ApiError(
+          500,
+          "ingredient_pair_stats_fetch_failed",
+          "Could not fetch ingredient pair stats",
+          fetchError.message,
+        );
+      }
+
+      const nextCount = Number(existing?.co_occurrence_count ?? 0) + 1;
+      const nextRecipeCount = Number(existing?.recipe_count ?? 0) + 1;
+      const pmi = Math.log10(Math.max(1, nextCount));
+      const lift = Math.max(1, nextCount / Math.max(1, nextRecipeCount));
+
+      const { error: writeError } = await params.serviceClient
+        .from("ingredient_pair_stats")
+        .upsert({
+          ingredient_a_id: ingredientA,
+          ingredient_b_id: ingredientB,
+          co_occurrence_count: nextCount,
+          recipe_count: nextRecipeCount,
+          pmi,
+          lift,
+          last_computed_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        }, { onConflict: "ingredient_a_id,ingredient_b_id" });
+
+      if (
+        writeError && !isSchemaMissingError(writeError) &&
+        !isRlsError(writeError)
+      ) {
+        throw new ApiError(
+          500,
+          "ingredient_pair_stats_upsert_failed",
+          "Could not upsert ingredient pair stats",
+          writeError.message,
+        );
+      }
+    }
+  }
+};
+
+const upsertIngredientEnrichment = async (params: {
+  serviceClient: SupabaseClient;
+  userId: string;
+  requestId: string;
+  jobId: string;
+  recipeId: string;
+  recipeVersionId: string;
+  canonicalRows: CanonicalRecipeIngredientRow[];
+  canonicalIngredientNameById: Map<string, string>;
+}): Promise<{
+  rejectedCount: number;
+}> => {
+  const ingredientById = new Map<string, string>();
+  for (const row of params.canonicalRows) {
+    if (!row.ingredient_id) continue;
+    const canonicalName =
+      params.canonicalIngredientNameById.get(row.ingredient_id) ??
+        row.source_name;
+    ingredientById.set(row.ingredient_id, canonicalName);
+  }
+
+  const ingredientItems = Array.from(ingredientById.entries()).map(
+    ([ingredient_id, canonical_name]) => ({
+      ingredient_id,
+      canonical_name,
+    }),
+  );
+  if (ingredientItems.length === 0) {
+    return { rejectedCount: 0 };
+  }
+
+  const runId = await startEnrichmentRun({
+    serviceClient: params.serviceClient,
+    jobId: params.jobId,
+    recipeId: params.recipeId,
+    recipeVersionId: params.recipeVersionId,
+    stage: "ingredient_enrichment",
+    inputPayload: {
+      ingredient_count: ingredientItems.length,
+    },
+  });
+
+  let rejectedCount = 0;
+  try {
+    const enrichment = await llmGateway.enrichIngredients({
+      client: params.serviceClient,
+      userId: params.userId,
+      requestId: params.requestId,
+      ingredients: ingredientItems,
+    });
+
+    const enrichmentByName = new Map(
+      enrichment.map((item) => [item.canonical_name.toLocaleLowerCase(), item]),
+    );
+    const { data: ingredientRows, error: ingredientFetchError } = await params
+      .serviceClient
+      .from("ingredients")
+      .select("id,canonical_name,metadata")
+      .in("id", ingredientItems.map((item) => item.ingredient_id));
+
+    if (ingredientFetchError) {
+      throw new ApiError(
+        500,
+        "ingredient_enrichment_fetch_failed",
+        "Could not load ingredient metadata rows",
+        ingredientFetchError.message,
+      );
+    }
+
+    type OntologyUpsertRow = {
+      ingredient_id: string;
+      term_type: string;
+      term_key: string;
+      label: string;
+      relation_type: string;
+      confidence: number;
+    };
+    const ontologyUpserts: OntologyUpsertRow[] = [];
+
+    for (const row of ingredientRows ?? []) {
+      const key = String(row.canonical_name ?? "").toLocaleLowerCase();
+      const candidate = enrichmentByName.get(key);
+      if (!candidate || !shouldPersistEnrichment(candidate.confidence)) {
+        rejectedCount += 1;
+        continue;
+      }
+
+      const existingMetadata =
+        row.metadata && typeof row.metadata === "object" &&
+          !Array.isArray(row.metadata)
+          ? row.metadata as Record<string, JsonValue>
+          : {};
+      const nextMetadata: Record<string, JsonValue> = {
+        ...existingMetadata,
+        ...candidate.metadata,
+        metadata_schema_version: 2,
+        enrichment_confidence: candidate.confidence,
+        enriched_at: new Date().toISOString(),
+      };
+
+      let { error: ingredientWriteError } = await params.serviceClient
+        .from("ingredients")
+        .update({
+          metadata: nextMetadata,
+          metadata_schema_version: 2,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", row.id);
+      if (ingredientWriteError && isSchemaMissingError(ingredientWriteError)) {
+        ({ error: ingredientWriteError } = await params.serviceClient
+          .from("ingredients")
+          .update({
+            metadata: nextMetadata,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", row.id));
+      }
+      if (ingredientWriteError) {
+        throw new ApiError(
+          500,
+          "ingredient_enrichment_write_failed",
+          "Could not persist ingredient enrichment",
+          ingredientWriteError.message,
+        );
+      }
+
+      for (const term of candidate.ontology_terms ?? []) {
+        if (!shouldPersistEnrichment(term.confidence)) {
+          rejectedCount += 1;
+          continue;
+        }
+        const normalizedKey = normalizeTermKey(term.term_key || term.label);
+        const normalizedType = normalizeTermKey(String(term.term_type ?? ""));
+        if (!normalizedKey) {
+          rejectedCount += 1;
+          continue;
+        }
+        if (!normalizedType) {
+          rejectedCount += 1;
+          continue;
+        }
+        ontologyUpserts.push({
+          ingredient_id: row.id,
+          term_type: normalizedType,
+          term_key: normalizedKey,
+          label: String(term.label ?? "").trim(),
+          relation_type: String(term.relation_type ?? "classified_as").trim()
+            .toLocaleLowerCase(),
+          confidence: clampConfidence(term.confidence, candidate.confidence),
+        });
+      }
+    }
+
+    if (ontologyUpserts.length > 0) {
+      const termRows = Array.from(
+        new Map(
+          ontologyUpserts.map((item) => [
+            `${item.term_type}:${item.term_key}`,
+            {
+              term_type: item.term_type,
+              term_key: item.term_key,
+              label: item.label,
+              source: "llm",
+              metadata: {},
+              updated_at: new Date().toISOString(),
+            },
+          ]),
+        ).values(),
+      );
+      const { error: termUpsertError } = await params.serviceClient
+        .from("ontology_terms")
+        .upsert(termRows, { onConflict: "term_type,term_key" });
+      if (
+        termUpsertError && !isSchemaMissingError(termUpsertError) &&
+        !isRlsError(termUpsertError)
+      ) {
+        throw new ApiError(
+          500,
+          "ontology_terms_upsert_failed",
+          "Could not persist ontology terms",
+          termUpsertError.message,
+        );
+      }
+
+      const { data: termIds, error: termFetchError } = await params
+        .serviceClient
+        .from("ontology_terms")
+        .select("id,term_type,term_key")
+        .or(
+          termRows.map((row) =>
+            `and(term_type.eq.${row.term_type},term_key.eq.${row.term_key})`
+          ).join(","),
+        );
+      if (
+        termFetchError && !isSchemaMissingError(termFetchError) &&
+        !isRlsError(termFetchError)
+      ) {
+        throw new ApiError(
+          500,
+          "ontology_terms_fetch_failed",
+          "Could not load ontology term ids",
+          termFetchError.message,
+        );
+      }
+
+      const termIdByKey = new Map(
+        (termIds ?? []).map((row) => [
+          `${row.term_type}:${row.term_key}`,
+          row.id,
+        ]),
+      );
+
+      const ontologyLinkRows = ontologyUpserts
+        .map((item) => {
+          const termId = termIdByKey.get(`${item.term_type}:${item.term_key}`);
+          if (!termId) return null;
+          return {
+            ingredient_id: item.ingredient_id,
+            ontology_term_id: termId,
+            relation_type: item.relation_type,
+            source: "llm",
+            confidence: item.confidence,
+            metadata: {},
+            updated_at: new Date().toISOString(),
+          };
+        })
+        .filter((item): item is {
+          ingredient_id: string;
+          ontology_term_id: string;
+          relation_type: string;
+          source: string;
+          confidence: number;
+          metadata: Record<string, JsonValue>;
+          updated_at: string;
+        } => item !== null);
+
+      if (ontologyLinkRows.length > 0) {
+        const { error: linkError } = await params.serviceClient
+          .from("ingredient_ontology_links")
+          .upsert(ontologyLinkRows, {
+            onConflict: "ingredient_id,ontology_term_id,relation_type,source",
+          });
+        if (
+          linkError && !isSchemaMissingError(linkError) &&
+          !isRlsError(linkError)
+        ) {
+          throw new ApiError(
+            500,
+            "ingredient_ontology_links_upsert_failed",
+            "Could not persist ingredient ontology links",
+            linkError.message,
+          );
+        }
+      }
+    }
+
+    await completeEnrichmentRun({
+      serviceClient: params.serviceClient,
+      runId,
+      status: "ready",
+      outputPayload: {
+        ingredient_count: ingredientItems.length,
+      },
+      confidenceSummary: {
+        persist_threshold: ENRICHMENT_PERSIST_CONFIDENCE,
+      },
+      rejectionCount: rejectedCount,
+    });
+    return { rejectedCount };
+  } catch (error) {
+    await completeEnrichmentRun({
+      serviceClient: params.serviceClient,
+      runId,
+      status: "failed",
+      rejectionCount: rejectedCount,
+      metadata: {
+        error: error instanceof Error ? error.message : "unknown_error",
+      },
+    });
+    throw error;
+  }
+};
+
+const enrichRecipeMetadataAsync = async (params: {
+  serviceClient: SupabaseClient;
+  userId: string;
+  requestId: string;
+  jobId: string;
+  recipeId: string;
+  recipeVersionId: string;
+  payload: RecipePayload;
+  ingredientNames: string[];
+}): Promise<
+  {
+    metadataPatch: Record<string, JsonValue>;
+    confidence: number;
+    rejectedCount: number;
+  }
+> => {
+  const runId = await startEnrichmentRun({
+    serviceClient: params.serviceClient,
+    jobId: params.jobId,
+    recipeId: params.recipeId,
+    recipeVersionId: params.recipeVersionId,
+    stage: "recipe_enrichment",
+    inputPayload: {
+      ingredient_count: params.ingredientNames.length,
+    },
+  });
+
+  let rejectedCount = 0;
+  try {
+    const result = await llmGateway.enrichRecipeMetadata({
+      client: params.serviceClient,
+      userId: params.userId,
+      requestId: params.requestId,
+      recipe: params.payload,
+      ingredientNames: params.ingredientNames,
+    });
+
+    if (!shouldPersistEnrichment(result.confidence)) {
+      rejectedCount += 1;
+      await completeEnrichmentRun({
+        serviceClient: params.serviceClient,
+        runId,
+        status: "discarded",
+        outputPayload: {},
+        confidenceSummary: {
+          confidence: result.confidence,
+          persist_threshold: ENRICHMENT_PERSIST_CONFIDENCE,
+        },
+        rejectionCount: rejectedCount,
+      });
+      return {
+        metadataPatch: {},
+        confidence: result.confidence,
+        rejectedCount,
+      };
+    }
+
+    await completeEnrichmentRun({
+      serviceClient: params.serviceClient,
+      runId,
+      status: "ready",
+      outputPayload: result.metadata,
+      confidenceSummary: {
+        confidence: result.confidence,
+        persist_threshold: ENRICHMENT_PERSIST_CONFIDENCE,
+      },
+      rejectionCount: rejectedCount,
+    });
+    return {
+      metadataPatch: result.metadata,
+      confidence: result.confidence,
+      rejectedCount,
+    };
+  } catch (error) {
+    await completeEnrichmentRun({
+      serviceClient: params.serviceClient,
+      runId,
+      status: "failed",
+      rejectionCount: rejectedCount,
+      metadata: {
+        error: error instanceof Error ? error.message : "unknown_error",
+      },
+    });
+    throw error;
+  }
+};
+
+const inferIngredientRelationsAsync = async (params: {
+  serviceClient: SupabaseClient;
+  userId: string;
+  requestId: string;
+  jobId: string;
+  recipeId: string;
+  recipeVersionId: string;
+  ingredientNames: string[];
+}): Promise<{
+  relations: Array<{
+    from_canonical_name: string;
+    to_canonical_name: string;
+    relation_type: string;
+    confidence: number;
+    rationale?: string;
+  }>;
+  rejectedCount: number;
+}> => {
+  const runId = await startEnrichmentRun({
+    serviceClient: params.serviceClient,
+    jobId: params.jobId,
+    recipeId: params.recipeId,
+    recipeVersionId: params.recipeVersionId,
+    stage: "edge_inference",
+    inputPayload: {
+      ingredient_count: params.ingredientNames.length,
+    },
+  });
+
+  let rejectedCount = 0;
+  try {
+    const suggestions = await llmGateway.inferIngredientRelations({
+      client: params.serviceClient,
+      userId: params.userId,
+      requestId: params.requestId,
+      ingredientNames: params.ingredientNames,
+    });
+    const relations = suggestions.filter((item) => {
+      if (!shouldPersistEnrichment(item.confidence)) {
+        rejectedCount += 1;
+        return false;
+      }
+      return true;
+    });
+
+    await completeEnrichmentRun({
+      serviceClient: params.serviceClient,
+      runId,
+      status: "ready",
+      outputPayload: {
+        relation_count: relations.length,
+      },
+      confidenceSummary: {
+        persist_threshold: ENRICHMENT_PERSIST_CONFIDENCE,
+      },
+      rejectionCount: rejectedCount,
+    });
+    return { relations, rejectedCount };
+  } catch (error) {
+    await completeEnrichmentRun({
+      serviceClient: params.serviceClient,
+      runId,
+      status: "failed",
+      rejectionCount: rejectedCount,
+      metadata: {
+        error: error instanceof Error ? error.message : "unknown_error",
+      },
+    });
+    throw error;
   }
 };
 
@@ -1796,22 +2363,53 @@ const upsertMetadataGraph = async (params: {
   payload: RecipePayload;
   canonicalRows: CanonicalRecipeIngredientRow[];
   canonicalIngredientNameById: Map<string, string>;
+  recipeMetadataPatch?: Record<string, JsonValue>;
+  ingredientRelations?: Array<{
+    from_canonical_name: string;
+    to_canonical_name: string;
+    relation_type: string;
+    confidence: number;
+    rationale?: string;
+  }>;
 }): Promise<void> => {
   const recipeLabel = params.payload.title.trim();
   if (!recipeLabel) {
     return;
   }
 
-  const ingredientNames = params.canonicalRows
-    .map((row) => {
-      if (row.ingredient_id) {
-        return params.canonicalIngredientNameById.get(row.ingredient_id) ??
-          row.source_name;
+  const mergedMetadata: Record<string, JsonValue> = {
+    ...(params.payload.metadata ?? {}),
+    ...(params.recipeMetadataPatch ?? {}),
+    metadata_schema_version: 2,
+  };
+
+  const ingredientNameSet = new Set<string>();
+  for (const row of params.canonicalRows) {
+    const baseName = row.ingredient_id
+      ? params.canonicalIngredientNameById.get(row.ingredient_id) ??
+        row.source_name
+      : row.source_name;
+    const trimmed = baseName.trim();
+    if (trimmed.length > 0) {
+      ingredientNameSet.add(trimmed);
+    }
+
+    const components = Array.isArray(row.metadata?.components)
+      ? row.metadata.components
+      : [];
+    for (const component of components) {
+      if (
+        !component || typeof component !== "object" || Array.isArray(component)
+      ) {
+        continue;
       }
-      return row.source_name;
-    })
-    .map((name) => name.trim())
-    .filter((name) => name.length > 0);
+      const name = (component as { canonical_name?: unknown }).canonical_name;
+      if (typeof name === "string" && name.trim().length > 0) {
+        ingredientNameSet.add(name.trim());
+      }
+    }
+  }
+  const ingredientNames = Array.from(ingredientNameSet);
 
   const categoryNames = Array.from(
     new Set(
@@ -1819,8 +2417,9 @@ const upsertMetadataGraph = async (params: {
         ...params.canonicalRows.map((row) => row.category).filter((
           value,
         ): value is string => Boolean(value)),
-        ...listifyText(params.payload.metadata?.cuisine_tags),
-        ...listifyText(params.payload.metadata?.occasion_tags),
+        ...listifyMaybeText(mergedMetadata.cuisine_tags),
+        ...listifyMaybeText(mergedMetadata.occasion_tags),
+        ...listifyMaybeText(mergedMetadata.course_type),
       ]
         .map((value) => value.trim())
         .filter((value) => value.length > 0),
@@ -1830,11 +2429,67 @@ const upsertMetadataGraph = async (params: {
   const keywordNames = Array.from(
     new Set(
       [
-        ...listifyText(params.payload.metadata?.flavor_profile),
-        ...listifyText(params.payload.pairings),
-        ...listifyText(params.payload.metadata?.pairing_rationale),
+        ...listifyMaybeText(mergedMetadata.flavor_profile),
+        ...listifyMaybeText(params.payload.pairings),
+        ...listifyMaybeText(mergedMetadata.pairing_rationale),
+        ...listifyMaybeText(mergedMetadata.health_flags),
       ]
         .map((value) => value.trim())
+        .filter((value) => value.length > 0),
+    ),
+  );
+
+  const dietTags = Array.from(
+    new Set(
+      listifyMaybeText(mergedMetadata.diet_tags).map((value) => value.trim())
+        .filter((value) => value.length > 0),
+    ),
+  );
+  const allergenFlags = Array.from(
+    new Set(
+      [
+        ...listifyMaybeText(mergedMetadata.allergen_flags),
+        ...listifyMaybeText(mergedMetadata.allergens),
+      ].map((value) => value.trim()).filter((value) => value.length > 0),
+    ),
+  );
+  const techniques = Array.from(
+    new Set(
+      listifyMaybeText(mergedMetadata.techniques).map((value) => value.trim())
+        .filter((value) => value.length > 0),
+    ),
+  );
+  const equipments = Array.from(
+    new Set(
+      listifyMaybeText(mergedMetadata.equipment).map((value) => value.trim())
+        .filter((value) => value.length > 0),
+    ),
+  );
+  const cuisines = Array.from(
+    new Set(
+      [
+        ...listifyMaybeText(mergedMetadata.cuisine),
+        ...listifyMaybeText(mergedMetadata.cuisine_tags),
+      ].map((value) => value.trim()).filter((value) => value.length > 0),
+    ),
+  );
+  const occasions = Array.from(
+    new Set(
+      listifyMaybeText(mergedMetadata.occasion_tags).map((value) =>
+        value.trim()
+      )
+        .filter((value) => value.length > 0),
+    ),
+  );
+  const spiceLevels = Array.from(
+    new Set(
+      listifyMaybeText(mergedMetadata.spice_level).map((value) => value.trim())
+        .filter((value) => value.length > 0),
+    ),
+  );
+  const difficultyValues = Array.from(
+    new Set(
+      listifyMaybeText(mergedMetadata.difficulty).map((value) => value.trim())
         .filter((value) => value.length > 0),
     ),
   );
@@ -1861,6 +2516,46 @@ const upsertMetadataGraph = async (params: {
     })),
     ...keywordNames.map((label) => ({
       entity_type: "keyword",
+      label,
+      metadata: {},
+    })),
+    ...dietTags.map((label) => ({
+      entity_type: "diet_tag",
+      label,
+      metadata: {},
+    })),
+    ...allergenFlags.map((label) => ({
+      entity_type: "allergen",
+      label,
+      metadata: {},
+    })),
+    ...techniques.map((label) => ({
+      entity_type: "technique",
+      label,
+      metadata: {},
+    })),
+    ...equipments.map((label) => ({
+      entity_type: "equipment",
+      label,
+      metadata: {},
+    })),
+    ...cuisines.map((label) => ({
+      entity_type: "cuisine",
+      label,
+      metadata: {},
+    })),
+    ...occasions.map((label) => ({
+      entity_type: "occasion",
+      label,
+      metadata: {},
+    })),
+    ...spiceLevels.map((label) => ({
+      entity_type: "spice_level",
+      label,
+      metadata: {},
+    })),
+    ...difficultyValues.map((label) => ({
+      entity_type: "difficulty_level",
       label,
       metadata: {},
     })),
@@ -1922,6 +2617,20 @@ const upsertMetadataGraph = async (params: {
       "contains_ingredient",
       "has_category",
       "has_keyword",
+      "compatible_with_diet",
+      "contains_allergen",
+      "uses_technique",
+      "requires_equipment",
+      "belongs_to_cuisine",
+      "fits_occasion",
+      "has_spice_level",
+      "has_difficulty",
+      "co_occurs_with",
+      "complements",
+      "substitutes_for",
+      "same_family_as",
+      "derived_from",
+      "conflicts_with",
     ],
   );
 
@@ -1930,6 +2639,15 @@ const upsertMetadataGraph = async (params: {
   );
   const hasCategoryRelation = relationTypeByName.get("has_category");
   const hasKeywordRelation = relationTypeByName.get("has_keyword");
+  const dietRelation = relationTypeByName.get("compatible_with_diet");
+  const allergenRelation = relationTypeByName.get("contains_allergen");
+  const techniqueRelation = relationTypeByName.get("uses_technique");
+  const equipmentRelation = relationTypeByName.get("requires_equipment");
+  const cuisineRelation = relationTypeByName.get("belongs_to_cuisine");
+  const occasionRelation = relationTypeByName.get("fits_occasion");
+  const spiceRelation = relationTypeByName.get("has_spice_level");
+  const difficultyRelation = relationTypeByName.get("has_difficulty");
+  const coOccurRelation = relationTypeByName.get("co_occurs_with");
 
   const edgePayload: Array<{
     from_entity_id: string;
@@ -1938,6 +2656,15 @@ const upsertMetadataGraph = async (params: {
     source: string;
     confidence: number;
     metadata: Record<string, JsonValue>;
+  }> = [];
+  const edgeEvidence: Array<{
+    from_entity_id: string;
+    to_entity_id: string;
+    relation_type_id: string;
+    source: string;
+    evidence_type: string;
+    evidence_ref: string;
+    excerpt: string | null;
   }> = [];
 
   if (containsIngredientRelation) {
@@ -1957,6 +2684,34 @@ const upsertMetadataGraph = async (params: {
         confidence: 1,
         metadata: {},
       });
+    }
+  }
+
+  if (coOccurRelation) {
+    for (let i = 0; i < ingredientNames.length; i += 1) {
+      for (let j = i + 1; j < ingredientNames.length; j += 1) {
+        const left = ingredientNames[i]!;
+        const right = ingredientNames[j]!;
+        const leftEntity = entityByKey.get(`ingredient:${left.toLowerCase()}`);
+        const rightEntity = entityByKey.get(
+          `ingredient:${right.toLowerCase()}`,
+        );
+        if (!leftEntity || !rightEntity) {
+          continue;
+        }
+
+        edgePayload.push({
+          from_entity_id: leftEntity,
+          to_entity_id: rightEntity,
+          relation_type_id: coOccurRelation,
+          source: "metadata_job",
+          confidence: 0.9,
+          metadata: {
+            recipe_id: params.recipeId,
+            recipe_version_id: params.recipeVersionId,
+          },
+        });
+      }
     }
   }
 
@@ -1996,14 +2751,184 @@ const upsertMetadataGraph = async (params: {
     }
   }
 
+  if (dietRelation) {
+    for (const value of dietTags) {
+      const entityId = entityByKey.get(`diet_tag:${value.toLowerCase()}`);
+      if (!entityId) continue;
+      edgePayload.push({
+        from_entity_id: recipeEntityId,
+        to_entity_id: entityId,
+        relation_type_id: dietRelation,
+        source: "metadata_job",
+        confidence: 0.9,
+        metadata: {},
+      });
+    }
+  }
+
+  if (allergenRelation) {
+    for (const value of allergenFlags) {
+      const entityId = entityByKey.get(`allergen:${value.toLowerCase()}`);
+      if (!entityId) continue;
+      edgePayload.push({
+        from_entity_id: recipeEntityId,
+        to_entity_id: entityId,
+        relation_type_id: allergenRelation,
+        source: "metadata_job",
+        confidence: 0.9,
+        metadata: {},
+      });
+    }
+  }
+
+  if (techniqueRelation) {
+    for (const value of techniques) {
+      const entityId = entityByKey.get(`technique:${value.toLowerCase()}`);
+      if (!entityId) continue;
+      edgePayload.push({
+        from_entity_id: recipeEntityId,
+        to_entity_id: entityId,
+        relation_type_id: techniqueRelation,
+        source: "metadata_job",
+        confidence: 0.88,
+        metadata: {},
+      });
+    }
+  }
+
+  if (equipmentRelation) {
+    for (const value of equipments) {
+      const entityId = entityByKey.get(`equipment:${value.toLowerCase()}`);
+      if (!entityId) continue;
+      edgePayload.push({
+        from_entity_id: recipeEntityId,
+        to_entity_id: entityId,
+        relation_type_id: equipmentRelation,
+        source: "metadata_job",
+        confidence: 0.88,
+        metadata: {},
+      });
+    }
+  }
+
+  if (cuisineRelation) {
+    for (const value of cuisines) {
+      const entityId = entityByKey.get(`cuisine:${value.toLowerCase()}`);
+      if (!entityId) continue;
+      edgePayload.push({
+        from_entity_id: recipeEntityId,
+        to_entity_id: entityId,
+        relation_type_id: cuisineRelation,
+        source: "metadata_job",
+        confidence: 0.9,
+        metadata: {},
+      });
+    }
+  }
+
+  if (occasionRelation) {
+    for (const value of occasions) {
+      const entityId = entityByKey.get(`occasion:${value.toLowerCase()}`);
+      if (!entityId) continue;
+      edgePayload.push({
+        from_entity_id: recipeEntityId,
+        to_entity_id: entityId,
+        relation_type_id: occasionRelation,
+        source: "metadata_job",
+        confidence: 0.87,
+        metadata: {},
+      });
+    }
+  }
+
+  if (spiceRelation) {
+    for (const value of spiceLevels) {
+      const entityId = entityByKey.get(`spice_level:${value.toLowerCase()}`);
+      if (!entityId) continue;
+      edgePayload.push({
+        from_entity_id: recipeEntityId,
+        to_entity_id: entityId,
+        relation_type_id: spiceRelation,
+        source: "metadata_job",
+        confidence: 0.9,
+        metadata: {},
+      });
+    }
+  }
+
+  if (difficultyRelation) {
+    for (const value of difficultyValues) {
+      const entityId = entityByKey.get(
+        `difficulty_level:${value.toLowerCase()}`,
+      );
+      if (!entityId) continue;
+      edgePayload.push({
+        from_entity_id: recipeEntityId,
+        to_entity_id: entityId,
+        relation_type_id: difficultyRelation,
+        source: "metadata_job",
+        confidence: 0.9,
+        metadata: {},
+      });
+    }
+  }
+
+  for (const relation of params.ingredientRelations ?? []) {
+    const fromEntityId = entityByKey.get(
+      `ingredient:${relation.from_canonical_name.toLowerCase()}`,
+    );
+    const toEntityId = entityByKey.get(
+      `ingredient:${relation.to_canonical_name.toLowerCase()}`,
+    );
+    const relationTypeId = relationTypeByName.get(relation.relation_type);
+    if (!fromEntityId || !toEntityId || !relationTypeId) {
+      continue;
+    }
+    if (!shouldPersistEnrichment(relation.confidence)) {
+      continue;
+    }
+
+    edgePayload.push({
+      from_entity_id: fromEntityId,
+      to_entity_id: toEntityId,
+      relation_type_id: relationTypeId,
+      source: "llm_inference",
+      confidence: clampConfidence(relation.confidence, 0.5),
+      metadata: {
+        recipe_id: params.recipeId,
+        recipe_version_id: params.recipeVersionId,
+      },
+    });
+    edgeEvidence.push({
+      from_entity_id: fromEntityId,
+      to_entity_id: toEntityId,
+      relation_type_id: relationTypeId,
+      source: "llm_inference",
+      evidence_type: "llm_rationale",
+      evidence_ref: "ingredient_relation_inference_v2",
+      excerpt: relation.rationale ?? null,
+    });
+  }
+
   if (edgePayload.length === 0) {
     return;
   }
 
-  const { error: edgeError } = await params.serviceClient.from("graph_edges")
-    .upsert(edgePayload, {
+  const dedupedEdgePayload = Array.from(
+    new Map(
+      edgePayload.map((edge) => [
+        `${edge.from_entity_id}:${edge.to_entity_id}:${edge.relation_type_id}:${edge.source}`,
+        edge,
+      ]),
+    ).values(),
+  );
+
+  const { data: writtenEdges, error: edgeError } = await params.serviceClient
+    .from("graph_edges")
+    .upsert(dedupedEdgePayload, {
       onConflict: "from_entity_id,to_entity_id,relation_type_id,source",
-    });
+    })
+    .select("id,from_entity_id,to_entity_id,relation_type_id,source");
 
   if (edgeError) {
     throw new ApiError(
@@ -2011,6 +2936,91 @@ const upsertMetadataGraph = async (params: {
       "metadata_graph_edge_upsert_failed",
       "Could not upsert graph edges",
       edgeError.message,
+    );
+  }
+
+  if ((writtenEdges ?? []).length > 0 && edgeEvidence.length > 0) {
+    const edgeIdByKey = new Map(
+      (writtenEdges ?? []).map((edge) => [
+        `${edge.from_entity_id}:${edge.to_entity_id}:${edge.relation_type_id}:${edge.source}`,
+        edge.id,
+      ]),
+    );
+
+    const evidenceRows = edgeEvidence
+      .map((item) => {
+        const edgeId = edgeIdByKey.get(
+          `${item.from_entity_id}:${item.to_entity_id}:${item.relation_type_id}:${item.source}`,
+        );
+        if (!edgeId) return null;
+        return {
+          graph_edge_id: edgeId,
+          evidence_type: item.evidence_type,
+          evidence_ref: item.evidence_ref,
+          excerpt: item.excerpt,
+          metadata: {},
+        };
+      })
+      .filter((item): item is {
+        graph_edge_id: string;
+        evidence_type: string;
+        evidence_ref: string;
+        excerpt: string | null;
+        metadata: Record<string, JsonValue>;
+      } => item !== null);
+
+    if (evidenceRows.length > 0) {
+      const { error: evidenceError } = await params.serviceClient
+        .from("graph_edge_evidence")
+        .insert(evidenceRows);
+      if (
+        evidenceError && !isSchemaMissingError(evidenceError) &&
+        !isRlsError(evidenceError)
+      ) {
+        throw new ApiError(
+          500,
+          "metadata_graph_evidence_insert_failed",
+          "Could not persist edge evidence",
+          evidenceError.message,
+        );
+      }
+    }
+  }
+
+  const ingredientIds = Array.from(
+    new Set(
+      params.canonicalRows
+        .map((row) => row.ingredient_id)
+        .filter((value): value is string =>
+          typeof value === "string" && value.length > 0
+        ),
+    ),
+  );
+  await upsertIngredientPairStats({
+    serviceClient: params.serviceClient,
+    ingredientIds,
+  });
+};
+
+const updateMetadataJobState = async (params: {
+  serviceClient: SupabaseClient;
+  jobId: string;
+  patch: Record<string, JsonValue>;
+}): Promise<void> => {
+  const { error } = await params.serviceClient
+    .from("recipe_metadata_jobs")
+    .update({
+      ...params.patch,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", params.jobId);
+
+  if (error && !isSchemaMissingError(error) && !isRlsError(error)) {
+    throw new ApiError(
+      500,
+      "metadata_job_update_failed",
+      "Could not update metadata job state",
+      error.message,
     );
   }
 };
@@ -2059,20 +3069,43 @@ const processMetadataJobs = async (params: {
       .from("recipe_metadata_jobs")
       .update({
         status: "pending",
+        stage: "queued",
         locked_at: null,
         locked_by: null,
+        current_run_id: null,
+        last_stage_error: null,
         next_attempt_at: now.toISOString(),
         updated_at: now.toISOString(),
       })
       .in("id", staleIds);
 
-    if (reapError) {
+    if (reapError && !isSchemaMissingError(reapError)) {
       throw new ApiError(
         500,
         "metadata_jobs_reap_failed",
         "Could not reap stale metadata locks",
         reapError.message,
       );
+    }
+    if (reapError && isSchemaMissingError(reapError)) {
+      const { error: legacyReapError } = await params.serviceClient
+        .from("recipe_metadata_jobs")
+        .update({
+          status: "pending",
+          locked_at: null,
+          locked_by: null,
+          next_attempt_at: now.toISOString(),
+          updated_at: now.toISOString(),
+        })
+        .in("id", staleIds);
+      if (legacyReapError) {
+        throw new ApiError(
+          500,
+          "metadata_jobs_reap_failed",
+          "Could not reap stale metadata locks",
+          legacyReapError.message,
+        );
+      }
     }
     reaped = staleIds.length;
   }
@@ -2141,11 +3174,13 @@ const processMetadataJobs = async (params: {
 
   for (const job of jobs) {
     const nextAttempt = Number(job.attempts ?? 0) + 1;
-    const lockResult = await params.serviceClient
+    let lockResult = await params.serviceClient
       .from("recipe_metadata_jobs")
       .update({
         status: "processing",
         attempts: nextAttempt,
+        stage: "queued",
+        current_run_id: null,
         locked_at: now.toISOString(),
         locked_by: "v1_metadata_jobs_process",
         updated_at: now.toISOString(),
@@ -2154,6 +3189,22 @@ const processMetadataJobs = async (params: {
       .eq("status", job.status)
       .select("id")
       .maybeSingle();
+
+    if (lockResult.error && isSchemaMissingError(lockResult.error)) {
+      lockResult = await params.serviceClient
+        .from("recipe_metadata_jobs")
+        .update({
+          status: "processing",
+          attempts: nextAttempt,
+          locked_at: now.toISOString(),
+          locked_by: "v1_metadata_jobs_process",
+          updated_at: now.toISOString(),
+        })
+        .eq("id", job.id)
+        .eq("status", job.status)
+        .select("id")
+        .maybeSingle();
+    }
 
     if (lockResult.error) {
       throw new ApiError(
@@ -2171,7 +3222,7 @@ const processMetadataJobs = async (params: {
     try {
       const { data: version, error: versionError } = await params.serviceClient
         .from("recipe_versions")
-        .select("id,payload")
+        .select("id,payload,metadata_schema_version")
         .eq("id", job.recipe_version_id)
         .maybeSingle();
 
@@ -2179,7 +3230,28 @@ const processMetadataJobs = async (params: {
         throw new Error("recipe_version_payload_missing");
       }
 
-      const payload = version.payload as RecipePayload;
+      let payload = version.payload as RecipePayload;
+
+      await updateMetadataJobState({
+        serviceClient: params.serviceClient,
+        jobId: job.id,
+        patch: {
+          stage: "ingredient_resolution",
+          last_stage_error: null,
+        },
+      });
+
+      const ingredientResolution = await resolveCanonicalRecipeIngredientsAsync(
+        {
+          serviceClient: params.serviceClient,
+          userId: params.actorUserId,
+          requestId: params.requestId,
+          jobId: job.id,
+          recipeId: job.recipe_id,
+          recipeVersionId: job.recipe_version_id,
+        },
+      );
+
       const canonicalRows = await fetchCanonicalIngredientRows(
         params.serviceClient,
         job.recipe_version_id,
@@ -2195,14 +3267,117 @@ const processMetadataJobs = async (params: {
         params.serviceClient,
         ingredientIds,
       );
+      const ingredientNames = Array.from(
+        new Set(
+          canonicalRows.map((row) => {
+            if (row.ingredient_id) {
+              return canonicalIngredientNameById.get(row.ingredient_id) ??
+                row.source_name;
+            }
+            return row.source_name;
+          }).map((value) => value.trim()).filter((value) => value.length > 0),
+        ),
+      );
+
+      await updateMetadataJobState({
+        serviceClient: params.serviceClient,
+        jobId: job.id,
+        patch: {
+          stage: "ingredient_enrichment",
+          last_stage_error: null,
+        },
+      });
+
+      const ingredientEnrichment = await upsertIngredientEnrichment({
+        serviceClient: params.serviceClient,
+        userId: params.actorUserId,
+        requestId: params.requestId,
+        jobId: job.id,
+        recipeId: job.recipe_id,
+        recipeVersionId: job.recipe_version_id,
+        canonicalRows,
+        canonicalIngredientNameById,
+      });
+
+      await updateMetadataJobState({
+        serviceClient: params.serviceClient,
+        jobId: job.id,
+        patch: {
+          stage: "recipe_enrichment",
+          last_stage_error: null,
+        },
+      });
+
+      const recipeEnrichment = await enrichRecipeMetadataAsync({
+        serviceClient: params.serviceClient,
+        userId: params.actorUserId,
+        requestId: params.requestId,
+        jobId: job.id,
+        recipeId: job.recipe_id,
+        recipeVersionId: job.recipe_version_id,
+        payload,
+        ingredientNames,
+      });
+
+      if (Object.keys(recipeEnrichment.metadataPatch).length > 0) {
+        const mergedMetadata: Record<string, JsonValue> = {
+          ...(payload.metadata ?? {}),
+          ...recipeEnrichment.metadataPatch,
+          metadata_schema_version: 2,
+        };
+        payload = {
+          ...payload,
+          metadata: mergedMetadata,
+        };
+        let { error: payloadUpdateError } = await params.serviceClient
+          .from("recipe_versions")
+          .update({
+            payload,
+            metadata_schema_version: 2,
+          })
+          .eq("id", job.recipe_version_id);
+        if (payloadUpdateError && isSchemaMissingError(payloadUpdateError)) {
+          ({ error: payloadUpdateError } = await params.serviceClient
+            .from("recipe_versions")
+            .update({
+              payload,
+            })
+            .eq("id", job.recipe_version_id));
+        }
+        if (payloadUpdateError) {
+          throw new Error(payloadUpdateError.message);
+        }
+      }
+
+      await updateMetadataJobState({
+        serviceClient: params.serviceClient,
+        jobId: job.id,
+        patch: {
+          stage: "edge_inference",
+          last_stage_error: null,
+        },
+      });
+
+      const ingredientRelationInference = await inferIngredientRelationsAsync({
+        serviceClient: params.serviceClient,
+        userId: params.actorUserId,
+        requestId: params.requestId,
+        jobId: job.id,
+        recipeId: job.recipe_id,
+        recipeVersionId: job.recipe_version_id,
+        ingredientNames,
+      });
+
       const categories = Array.from(
         new Set(
           [
             ...canonicalRows.map((row) => row.category).filter((
               value,
             ): value is string => Boolean(value)),
-            ...listifyText(payload.metadata?.cuisine_tags),
-            ...listifyText(payload.metadata?.occasion_tags),
+            ...listifyMaybeText(payload.metadata?.cuisine_tags),
+            ...listifyMaybeText(payload.metadata?.occasion_tags),
+            ...listifyMaybeText(payload.metadata?.cuisine),
+            ...listifyMaybeText(payload.metadata?.course_type),
           ]
             .map((value) => value.trim())
             .filter((value) => value.length > 0),
@@ -2211,9 +3386,10 @@ const processMetadataJobs = async (params: {
       const keywords = Array.from(
         new Set(
           [
-            ...listifyText(payload.metadata?.flavor_profile),
-            ...listifyText(payload.pairings),
-            ...listifyText(payload.metadata?.pairing_rationale),
+            ...listifyMaybeText(payload.metadata?.flavor_profile),
+            ...listifyMaybeText(payload.pairings),
+            ...listifyMaybeText(payload.metadata?.pairing_rationale),
+            ...listifyMaybeText(payload.metadata?.health_flags),
           ]
             .map((value) => value.trim())
             .filter((value) => value.length > 0),
@@ -2227,24 +3403,52 @@ const processMetadataJobs = async (params: {
         payload,
         canonicalRows,
         canonicalIngredientNameById,
+        recipeMetadataPatch: recipeEnrichment.metadataPatch,
+        ingredientRelations: ingredientRelationInference.relations,
       });
 
-      const { error: readyError } = await params.serviceClient
+      const readyMetadata = {
+        categories,
+        keywords,
+        nutrition: payload.metadata?.nutrition ?? null,
+        ingredient_resolution: ingredientResolution,
+        rejection_counts: {
+          ingredient_resolution: ingredientResolution.rejectedCount,
+          ingredient_enrichment: ingredientEnrichment.rejectedCount,
+          recipe_enrichment: recipeEnrichment.rejectedCount,
+          edge_inference: ingredientRelationInference.rejectedCount,
+        },
+        confidence_threshold: ENRICHMENT_PERSIST_CONFIDENCE,
+        processed_at: new Date().toISOString(),
+      };
+
+      let { error: readyError } = await params.serviceClient
         .from("recipe_metadata_jobs")
         .update({
           status: "ready",
+          stage: "finalize",
           locked_at: null,
           locked_by: null,
           last_error: null,
-          metadata: {
-            categories,
-            keywords,
-            nutrition: payload.metadata?.nutrition ?? null,
-            processed_at: new Date().toISOString(),
-          },
+          last_stage_error: null,
+          metadata: readyMetadata,
           updated_at: new Date().toISOString(),
         })
         .eq("id", job.id);
+
+      if (readyError && isSchemaMissingError(readyError)) {
+        ({ error: readyError } = await params.serviceClient
+          .from("recipe_metadata_jobs")
+          .update({
+            status: "ready",
+            locked_at: null,
+            locked_by: null,
+            last_error: null,
+            metadata: readyMetadata,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", job.id));
+      }
 
       if (readyError) {
         throw new Error(readyError.message);
@@ -2280,17 +3484,33 @@ const processMetadataJobs = async (params: {
       const nextAttemptAt = new Date(Date.now() + baseDelayMs + jitterMs)
         .toISOString();
 
-      const { error: failureUpdateError } = await params.serviceClient
+      let { error: failureUpdateError } = await params.serviceClient
         .from("recipe_metadata_jobs")
         .update({
           status: terminal ? "failed" : "pending",
+          stage: "queued",
           next_attempt_at: terminal ? now.toISOString() : nextAttemptAt,
           locked_at: null,
           locked_by: null,
           last_error: message,
+          last_stage_error: message,
           updated_at: new Date().toISOString(),
         })
         .eq("id", job.id);
+
+      if (failureUpdateError && isSchemaMissingError(failureUpdateError)) {
+        ({ error: failureUpdateError } = await params.serviceClient
+          .from("recipe_metadata_jobs")
+          .update({
+            status: terminal ? "failed" : "pending",
+            next_attempt_at: terminal ? now.toISOString() : nextAttemptAt,
+            locked_at: null,
+            locked_by: null,
+            last_error: message,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", job.id));
+      }
 
       if (failureUpdateError) {
         throw new ApiError(
@@ -2338,6 +3558,220 @@ const processMetadataJobs = async (params: {
   };
 
   return { reaped, claimed, processed, ready, failed, pending, queue };
+};
+
+const fetchGraphNeighborhood = async (params: {
+  client: SupabaseClient;
+  seedEntityIds: string[];
+  depth: number;
+  minConfidence: number;
+  relationTypeFilter: Set<string>;
+  entityTypeFilter: Set<string>;
+}): Promise<{
+  entities: Array<{
+    id: string;
+    entity_type: string;
+    label: string;
+    metadata: Record<string, JsonValue>;
+  }>;
+  edges: Array<{
+    id: string;
+    from_entity_id: string;
+    to_entity_id: string;
+    relation_type: string;
+    confidence: number;
+    source: string;
+    metadata: Record<string, JsonValue>;
+    evidence_count: number;
+    is_inferred: boolean;
+  }>;
+}> => {
+  const initial = Array.from(
+    new Set(params.seedEntityIds.filter((id) => id.length > 0)),
+  );
+  if (initial.length === 0) {
+    return { entities: [], edges: [] };
+  }
+
+  const maxDepth = Math.max(1, Math.min(2, Number(params.depth || 1)));
+  const visited = new Set(initial);
+  let frontier = initial;
+  type EdgeRow = {
+    id: string;
+    from_entity_id: string;
+    to_entity_id: string;
+    confidence: number;
+    source: string;
+    relation_type_id: string;
+    metadata: Record<string, JsonValue> | null;
+  };
+  const edgeById = new Map<string, EdgeRow>();
+
+  for (let level = 0; level < maxDepth; level += 1) {
+    if (frontier.length === 0) {
+      break;
+    }
+
+    const [
+      { data: edgesFrom, error: edgesFromError },
+      { data: edgesTo, error: edgesToError },
+    ] = await Promise.all([
+      params.client
+        .from("graph_edges")
+        .select(
+          "id,from_entity_id,to_entity_id,confidence,source,relation_type_id,metadata",
+        )
+        .in("from_entity_id", frontier),
+      params.client
+        .from("graph_edges")
+        .select(
+          "id,from_entity_id,to_entity_id,confidence,source,relation_type_id,metadata",
+        )
+        .in("to_entity_id", frontier),
+    ]);
+
+    if (edgesFromError || edgesToError) {
+      throw new ApiError(
+        500,
+        "graph_edges_fetch_failed",
+        "Could not fetch graph edges",
+        edgesFromError?.message ?? edgesToError?.message,
+      );
+    }
+
+    const nextFrontierSet = new Set<string>();
+    for (const edge of [...(edgesFrom ?? []), ...(edgesTo ?? [])]) {
+      const confidence = clampConfidence(edge.confidence, 0.5);
+      if (confidence < params.minConfidence) {
+        continue;
+      }
+      edgeById.set(edge.id, {
+        ...edge,
+        confidence,
+        metadata: edge.metadata && typeof edge.metadata === "object" &&
+            !Array.isArray(edge.metadata)
+          ? edge.metadata as Record<string, JsonValue>
+          : {},
+      });
+      if (!visited.has(edge.from_entity_id)) {
+        nextFrontierSet.add(edge.from_entity_id);
+      }
+      if (!visited.has(edge.to_entity_id)) {
+        nextFrontierSet.add(edge.to_entity_id);
+      }
+      visited.add(edge.from_entity_id);
+      visited.add(edge.to_entity_id);
+    }
+
+    frontier = Array.from(nextFrontierSet);
+  }
+
+  const visitedIds = Array.from(visited);
+  const { data: entities, error: entitiesError } = await params.client
+    .from("graph_entities")
+    .select("id,entity_type,label,metadata")
+    .in("id", visitedIds);
+  if (entitiesError) {
+    throw new ApiError(
+      500,
+      "graph_entities_fetch_failed",
+      "Could not fetch graph entities",
+      entitiesError.message,
+    );
+  }
+
+  const relationTypeIds = Array.from(
+    new Set(Array.from(edgeById.values()).map((edge) => edge.relation_type_id)),
+  );
+  const relationById = new Map<string, string>();
+  if (relationTypeIds.length > 0) {
+    const { data: relationTypes, error: relationTypesError } = await params
+      .client
+      .from("graph_relation_types")
+      .select("id,name")
+      .in("id", relationTypeIds);
+    if (relationTypesError) {
+      throw new ApiError(
+        500,
+        "graph_relation_types_fetch_failed",
+        "Could not fetch graph relation types",
+        relationTypesError.message,
+      );
+    }
+    for (const relationType of relationTypes ?? []) {
+      relationById.set(relationType.id, relationType.name);
+    }
+  }
+
+  const filteredEntities = (entities ?? []).filter((entity) =>
+    params.entityTypeFilter.size === 0 ||
+    params.entityTypeFilter.has(entity.entity_type.toLocaleLowerCase())
+  ).map((entity) => ({
+    id: entity.id,
+    entity_type: entity.entity_type,
+    label: entity.label,
+    metadata: entity.metadata && typeof entity.metadata === "object" &&
+        !Array.isArray(entity.metadata)
+      ? entity.metadata as Record<string, JsonValue>
+      : {},
+  }));
+  const filteredEntityIds = new Set(
+    filteredEntities.map((entity) => entity.id),
+  );
+
+  const responseEdgesBase = Array.from(edgeById.values())
+    .map((edge) => ({
+      id: edge.id,
+      from_entity_id: edge.from_entity_id,
+      to_entity_id: edge.to_entity_id,
+      relation_type: relationById.get(edge.relation_type_id) ?? "unknown",
+      confidence: edge.confidence,
+      source: edge.source,
+      metadata: edge.metadata ?? {},
+    }))
+    .filter((edge) =>
+      (params.relationTypeFilter.size === 0 ||
+        params.relationTypeFilter.has(
+          edge.relation_type.toLocaleLowerCase(),
+        )) &&
+      filteredEntityIds.has(edge.from_entity_id) &&
+      filteredEntityIds.has(edge.to_entity_id)
+    );
+
+  const edgeIds = responseEdgesBase.map((edge) => edge.id);
+  const evidenceCountByEdgeId = new Map<string, number>();
+  if (edgeIds.length > 0) {
+    const { data: evidenceRows, error: evidenceError } = await params.client
+      .from("graph_edge_evidence")
+      .select("graph_edge_id")
+      .in("graph_edge_id", edgeIds);
+    if (
+      evidenceError && !isSchemaMissingError(evidenceError) &&
+      !isRlsError(evidenceError)
+    ) {
+      throw new ApiError(
+        500,
+        "graph_edge_evidence_fetch_failed",
+        "Could not fetch graph edge evidence",
+        evidenceError.message,
+      );
+    }
+    for (const row of evidenceRows ?? []) {
+      const current = evidenceCountByEdgeId.get(row.graph_edge_id) ?? 0;
+      evidenceCountByEdgeId.set(row.graph_edge_id, current + 1);
+    }
+  }
+
+  const responseEdges = responseEdgesBase.map((edge) => ({
+    ...edge,
+    evidence_count: evidenceCountByEdgeId.get(edge.id) ?? 0,
+    is_inferred: edge.source.toLocaleLowerCase().includes("llm"),
+  }));
+
+  return {
+    entities: filteredEntities,
+    edges: responseEdges,
+  };
 };
 
 const fetchRecipeView = async (
@@ -2768,18 +4202,13 @@ const buildContextPack = async (params: {
   context: Record<string, JsonValue>;
   selectionMode?: "llm" | "fast";
 }): Promise<ContextPack> => {
-  const preferences = await getPreferences(params.userClient, params.userId);
+  const [preferences, memorySnapshot, memories] = await Promise.all([
+    getPreferences(params.userClient, params.userId),
+    getMemorySnapshot(params.userClient, params.userId),
+    getActiveMemories(params.userClient, params.userId, 120),
+  ]);
   const preferencesNaturalLanguage = buildNaturalLanguagePreferenceContext(
     preferences,
-  );
-  const memorySnapshot = await getMemorySnapshot(
-    params.userClient,
-    params.userId,
-  );
-  const memories = await getActiveMemories(
-    params.userClient,
-    params.userId,
-    120,
   );
 
   if (memories.length === 0) {
@@ -3588,15 +5017,16 @@ const normalizeChatIntent = (value: unknown): ChatIntent | null => {
 
 const getChatIntentFromResponse = (
   response: Awaited<ReturnType<typeof llmGateway.converseChat>>,
-): ChatIntent | null =>
-  normalizeChatIntent(response.response_context?.intent);
+): ChatIntent | null => normalizeChatIntent(response.response_context?.intent);
 
 const buildThreadForPrompt = (
   messages: ChatMessageView[],
   maxMessages = 6,
 ): Array<{ role: string; content: string }> => {
   const scoped = messages
-    .filter((message) => message.role === "user" || message.role === "assistant")
+    .filter((message) =>
+      message.role === "user" || message.role === "assistant"
+    )
     .slice(-maxMessages);
 
   return scoped.map((message) => ({
@@ -4169,11 +5599,12 @@ const orchestrateChatTurn = async (params: {
     params.existingCandidate,
   );
   const compactChatContext = buildCompactChatContext(params.sessionContext);
-  const activeComponent = params.existingCandidate?.components.find((component) =>
-    component.component_id === params.existingCandidate?.active_component_id
-  ) ??
-    params.existingCandidate?.components[0] ??
-    null;
+  const activeComponent =
+    params.existingCandidate?.components.find((component) =>
+      component.component_id === params.existingCandidate?.active_component_id
+    ) ??
+      params.existingCandidate?.components[0] ??
+      null;
 
   let assistantChatResponse = await converseChatWithRetry({
     client: params.serviceClient,
@@ -4187,9 +5618,13 @@ const orchestrateChatTurn = async (params: {
         ? (activeComponent.recipe as unknown as JsonValue)
         : null,
       candidate_recipe_set_outline: candidateOutlineForPrompt,
-      loop_state: deriveLoopState(params.sessionContext, params.existingCandidate),
+      loop_state: deriveLoopState(
+        params.sessionContext,
+        params.existingCandidate,
+      ),
       preferences: params.contextPack.preferences,
-      preferences_natural_language: params.contextPack.preferencesNaturalLanguage,
+      preferences_natural_language:
+        params.contextPack.preferencesNaturalLanguage,
       memory_snapshot: params.contextPack.memorySnapshot,
       selected_memories: params.contextPack.selectedMemories,
     },
@@ -4310,8 +5745,9 @@ const orchestrateChatTurn = async (params: {
   const responseContext = assistantChatResponse.response_context
     ? {
       mode: assistantChatResponse.response_context.mode,
-      intent: normalizeChatIntent(assistantChatResponse.response_context.intent) ??
-        (nextCandidateSet ? "in_scope_generate" : "in_scope_ideation"),
+      intent:
+        normalizeChatIntent(assistantChatResponse.response_context.intent) ??
+          (nextCandidateSet ? "in_scope_generate" : "in_scope_ideation"),
       changed_sections: assistantChatResponse.response_context.changed_sections,
       personalization_notes: assistantChatResponse.response_context
         .personalization_notes,
@@ -4573,10 +6009,15 @@ const processImageJobs = async (params: {
 
 Deno.serve(async (request) => {
   const requestId = crypto.randomUUID();
+  const requestStartedAt = Date.now();
   const respond = (status: number, body: unknown): Response => {
     const response = jsonResponse(status, body);
     response.headers.set("x-request-id", requestId);
     response.headers.set("x-alchemy-request-id", requestId);
+    response.headers.set(
+      "x-alchemy-server-ms",
+      String(Math.max(0, Date.now() - requestStartedAt)),
+    );
     return response;
   };
 
@@ -5145,26 +6586,144 @@ Deno.serve(async (request) => {
 
     if (
       segments.length === 2 && segments[0] === "metadata-jobs" &&
+      segments[1] === "recompute" && method === "POST"
+    ) {
+      const body = await requireJsonBody<{
+        recipe_id?: string;
+        recipe_version_id?: string;
+      }>(request);
+
+      const recipeVersionIdInput = typeof body.recipe_version_id === "string" &&
+          body.recipe_version_id.length > 0
+        ? parseUuid(body.recipe_version_id)
+        : null;
+      const recipeIdInput = typeof body.recipe_id === "string" &&
+          body.recipe_id.length > 0
+        ? parseUuid(body.recipe_id)
+        : null;
+
+      let recipeId = recipeIdInput;
+      let recipeVersionId = recipeVersionIdInput;
+      if (!recipeVersionId) {
+        if (!recipeId) {
+          throw new ApiError(
+            400,
+            "metadata_recompute_missing_target",
+            "recipe_id or recipe_version_id is required",
+          );
+        }
+
+        const { data: recipe, error: recipeError } = await client
+          .from("recipes")
+          .select("id,current_version_id")
+          .eq("id", recipeId)
+          .maybeSingle();
+        if (recipeError || !recipe?.current_version_id) {
+          throw new ApiError(
+            404,
+            "metadata_recompute_recipe_not_found",
+            "Recipe version was not found for recompute",
+            recipeError?.message,
+          );
+        }
+        recipeVersionId = recipe.current_version_id;
+      }
+
+      if (!recipeId) {
+        const { data: version, error: versionError } = await client
+          .from("recipe_versions")
+          .select("recipe_id")
+          .eq("id", recipeVersionId)
+          .maybeSingle();
+        if (versionError || !version?.recipe_id) {
+          throw new ApiError(
+            404,
+            "metadata_recompute_version_not_found",
+            "Recipe version was not found",
+            versionError?.message,
+          );
+        }
+        recipeId = version.recipe_id;
+      }
+
+      if (!recipeId || !recipeVersionId) {
+        throw new ApiError(
+          400,
+          "metadata_recompute_missing_target",
+          "recipe_id and recipe_version_id are required",
+        );
+      }
+
+      await enqueueRecipeMetadataJob({
+        serviceClient,
+        recipeId: recipeId,
+        recipeVersionId: recipeVersionId,
+      });
+
+      await logChangelog({
+        serviceClient,
+        actorUserId: auth.userId,
+        scope: "metadata",
+        entityType: "metadata_job",
+        entityId: recipeVersionId,
+        action: "manual_recompute",
+        requestId,
+        afterJson: {
+          recipe_id: recipeId,
+          recipe_version_id: recipeVersionId,
+        },
+      });
+
+      return respond(200, {
+        ok: true,
+        recipe_id: recipeId,
+        recipe_version_id: recipeVersionId,
+      });
+    }
+
+    if (
+      segments.length === 2 && segments[0] === "metadata-jobs" &&
       segments[1] === "retry" && method === "POST"
     ) {
       const body = await requireJsonBody<{ job_id?: string }>(request);
       const jobId = parseUuid(body.job_id ?? "");
 
-      const { data: retried, error: retryError } = await serviceClient
+      let { data: retried, error: retryError } = await serviceClient
         .from("recipe_metadata_jobs")
         .update({
           status: "pending",
+          stage: "queued",
           attempts: 0,
           next_attempt_at: new Date().toISOString(),
           locked_at: null,
           locked_by: null,
           last_error: null,
+          last_stage_error: null,
+          current_run_id: null,
           updated_at: new Date().toISOString(),
         })
         .eq("id", jobId)
         .in("status", ["pending", "processing", "failed"])
         .select("id,status,attempts,next_attempt_at")
         .maybeSingle();
+
+      if (retryError && isSchemaMissingError(retryError)) {
+        ({ data: retried, error: retryError } = await serviceClient
+          .from("recipe_metadata_jobs")
+          .update({
+            status: "pending",
+            attempts: 0,
+            next_attempt_at: new Date().toISOString(),
+            locked_at: null,
+            locked_by: null,
+            last_error: null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", jobId)
+          .in("status", ["pending", "processing", "failed"])
+          .select("id,status,attempts,next_attempt_at")
+          .maybeSingle());
+      }
 
       if (retryError) {
         throw new ApiError(
@@ -5862,6 +7421,23 @@ Deno.serve(async (request) => {
       segments[2] === "graph" && method === "GET"
     ) {
       const recipeId = parseUuid(segments[1]);
+      const minConfidence = Math.max(
+        0,
+        Math.min(
+          1,
+          Number(url.searchParams.get("min_confidence") ?? "0") || 0,
+        ),
+      );
+      const depth = Math.max(
+        1,
+        Math.min(2, Number(url.searchParams.get("depth") ?? "1") || 1),
+      );
+      const relationTypeFilter = new Set(
+        parseCsvParam(url.searchParams.get("relation_types")),
+      );
+      const entityTypeFilter = new Set(
+        parseCsvParam(url.searchParams.get("entity_types")),
+      );
 
       const { data: recipe, error: recipeError } = await client
         .from("recipes")
@@ -5897,96 +7473,77 @@ Deno.serve(async (request) => {
         return respond(200, { entities: [], edges: [] });
       }
 
-      const { data: entities, error: entitiesError } = await client
-        .from("graph_entities")
-        .select("id,entity_type,label,metadata")
-        .in("id", entityIds);
-
-      if (entitiesError) {
-        throw new ApiError(
-          500,
-          "graph_entities_fetch_failed",
-          "Could not fetch graph entities",
-          entitiesError.message,
-        );
-      }
-
-      const [
-        { data: edgesFrom, error: edgesFromError },
-        { data: edgesTo, error: edgesToError },
-      ] = await Promise.all([
-        client
-          .from("graph_edges")
-          .select(
-            "id,from_entity_id,to_entity_id,confidence,source,relation_type_id",
-          )
-          .in("from_entity_id", entityIds),
-        client
-          .from("graph_edges")
-          .select(
-            "id,from_entity_id,to_entity_id,confidence,source,relation_type_id",
-          )
-          .in("to_entity_id", entityIds),
-      ]);
-
-      if (edgesFromError || edgesToError) {
-        throw new ApiError(
-          500,
-          "graph_edges_fetch_failed",
-          "Could not fetch graph edges",
-          edgesFromError?.message ?? edgesToError?.message,
-        );
-      }
-
-      type EdgeRow = NonNullable<typeof edgesFrom>[number];
-      const edgeById = new Map<string, EdgeRow>();
-      for (const edge of edgesFrom ?? []) {
-        edgeById.set(edge.id, edge);
-      }
-      for (const edge of edgesTo ?? []) {
-        edgeById.set(edge.id, edge);
-      }
-      const edges = Array.from(edgeById.values());
-
-      const relationTypeIds = Array.from(
-        new Set((edges ?? []).map((edge) => edge.relation_type_id)),
-      );
-      let relationById = new Map<string, string>();
-      if (relationTypeIds.length > 0) {
-        const { data: relationTypes, error: relationTypesError } = await client
-          .from("graph_relation_types")
-          .select("id,name")
-          .in("id", relationTypeIds);
-
-        if (relationTypesError) {
-          throw new ApiError(
-            500,
-            "graph_relation_types_fetch_failed",
-            "Could not fetch graph relation types",
-            relationTypesError.message,
-          );
-        }
-
-        relationById = new Map(
-          (relationTypes ?? []).map((
-            relationType,
-          ) => [relationType.id, relationType.name]),
-        );
-      }
-
-      const responseEdges = (edges ?? []).map((edge) => ({
-        id: edge.id,
-        from_entity_id: edge.from_entity_id,
-        to_entity_id: edge.to_entity_id,
-        relation_type: relationById.get(edge.relation_type_id) ?? "unknown",
-        confidence: edge.confidence,
-        source: edge.source,
-      }));
-
-      return respond(200, {
-        entities: entities ?? [],
-        edges: responseEdges,
+      const graph = await fetchGraphNeighborhood({
+        client,
+        seedEntityIds: entityIds,
+        depth,
+        minConfidence,
+        relationTypeFilter,
+        entityTypeFilter,
       });
+
+      return respond(200, graph);
+    }
+
+    if (
+      segments.length === 3 && segments[0] === "ingredients" &&
+      segments[2] === "graph" && method === "GET"
+    ) {
+      const ingredientId = parseUuid(segments[1]);
+      const minConfidence = Math.max(
+        0,
+        Math.min(
+          1,
+          Number(url.searchParams.get("min_confidence") ?? "0") || 0,
+        ),
+      );
+      const depth = Math.max(
+        1,
+        Math.min(2, Number(url.searchParams.get("depth") ?? "1") || 1),
+      );
+      const relationTypeFilter = new Set(
+        parseCsvParam(url.searchParams.get("relation_types")),
+      );
+      const entityTypeFilter = new Set(
+        parseCsvParam(url.searchParams.get("entity_types")),
+      );
+
+      const { data: ingredient, error: ingredientError } = await client
+        .from("ingredients")
+        .select("id,canonical_name")
+        .eq("id", ingredientId)
+        .maybeSingle();
+
+      if (ingredientError || !ingredient) {
+        throw new ApiError(
+          404,
+          "ingredient_not_found",
+          "Ingredient graph source was not found",
+          ingredientError?.message,
+        );
+      }
+
+      const { data: entity, error: entityError } = await client
+        .from("graph_entities")
+        .select("id")
+        .eq("entity_type", "ingredient")
+        .ilike("label", ingredient.canonical_name)
+        .maybeSingle();
+
+      if (entityError || !entity?.id) {
+        return respond(200, { entities: [], edges: [] });
+      }
+
+      const graph = await fetchGraphNeighborhood({
+        client,
+        seedEntityIds: [entity.id],
+        depth,
+        minConfidence,
+        relationTypeFilter,
+        entityTypeFilter,
+      });
+
+      return respond(200, graph);
     }
 
     if (segments.length === 1 && segments[0] === "chat" && method === "POST") {
@@ -6039,7 +7596,7 @@ Deno.serve(async (request) => {
           role: "user",
           content: message,
         })
-        .select("id")
+        .select("id,created_at")
         .single();
 
       if (userMessageError || !userMessage) {
@@ -6051,7 +7608,14 @@ Deno.serve(async (request) => {
         );
       }
 
-      const threadMessages = await fetchChatMessages(client, chatSession.id);
+      const threadMessages: ChatMessageView[] = [
+        {
+          id: userMessage.id,
+          role: "user",
+          content: message,
+          created_at: userMessage.created_at,
+        },
+      ];
       const threadForPrompt = buildThreadForPrompt(threadMessages);
       const initialContext: ChatSessionContext = {
         preferences: contextPack.preferences,
@@ -6081,32 +7645,34 @@ Deno.serve(async (request) => {
         context: orchestrated.nextContext,
       });
 
-      const { error: assistantMessageError } = await client.from(
-        "chat_messages",
-      ).insert({
-        chat_id: chatSession.id,
-        role: "assistant",
-        content: JSON.stringify({
-          assistant_reply: orchestrated.assistantChatResponse.assistant_reply,
-          trigger_recipe: orchestrated.assistantChatResponse.trigger_recipe ??
-            Boolean(orchestrated.nextCandidateSet),
-          candidate_recipe_set: orchestrated.nextCandidateSet,
-          recipe: orchestrated.assistantChatResponse.recipe,
-          response_context: orchestrated.responseContext,
-        }),
-        metadata: {
-          format: "assistant_chat_envelope_v2",
-          loop_state: orchestrated.nextLoopState,
-          intent: orchestrated.responseContext?.intent ?? null,
-        },
-      });
+      const assistantEnvelope = {
+        assistant_reply: orchestrated.assistantChatResponse.assistant_reply,
+        trigger_recipe: orchestrated.assistantChatResponse.trigger_recipe ??
+          Boolean(orchestrated.nextCandidateSet),
+        candidate_recipe_set: orchestrated.nextCandidateSet,
+        recipe: orchestrated.assistantChatResponse.recipe,
+        response_context: orchestrated.responseContext,
+      };
+      const assistantMetadata: Record<string, JsonValue> = {
+        format: "assistant_chat_envelope_v2",
+        loop_state: orchestrated.nextLoopState,
+        intent: orchestrated.responseContext?.intent ?? null,
+      };
 
-      if (assistantMessageError) {
+      const { data: assistantMessage, error: assistantMessageError } =
+        await client.from("chat_messages").insert({
+          chat_id: chatSession.id,
+          role: "assistant",
+          content: JSON.stringify(assistantEnvelope),
+          metadata: assistantMetadata,
+        }).select("id,created_at").single();
+
+      if (assistantMessageError || !assistantMessage) {
         throw new ApiError(
           500,
           "chat_assistant_message_failed",
           "Could not store assistant chat message",
-          assistantMessageError.message,
+          assistantMessageError?.message ?? "assistant_message_insert_missing",
         );
       }
 
@@ -6122,8 +7688,8 @@ Deno.serve(async (request) => {
         thread_size: threadMessages.length,
       };
       if (orchestrated.nextCandidateSet) {
-        interactionContext.candidate_recipe_set =
-          orchestrated.nextCandidateSet as unknown as JsonValue;
+        interactionContext.candidate_recipe_set = orchestrated
+          .nextCandidateSet as unknown as JsonValue;
       } else if (orchestrated.assistantChatResponse.recipe) {
         interactionContext.assistant_recipe = orchestrated.assistantChatResponse
           .recipe as unknown as JsonValue;
@@ -6137,7 +7703,16 @@ Deno.serve(async (request) => {
         interactionContext,
       });
 
-      const messages = await fetchChatMessages(client, chatSession.id);
+      const messages: ChatMessageView[] = [
+        ...threadMessages,
+        {
+          id: assistantMessage.id,
+          role: "assistant",
+          content: JSON.stringify(assistantEnvelope),
+          metadata: assistantMetadata,
+          created_at: assistantMessage.created_at,
+        },
+      ];
 
       await logChangelog({
         serviceClient,
@@ -6277,7 +7852,7 @@ Deno.serve(async (request) => {
           role: "user",
           content: message,
         })
-        .select("id")
+        .select("id,created_at")
         .single();
 
       if (userMessageError || !userMessage) {
@@ -6310,32 +7885,33 @@ Deno.serve(async (request) => {
         context: orchestrated.nextContext,
       });
 
-      const { error: assistantMessageError } = await client.from(
-        "chat_messages",
-      ).insert({
-        chat_id: chatId,
-        role: "assistant",
-        content: JSON.stringify({
-          assistant_reply: orchestrated.assistantChatResponse.assistant_reply,
-          trigger_recipe: orchestrated.assistantChatResponse.trigger_recipe ??
-            Boolean(orchestrated.nextCandidateSet),
-          candidate_recipe_set: orchestrated.nextCandidateSet,
-          recipe: orchestrated.assistantChatResponse.recipe,
-          response_context: orchestrated.responseContext,
-        }),
-        metadata: {
-          format: "assistant_chat_envelope_v2",
-          loop_state: orchestrated.nextLoopState,
-          intent: orchestrated.responseContext?.intent ?? null,
-        },
-      });
+      const assistantEnvelope = {
+        assistant_reply: orchestrated.assistantChatResponse.assistant_reply,
+        trigger_recipe: orchestrated.assistantChatResponse.trigger_recipe ??
+          Boolean(orchestrated.nextCandidateSet),
+        candidate_recipe_set: orchestrated.nextCandidateSet,
+        recipe: orchestrated.assistantChatResponse.recipe,
+        response_context: orchestrated.responseContext,
+      };
+      const assistantMetadata: Record<string, JsonValue> = {
+        format: "assistant_chat_envelope_v2",
+        loop_state: orchestrated.nextLoopState,
+        intent: orchestrated.responseContext?.intent ?? null,
+      };
+      const { data: assistantMessage, error: assistantMessageError } =
+        await client.from("chat_messages").insert({
+          chat_id: chatId,
+          role: "assistant",
+          content: JSON.stringify(assistantEnvelope),
+          metadata: assistantMetadata,
+        }).select("id,created_at").single();
 
-      if (assistantMessageError) {
+      if (assistantMessageError || !assistantMessage) {
         throw new ApiError(
           500,
           "chat_assistant_message_failed",
           "Could not store assistant chat message",
-          assistantMessageError.message,
+          assistantMessageError?.message ?? "assistant_message_insert_missing",
         );
       }
 
@@ -6351,8 +7927,8 @@ Deno.serve(async (request) => {
           {}) as unknown as JsonValue,
       };
       if (orchestrated.nextCandidateSet) {
-        interactionContext.candidate_recipe_set =
-          orchestrated.nextCandidateSet as unknown as JsonValue;
+        interactionContext.candidate_recipe_set = orchestrated
+          .nextCandidateSet as unknown as JsonValue;
       } else if (orchestrated.assistantChatResponse.recipe) {
         interactionContext.assistant_recipe = orchestrated.assistantChatResponse
           .recipe as unknown as JsonValue;
@@ -6366,7 +7942,16 @@ Deno.serve(async (request) => {
         interactionContext,
       });
 
-      const messages = await fetchChatMessages(client, chatId);
+      const messages: ChatMessageView[] = [
+        ...threadMessages,
+        {
+          id: assistantMessage.id,
+          role: "assistant",
+          content: JSON.stringify(assistantEnvelope),
+          metadata: assistantMetadata,
+          created_at: assistantMessage.created_at,
+        },
+      ];
 
       return respond(
         200,
@@ -6784,6 +8369,10 @@ Deno.serve(async (request) => {
     const response = errorResponse(requestId, error);
     response.headers.set("x-request-id", requestId);
     response.headers.set("x-alchemy-request-id", requestId);
+    response.headers.set(
+      "x-alchemy-server-ms",
+      String(Math.max(0, Date.now() - requestStartedAt)),
+    );
     return response;
   }
 });

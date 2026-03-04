@@ -133,26 +133,77 @@ struct RecipeSubstitution: Codable {
     var note: String?
 }
 
+struct RecipeFlavorAxes: Codable {
+    var sweet: Double?
+    var salty: Double?
+    var sour: Double?
+    var bitter: Double?
+    var umami: Double?
+    var fatty: Double?
+}
+
+struct RecipeStorageReheatProfile: Codable {
+    var storage: [String]?
+    var reheat: [String]?
+}
+
+struct RecipePracticalMetadata: Codable {
+    var costTier: String?
+    var mealPrepFriendly: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case costTier = "cost_tier"
+        case mealPrepFriendly = "meal_prep_friendly"
+    }
+}
+
 struct RecipeMetadata: Codable {
+    var metadataSchemaVersion: Int?
     var vibe: String?
     var flavorProfile: [String]?
+    var flavorAxes: RecipeFlavorAxes?
+    var spiceLevel: String?
     var nutrition: RecipeNutrition?
     var difficulty: String?
+    var skillLevel: String?
+    var complexityScore: Double?
     var allergens: [String]?
+    var allergenFlags: [String]?
+    var dietTags: [String]?
+    var healthFlags: [String]?
     var substitutions: [RecipeSubstitution]?
     var timing: RecipeTiming?
     var cuisineTags: [String]?
     var occasionTags: [String]?
+    var cuisine: [String]?
+    var courseType: String?
+    var seasonality: [String]?
+    var techniques: [String]?
+    var equipment: [String]?
     var pairingRationale: [String]?
     var servingNotes: [String]?
+    var storageReheatProfile: RecipeStorageReheatProfile?
+    var practical: RecipePracticalMetadata?
 
     enum CodingKeys: String, CodingKey {
-        case vibe, nutrition, difficulty, allergens, substitutions, timing
+        case vibe, nutrition, difficulty, allergens, substitutions, timing, cuisine, equipment, practical
+        case metadataSchemaVersion = "metadata_schema_version"
         case flavorProfile = "flavor_profile"
+        case flavorAxes = "flavor_axes"
+        case spiceLevel = "spice_level"
+        case skillLevel = "skill_level"
+        case complexityScore = "complexity_score"
+        case allergenFlags = "allergen_flags"
+        case dietTags = "diet_tags"
+        case healthFlags = "health_flags"
         case cuisineTags = "cuisine_tags"
         case occasionTags = "occasion_tags"
+        case courseType = "course_type"
+        case seasonality
+        case techniques
         case pairingRationale = "pairing_rationale"
         case servingNotes = "serving_notes"
+        case storageReheatProfile = "storage_reheat_profile"
     }
 }
 
@@ -349,12 +400,34 @@ struct ChatUiHints: Codable {
     }
 }
 
+enum ChatResponseIntent: String, Codable {
+    case inScopeIdeation = "in_scope_ideation"
+    case inScopeGenerate = "in_scope_generate"
+    case outOfScope = "out_of_scope"
+}
+
+struct ChatResponseContext: Codable {
+    var mode: String?
+    var intent: ChatResponseIntent?
+    var changedSections: [String]?
+    var personalizationNotes: [String]?
+    var preferenceUpdates: [String: JSONValue]?
+
+    enum CodingKeys: String, CodingKey {
+        case mode, intent
+        case changedSections = "changed_sections"
+        case personalizationNotes = "personalization_notes"
+        case preferenceUpdates = "preference_updates"
+    }
+}
+
 struct ChatSession: Codable, Identifiable {
     let id: String
     var messages: [ChatMessageItem]
     var loopState: ChatLoopState
     var assistantReply: AssistantReply?
     var candidateRecipeSet: CandidateRecipeSet?
+    var responseContext: ChatResponseContext?
     var memoryContextIds: [String]
     var contextVersion: Int
     var uiHints: ChatUiHints?
@@ -366,6 +439,7 @@ struct ChatSession: Codable, Identifiable {
         case loopState = "loop_state"
         case assistantReply = "assistant_reply"
         case candidateRecipeSet = "candidate_recipe_set"
+        case responseContext = "response_context"
         case memoryContextIds = "memory_context_ids"
         case contextVersion = "context_version"
         case uiHints = "ui_hints"
@@ -456,6 +530,7 @@ struct CommitChatRecipesResponse: Codable {
     var loopState: ChatLoopState
     var assistantReply: AssistantReply?
     var candidateRecipeSet: CandidateRecipeSet?
+    var responseContext: ChatResponseContext?
     var memoryContextIds: [String]
     var contextVersion: Int
     var uiHints: ChatUiHints?
@@ -468,6 +543,7 @@ struct CommitChatRecipesResponse: Codable {
         case loopState = "loop_state"
         case assistantReply = "assistant_reply"
         case candidateRecipeSet = "candidate_recipe_set"
+        case responseContext = "response_context"
         case memoryContextIds = "memory_context_ids"
         case contextVersion = "context_version"
         case uiHints = "ui_hints"
@@ -482,6 +558,7 @@ struct CommitChatRecipesResponse: Codable {
             loopState: loopState,
             assistantReply: assistantReply,
             candidateRecipeSet: candidateRecipeSet,
+            responseContext: responseContext,
             memoryContextIds: memoryContextIds,
             contextVersion: contextVersion,
             uiHints: uiHints,

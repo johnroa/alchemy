@@ -45,6 +45,18 @@ struct GenerateView: View {
         keyboard.isVisible ? 8 : (Sizing.tabBarHeight + 38)
     }
 
+    private var chatPanelTopInset: CGFloat {
+        Spacing.xl + Spacing.xs
+    }
+
+    private var chatPanelBottomBleed: CGFloat {
+        keyboard.isVisible ? 18 : (Sizing.tabBarHeight + 88)
+    }
+
+    private var userBubbleMaxWidth: CGFloat {
+        UIScreen.main.bounds.width * 0.8
+    }
+
     var body: some View {
         NavigationStack {
             ZStack {
@@ -65,8 +77,10 @@ struct GenerateView: View {
 
                 if showsChatPanel {
                     chatPanel
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                         .padding(.horizontal, Spacing.xs)
-                        .padding(.top, Spacing.lg2)
+                        .padding(.top, chatPanelTopInset)
+                        .padding(.bottom, -chatPanelBottomBleed)
                         .ignoresSafeArea(.container, edges: .bottom)
                         .zIndex(5)
                 }
@@ -467,6 +481,7 @@ struct GenerateView: View {
                         .foregroundStyle(AlchemyColors.textPrimary)
                         .padding(.horizontal, Spacing.md)
                         .padding(.vertical, Spacing.sm2)
+                        .frame(maxWidth: userBubbleMaxWidth, alignment: .leading)
                         .chatLiquidSurface(
                             role: .userBubble,
                             focused: false,
@@ -522,32 +537,34 @@ struct GenerateView: View {
         HStack(spacing: Spacing.sm) {
             LottieView(animation: .named("alchemy-loading"))
                 .playbackMode(.playing(.toProgress(1, loopMode: .loop)))
-                .frame(width: 26, height: 26)
+                .frame(width: 34, height: 34)
             Text(vm.typingDescriptor)
-                .font(AlchemyFont.captionLight)
-                .foregroundStyle(AlchemyColors.textSecondary)
+                .font(AlchemyFont.chatBody)
+                .foregroundStyle(AlchemyColors.textPrimary.opacity(0.98))
+                .shadow(color: Color.black.opacity(0.32), radius: 2, x: 0, y: 1)
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, Spacing.md)
-        .padding(.vertical, Spacing.sm)
-        .chatLiquidSurface(role: .shell, focused: false, cornerRadius: Radius.lg)
+        .padding(.horizontal, Spacing.lg)
+        .padding(.vertical, Spacing.xs)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var iteratingShell: some View {
         HStack(spacing: Spacing.sm) {
             LottieView(animation: .named("alchemy-loading"))
                 .playbackMode(.playing(.toProgress(1, loopMode: .loop)))
-                .frame(width: 24, height: 24)
+                .frame(width: 30, height: 30)
 
             Text("Updating recipe…")
-                .font(AlchemyFont.captionLight)
-                .foregroundStyle(AlchemyColors.textSecondary)
+                .font(AlchemyFont.chatBody)
+                .foregroundStyle(AlchemyColors.textPrimary.opacity(0.98))
+                .shadow(color: Color.black.opacity(0.32), radius: 2, x: 0, y: 1)
 
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, Spacing.md)
-        .padding(.vertical, Spacing.sm)
-        .chatLiquidSurface(role: .shell, focused: false, cornerRadius: Radius.lg)
+        .padding(.horizontal, Spacing.lg)
+        .padding(.vertical, Spacing.xs)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: - Composer

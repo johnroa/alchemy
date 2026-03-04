@@ -35,6 +35,42 @@ type IngredientAliasNormalization = {
   confidence: number;
 };
 
+type IngredientPhraseSplit = {
+  source_name: string;
+  items: Array<{
+    name: string;
+    confidence: number;
+  }>;
+};
+
+type OntologySuggestion = {
+  term_type: string;
+  term_key: string;
+  label: string;
+  relation_type: string;
+  confidence: number;
+};
+
+type IngredientSemanticEnrichment = {
+  canonical_name: string;
+  confidence: number;
+  metadata: Record<string, JsonValue>;
+  ontology_terms: OntologySuggestion[];
+};
+
+type RecipeSemanticEnrichment = {
+  confidence: number;
+  metadata: Record<string, JsonValue>;
+};
+
+type IngredientSemanticRelation = {
+  from_canonical_name: string;
+  to_canonical_name: string;
+  relation_type: string;
+  confidence: number;
+  rationale?: string;
+};
+
 type MemoryCandidate = {
   memory_type: string;
   memory_kind?: string;
@@ -90,71 +126,20 @@ const defaultChatPromptForScope = (
   scope: ChatConversationScope,
 ): string => {
   if (scope === "chat_generation") {
-    return `You are Alchemy. Generate candidate recipe tabs from chat context.
-Return ONLY strict JSON with keys:
-- assistant_reply
-- candidate_recipe_set
-- response_context
-Rules:
-- Max 3 components.
-- If the user did not explicitly request multiple dishes, return exactly 1 component (role "main").
-- Keep each recipe concise and practical (typically 5-7 ingredients, 3-4 steps).
-- Omit optional verbose fields (attachments, long notes, extended metadata) unless explicitly requested.
-- Keep assistant_reply.text concise (<= 20 words).
-- response_context.intent MUST be "in_scope_generate".
-- candidate_recipe_set is REQUIRED and must include:
-  - candidate_id (string)
-  - revision (integer >= 1)
-  - active_component_id (must match a component_id)
-  - components[] where each component has:
-    - component_id (string)
-    - role (main|side|appetizer|dessert|drink)
-    - title (string)
-    - recipe object with REQUIRED keys:
-      - title (string)
-      - servings (number >= 1)
-      - ingredients[] of {name, amount, unit}
-      - steps[] of {index, instruction}
-- Output JSON only.`;
+    return `You are Alchemy. Generate candidate recipes from conversation context.
+Return one strict JSON object that matches the provided contract.
+Do not use markdown or code fences.`;
   }
 
   if (scope === "chat_iteration") {
-    return `You are Alchemy. Update existing candidate recipe tabs based on the latest user tweak.
-Return ONLY strict JSON with keys:
-- assistant_reply
-- candidate_recipe_set
-- response_context
-Rules:
-- Return full updated candidate_recipe_set, not a patch.
-- Preserve component count unless user explicitly asks to add/remove dishes.
-- Max 3 components.
-- Keep each recipe concise and practical (typically 5-7 ingredients, 3-4 steps).
-- Omit optional verbose fields (attachments, long notes, extended metadata) unless explicitly requested.
-- Keep assistant_reply.text concise (<= 20 words).
-- response_context.intent MUST be "in_scope_generate".
-- candidate_recipe_set is REQUIRED and must include valid components with full recipe payloads.
-- Do not return ideation output or trigger-only output.
-- Output JSON only.`;
+    return `You are Alchemy. Update existing candidate recipes from the latest conversation turn.
+Return one strict JSON object that matches the provided contract.
+Do not use markdown or code fences.`;
   }
 
-  return `You are Alchemy, a concise cooking copilot in ideation mode.
-Return ONLY strict JSON with keys:
-- assistant_reply
-- trigger_recipe (boolean)
-- response_context
-Rules:
-- assistant_reply.text must be concise (<= 22 words).
-- Ask at most one short follow-up question.
-- Set trigger_recipe=true only when user clearly asks to generate now or commits to a specific dish.
-- If intent is broad or exploratory, keep trigger_recipe=false.
-- response_context.intent is REQUIRED and must be one of:
-  - "in_scope_ideation"
-  - "in_scope_generate"
-  - "out_of_scope"
-- For out-of-scope asks (non-cooking requests), set response_context.intent="out_of_scope", set trigger_recipe=false, and reply with one concise refusal plus a cooking redirect.
-- If trigger_recipe=true, set response_context.intent="in_scope_generate".
-- If response_context.intent is "in_scope_ideation", trigger_recipe must be false.
-- Output JSON only.`;
+  return `You are Alchemy in cooking ideation mode.
+Return one strict JSON object that matches the provided contract.
+Do not use markdown or code fences.`;
 };
 
 const defaultChatRuleForScope = (
@@ -164,8 +149,6 @@ const defaultChatRuleForScope = (
     return {
       response_contract: "chat_generation_v1",
       strict_json_only: true,
-      max_components: 3,
-      require_complete_recipes: true,
     };
   }
 
@@ -173,17 +156,12 @@ const defaultChatRuleForScope = (
     return {
       response_contract: "chat_iteration_v1",
       strict_json_only: true,
-      max_components: 3,
-      return_full_candidate_set: true,
     };
   }
 
   return {
     response_contract: "chat_ideation_v1",
     strict_json_only: true,
-    max_questions_per_turn: 1,
-    emit_preference_updates: true,
-    required_intents: ["in_scope_ideation", "in_scope_generate", "out_of_scope"],
   };
 };
 
@@ -778,6 +756,7 @@ const callProvider = async <T>(params: {
     const anthropicPayload = (await response.json()) as {
       content?: Array<{ type: string; text?: string }>;
       usage?: { input_tokens?: number; output_tokens?: number };
+      stop_reason?: string;
     };
     const anthropicText = anthropicPayload?.content?.find((c) =>
       c.type === "text"
@@ -798,6 +777,18 @@ const callProvider = async <T>(params: {
         inputTokens: anthropicPayload.usage?.input_tokens ?? 0,
         outputTokens: anthropicPayload.usage?.output_tokens ?? 0,
       };
+    }
+
+    const stopReason = typeof anthropicPayload.stop_reason === "string"
+      ? anthropicPayload.stop_reason
+      : "";
+    if (stopReason === "max_tokens") {
+      throw new ApiError(
+        502,
+        "llm_json_truncated",
+        "Anthropic output was truncated before JSON completed",
+        truncateErrorDetailText(anthropicText),
+      );
     }
 
     throw new ApiError(
@@ -823,11 +814,11 @@ const callProvider = async <T>(params: {
     : "responses";
   const endpoint = apiMode === "chat_completions"
     ? ((typeof modelConfig.chat_completions_endpoint === "string" &&
-          modelConfig.chat_completions_endpoint) ||
+      modelConfig.chat_completions_endpoint) ||
       Deno.env.get("OPENAI_CHAT_COMPLETIONS_ENDPOINT") ||
       "https://api.openai.com/v1/chat/completions")
     : ((typeof modelConfig.endpoint === "string" &&
-          modelConfig.endpoint) ||
+      modelConfig.endpoint) ||
       Deno.env.get("OPENAI_RESPONSES_ENDPOINT") ||
       "https://api.openai.com/v1/responses");
   const apiKeyEnv = (typeof modelConfig.api_key_env === "string" &&
@@ -878,7 +869,9 @@ const callProvider = async <T>(params: {
     requestConfig.reasoning = reasoning;
   }
 
-  const openAiRequestBody = (config: Record<string, JsonValue>): Record<string, JsonValue> =>
+  const openAiRequestBody = (
+    config: Record<string, JsonValue>,
+  ): Record<string, JsonValue> =>
     apiMode === "chat_completions"
       ? {
         model: params.model,
@@ -2119,18 +2112,18 @@ const normalizeChatEnvelope = (
   const deriveFallbackReply = (candidateRecipe: RecipePayload | null):
     | AssistantReply
     | null => {
-      if (!candidateRecipe) {
-        return null;
-      }
-      const textCandidate = [
-        candidateRecipe.notes,
-        candidateRecipe.description,
-        candidateRecipe.title,
-      ].find((value): value is string =>
-        typeof value === "string" && value.trim().length > 0
-      );
-      return textCandidate ? { text: textCandidate.trim() } : null;
-    };
+    if (!candidateRecipe) {
+      return null;
+    }
+    const textCandidate = [
+      candidateRecipe.notes,
+      candidateRecipe.description,
+      candidateRecipe.title,
+    ].find((value): value is string =>
+      typeof value === "string" && value.trim().length > 0
+    );
+    return textCandidate ? { text: textCandidate.trim() } : null;
+  };
 
   const derivedReply = deriveFallbackReply(recipe) ??
     deriveFallbackReply(candidateRecipeSet?.components?.[0]?.recipe ?? null);
@@ -2412,62 +2405,21 @@ const generateChatConversationPayload = async (
   const runtimeModelConfig: Record<string, JsonValue> = {
     ...config.modelConfig,
   };
-  const outputTokenCap = scope === "chat_ideation" ? 700 : 2_600;
-  const timeoutCapMs = scope === "chat_ideation" ? 18_000 : 18_000;
   const runtimeProvider = config.provider;
   const runtimeModel = config.model;
-
-  const configuredMaxTokens = Number(runtimeModelConfig.max_output_tokens);
-  if (
-    !Number.isFinite(configuredMaxTokens) || configuredMaxTokens < 1 ||
-    configuredMaxTokens > outputTokenCap
-  ) {
-    runtimeModelConfig.max_output_tokens = outputTokenCap;
-  }
   const configuredTimeoutMs = Number(runtimeModelConfig.timeout_ms);
-  if (
-    !Number.isFinite(configuredTimeoutMs) || configuredTimeoutMs < 5_000 ||
-    configuredTimeoutMs > timeoutCapMs
-  ) {
-    runtimeModelConfig.timeout_ms = timeoutCapMs;
+  if (!Number.isFinite(configuredTimeoutMs) || configuredTimeoutMs < 5_000) {
+    runtimeModelConfig.timeout_ms = 60_000;
   }
 
   if (!Number.isFinite(Number(runtimeModelConfig.temperature))) {
     runtimeModelConfig.temperature = scope === "chat_ideation" ? 0.3 : 0.35;
   }
 
-  const runtimeConstraints = scope === "chat_ideation"
-    ? `Runtime constraints:
-- Keep assistant_reply.text under 22 words.
-- Ask at most one concise question.
-- response_context.intent is REQUIRED and must be one of "in_scope_ideation", "in_scope_generate", or "out_of_scope".
-- For out-of-scope asks, set response_context.intent="out_of_scope" and trigger_recipe=false.`
-    : scope === "chat_generation"
-    ? `Runtime constraints:
-- Keep assistant_reply.text under 20 words.
-- If user did not explicitly request multiple dishes, return exactly one component with role "main".
-- Add additional components only when explicitly requested.
-- candidate_recipe_set is required in this response.
-- Keep each recipe concise and practical: usually 5-7 ingredients and 3-4 steps.
-- Omit optional verbose fields unless explicitly requested.
-- Do not emit markdown, code fences, commentary, or extra top-level fields.
-- Allowed top-level keys only: assistant_reply, candidate_recipe_set, response_context.
-- Allowed recipe fields: title, servings, ingredients[{name,amount,unit}], steps[{index,instruction}].
-- response_context.intent MUST be "in_scope_generate".`
-    : scope === "chat_iteration"
-    ? `Runtime constraints:
-- Keep assistant_reply.text under 20 words.
-- Preserve current component count unless user explicitly asks to add or remove components.
-- candidate_recipe_set is required in this response.
-- Keep each recipe concise and practical: usually 5-7 ingredients and 3-4 steps.
-- Omit optional verbose fields unless explicitly requested.
-- Do not emit markdown, code fences, commentary, or extra top-level fields.
-- Allowed top-level keys only: assistant_reply, candidate_recipe_set, response_context.
-- Allowed recipe fields: title, servings, ingredients[{name,amount,unit}], steps[{index,instruction}].
-- response_context.intent MUST be "in_scope_generate".`
-    : `Runtime constraints:
-- Keep assistant replies concise and practical.
-- Output strictly valid JSON.`;
+  const runtimeConstraints = `Runtime requirements:
+- Output one strict JSON object only.
+- Do not emit markdown or code fences.
+- Match the provided contract keys and schema.`;
 
   const runtimePromptTemplate = config.promptTemplate?.trim().length
     ? config.promptTemplate
@@ -2525,7 +2477,9 @@ const generateChatConversationPayload = async (
     rawResult = await executeCall(null, runtimeModelConfig);
   } catch (error) {
     const code = error instanceof ApiError ? error.code : "";
-    const canRetry = code === "llm_invalid_json" || code === "llm_empty_output" ||
+    const canRetry = code === "llm_invalid_json" ||
+      code === "llm_json_truncated" ||
+      code === "llm_empty_output" ||
       code === "chat_schema_invalid";
     if (!canRetry) {
       throw error;
@@ -2536,17 +2490,28 @@ const generateChatConversationPayload = async (
       temperature: 0,
     };
     if (scope !== "chat_ideation") {
-      const retryOutputCap = Number(retryConfig.max_output_tokens);
-      if (!Number.isFinite(retryOutputCap) || retryOutputCap < 3_200) {
-        retryConfig.max_output_tokens = 3_200;
-      }
       const retryTimeout = Number(retryConfig.timeout_ms);
-      if (!Number.isFinite(retryTimeout) || retryTimeout < 25_000) {
-        retryConfig.timeout_ms = 25_000;
+      if (!Number.isFinite(retryTimeout) || retryTimeout < 5_000) {
+        retryConfig.timeout_ms = 60_000;
+      }
+      if (code === "llm_json_truncated") {
+        const currentTokenBudget = Number(
+          retryConfig.max_output_tokens ?? retryConfig.max_tokens,
+        );
+        const expandedTokenBudget = Number.isFinite(currentTokenBudget) &&
+            currentTokenBudget > 0
+          ? Math.min(Math.trunc(currentTokenBudget * 2), 12_000)
+          : 8_000;
+        retryConfig.max_output_tokens = expandedTokenBudget;
+        retryConfig.max_tokens = expandedTokenBudget;
+        retryConfig.timeout_ms = Math.max(
+          Number(retryConfig.timeout_ms) || 0,
+          90_000,
+        );
       }
     }
     rawResult = await executeCall(
-      "CRITICAL: Return one strict JSON object only. No markdown, no prose, no code fences, no extra keys.",
+      "CRITICAL: Return one strict JSON object only. No markdown, no prose, no code fences, no extra keys. Always close all braces/brackets.",
       retryConfig,
     );
   }
@@ -3042,7 +3007,9 @@ Requirements:
             const rawCanonical = (item as { canonical_name?: unknown })
               .canonical_name;
             const rawConfidence = (item as { confidence?: unknown }).confidence;
-            if (typeof rawAlias !== "string" || typeof rawCanonical !== "string") {
+            if (
+              typeof rawAlias !== "string" || typeof rawCanonical !== "string"
+            ) {
               return null;
             }
 
@@ -3162,7 +3129,8 @@ Requirements:
         provider: config.provider,
         model: config.model,
         modelConfig: config.modelConfig,
-        systemPrompt: `Split ingredient phrases into atomic ingredients for normalization.
+        systemPrompt:
+          `Split ingredient phrases into atomic ingredients for normalization.
 Return ONLY JSON with key "items", where each item is:
 {
   "source_name": string,
@@ -3303,14 +3271,19 @@ Rules:
       return [];
     }
 
-    const dedupedByName = new Map<string, { canonical_name: string; ingredient_id?: string }>();
+    const dedupedByName = new Map<
+      string,
+      { canonical_name: string; ingredient_id?: string }
+    >();
     for (const item of cleaned) {
       const key = item.canonical_name.toLocaleLowerCase();
       if (dedupedByName.has(key)) continue;
       dedupedByName.set(key, item);
     }
     const deduped = Array.from(dedupedByName.values());
-    const allowed = new Set(deduped.map((item) => item.canonical_name.toLocaleLowerCase()));
+    const allowed = new Set(
+      deduped.map((item) => item.canonical_name.toLocaleLowerCase()),
+    );
 
     const startedAt = Date.now();
     const accum: TokenAccum = { input: 0, output: 0, costUsd: 0 };
@@ -3322,7 +3295,8 @@ Rules:
         provider: config.provider,
         model: config.model,
         modelConfig: config.modelConfig,
-        systemPrompt: `Enrich canonical ingredients with structured food metadata.
+        systemPrompt:
+          `Enrich canonical ingredients with structured food metadata.
 Return ONLY JSON object with key "items". Each item shape:
 {
   "canonical_name": string,
@@ -3348,16 +3322,23 @@ Rules:
       const rawItems = Array.isArray(result.items) ? result.items : [];
       const output = rawItems
         .map((rawItem) => {
-          if (!rawItem || typeof rawItem !== "object" || Array.isArray(rawItem)) {
+          if (
+            !rawItem || typeof rawItem !== "object" || Array.isArray(rawItem)
+          ) {
             return null;
           }
           const canonicalName = (rawItem as { canonical_name?: unknown })
             .canonical_name;
-          const confidenceRaw = (rawItem as { confidence?: unknown }).confidence;
+          const confidenceRaw =
+            (rawItem as { confidence?: unknown }).confidence;
           const metadataRaw = (rawItem as { metadata?: unknown }).metadata;
-          const ontologyRaw = (rawItem as { ontology_terms?: unknown }).ontology_terms;
+          const ontologyRaw =
+            (rawItem as { ontology_terms?: unknown }).ontology_terms;
 
-          if (typeof canonicalName !== "string" || canonicalName.trim().length === 0) {
+          if (
+            typeof canonicalName !== "string" ||
+            canonicalName.trim().length === 0
+          ) {
             return null;
           }
           const key = canonicalName.trim().toLocaleLowerCase();
@@ -3382,8 +3363,10 @@ Rules:
                 const termType = (term as { term_type?: unknown }).term_type;
                 const termKey = (term as { term_key?: unknown }).term_key;
                 const label = (term as { label?: unknown }).label;
-                const relationType = (term as { relation_type?: unknown }).relation_type;
-                const termConfidenceRaw = (term as { confidence?: unknown }).confidence;
+                const relationType =
+                  (term as { relation_type?: unknown }).relation_type;
+                const termConfidenceRaw =
+                  (term as { confidence?: unknown }).confidence;
                 if (
                   typeof termType !== "string" ||
                   typeof termKey !== "string" ||
@@ -3413,7 +3396,9 @@ Rules:
             ontology_terms: ontologyTerms,
           };
         })
-        .filter((entry): entry is IngredientSemanticEnrichment => entry !== null);
+        .filter((entry): entry is IngredientSemanticEnrichment =>
+          entry !== null
+        );
 
       await logLlmEvent(
         params.client,
@@ -3601,14 +3586,19 @@ Rules:
       const rawItems = Array.isArray(result.items) ? result.items : [];
       const output = rawItems
         .map((rawItem) => {
-          if (!rawItem || typeof rawItem !== "object" || Array.isArray(rawItem)) {
+          if (
+            !rawItem || typeof rawItem !== "object" || Array.isArray(rawItem)
+          ) {
             return null;
           }
           const from = (rawItem as { from_canonical_name?: unknown })
             .from_canonical_name;
-          const to = (rawItem as { to_canonical_name?: unknown }).to_canonical_name;
-          const relationType = (rawItem as { relation_type?: unknown }).relation_type;
-          const confidenceRaw = (rawItem as { confidence?: unknown }).confidence;
+          const to =
+            (rawItem as { to_canonical_name?: unknown }).to_canonical_name;
+          const relationType =
+            (rawItem as { relation_type?: unknown }).relation_type;
+          const confidenceRaw =
+            (rawItem as { confidence?: unknown }).confidence;
           const rationaleRaw = (rawItem as { rationale?: unknown }).rationale;
 
           if (
@@ -3641,9 +3631,10 @@ Rules:
             confidence: Number.isFinite(numeric)
               ? Math.max(0, Math.min(1, numeric))
               : 0.5,
-            rationale: typeof rationaleRaw === "string" && rationaleRaw.trim().length > 0
-              ? rationaleRaw.trim()
-              : undefined,
+            rationale:
+              typeof rationaleRaw === "string" && rationaleRaw.trim().length > 0
+                ? rationaleRaw.trim()
+                : undefined,
           };
         })
         .filter((entry): entry is IngredientSemanticRelation => entry !== null);

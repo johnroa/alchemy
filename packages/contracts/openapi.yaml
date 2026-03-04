@@ -600,6 +600,41 @@ paths:
                         format: date-time
         default:
           $ref: '#/components/responses/ErrorResponse'
+  /metadata-jobs/recompute:
+    post:
+      summary: Recompute metadata for a recipe or recipe version (internal authenticated scope)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                recipe_id:
+                  type: string
+                  format: uuid
+                recipe_version_id:
+                  type: string
+                  format: uuid
+      responses:
+        '200':
+          description: Recompute enqueue status
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, recipe_id, recipe_version_id]
+                properties:
+                  ok:
+                    type: boolean
+                  recipe_id:
+                    type: string
+                    format: uuid
+                  recipe_version_id:
+                    type: string
+                    format: uuid
+        default:
+          $ref: '#/components/responses/ErrorResponse'
   /memory-jobs/process:
     post:
       summary: Process due memory extraction jobs (internal authenticated scope)
@@ -1056,9 +1091,85 @@ paths:
       summary: Fetch graph entities and edges related to a recipe
       parameters:
         - $ref: '#/components/parameters/RecipeId'
+        - in: query
+          name: min_confidence
+          required: false
+          schema:
+            type: number
+            minimum: 0
+            maximum: 1
+        - in: query
+          name: relation_types
+          required: false
+          schema:
+            type: string
+          description: Comma-separated relation types filter
+        - in: query
+          name: entity_types
+          required: false
+          schema:
+            type: string
+          description: Comma-separated entity types filter
+        - in: query
+          name: depth
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 2
       responses:
         '200':
           description: Recipe graph
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [entities, edges]
+                properties:
+                  entities:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/GraphEntity'
+                  edges:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/GraphEdge'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /ingredients/{id}/graph:
+    get:
+      summary: Fetch graph entities and edges related to an ingredient
+      parameters:
+        - $ref: '#/components/parameters/IngredientId'
+        - in: query
+          name: min_confidence
+          required: false
+          schema:
+            type: number
+            minimum: 0
+            maximum: 1
+        - in: query
+          name: relation_types
+          required: false
+          schema:
+            type: string
+          description: Comma-separated relation types filter
+        - in: query
+          name: entity_types
+          required: false
+          schema:
+            type: string
+          description: Comma-separated entity types filter
+        - in: query
+          name: depth
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 2
+      responses:
+        '200':
+          description: Ingredient graph
           content:
             application/json:
               schema:
@@ -1083,6 +1194,13 @@ components:
       bearerFormat: JWT
   parameters:
     RecipeId:
+      in: path
+      name: id
+      required: true
+      schema:
+        type: string
+        format: uuid
+    IngredientId:
       in: path
       name: id
       required: true
@@ -1198,17 +1316,52 @@ components:
     RecipeMetadata:
       type: object
       properties:
+        metadata_schema_version:
+          type: integer
         vibe:
           type: string
         flavor_profile:
           type: array
           items:
             type: string
+        flavor_axes:
+          type: object
+          properties:
+            sweet:
+              type: number
+            salty:
+              type: number
+            sour:
+              type: number
+            bitter:
+              type: number
+            umami:
+              type: number
+            fatty:
+              type: number
+        spice_level:
+          type: string
         nutrition:
           $ref: '#/components/schemas/Nutrition'
         difficulty:
           type: string
+        skill_level:
+          type: string
+        complexity_score:
+          type: number
         allergens:
+          type: array
+          items:
+            type: string
+        allergen_flags:
+          type: array
+          items:
+            type: string
+        diet_tags:
+          type: array
+          items:
+            type: string
+        health_flags:
           type: array
           items:
             type: string
@@ -1240,6 +1393,24 @@ components:
           type: array
           items:
             type: string
+        cuisine:
+          type: array
+          items:
+            type: string
+        course_type:
+          type: string
+        seasonality:
+          type: array
+          items:
+            type: string
+        techniques:
+          type: array
+          items:
+            type: string
+        equipment:
+          type: array
+          items:
+            type: string
         pairing_rationale:
           type: array
           items:
@@ -1248,6 +1419,24 @@ components:
           type: array
           items:
             type: string
+        storage_reheat_profile:
+          type: object
+          properties:
+            storage:
+              type: array
+              items:
+                type: string
+            reheat:
+              type: array
+              items:
+                type: string
+        practical:
+          type: object
+          properties:
+            cost_tier:
+              type: string
+            meal_prep_friendly:
+              type: boolean
         additionalProperties:
           type: object
           additionalProperties: true
@@ -1922,7 +2111,7 @@ components:
           additionalProperties: true
     GraphEdge:
       type: object
-      required: [id, from_entity_id, to_entity_id, relation_type, confidence]
+      required: [id, from_entity_id, to_entity_id, relation_type, confidence, source]
       properties:
         id:
           type: string
@@ -1941,3 +2130,10 @@ components:
           maximum: 1
         source:
           type: string
+        metadata:
+          type: object
+          additionalProperties: true
+        evidence_count:
+          type: integer
+        is_inferred:
+          type: boolean

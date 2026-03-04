@@ -347,7 +347,7 @@ const getTokenUsageFromStep = (step: SimStep | undefined): TokenUsageSummary | n
 
 const getStepTimingFromStep = (
   step: SimStep | undefined
-): { llm_ms: number; api_ms: number; db_ms: number } | null => {
+): { llm_ms: number; api_ms: number; db_ms: number; server_ms: number } | null => {
   if (!step || !isRecord(step.result)) {
     return null;
   }
@@ -358,7 +358,8 @@ const getStepTimingFromStep = (
   return {
     llm_ms: Math.max(0, asNumber(timing["llm_ms"]) ?? 0),
     api_ms: Math.max(0, asNumber(timing["api_ms"]) ?? 0),
-    db_ms: Math.max(0, asNumber(timing["db_ms"]) ?? 0)
+    db_ms: Math.max(0, asNumber(timing["db_ms"]) ?? 0),
+    server_ms: Math.max(0, asNumber(timing["server_ms"]) ?? 0)
   };
 };
 
@@ -749,10 +750,10 @@ function StepList({ steps }: { steps: SimStep[] }): React.JSX.Element {
             <span className="flex-none font-mono text-muted-foreground">
               {hasLlmTokens ? `${tokenTotal.toLocaleString()} tok` : "— tok"}
             </span>
-            {timing && (timing.llm_ms > 0 || timing.api_ms > 0 || timing.db_ms > 0) && (
+            {timing && (timing.llm_ms > 0 || timing.api_ms > 0 || timing.db_ms > 0 || timing.server_ms > 0) && (
               <span className="flex-none font-mono text-[11px] text-muted-foreground">
-                llm {timing.llm_ms.toLocaleString()}ms · api {timing.api_ms.toLocaleString()}ms · db{" "}
-                {timing.db_ms.toLocaleString()}ms
+                llm {timing.llm_ms.toLocaleString()}ms · server {timing.server_ms.toLocaleString()}ms · api{" "}
+                {timing.api_ms.toLocaleString()}ms · db {timing.db_ms.toLocaleString()}ms
               </span>
             )}
             <span className="flex-none font-mono text-muted-foreground">

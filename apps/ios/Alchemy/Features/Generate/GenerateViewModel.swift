@@ -100,6 +100,14 @@ final class GenerateViewModel {
         chatSession?.loopState ?? .ideation
     }
 
+    var isOutOfScope: Bool {
+        chatSession?.responseContext?.intent == .outOfScope
+    }
+
+    var effectiveLoopState: ChatLoopState {
+        isOutOfScope ? .ideation : loopState
+    }
+
     var uiState: GenerateLoopUIState {
         switch presentationMode {
         case .ideationExpanded, .generationMinimized:
@@ -112,6 +120,10 @@ final class GenerateViewModel {
     }
 
     var presentationMode: GeneratePresentationMode {
+        if isOutOfScope {
+            return .ideationExpanded
+        }
+
         if isGenerationAnimationActive {
             return .generationMinimized
         }
@@ -120,7 +132,7 @@ final class GenerateViewModel {
             return .ideationExpanded
         }
 
-        if isSendingMessage || loopState == .iterating {
+        if isSendingMessage || effectiveLoopState == .iterating {
             return .iterating
         }
 
@@ -128,7 +140,8 @@ final class GenerateViewModel {
     }
 
     var candidateRecipeSet: CandidateRecipeSet? {
-        chatSession?.candidateRecipeSet
+        guard !isOutOfScope else { return nil }
+        return chatSession?.candidateRecipeSet
     }
 
     var hasCandidate: Bool {
@@ -170,7 +183,7 @@ final class GenerateViewModel {
     }
 
     var shouldShowGenerationAnimation: Bool {
-        hasCandidate && isSendingMessage && chatSession?.uiHints?.showGenerationAnimation == true
+        !isOutOfScope && hasCandidate && isSendingMessage && chatSession?.uiHints?.showGenerationAnimation == true
     }
 
     var typingDescriptor: String {
@@ -178,7 +191,7 @@ final class GenerateViewModel {
     }
 
     var shouldShowRecipeSkeleton: Bool {
-        !hasCandidate && (messages.contains(where: { $0.role == "user" }) || isSendingMessage)
+        !isOutOfScope && !hasCandidate && isSendingMessage
     }
 
     var lastUserMessage: String {
@@ -347,11 +360,18 @@ final class GenerateViewModel {
         chatSession = session
         optimisticActiveComponentId = nil
 
-        mergeServerMessages(session.messages)
+        mergeServerMessages(
+            session.messages,
+            assistantReplyFallback: session.assistantReply?.text
+        )
         seedWelcomeMessageIfNeeded()
 
         if let assistantText = session.assistantReply?.text.trimmingCharacters(in: .whitespacesAndNewlines), !assistantText.isEmpty {
-            let shouldAppend = messages.last?.role != "assistant" || messages.last?.content != assistantText
+            let lastAssistantContent = messages
+                .last(where: { $0.role == "assistant" })?
+                .content
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let shouldAppend = lastAssistantContent != assistantText
             if shouldAppend {
                 appendLocalMessage(role: "assistant", content: assistantText)
             }
@@ -359,6 +379,13 @@ final class GenerateViewModel {
     }
 
     private func mapMessage(_ item: ChatMessageItem) -> GenerateMessage {
+        let normalizedContent: String
+        if item.role == "assistant" {
+            normalizedContent = normalizeAssistantMessageContent(item.content)
+        } else {
+            normalizedContent = item.content
+        }
+
         let timestamp: Date
         if let createdAt = item.createdAt,
            let parsed = ISO8601DateFormatter().date(from: createdAt) {
@@ -370,7 +397,7 @@ final class GenerateViewModel {
         return GenerateMessage(
             id: item.id,
             role: item.role,
-            content: item.content,
+            content: normalizedContent,
             timestamp: timestamp
         )
     }
@@ -452,6 +479,13 @@ final class GenerateViewModel {
     }
 
     private func updateGenerationAnimationState(from session: ChatSession) {
+        if session.responseContext?.intent == .outOfScope {
+            isGenerationAnimationActive = false
+            generationAnimationTask?.cancel()
+            generationAnimationTask = nil
+            return
+        }
+
         guard
             session.loopState == .candidatePresented,
             let candidateSet = session.candidateRecipeSet
@@ -517,9 +551,27 @@ final class GenerateViewModel {
         return selected
     }
 
-    private func mergeServerMessages(_ serverMessages: [ChatMessageItem]) {
+    private func mergeServerMessages(
+        _ serverMessages: [ChatMessageItem],
+        assistantReplyFallback: String?
+    ) {
         guard !serverMessages.isEmpty else { return }
-        let mapped = serverMessages.map(mapMessage)
+        let mapped = serverMessages.map { item in
+            if item.role == "assistant" {
+                return mapMessage(
+                    ChatMessageItem(
+                        id: item.id,
+                        role: item.role,
+                        content: normalizeAssistantMessageContent(
+                            item.content,
+                            fallbackAssistantReplyText: assistantReplyFallback
+                        ),
+                        createdAt: item.createdAt
+                    )
+                )
+            }
+            return mapMessage(item)
+        }
         let welcome = messages.first(where: { $0.id == Self.welcomeMessageId })
         let serverHasEquivalentWelcome = mapped.contains {
             $0.role == "assistant"
@@ -533,6 +585,75 @@ final class GenerateViewModel {
         }
         merged.append(contentsOf: mapped)
         messages = merged
+    }
+
+    private func normalizeAssistantMessageContent(
+        _ content: String,
+        fallbackAssistantReplyText: String? = nil
+    ) -> String {
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return content }
+        guard trimmed.first == "{" || trimmed.first == "[" else { return content }
+
+        if let data = trimmed.data(using: .utf8),
+           let rawJSON = try? JSONSerialization.jsonObject(with: data),
+           let extracted = extractAssistantText(fromJSONValue: rawJSON)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+           !extracted.isEmpty {
+            return extracted
+        }
+
+        if let fallbackAssistantReplyText {
+            let fallback = fallbackAssistantReplyText.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !fallback.isEmpty { return fallback }
+        }
+
+        return content
+    }
+
+    private func extractAssistantText(fromJSONValue value: Any) -> String? {
+        if let object = value as? [String: Any] {
+            if let assistantReply = object["assistant_reply"] {
+                if let text = extractAssistantText(fromAssistantReplyPayload: assistantReply) {
+                    return text
+                }
+            }
+
+            if let text = object["text"] as? String,
+               !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return text
+            }
+
+            if let message = object["message"] as? String,
+               !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return message
+            }
+
+            for child in object.values {
+                if let extracted = extractAssistantText(fromJSONValue: child) {
+                    return extracted
+                }
+            }
+        }
+
+        if let array = value as? [Any] {
+            for child in array {
+                if let extracted = extractAssistantText(fromJSONValue: child) {
+                    return extracted
+                }
+            }
+        }
+
+        return nil
+    }
+
+    private func extractAssistantText(fromAssistantReplyPayload payload: Any) -> String? {
+        if let replyObject = payload as? [String: Any],
+           let text = replyObject["text"] as? String,
+           !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return text
+        }
+        return extractAssistantText(fromJSONValue: payload)
     }
 
     private func advanceTypingDescriptor() {

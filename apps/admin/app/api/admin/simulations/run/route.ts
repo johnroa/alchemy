@@ -103,6 +103,7 @@ type TokenUsageSummary = {
 type ApiCallResult<T> = {
   data: T;
   request_id: string | null;
+  server_ms: number | null;
 };
 
 type SimStep = {
@@ -310,7 +311,11 @@ const requestJson = async <T>(params: {
           payload,
           response.headers.get("x-alchemy-request-id"),
           response.headers.get("x-request-id")
-        )
+        ),
+        server_ms: (() => {
+          const raw = Number(response.headers.get("x-alchemy-server-ms"));
+          return Number.isFinite(raw) ? Math.max(0, Math.trunc(raw)) : null;
+        })()
       };
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
@@ -786,7 +791,7 @@ const runSimulation = async (params: {
         user_prompt: prompts.start,
         api_request_id: api.request_id,
         token_usage: tokenUsage,
-        timing: { api_ms: apiMs, db_ms: dbMs, llm_ms: llmMs },
+        timing: { api_ms: apiMs, db_ms: dbMs, llm_ms: llmMs, server_ms: api.server_ms },
         loop_state: response.loop_state ?? "unknown",
         assistant_reply: extractAssistantText(response),
         message_count: Array.isArray(response.messages) ? response.messages.length : 0,
@@ -813,7 +818,7 @@ const runSimulation = async (params: {
         user_prompt: prompts.refine,
         api_request_id: api.request_id,
         token_usage: tokenUsage,
-        timing: { api_ms: apiMs, db_ms: dbMs, llm_ms: llmMs },
+        timing: { api_ms: apiMs, db_ms: dbMs, llm_ms: llmMs, server_ms: api.server_ms },
         loop_state: response.loop_state ?? "unknown",
         assistant_reply: extractAssistantText(response),
         message_count: Array.isArray(response.messages) ? response.messages.length : 0,
@@ -852,7 +857,7 @@ const runSimulation = async (params: {
             scopes: [],
             scope_stats: {}
           },
-          timing: { api_ms: 0, db_ms: 0, llm_ms: 0 }
+          timing: { api_ms: 0, db_ms: 0, llm_ms: 0, server_ms: 0 }
         };
       }
 
@@ -900,7 +905,7 @@ const runSimulation = async (params: {
             generation_source: "chat_generation_trigger",
             api_request_id: api.request_id,
             token_usage: tokenUsage,
-            timing: { api_ms: apiMs, db_ms: dbMs, llm_ms: llmMs },
+            timing: { api_ms: apiMs, db_ms: dbMs, llm_ms: llmMs, server_ms: api.server_ms },
             loop_state: loopState,
             candidate_id: response.candidate_recipe_set?.candidate_id ?? "",
             revision: response.candidate_recipe_set?.revision ?? null,
@@ -945,7 +950,7 @@ const runSimulation = async (params: {
         tweak_prompt: prompts.iterate,
         api_request_id: api.request_id,
         token_usage: tokenUsage,
-        timing: { api_ms: apiMs, db_ms: dbMs, llm_ms: llmMs },
+        timing: { api_ms: apiMs, db_ms: dbMs, llm_ms: llmMs, server_ms: api.server_ms },
         loop_state: response.loop_state ?? "unknown",
         assistant_reply: extractAssistantText(response),
         message_count: Array.isArray(response.messages) ? response.messages.length : 0,
@@ -970,7 +975,7 @@ const runSimulation = async (params: {
           reason: "No active component id provided in candidate set",
           api_request_id: null,
           token_usage: null,
-          timing: { api_ms: 0, db_ms: 0, llm_ms: 0 }
+          timing: { api_ms: 0, db_ms: 0, llm_ms: 0, server_ms: 0 }
         };
       }
 
@@ -994,7 +999,7 @@ const runSimulation = async (params: {
       return {
         api_request_id: api.request_id,
         token_usage: tokenUsage,
-        timing: { api_ms: apiMs, db_ms: dbMs, llm_ms: llmMs },
+        timing: { api_ms: apiMs, db_ms: dbMs, llm_ms: llmMs, server_ms: api.server_ms },
         loop_state: response.loop_state ?? "unknown",
         active_component_id: response.candidate_recipe_set?.active_component_id ?? null,
         candidate_summary: summarizeComponents(response.candidate_recipe_set),
@@ -1023,7 +1028,7 @@ const runSimulation = async (params: {
       return {
         api_request_id: api.request_id,
         token_usage: tokenUsage,
-        timing: { api_ms: apiMs, db_ms: dbMs, llm_ms: llmMs },
+        timing: { api_ms: apiMs, db_ms: dbMs, llm_ms: llmMs, server_ms: api.server_ms },
         loop_state: response.loop_state ?? "unknown",
         committed_count: Number(response.commit?.committed_count ?? recipes.length),
         recipes: recipes.map((recipe) => ({
@@ -1061,7 +1066,7 @@ const runSimulation = async (params: {
       return {
         api_request_id: api.request_id,
         token_usage: tokenUsage,
-        timing: { api_ms: apiMs, db_ms: dbMs, llm_ms: llmMs },
+        timing: { api_ms: apiMs, db_ms: dbMs, llm_ms: llmMs, server_ms: api.server_ms },
         recipe_id: primaryRecipeId,
         title: recipe.title ?? "",
         ingredient_count: Array.isArray(recipe.ingredients) ? recipe.ingredients.length : 0,
@@ -1093,7 +1098,7 @@ const runSimulation = async (params: {
       return {
         api_request_id: api.request_id,
         token_usage: tokenUsage,
-        timing: { api_ms: apiMs, db_ms: dbMs, llm_ms: llmMs },
+        timing: { api_ms: apiMs, db_ms: dbMs, llm_ms: llmMs, server_ms: api.server_ms },
         item_count: items.length,
         contains_primary_recipe: containsCommitted
       };

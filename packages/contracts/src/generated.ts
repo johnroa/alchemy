@@ -920,6 +920,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/metadata-jobs/recompute": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Recompute metadata for a recipe or recipe version (internal authenticated scope) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** Format: uuid */
+                        recipe_id?: string;
+                        /** Format: uuid */
+                        recipe_version_id?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Recompute enqueue status */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            ok: boolean;
+                            /** Format: uuid */
+                            recipe_id: string;
+                            /** Format: uuid */
+                            recipe_version_id: string;
+                        };
+                    };
+                };
+                default: components["responses"]["ErrorResponse"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/memory-jobs/process": {
         parameters: {
             query?: never;
@@ -1366,7 +1418,14 @@ export interface paths {
         /** Fetch graph entities and edges related to a recipe */
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    min_confidence?: number;
+                    /** @description Comma-separated relation types filter */
+                    relation_types?: string;
+                    /** @description Comma-separated entity types filter */
+                    entity_types?: string;
+                    depth?: number;
+                };
                 header?: never;
                 path: {
                     id: components["parameters"]["RecipeId"];
@@ -1376,6 +1435,55 @@ export interface paths {
             requestBody?: never;
             responses: {
                 /** @description Recipe graph */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            entities: components["schemas"]["GraphEntity"][];
+                            edges: components["schemas"]["GraphEdge"][];
+                        };
+                    };
+                };
+                default: components["responses"]["ErrorResponse"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ingredients/{id}/graph": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Fetch graph entities and edges related to an ingredient */
+        get: {
+            parameters: {
+                query?: {
+                    min_confidence?: number;
+                    /** @description Comma-separated relation types filter */
+                    relation_types?: string;
+                    /** @description Comma-separated entity types filter */
+                    entity_types?: string;
+                    depth?: number;
+                };
+                header?: never;
+                path: {
+                    id: components["parameters"]["IngredientId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Ingredient graph */
                 200: {
                     headers: {
                         [name: string]: unknown;
@@ -1447,11 +1555,26 @@ export interface components {
             sodium_mg?: number;
         };
         RecipeMetadata: {
+            metadata_schema_version?: number;
             vibe?: string;
             flavor_profile?: string[];
+            flavor_axes?: {
+                sweet?: number;
+                salty?: number;
+                sour?: number;
+                bitter?: number;
+                umami?: number;
+                fatty?: number;
+            };
+            spice_level?: string;
             nutrition?: components["schemas"]["Nutrition"];
             difficulty?: string;
+            skill_level?: string;
+            complexity_score?: number;
             allergens?: string[];
+            allergen_flags?: string[];
+            diet_tags?: string[];
+            health_flags?: string[];
             substitutions?: {
                 from?: string;
                 to?: string;
@@ -1464,8 +1587,21 @@ export interface components {
             };
             cuisine_tags?: string[];
             occasion_tags?: string[];
+            cuisine?: string[];
+            course_type?: string;
+            seasonality?: string[];
+            techniques?: string[];
+            equipment?: string[];
             pairing_rationale?: string[];
             serving_notes?: string[];
+            storage_reheat_profile?: {
+                storage?: string[];
+                reheat?: string[];
+            };
+            practical?: {
+                cost_tier?: string;
+                meal_prep_friendly?: boolean;
+            };
             additionalProperties?: {
                 [key: string]: unknown;
             };
@@ -1818,7 +1954,12 @@ export interface components {
             to_entity_id: string;
             relation_type: string;
             confidence: number;
-            source?: string;
+            source: string;
+            metadata?: {
+                [key: string]: unknown;
+            };
+            evidence_count?: number;
+            is_inferred?: boolean;
         };
     };
     responses: {
@@ -1834,6 +1975,7 @@ export interface components {
     };
     parameters: {
         RecipeId: string;
+        IngredientId: string;
         /**
          * @description Optional JSON string used by Admin Simulation Runner to override model/provider per scope.
          *     Format: {"chat_ideation":{"provider":"anthropic","model":"claude-3-5-haiku-latest"}}.
