@@ -34,9 +34,42 @@ export type OnboardingAssistantEnvelope = {
   preference_updates?: Record<string, JsonValue>;
 };
 
-export type RecipeMetadata = {
+export type IngredientMetadataV2 = {
+  metadata_schema_version?: number;
+  food_group?: string;
+  ingredient_family?: string[];
+  functional_classes?: string[];
+  diet_compatibility?: string[];
+  allergen_profile?: string[];
+  flavor_notes?: string[];
+  aroma_notes?: string[];
+  heat_level?: string;
+  texture_effect?: string[];
+  processing_level?: string;
+  storage_sensitivity?: string[];
+  additive_classes?: string[];
+  ontology_ids?: {
+    internal_term_keys?: string[];
+    foodon?: string[];
+    langual?: string[];
+    wikidata?: string[];
+  };
+  [key: string]: JsonValue | undefined;
+};
+
+export type RecipeMetadataV2 = {
+  metadata_schema_version?: number;
   vibe?: string;
   flavor_profile?: string[];
+  flavor_axes?: {
+    sweet?: number;
+    salty?: number;
+    sour?: number;
+    bitter?: number;
+    umami?: number;
+    fatty?: number;
+  };
+  spice_level?: string;
   nutrition?: {
     calories?: number;
     protein_g?: number;
@@ -47,7 +80,12 @@ export type RecipeMetadata = {
     sodium_mg?: number;
   };
   difficulty?: string;
+  skill_level?: string;
+  complexity_score?: number;
   allergens?: string[];
+  allergen_flags?: string[];
+  diet_tags?: string[];
+  health_flags?: string[];
   substitutions?: Array<{
     from: string;
     to: string;
@@ -60,10 +98,25 @@ export type RecipeMetadata = {
   };
   cuisine_tags?: string[];
   occasion_tags?: string[];
+  cuisine?: string[];
+  course_type?: string;
+  seasonality?: string[];
+  techniques?: string[];
+  equipment?: string[];
   pairing_rationale?: string[];
   serving_notes?: string[];
+  storage_reheat_profile?: {
+    storage?: string[];
+    reheat?: string[];
+  };
+  practical?: {
+    cost_tier?: string;
+    meal_prep_friendly?: boolean;
+  };
   [key: string]: JsonValue | undefined;
 };
+
+export type RecipeMetadata = RecipeMetadataV2;
 
 export type RecipePayload = {
   title: string;
