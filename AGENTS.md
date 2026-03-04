@@ -17,17 +17,17 @@ packages/shared/      Shared utilities
 
 All commands run from repo root (`/Users/john/Projects/alchemy`). **Always deploy after making changes — never tell the user to run commands.**
 
-### One-time auth
-```bash
-supabase login
-npx wrangler login
-```
+### Deployment policy (required)
+- No local Supabase deploy path in this project.
+- Supabase schema/functions deploy through GitHub CI only: `.github/workflows/supabase-deploy.yml`.
+- Cloudflare deploys are direct (`wrangler`) from this repo.
+- Never run direct DB edits in production workflows.
+- Migrations must be append-only and sequential in `supabase/migrations/`.
+- LLM prompts/rules must be changed via API/Admin UI, never by direct DB edits.
 
-### Push Supabase (schema + edge function)
-```bash
-supabase db push --project-ref dwptbjcxrsmmgjmnumpg
-supabase functions deploy v1 --project-ref dwptbjcxrsmmgjmnumpg
-```
+### Supabase (GitHub CI only)
+- Push to `main` with changes under `supabase/migrations/**` and/or `supabase/functions/**`.
+- CI workflow handles `db push` and function deploy.
 
 ### Push Cloudflare API gateway (`api.cookwithalchemy.com`)
 ```bash
@@ -50,6 +50,8 @@ curl https://api.cookwithalchemy.com/v1/healthz
 - Minimal diffs. Do not touch unrelated code.
 - Do not add dependencies unless explicitly asked.
 - All LLM calls go through `supabase/functions/v1/` — never from the client.
-- DB schema changes → migration file in `supabase/migrations/`, then `supabase db push`.
+- DB schema changes must be sequential, append-only migrations in `supabase/migrations/` (no direct DB edits).
+- Supabase deploy is GitHub CI only; do not run local `supabase db push` / `supabase functions deploy`.
+- LLM model routing/prompt/rule updates must go through Admin API/UI (`/api/admin/llm/prompts`, `/api/admin/llm/rules`, `/api/admin/llm/routes`), never direct DB edits.
 - Seeds belong in migrations, not API endpoints or hardcoded UI.
 - After any code change: deploy the affected service. Don't ask the user to do it.

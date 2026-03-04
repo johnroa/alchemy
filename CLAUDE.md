@@ -18,6 +18,9 @@ packages/shared/      Shared utilities
 - Minimal diffs. Do not touch unrelated code.
 - Do not add dependencies unless explicitly asked.
 - All LLM calls go through `supabase/functions/v1/` — never from the client.
+- Supabase deploy is GitHub CI only; do not run local `supabase db push` / `supabase functions deploy`.
+- Never hit the DB directly for production changes. Use sequential, append-only migrations.
+- Change LLM prompts/rules/routes via API/Admin UI (`/api/admin/llm/prompts`, `/api/admin/llm/rules`, `/api/admin/llm/routes`), never direct DB edits.
 - The client is API-driven. No business logic beyond UI/UX orchestration.
 - Every user-facing screen needs loading, empty, and error states.
 - No silent data loss. Offline reads from cache are fine.
@@ -91,17 +94,19 @@ Admin route structure: `app/(admin)/` — dashboard, moderation, provider-model,
 
 All commands run from repo root. Always deploy after making changes — never tell the user to run commands.
 
+### Deployment policy (required)
+- No local Supabase deploy path in this project.
+- Supabase schema/functions deploy via GitHub CI workflow: `.github/workflows/supabase-deploy.yml`.
+- Cloudflare deploys are direct from this repo.
+
 ### One-time auth
 ```bash
-supabase login
 npx wrangler login
 ```
 
-### Push Supabase (schema + edge function)
-```bash
-supabase db push --project-ref dwptbjcxrsmmgjmnumpg
-supabase functions deploy v1 --project-ref dwptbjcxrsmmgjmnumpg
-```
+### Supabase (GitHub CI only)
+- Push to `main` with changes under `supabase/migrations/**` and/or `supabase/functions/**`.
+- CI runs migration + function deploy.
 
 ### Push Cloudflare API gateway
 ```bash

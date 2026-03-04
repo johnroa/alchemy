@@ -18,6 +18,19 @@ Ship a premium-feeling iOS app with excellent UX, fast iteration, and a clean AP
 - Offline behavior must be intentional (read-only cache is fine, but no silent data loss).
 - Avoid LLM spaghetti: all model calls go through a single server API.
 
+## Deployment + DB Governance (Required)
+- No local Supabase deploy path in this project.
+- Deploy channels are:
+  - GitHub CI for Supabase schema/functions (`.github/workflows/supabase-deploy.yml`)
+  - Direct Cloudflare deploys for API/Admin workers
+- Never hit the DB directly for production updates.
+- Schema/data changes must be append-only, sequential migrations in `supabase/migrations/`.
+- LLM prompt/rule/route changes must be made through API/Admin UI only:
+  - `/api/admin/llm/prompts`
+  - `/api/admin/llm/rules`
+  - `/api/admin/llm/routes`
+- Do not edit LLM prompt/rule rows directly in DB.
+
 ## Product Pillars
 - Creation: generate recipes from preferences and prompts.
 - Iteration: tweak recipes via chat-like edits while maintaining structured output.
