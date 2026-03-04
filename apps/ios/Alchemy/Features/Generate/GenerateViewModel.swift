@@ -18,6 +18,7 @@ struct GenerateMessage: Identifiable {
     let role: String
     let content: String
     let timestamp: Date
+    var isPending: Bool = false
 }
 
 @Observable
@@ -25,10 +26,7 @@ struct GenerateMessage: Identifiable {
 final class GenerateViewModel {
     private static let welcomeMessageId = "assistant-welcome"
     private static let genericWelcomeVariants = [
-        "Hi Chef! What are we cooking today?",
-        "Hi Chef! What should we cook today?",
-        "Hey Chef! What are you in the mood for?",
-        "Welcome back, Chef. What are we making today?"
+        "Hi Chef! What are we cooking today?"
     ]
     private static let typingDescriptors = [
         "Baking...",
@@ -211,7 +209,7 @@ final class GenerateViewModel {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !isSendingMessage else { return }
 
-        appendLocalMessage(role: "user", content: trimmed)
+        let pendingMessageId = appendLocalMessage(role: "user", content: trimmed, isPending: true)
         advanceTypingDescriptor()
         if input.trimmingCharacters(in: .whitespacesAndNewlines) == trimmed {
             input = ""
@@ -230,6 +228,7 @@ final class GenerateViewModel {
             applySession(session)
             Haptics.fire(.light)
         } catch {
+            markMessagePending(messageId: pendingMessageId, isPending: false)
             if !handleServerError(error) {
                 self.error = error.localizedDescription
             }
@@ -365,22 +364,12 @@ final class GenerateViewModel {
             assistantReplyFallback: session.assistantReply?.text
         )
         seedWelcomeMessageIfNeeded()
-
-        if let assistantText = session.assistantReply?.text.trimmingCharacters(in: .whitespacesAndNewlines), !assistantText.isEmpty {
-            let lastAssistantContent = messages
-                .last(where: { $0.role == "assistant" })?
-                .content
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            let shouldAppend = lastAssistantContent != assistantText
-            if shouldAppend {
-                appendLocalMessage(role: "assistant", content: assistantText)
-            }
-        }
     }
 
     private func mapMessage(_ item: ChatMessageItem) -> GenerateMessage {
+        let normalizedRole = item.role == "user" ? "user" : "assistant"
         let normalizedContent: String
-        if item.role == "assistant" {
+        if normalizedRole == "assistant" {
             normalizedContent = normalizeAssistantMessageContent(item.content)
         } else {
             normalizedContent = item.content
@@ -396,20 +385,30 @@ final class GenerateViewModel {
 
         return GenerateMessage(
             id: item.id,
-            role: item.role,
+            role: normalizedRole,
             content: normalizedContent,
-            timestamp: timestamp
+            timestamp: timestamp,
+            isPending: false
         )
     }
 
-    private func appendLocalMessage(role: String, content: String) {
+    @discardableResult
+    private func appendLocalMessage(role: String, content: String, isPending: Bool = false) -> String {
+        let messageId = "\(role)-local-\(UUID().uuidString)"
         let message = GenerateMessage(
-            id: "\(role)-\(UUID().uuidString)",
+            id: messageId,
             role: role,
             content: content,
-            timestamp: .now
+            timestamp: .now,
+            isPending: isPending
         )
         messages.append(message)
+        return messageId
+    }
+
+    private func markMessagePending(messageId: String, isPending: Bool) {
+        guard let index = messages.firstIndex(where: { $0.id == messageId }) else { return }
+        messages[index].isPending = isPending
     }
 
     private func resetCandidateToIdeationInPlace() {
@@ -557,21 +556,30 @@ final class GenerateViewModel {
     ) {
         guard !serverMessages.isEmpty else { return }
         let mapped = serverMessages.map { item in
-            if item.role == "assistant" {
-                return mapMessage(
-                    ChatMessageItem(
-                        id: item.id,
-                        role: item.role,
-                        content: normalizeAssistantMessageContent(
-                            item.content,
-                            fallbackAssistantReplyText: assistantReplyFallback
-                        ),
-                        createdAt: item.createdAt
-                    )
+            let normalizedRole = item.role == "user" ? "user" : "assistant"
+            if normalizedRole == "assistant" {
+                return GenerateMessage(
+                    id: item.id,
+                    role: normalizedRole,
+                    content: normalizeAssistantMessageContent(
+                        item.content,
+                        fallbackAssistantReplyText: assistantReplyFallback
+                    ),
+                    timestamp: {
+                        if let createdAt = item.createdAt,
+                           let parsed = ISO8601DateFormatter().date(from: createdAt) {
+                            return parsed
+                        }
+                        return .now
+                    }(),
+                    isPending: false
                 )
             }
             return mapMessage(item)
         }
+
+        let pendingLocalMessages = messages.filter(\.isPending)
+
         let welcome = messages.first(where: { $0.id == Self.welcomeMessageId })
         let serverHasEquivalentWelcome = mapped.contains {
             $0.role == "assistant"
@@ -584,6 +592,16 @@ final class GenerateViewModel {
             merged.append(welcome)
         }
         merged.append(contentsOf: mapped)
+
+        // Keep only optimistic messages that have not yet arrived from the server.
+        for pending in pendingLocalMessages where !mapped.contains(where: {
+            $0.role == pending.role &&
+                $0.content.trimmingCharacters(in: .whitespacesAndNewlines)
+                    == pending.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        }) {
+            merged.append(pending)
+        }
+
         messages = merged
     }
 
@@ -608,7 +626,7 @@ final class GenerateViewModel {
             if !fallback.isEmpty { return fallback }
         }
 
-        return content
+        return "..."
     }
 
     private func extractAssistantText(fromJSONValue value: Any) -> String? {

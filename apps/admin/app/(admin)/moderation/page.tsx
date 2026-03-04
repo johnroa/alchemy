@@ -13,7 +13,7 @@ export default async function ModerationPage(): Promise<React.JSX.Element> {
       />
 
       {/* Status card */}
-      <Card className="border-zinc-200 bg-zinc-50/60">
+      <Card className="border-zinc-200 bg-zinc-50">
         <CardHeader className="pb-3">
           <CardTitle className="flex items-center gap-2 text-base">
             <ShieldOff className="h-4 w-4 text-zinc-500" />
@@ -33,7 +33,7 @@ export default async function ModerationPage(): Promise<React.JSX.Element> {
             </p>
           </div>
 
-          <div className="flex items-start gap-3 rounded-lg border border-blue-200 bg-blue-50/60 p-4">
+          <div className="flex items-start gap-3 rounded-lg border border-blue-200 bg-blue-50 p-4">
             <Info className="mt-0.5 h-4 w-4 flex-none text-blue-600" />
             <div className="space-y-2">
               <p className="text-sm font-medium text-blue-900">Safety monitoring is still active</p>

@@ -16,7 +16,7 @@ export default async function ProviderModelPage(): Promise<React.JSX.Element> {
         description="Configure model routing for recipe generation, image, classification, onboarding, and memory scopes."
       />
 
-      <Card className="border-blue-200 bg-blue-50/40">
+      <Card className="border-blue-200 bg-blue-50">
         <CardContent className="flex items-start gap-3 py-4">
           <Info className="mt-0.5 h-4 w-4 flex-none text-blue-600" />
           <div className="space-y-0.5">

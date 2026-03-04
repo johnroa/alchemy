@@ -92,8 +92,8 @@ struct AlchemyScreenHeader: View {
         }
         .frame(height: Sizing.headerRowHeight)
         .padding(.horizontal, Spacing.md)
-        .padding(.top, Sizing.headerTopInset + 24)
-        .padding(.bottom, Spacing.sm)
+        .padding(.top, Spacing.sm2)
+        .padding(.bottom, Spacing.sm2)
     }
 }
 

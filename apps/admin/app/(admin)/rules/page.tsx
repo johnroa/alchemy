@@ -15,7 +15,7 @@ export default async function RulesPage(): Promise<React.JSX.Element> {
         title="Rules"
         description="Policy and safety rules scoped by workflow. Rules are JSON-driven and hot-swappable."
       />
-      <Card className="border-blue-200 bg-blue-50/40">
+      <Card className="border-blue-200 bg-blue-50">
         <CardContent className="flex items-start gap-3 py-4">
           <Info className="mt-0.5 h-4 w-4 flex-none text-blue-600" />
           <div className="space-y-0.5">

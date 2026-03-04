@@ -38,6 +38,10 @@ final class KeyboardMonitor: ObservableObject {
             return
         }
 
+        // Visibility is updated immediately so dependent UI (tab bar/composer) can
+        // react before the keyboard animation completes.
+        isVisible = visible
+
         let animation: Animation
         switch Int(curveRaw) {
         case UIView.AnimationCurve.easeIn.rawValue:
@@ -52,7 +56,6 @@ final class KeyboardMonitor: ObservableObject {
 
         if duration <= 0.01 {
             height = keyboardHeight
-            isVisible = visible
             #if DEBUG
             print("[KeyboardMonitor] immediate height=\(keyboardHeight) visible=\(visible) endFrame=\(NSCoder.string(for: endFrame))")
             #endif
@@ -61,7 +64,6 @@ final class KeyboardMonitor: ObservableObject {
 
         withAnimation(animation) {
             height = keyboardHeight
-            isVisible = visible
         }
         #if DEBUG
         print("[KeyboardMonitor] animated height=\(keyboardHeight) visible=\(visible) endFrame=\(NSCoder.string(for: endFrame))")

@@ -15,7 +15,7 @@ export default async function ModelsPage(): Promise<React.JSX.Element> {
         title="Model Registry"
         description="Manage available LLM models and their per-token pricing. Models listed here are available for routing and simulation overrides."
       />
-      <Card className="border-blue-200 bg-blue-50/40">
+      <Card className="border-blue-200 bg-blue-50">
         <CardContent className="flex items-start gap-3 py-4">
           <Database className="mt-0.5 h-4 w-4 flex-none text-blue-600" />
           <div className="space-y-0.5">

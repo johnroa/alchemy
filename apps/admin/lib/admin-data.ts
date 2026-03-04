@@ -1784,6 +1784,13 @@ const scopeLabel = (scope: string): string => {
     tweak: "Tweaking",
     image: "Image Generation",
     classify: "Classification",
+    ingredient_alias_normalize: "Ingredient Alias Normalize",
+    ingredient_phrase_split: "Ingredient Phrase Split",
+    ingredient_enrich: "Ingredient Enrich",
+    recipe_metadata_enrich: "Recipe Metadata Enrich",
+    ingredient_relation_infer: "Ingredient Relation Infer",
+    preference_normalize: "Preference Normalize",
+    equipment_filter: "Equipment Filter",
     onboarding: "Onboarding",
     memory_extract: "Memory Extract",
     memory_select: "Memory Select",
@@ -2135,7 +2142,19 @@ export const getSimulationData = async (): Promise<{
     client
       .from("llm_model_routes")
       .select("scope,provider,model,is_active")
-      .in("scope", ["chat_ideation", "chat_generation", "chat_iteration", "classify"])
+      .in("scope", [
+        "chat_ideation",
+        "chat_generation",
+        "chat_iteration",
+        "classify",
+        "ingredient_alias_normalize",
+        "ingredient_phrase_split",
+        "ingredient_enrich",
+        "recipe_metadata_enrich",
+        "ingredient_relation_infer",
+        "preference_normalize",
+        "equipment_filter",
+      ])
       .order("scope")
       .order("is_active", { ascending: false }),
     client

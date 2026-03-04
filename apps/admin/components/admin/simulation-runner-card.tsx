@@ -11,7 +11,19 @@ import { cn } from "@/lib/utils";
 
 type ModelOverride = { provider: string; model: string };
 
-const SIM_SCOPES = ["chat_ideation", "chat_generation", "chat_iteration", "classify"] as const;
+const SIM_SCOPES = [
+  "chat_ideation",
+  "chat_generation",
+  "chat_iteration",
+  "classify",
+  "ingredient_alias_normalize",
+  "ingredient_phrase_split",
+  "ingredient_enrich",
+  "recipe_metadata_enrich",
+  "ingredient_relation_infer",
+  "preference_normalize",
+  "equipment_filter",
+] as const;
 type SimScope = (typeof SIM_SCOPES)[number];
 
 type LaneOverrides = Partial<Record<SimScope, ModelOverride>>;
@@ -347,7 +359,7 @@ const getTokenUsageFromStep = (step: SimStep | undefined): TokenUsageSummary | n
 
 const getStepTimingFromStep = (
   step: SimStep | undefined
-): { llm_ms: number; api_ms: number; db_ms: number; server_ms: number } | null => {
+): { llm_ms: number; api_ms: number; usage_query_ms: number; server_ms: number } | null => {
   if (!step || !isRecord(step.result)) {
     return null;
   }
@@ -358,7 +370,7 @@ const getStepTimingFromStep = (
   return {
     llm_ms: Math.max(0, asNumber(timing["llm_ms"]) ?? 0),
     api_ms: Math.max(0, asNumber(timing["api_ms"]) ?? 0),
-    db_ms: Math.max(0, asNumber(timing["db_ms"]) ?? 0),
+    usage_query_ms: Math.max(0, asNumber(timing["usage_query_ms"]) ?? 0),
     server_ms: Math.max(0, asNumber(timing["server_ms"]) ?? 0)
   };
 };
@@ -515,7 +527,7 @@ function CandidateSnapshotPanel({
           const isActive =
             snapshot.active_component_id !== null && component.component_id === snapshot.active_component_id;
           return (
-            <div key={`${component.component_id || component.title}-${index}`} className="rounded border bg-zinc-50/40 p-2">
+            <div key={`${component.component_id || component.title}-${index}`} className="rounded border bg-zinc-50 p-2">
               <div className="flex flex-wrap items-center gap-2 text-xs">
                 <Badge variant={isActive ? "default" : "outline"} className="font-mono text-[10px]">
                   {component.role || "component"}
@@ -720,10 +732,10 @@ function StepList({ steps }: { steps: SimStep[] }): React.JSX.Element {
             className={cn(
               "flex items-center gap-2 rounded border px-2.5 py-1.5 text-xs",
               step.status === "ok"
-                ? "border-emerald-200 bg-emerald-50/50"
+                ? "border-emerald-200 bg-emerald-50"
                 : step.status === "failed"
-                  ? "border-red-200 bg-red-50/50"
-                  : "border-amber-200 bg-amber-50/50"
+                  ? "border-red-200 bg-red-50"
+                  : "border-amber-200 bg-amber-50"
             )}
           >
             {step.status === "ok" ? (
@@ -750,10 +762,10 @@ function StepList({ steps }: { steps: SimStep[] }): React.JSX.Element {
             <span className="flex-none font-mono text-muted-foreground">
               {hasLlmTokens ? `${tokenTotal.toLocaleString()} tok` : "— tok"}
             </span>
-            {timing && (timing.llm_ms > 0 || timing.api_ms > 0 || timing.db_ms > 0 || timing.server_ms > 0) && (
+            {timing && (timing.llm_ms > 0 || timing.api_ms > 0 || timing.usage_query_ms > 0 || timing.server_ms > 0) && (
               <span className="flex-none font-mono text-[11px] text-muted-foreground">
                 llm {timing.llm_ms.toLocaleString()}ms · server {timing.server_ms.toLocaleString()}ms · api{" "}
-                {timing.api_ms.toLocaleString()}ms · db {timing.db_ms.toLocaleString()}ms
+                {timing.api_ms.toLocaleString()}ms · usage-query {timing.usage_query_ms.toLocaleString()}ms
               </span>
             )}
             <span className="flex-none font-mono text-muted-foreground">
@@ -776,7 +788,7 @@ function TraceTimeline({ trace }: { trace: SimTraceEvent[] }): React.JSX.Element
   }
 
   return (
-    <div className="max-h-80 space-y-2 overflow-y-auto rounded border bg-zinc-50/40 p-2">
+    <div className="max-h-80 space-y-2 overflow-y-auto rounded border bg-zinc-50 p-2">
       {trace.map((event, index) => (
         <div key={`${event.type}-${event.at}-${index}`} className="rounded border bg-background p-2">
           <div className="flex items-center gap-2 text-xs">

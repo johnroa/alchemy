@@ -116,7 +116,7 @@ function TraceDetail({ requestId, trace }: { requestId: string; trace: TracePayl
   );
 
   return (
-    <div className="rounded-lg border bg-muted/20 p-4 space-y-4">
+    <div className="rounded-lg border bg-muted p-4 space-y-4">
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-mono text-xs text-muted-foreground">{requestId}</span>
         <Badge variant="outline">{trace.events?.length ?? 0} events</Badge>
@@ -141,7 +141,7 @@ function TraceDetail({ requestId, trace }: { requestId: string; trace: TracePayl
                 key={event.id}
                 className={cn(
                   "rounded-md border",
-                  isEventError ? "border-red-200 bg-red-50/50" : "border-border bg-background"
+                  isEventError ? "border-red-200 bg-red-50" : "border-border bg-background"
                 )}
               >
                 <button
@@ -338,7 +338,7 @@ export function RequestTraceViewer({
                   key={event.id}
                   className={cn(
                     "rounded-md border",
-                    error ? "border-red-200 bg-red-50/40" : "border-border"
+                    error ? "border-red-200 bg-red-50" : "border-border"
                   )}
                 >
                   <div className="flex items-center gap-3 px-3 py-2">

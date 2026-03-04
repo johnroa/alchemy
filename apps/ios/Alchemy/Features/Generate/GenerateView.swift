@@ -12,17 +12,21 @@ struct GenerateView: View {
     @State private var isCandidateChatExpanded = false
     @State private var messageContentHeight: CGFloat = 0
     @State private var messageViewportHeight: CGFloat = 0
+    @State private var composerHeight: CGFloat = 50
 
     var onProfileTap: () -> Void = {}
+    var onComposerFocusChange: (Bool) -> Void = { _ in }
     var onGoToCookbook: ([String]) -> Void = { _ in }
 
     init(
         viewModel: GenerateViewModel,
         onProfileTap: @escaping () -> Void = {},
+        onComposerFocusChange: @escaping (Bool) -> Void = { _ in },
         onGoToCookbook: @escaping ([String]) -> Void = { _ in }
     ) {
         self._vm = Bindable(viewModel)
         self.onProfileTap = onProfileTap
+        self.onComposerFocusChange = onComposerFocusChange
         self.onGoToCookbook = onGoToCookbook
     }
 
@@ -41,16 +45,17 @@ struct GenerateView: View {
         }
     }
 
-    private var bottomDockPadding: CGFloat {
-        keyboard.isVisible ? 8 : (Sizing.tabBarHeight + 38)
-    }
-
     private var chatPanelTopInset: CGFloat {
-        Spacing.xl + Spacing.xs
+        Spacing.xxl + Spacing.sm
     }
 
-    private var chatPanelBottomBleed: CGFloat {
-        keyboard.isVisible ? 18 : (Sizing.tabBarHeight + 88)
+    private var keyboardActive: Bool {
+        isInputFocused || keyboard.isVisible
+    }
+
+    private var bottomDockReservedHeight: CGFloat {
+        let navSpace: CGFloat = keyboardActive ? 0 : (Sizing.tabBarHeight + 36)
+        return composerHeight + navSpace + Spacing.sm
     }
 
     private var userBubbleMaxWidth: CGFloat {
@@ -80,8 +85,6 @@ struct GenerateView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                         .padding(.horizontal, Spacing.xs)
                         .padding(.top, chatPanelTopInset)
-                        .padding(.bottom, -chatPanelBottomBleed)
-                        .ignoresSafeArea(.container, edges: .bottom)
                         .zIndex(5)
                 }
 
@@ -97,6 +100,8 @@ struct GenerateView: View {
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 bottomDock
+                    .padding(.bottom, keyboardActive ? Spacing.xs : (Sizing.tabBarHeight + 30))
+                    .padding(.top, Spacing.sm2)
             }
         }
         .confirmationDialog(
@@ -132,9 +137,11 @@ struct GenerateView: View {
                 dismissKeyboard()
                 isInputFocused = false
                 isCandidateChatExpanded = false
+                onComposerFocusChange(false)
             }
         }
         .onChange(of: isInputFocused) { _, focused in
+            onComposerFocusChange(focused)
             if focused, vm.hasCandidate {
                 isCandidateChatExpanded = true
             } else if !focused && vm.presentationMode == .candidatePresented {
@@ -145,6 +152,13 @@ struct GenerateView: View {
         }
         .onAppear {
             isInputFocused = false
+            onComposerFocusChange(false)
+        }
+        .onDisappear {
+            onComposerFocusChange(false)
+        }
+        .onPreferenceChange(GenerateComposerHeightKey.self) { value in
+            composerHeight = max(48, value)
         }
     }
 
@@ -296,13 +310,13 @@ struct GenerateView: View {
                 maxHeight: vm.presentationMode == .ideationExpanded ? .infinity : 260,
                 alignment: .top
             )
-            .padding(.top, vm.presentationMode == .ideationExpanded ? Spacing.lg2 : Spacing.md)
+            .padding(.top, vm.presentationMode == .ideationExpanded ? Spacing.lg : Spacing.md)
         .chatLiquidPanelBackground(
             UnevenRoundedRectangle(
-                topLeadingRadius: 22,
+                topLeadingRadius: 18,
                 bottomLeadingRadius: 0,
                 bottomTrailingRadius: 0,
-                topTrailingRadius: 22
+                topTrailingRadius: 18
             )
         )
         .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -348,7 +362,7 @@ struct GenerateView: View {
                             )
                     }
                 )
-                .padding(.bottom, Spacing.sm)
+                .padding(.bottom, bottomDockReservedHeight)
             }
             .background(
                 GeometryReader { geo in
@@ -429,9 +443,8 @@ struct GenerateView: View {
                     .padding(.horizontal, Spacing.md)
             }
         }
-        .padding(.top, keyboard.isVisible ? Spacing.xs : Spacing.sm2)
-        .padding(.bottom, bottomDockPadding)
-        .animation(.spring(response: 0.36, dampingFraction: 0.87), value: vm.presentationMode)
+        .padding(.top, Spacing.xs)
+        .animation(.easeInOut(duration: 0.2), value: vm.presentationMode)
     }
 
     private var generationMinimizedCenter: some View {
@@ -447,13 +460,21 @@ struct GenerateView: View {
     }
 
     private var compactGenerationStatus: some View {
-        Text(vm.typingDescriptor)
-            .font(AlchemyFont.chatBody)
-            .foregroundStyle(AlchemyColors.textPrimary)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, Spacing.md)
-            .padding(.vertical, Spacing.sm2)
-            .chatLiquidSurface(role: .userBubble, focused: false, cornerRadius: Radius.xl)
+        HStack(spacing: Spacing.sm) {
+            LottieView(animation: .named("alchemy-loading"))
+                .playbackMode(.playing(.toProgress(1, loopMode: .loop)))
+                .frame(width: 42, height: 42)
+
+            Text(vm.typingDescriptor)
+                .font(AlchemyFont.chatBody)
+                .foregroundStyle(AlchemyColors.textPrimary.opacity(0.98))
+                .shadow(color: Color.black.opacity(0.32), radius: 2, x: 0, y: 1)
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, Spacing.lg)
+        .padding(.vertical, Spacing.xs)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var introMessage: some View {
@@ -537,7 +558,7 @@ struct GenerateView: View {
         HStack(spacing: Spacing.sm) {
             LottieView(animation: .named("alchemy-loading"))
                 .playbackMode(.playing(.toProgress(1, loopMode: .loop)))
-                .frame(width: 34, height: 34)
+                .frame(width: 42, height: 42)
             Text(vm.typingDescriptor)
                 .font(AlchemyFont.chatBody)
                 .foregroundStyle(AlchemyColors.textPrimary.opacity(0.98))
@@ -585,6 +606,9 @@ struct GenerateView: View {
             .tint(AlchemyColors.gold)
             .lineLimit(1...6)
             .focused($isInputFocused)
+            .onTapGesture {
+                onComposerFocusChange(true)
+            }
             .padding(.leading, Spacing.md)
             .padding(.trailing, 46)
             .padding(.vertical, 10)
@@ -594,7 +618,7 @@ struct GenerateView: View {
                 Task { await vm.sendMessage(api: api) }
             } label: {
                 Image(systemName: "paperplane.fill")
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(
                         LinearGradient(
                             colors: [
@@ -605,16 +629,19 @@ struct GenerateView: View {
                             endPoint: .bottom
                         )
                     )
-                    .frame(width: 22, height: 22)
+                    .frame(width: 20, height: 20)
             }
             .disabled(sendDisabled)
             .opacity(sendDisabled ? 0.5 : 1)
             .padding(.trailing, 14)
         }
-        .frame(minHeight: 50, alignment: .center)
+        .frame(minHeight: 48, alignment: .center)
         .chatLiquidSurface(role: .composer, focused: isInputFocused, cornerRadius: Radius.xl)
-        .animation(.easeInOut(duration: 0.18), value: vm.input.count)
-        .animation(.easeInOut(duration: 0.2), value: isInputFocused)
+        .background(
+            GeometryReader { geo in
+                Color.clear.preference(key: GenerateComposerHeightKey.self, value: geo.size.height)
+            }
+        )
     }
 
     // MARK: - Recipe Detail
@@ -737,6 +764,13 @@ private struct GenerateMessageContentHeightKey: PreferenceKey {
 
 private struct GenerateMessageViewportHeightKey: PreferenceKey {
     static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
+private struct GenerateComposerHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 50
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = nextValue()
     }

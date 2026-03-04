@@ -42,6 +42,11 @@ Edge function implementing `/v1/*` routes.
 - Active provider/model route is read from `llm_model_routes`.
 - Prompt instructions are read from `llm_prompts`.
 - Policy rules are read from `llm_rules`.
+- All LLM calls are executed through the shared pipeline:
+  - `supabase/functions/_shared/llm-scope-registry.ts`
+  - `supabase/functions/_shared/llm-executor.ts`
+  - `supabase/functions/_shared/llm-adapters/*`
+- Direct provider endpoints are allowed only in adapter files.
 - Recipe imagery generation also uses active `scope = image` provider/model/prompt/rule records.
 - Onboarding interview behavior uses active `scope = onboarding` provider/model/prompt/rule records.
 - Memory extraction/selection/summarization/conflict scopes are configured via:
@@ -49,5 +54,13 @@ Edge function implementing `/v1/*` routes.
   - `memory_select`
   - `memory_summarize`
   - `memory_conflict_resolve`
+- Metadata/normalization helper scopes are configured via:
+  - `ingredient_alias_normalize`
+  - `ingredient_phrase_split`
+  - `ingredient_enrich`
+  - `recipe_metadata_enrich`
+  - `ingredient_relation_infer`
+  - `preference_normalize`
+  - `equipment_filter`
 
 No route-level behavior should depend on hardcoded instruction logic.

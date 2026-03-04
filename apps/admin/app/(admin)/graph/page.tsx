@@ -107,7 +107,7 @@ export default async function GraphPage({
             <CardHeader>
               <CardTitle className="text-base">Visual Graph</CardTitle>
               <CardDescription>
-                SVG node-link graph with relation filters and node detail panel.
+                Interactive force graph with pan/zoom, drag-to-pull, readable labels, hover tooltips, and fullscreen mode.
               </CardDescription>
             </CardHeader>
             <CardContent>

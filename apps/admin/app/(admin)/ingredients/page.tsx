@@ -1,4 +1,5 @@
 import { ArrowDownRight, ArrowUpRight } from "lucide-react";
+import { EntityTypeIcon } from "@/components/admin/entity-type-icon";
 import { IngredientsRegistryExplorer } from "@/components/admin/ingredients-registry-explorer";
 import { PageHeader } from "@/components/admin/page-header";
 import { Badge } from "@/components/ui/badge";
@@ -61,9 +62,9 @@ function DeltaBadge({
     <span
       className={cn(
         "inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-medium",
-        effectiveTone === "up" && "border-emerald-300/60 bg-emerald-50 text-emerald-700",
-        effectiveTone === "down" && "border-red-300/60 bg-red-50 text-red-700",
-        effectiveTone === "flat" && "border-zinc-300/60 bg-zinc-50 text-zinc-600"
+        effectiveTone === "up" && "border-emerald-300 bg-emerald-50 text-emerald-700",
+        effectiveTone === "down" && "border-red-300 bg-red-50 text-red-700",
+        effectiveTone === "flat" && "border-zinc-300 bg-zinc-50 text-zinc-600"
       )}
     >
       {Icon ? <Icon className="h-3 w-3" /> : null}
@@ -132,6 +133,7 @@ export default async function IngredientsPage(): Promise<React.JSX.Element> {
       <PageHeader
         title="Ingredients"
         description="Canonical ingredient registry, enrichment metadata, ontology links, and unresolved normalization rows."
+        icon={<EntityTypeIcon entityType="ingredient" className="h-6 w-6 text-emerald-600" />}
       />
 
       <section className="space-y-3">
@@ -143,9 +145,9 @@ export default async function IngredientsPage(): Promise<React.JSX.Element> {
               className={cn(
                 "transition-colors",
                 metric.warning
-                  ? "border-amber-200/80 bg-amber-50/30"
+                  ? "border-amber-200 bg-amber-50"
                   : metric.progress >= 0.7
-                    ? "border-emerald-200/80 bg-emerald-50/25"
+                    ? "border-emerald-200 bg-emerald-50"
                     : "border-zinc-200"
               )}
             >
@@ -261,7 +263,14 @@ export default async function IngredientsPage(): Promise<React.JSX.Element> {
                   data.aliases.slice(0, 100).map((alias) => (
                     <TableRow key={alias.id}>
                       <TableCell className="font-mono text-xs">{alias.alias_key}</TableCell>
-                      <TableCell className="text-xs">{alias.canonical_name ?? "—"}</TableCell>
+                      <TableCell className="text-xs">
+                        {alias.canonical_name ? (
+                          <span className="inline-flex items-center gap-1.5">
+                            <EntityTypeIcon entityType="ingredient" className="h-3.5 w-3.5 text-emerald-600" />
+                            {alias.canonical_name}
+                          </span>
+                        ) : "—"}
+                      </TableCell>
                       <TableCell className="text-xs text-muted-foreground">{alias.confidence.toFixed(2)}</TableCell>
                     </TableRow>
                   ))
@@ -281,7 +290,7 @@ export default async function IngredientsPage(): Promise<React.JSX.Element> {
               variant="outline"
               className={cn(
                 "font-mono text-xs",
-                unresolvedCount > 0 && "border-amber-300/60 bg-amber-50 text-amber-700"
+                unresolvedCount > 0 && "border-amber-300 bg-amber-50 text-amber-700"
               )}
             >
               {unresolvedCount} rows
@@ -306,12 +315,15 @@ export default async function IngredientsPage(): Promise<React.JSX.Element> {
                   data.unresolved_rows.map((row) => (
                     <TableRow key={row.id}>
                       <TableCell>
-                        <p className="text-sm font-medium">{row.source_name}</p>
+                        <p className="inline-flex items-center gap-1.5 text-sm font-medium">
+                          <EntityTypeIcon entityType="ingredient" className="h-3.5 w-3.5 text-emerald-600" />
+                          {row.source_name}
+                        </p>
                         <p className="font-mono text-[11px] text-muted-foreground">{row.recipe_version_id.slice(0, 8)}…</p>
                       </TableCell>
                       <TableCell className="text-xs text-muted-foreground">{row.source_amount ?? "?"} {row.source_unit ?? ""}</TableCell>
                       <TableCell>
-                        <Badge variant="outline" className="border-amber-300/60 bg-amber-50 text-amber-700 text-[10px]">
+                        <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-700 text-[10px]">
                           {row.normalized_status}
                         </Badge>
                       </TableCell>

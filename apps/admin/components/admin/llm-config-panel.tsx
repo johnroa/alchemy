@@ -63,6 +63,13 @@ const ALL_SCOPES = [
   "generate",
   "tweak",
   "classify",
+  "ingredient_alias_normalize",
+  "ingredient_phrase_split",
+  "ingredient_enrich",
+  "recipe_metadata_enrich",
+  "ingredient_relation_infer",
+  "preference_normalize",
+  "equipment_filter",
   "onboarding",
   "image",
   "memory_extract",
@@ -360,7 +367,7 @@ export function LlmConfigPanel(props: {
 
       {/* Active item for selected scope */}
       {activeItem ? (
-        <Card className={editingId === activeItem.id ? undefined : "border-emerald-300/60 bg-emerald-50/30"}>
+        <Card className={editingId === activeItem.id ? undefined : "border-emerald-300 bg-emerald-50"}>
           <CardHeader className="pb-2">
             <div className="flex flex-wrap items-center justify-between gap-2">
               {editingId === activeItem.id ? (

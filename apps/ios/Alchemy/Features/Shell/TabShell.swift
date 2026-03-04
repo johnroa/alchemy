@@ -8,6 +8,7 @@ struct TabShell: View {
     @State private var showSettings = false
     @State private var showProfileMenu = false
     @State private var tabBarVisible = true
+    @State private var generateComposerFocused = false
 
     @State private var tabRevealTask: Task<Void, Never>?
 
@@ -36,6 +37,9 @@ struct TabShell: View {
                             withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
                                 showProfileMenu.toggle()
                             }
+                        },
+                        onComposerFocusChange: { focused in
+                            generateComposerFocused = focused
                         },
                         onGoToCookbook: { committedIds in
                             withAnimation(.easeInOut(duration: 0.2)) {
@@ -111,6 +115,7 @@ struct TabShell: View {
             }
         }
         .ignoresSafeArea(.container, edges: .bottom)
+        .ignoresSafeArea(.keyboard, edges: .bottom)
         .background(AlchemyColors.deepDark)
         .sheet(isPresented: $showPreferences) {
             PreferencesView()
@@ -119,31 +124,49 @@ struct TabShell: View {
             SettingsView()
         }
         .animation(.spring(response: 0.35, dampingFraction: 0.88), value: showProfileMenu)
-        .onChange(of: keyboard.height) { _, newHeight in
-            if newHeight > 4 {
+        .onChange(of: selectedTab) { _, tab in
+            if tab != .generate {
+                generateComposerFocused = false
+            }
+        }
+        .onChange(of: keyboard.isVisible) { _, isVisible in
+            let shouldHide = isVisible || generateComposerFocused
+            if shouldHide {
                 tabRevealTask?.cancel()
                 tabRevealTask = nil
-                if tabBarVisible {
-                    withAnimation(.easeOut(duration: 0.12)) {
-                        tabBarVisible = false
-                    }
-                }
+                tabBarVisible = false
                 return
             }
 
-            if newHeight < 1 {
+            tabRevealTask?.cancel()
+            tabRevealTask = Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(70))
+                guard !keyboard.isVisible && !generateComposerFocused else { return }
+                withAnimation(.spring(response: 0.4, dampingFraction: 0.84)) {
+                    tabBarVisible = true
+                }
+            }
+        }
+        .onChange(of: generateComposerFocused) { _, focused in
+            if focused {
                 tabRevealTask?.cancel()
-                tabRevealTask = Task { @MainActor in
-                    try? await Task.sleep(for: .milliseconds(50))
-                    guard keyboard.height < 1 else { return }
-                    withAnimation(.spring(response: 0.4, dampingFraction: 0.84)) {
-                        tabBarVisible = true
-                    }
+                tabRevealTask = nil
+                tabBarVisible = false
+                return
+            }
+
+            guard !keyboard.isVisible else { return }
+            tabRevealTask?.cancel()
+            tabRevealTask = Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(70))
+                guard !keyboard.isVisible && !generateComposerFocused else { return }
+                withAnimation(.spring(response: 0.4, dampingFraction: 0.84)) {
+                    tabBarVisible = true
                 }
             }
         }
         .onAppear {
-            tabBarVisible = !keyboard.isVisible
+            tabBarVisible = !(keyboard.isVisible || generateComposerFocused)
         }
         .onDisappear {
             tabRevealTask?.cancel()

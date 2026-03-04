@@ -27,9 +27,9 @@ const formatCost = (usd: number): string => {
 };
 
 const actionColor = (action: string): string => {
-  if (action === "create") return "border-emerald-300/60 bg-emerald-50 text-emerald-700";
+  if (action === "create") return "border-emerald-300 bg-emerald-50 text-emerald-700";
   if (action === "update" || action === "activate") return "border-blue-300/60 bg-blue-50 text-blue-700";
-  if (action === "delete") return "border-red-300/60 bg-red-50 text-red-700";
+  if (action === "delete") return "border-red-300 bg-red-50 text-red-700";
   return "";
 };
 

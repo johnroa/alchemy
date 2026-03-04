@@ -27,14 +27,24 @@ type OntologyLinkRow = {
   metadata: Record<string, unknown> | null;
   created_at: string;
   updated_at: string;
-  ontology_term: Array<{
-    id: string;
-    term_type: string;
-    term_key: string;
-    label: string;
-    source: string;
-    metadata: Record<string, unknown> | null;
-  }> | null;
+  ontology_term:
+    | {
+        id: string;
+        term_type: string;
+        term_key: string;
+        label: string;
+        source: string;
+        metadata: Record<string, unknown> | null;
+      }
+    | Array<{
+        id: string;
+        term_type: string;
+        term_key: string;
+        label: string;
+        source: string;
+        metadata: Record<string, unknown> | null;
+      }>
+    | null;
 };
 
 type PairRow = {
@@ -268,7 +278,9 @@ export async function GET(
     })),
     ontology_links: ontologyLinks.map((link) => ({
       ...(() => {
-        const term = Array.isArray(link.ontology_term) ? link.ontology_term[0] ?? null : null;
+        const term = Array.isArray(link.ontology_term)
+          ? link.ontology_term[0] ?? null
+          : link.ontology_term ?? null;
         return {
           term: term
             ? {

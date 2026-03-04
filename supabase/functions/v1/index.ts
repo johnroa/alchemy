@@ -30,6 +30,7 @@ import {
   type UnitKind,
   type UnitPreference,
 } from "./recipe-standardization.ts";
+import { applyIngredientDietCompatibilityGuard } from "./ingredient-enrichment-guards.ts";
 import { sanitizeModelPreferencePatch } from "./preference-auto-update.ts";
 
 type PreferenceContext = {
@@ -1401,6 +1402,8 @@ const resolveCanonicalRecipeIngredientsAsync = async (params: {
   });
 
   let rejectedCount = 0;
+  let dietGuardRemovalCount = 0;
+  let dietGuardRemovalCount = 0;
   try {
     const splitItems = await llmGateway.splitIngredientPhrases({
       client: params.serviceClient,
@@ -1964,9 +1967,15 @@ const upsertIngredientEnrichment = async (params: {
           !Array.isArray(row.metadata)
           ? row.metadata as Record<string, JsonValue>
           : {};
+      const guarded = applyIngredientDietCompatibilityGuard({
+        canonicalName: candidate.canonical_name,
+        metadata: candidate.metadata,
+        ontologyTermKeys: candidate.ontology_terms.map((term) => term.term_key),
+      });
+      dietGuardRemovalCount += guarded.removedDietTags.length;
       const nextMetadata: Record<string, JsonValue> = {
         ...existingMetadata,
-        ...candidate.metadata,
+        ...guarded.metadata,
         metadata_schema_version: 2,
         enrichment_confidence: candidate.confidence,
         enriched_at: new Date().toISOString(),
@@ -2134,6 +2143,7 @@ const upsertIngredientEnrichment = async (params: {
       status: "ready",
       outputPayload: {
         ingredient_count: ingredientItems.length,
+        diet_guard_removed_tags: dietGuardRemovalCount,
       },
       confidenceSummary: {
         persist_threshold: ENRICHMENT_PERSIST_CONFIDENCE,
@@ -4257,7 +4267,7 @@ const buildContextPack = async (params: {
   const [preferences, memorySnapshot, memories] = await Promise.all([
     getPreferences(params.userClient, params.userId),
     getMemorySnapshot(params.userClient, params.userId),
-    getActiveMemories(params.userClient, params.userId, 120),
+    getActiveMemories(params.userClient, params.userId, 36),
   ]);
   const preferencesNaturalLanguage = buildNaturalLanguagePreferenceContext(
     preferences,
@@ -4855,12 +4865,15 @@ const syncRecipeAttachments = async (params: {
 const fetchChatMessages = async (
   client: SupabaseClient,
   chatId: string,
+  limit = 80,
 ): Promise<ChatMessageView[]> => {
+  const normalizedLimit = Math.max(1, Math.min(limit, 300));
   const { data: messages, error } = await client
     .from("chat_messages")
     .select("id,role,content,metadata,created_at")
     .eq("chat_id", chatId)
-    .order("created_at", { ascending: true });
+    .order("created_at", { ascending: false })
+    .limit(normalizedLimit);
 
   if (error) {
     throw new ApiError(
@@ -4871,11 +4884,13 @@ const fetchChatMessages = async (
     );
   }
 
-  return (messages ?? []) as ChatMessageView[];
+  return ((messages ?? []) as ChatMessageView[]).sort((a, b) =>
+    a.created_at.localeCompare(b.created_at)
+  );
 };
 
 const parseAssistantChatPayload = (
-  message: Pick<ChatMessageView, "content">,
+  message: Pick<ChatMessageView, "content" | "metadata">,
 ): {
   recipe: RecipePayload | null;
   assistantReply: AssistantReply | null;
@@ -4883,7 +4898,23 @@ const parseAssistantChatPayload = (
   responseContext: ChatLoopResponse["response_context"] | null;
 } | null => {
   try {
-    const parsed = JSON.parse(message.content) as unknown;
+    let parsed: unknown = null;
+    const metadataEnvelope = message.metadata &&
+        typeof message.metadata === "object" &&
+        !Array.isArray(message.metadata)
+      ? (message.metadata as Record<string, JsonValue>).envelope
+      : null;
+
+    if (
+      metadataEnvelope &&
+      typeof metadataEnvelope === "object" &&
+      !Array.isArray(metadataEnvelope)
+    ) {
+      parsed = metadataEnvelope as unknown;
+    } else {
+      parsed = JSON.parse(message.content) as unknown;
+    }
+
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       return null;
     }
@@ -5469,44 +5500,39 @@ const normalizeCookbookInsight = (
   return `${firstSentence.slice(0, 147).trimEnd()}...`;
 };
 
-const generateCookbookInsight = async (params: {
-  client: SupabaseClient;
-  userId: string;
-  requestId: string;
-  items: Array<Record<string, JsonValue>>;
-}): Promise<string | null> => {
-  if (params.items.length === 0) {
+const buildCookbookInsightDeterministic = (
+  items: Array<Record<string, JsonValue>>,
+): string | null => {
+  if (items.length === 0) {
     return null;
   }
 
-  const contextItems = params.items.slice(0, 12).map((item) => ({
-    title: typeof item.title === "string" ? item.title : "",
-    category: typeof item.category === "string" ? item.category : "",
-    summary: typeof item.summary === "string" ? item.summary.slice(0, 220) : "",
-  }));
-
-  try {
-    const response = await llmGateway.converseChat({
-      client: params.client,
-      userId: params.userId,
-      requestId: params.requestId,
-      prompt:
-        "Write a single warm sentence for a cookbook header subtitle based on the user's saved recipes. Mention one clear pattern you infer. Keep it under 20 words. No markdown.",
-      context: {
-        task: "cookbook_header_insight",
-        cookbook_items: contextItems,
-        cookbook_recipe_count: params.items.length,
-      },
-    });
-
-    return normalizeCookbookInsight(response.assistant_reply.text);
-  } catch (error) {
-    console.error("cookbook_insight_failed", {
-      request_id: params.requestId,
-      error: error instanceof Error ? error.message : String(error),
-    });
-    return null;
+  const categoryCounts = new Map<string, number>();
+  for (const item of items) {
+    const category = typeof item.category === "string" &&
+        item.category.trim().length > 0
+      ? item.category.trim()
+      : "favorites";
+    categoryCounts.set(category, (categoryCounts.get(category) ?? 0) + 1);
   }
+
+  const topCategory = [...categoryCounts.entries()]
+    .sort((a, b) => b[1] - a[1])[0]?.[0];
+  if (!topCategory) {
+    return normalizeCookbookInsight(
+      `You’ve saved ${items.length} recipes so far.`,
+    );
+  }
+
+  if (items.length == 1) {
+    return normalizeCookbookInsight(
+      `Great start. Your first recipe is in ${topCategory}.`,
+    );
+  }
+
+  return normalizeCookbookInsight(
+    `You’ve built ${items.length} recipes with a strong ${topCategory} streak.`,
+  );
 };
 
 const converseChatWithRetry = async (params: {
@@ -5518,38 +5544,15 @@ const converseChatWithRetry = async (params: {
   scopeHint?: "chat_ideation" | "chat_generation" | "chat_iteration";
   modelOverrides?: ModelOverrideMap;
 }): Promise<Awaited<ReturnType<typeof llmGateway.converseChat>>> => {
-  const maxAttempts = params.scopeHint === "chat_generation" ||
-      params.scopeHint === "chat_iteration"
-    ? 2
-    : 1;
-  let lastError: unknown = null;
-
-  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    try {
-      return await llmGateway.converseChat({
-        client: params.client,
-        userId: params.userId,
-        requestId: params.requestId,
-        prompt: params.prompt,
-        context: params.context,
-        scopeHint: params.scopeHint,
-        modelOverrides: params.modelOverrides,
-      });
-    } catch (error) {
-      lastError = error;
-      const code = error instanceof ApiError ? error.code : "";
-      const retryable = code === "llm_invalid_json" ||
-        code === "llm_empty_output" ||
-        code === "chat_schema_invalid";
-      if (!retryable || attempt >= maxAttempts) {
-        throw error;
-      }
-    }
-  }
-
-  throw lastError instanceof Error
-    ? lastError
-    : new ApiError(502, "chat_generation_failed", "Chat generation failed");
+  return await llmGateway.converseChat({
+    client: params.client,
+    userId: params.userId,
+    requestId: params.requestId,
+    prompt: params.prompt,
+    context: params.context,
+    scopeHint: params.scopeHint,
+    modelOverrides: params.modelOverrides,
+  });
 };
 
 const sanitizePreferenceStringList = (values: unknown): string[] => {
@@ -5669,6 +5672,9 @@ const orchestrateChatTurn = async (params: {
       active_recipe: activeComponent?.recipe
         ? (activeComponent.recipe as unknown as JsonValue)
         : null,
+      candidate_recipe_set: params.existingCandidate
+        ? (params.existingCandidate as unknown as JsonValue)
+        : null,
       candidate_recipe_set_outline: candidateOutlineForPrompt,
       loop_state: deriveLoopState(
         params.sessionContext,
@@ -5694,37 +5700,11 @@ const orchestrateChatTurn = async (params: {
       shouldGenerate && !assistantChatResponse.candidate_recipe_set &&
       !assistantChatResponse.recipe
     ) {
-      const generationResponse = await converseChatWithRetry({
-        client: params.serviceClient,
-        userId: params.userId,
-        requestId: params.requestId,
-        prompt: params.message,
-        context: {
-          chat_context: compactChatContext,
-          thread: params.threadForPrompt,
-          loop_state: "iterating",
-          preferences: params.contextPack.preferences,
-          preferences_natural_language:
-            params.contextPack.preferencesNaturalLanguage,
-          memory_snapshot: params.contextPack.memorySnapshot,
-          selected_memories: params.contextPack.selectedMemories,
-          candidate_recipe_set_outline: candidateOutlineForPrompt,
-        },
-        scopeHint: "chat_generation",
-        modelOverrides: params.modelOverrides,
-      });
-
-      if (
-        !generationResponse.candidate_recipe_set && !generationResponse.recipe
-      ) {
-        throw new ApiError(
-          502,
-          "chat_generation_missing_candidate",
-          "Generation trigger did not produce a candidate recipe set",
-        );
-      }
-
-      assistantChatResponse = generationResponse;
+      throw new ApiError(
+        502,
+        "chat_generation_missing_candidate",
+        "Generation trigger did not produce a candidate recipe set",
+      );
     }
   }
 
@@ -7001,12 +6981,7 @@ Deno.serve(async (request) => {
       segments[1] === "cookbook" && method === "GET"
     ) {
       const items = await buildCookbookItems(client, auth.userId);
-      const cookbookInsight = await generateCookbookInsight({
-        client,
-        userId: auth.userId,
-        requestId,
-        items,
-      });
+      const cookbookInsight = buildCookbookInsightDeterministic(items);
       return respond(200, { items, cookbook_insight: cookbookInsight });
     }
 
@@ -7093,7 +7068,11 @@ Deno.serve(async (request) => {
 
       let chatMessages: ChatMessageView[] = [];
       if (recipe.source_chat_id) {
-        chatMessages = await fetchChatMessages(client, recipe.source_chat_id);
+        chatMessages = await fetchChatMessages(
+          client,
+          recipe.source_chat_id,
+          160,
+        );
       }
 
       return respond(200, {
@@ -7717,17 +7696,21 @@ Deno.serve(async (request) => {
         recipe: orchestrated.assistantChatResponse.recipe,
         response_context: orchestrated.responseContext,
       };
+      const assistantMessageContent = orchestrated.assistantChatResponse
+        .assistant_reply?.text?.trim() ||
+        "I’m here to help with recipes. What are you in the mood for?";
       const assistantMetadata: Record<string, JsonValue> = {
         format: "assistant_chat_envelope_v2",
         loop_state: orchestrated.nextLoopState,
         intent: orchestrated.responseContext?.intent ?? null,
+        envelope: assistantEnvelope as unknown as JsonValue,
       };
 
       const { data: assistantMessage, error: assistantMessageError } =
         await client.from("chat_messages").insert({
           chat_id: chatSession.id,
           role: "assistant",
-          content: JSON.stringify(assistantEnvelope),
+          content: assistantMessageContent,
           metadata: assistantMetadata,
         }).select("id,created_at").single();
 
@@ -7772,7 +7755,7 @@ Deno.serve(async (request) => {
         {
           id: assistantMessage.id,
           role: "assistant",
-          content: JSON.stringify(assistantEnvelope),
+          content: assistantMessageContent,
           metadata: assistantMetadata,
           created_at: assistantMessage.created_at,
         },
@@ -7831,7 +7814,7 @@ Deno.serve(async (request) => {
         );
       }
 
-      const messages = await fetchChatMessages(client, chatId);
+      const messages = await fetchChatMessages(client, chatId, 120);
       const context = extractChatContext(chatSession.context);
       const memoryContextIds = Array.isArray(context.selected_memory_ids)
         ? context.selected_memory_ids.filter((item): item is string =>
@@ -7957,16 +7940,20 @@ Deno.serve(async (request) => {
         recipe: orchestrated.assistantChatResponse.recipe,
         response_context: orchestrated.responseContext,
       };
+      const assistantMessageContent = orchestrated.assistantChatResponse
+        .assistant_reply?.text?.trim() ||
+        "I’m here to help with recipes. What are you in the mood for?";
       const assistantMetadata: Record<string, JsonValue> = {
         format: "assistant_chat_envelope_v2",
         loop_state: orchestrated.nextLoopState,
         intent: orchestrated.responseContext?.intent ?? null,
+        envelope: assistantEnvelope as unknown as JsonValue,
       };
       const { data: assistantMessage, error: assistantMessageError } =
         await client.from("chat_messages").insert({
           chat_id: chatId,
           role: "assistant",
-          content: JSON.stringify(assistantEnvelope),
+          content: assistantMessageContent,
           metadata: assistantMetadata,
         }).select("id,created_at").single();
 
@@ -8011,7 +7998,7 @@ Deno.serve(async (request) => {
         {
           id: assistantMessage.id,
           role: "assistant",
-          content: JSON.stringify(assistantEnvelope),
+          content: assistantMessageContent,
           metadata: assistantMetadata,
           created_at: assistantMessage.created_at,
         },
@@ -8206,7 +8193,7 @@ Deno.serve(async (request) => {
         },
       });
 
-      const messages = await fetchChatMessages(client, chatId);
+      const messages = await fetchChatMessages(client, chatId, 120);
       return respond(
         200,
         buildChatLoopResponse({
@@ -8392,7 +8379,7 @@ Deno.serve(async (request) => {
         },
       });
 
-      const messages = await fetchChatMessages(client, chatId);
+      const messages = await fetchChatMessages(client, chatId, 120);
       const memoryContextIds = Array.isArray(nextContext.selected_memory_ids)
         ? nextContext.selected_memory_ids.filter((item): item is string =>
           typeof item === "string"

@@ -1086,7 +1086,16 @@ export interface paths {
                 header?: {
                     /**
                      * @description Optional JSON string used by Admin Simulation Runner to override model/provider per scope.
-                     *     Format: {"chat_ideation":{"provider":"anthropic","model":"claude-3-5-haiku-latest"}}.
+                     *     Format:
+                     *     {
+                     *       "chat_ideation":{"provider":"anthropic","model":"claude-3-5-haiku-latest"},
+                     *       "ingredient_enrich":{"provider":"openai","model":"gpt-5-mini"}
+                     *     }
+                     *     Common scope keys:
+                     *     chat_ideation, chat_generation, chat_iteration, classify,
+                     *     ingredient_alias_normalize, ingredient_phrase_split, ingredient_enrich,
+                     *     recipe_metadata_enrich, ingredient_relation_infer, preference_normalize, equipment_filter,
+                     *     onboarding, image, memory_extract, memory_select, memory_summarize, memory_conflict_resolve.
                      *     Not required for normal mobile clients.
                      */
                     "x-sim-model-overrides"?: components["parameters"]["SimModelOverrides"];
@@ -1175,7 +1184,16 @@ export interface paths {
                 header?: {
                     /**
                      * @description Optional JSON string used by Admin Simulation Runner to override model/provider per scope.
-                     *     Format: {"chat_ideation":{"provider":"anthropic","model":"claude-3-5-haiku-latest"}}.
+                     *     Format:
+                     *     {
+                     *       "chat_ideation":{"provider":"anthropic","model":"claude-3-5-haiku-latest"},
+                     *       "ingredient_enrich":{"provider":"openai","model":"gpt-5-mini"}
+                     *     }
+                     *     Common scope keys:
+                     *     chat_ideation, chat_generation, chat_iteration, classify,
+                     *     ingredient_alias_normalize, ingredient_phrase_split, ingredient_enrich,
+                     *     recipe_metadata_enrich, ingredient_relation_infer, preference_normalize, equipment_filter,
+                     *     onboarding, image, memory_extract, memory_select, memory_summarize, memory_conflict_resolve.
                      *     Not required for normal mobile clients.
                      */
                     "x-sim-model-overrides"?: components["parameters"]["SimModelOverrides"];
@@ -1239,7 +1257,16 @@ export interface paths {
                 header?: {
                     /**
                      * @description Optional JSON string used by Admin Simulation Runner to override model/provider per scope.
-                     *     Format: {"chat_ideation":{"provider":"anthropic","model":"claude-3-5-haiku-latest"}}.
+                     *     Format:
+                     *     {
+                     *       "chat_ideation":{"provider":"anthropic","model":"claude-3-5-haiku-latest"},
+                     *       "ingredient_enrich":{"provider":"openai","model":"gpt-5-mini"}
+                     *     }
+                     *     Common scope keys:
+                     *     chat_ideation, chat_generation, chat_iteration, classify,
+                     *     ingredient_alias_normalize, ingredient_phrase_split, ingredient_enrich,
+                     *     recipe_metadata_enrich, ingredient_relation_infer, preference_normalize, equipment_filter,
+                     *     onboarding, image, memory_extract, memory_select, memory_summarize, memory_conflict_resolve.
                      *     Not required for normal mobile clients.
                      */
                     "x-sim-model-overrides"?: components["parameters"]["SimModelOverrides"];
@@ -1285,7 +1312,16 @@ export interface paths {
                 header?: {
                     /**
                      * @description Optional JSON string used by Admin Simulation Runner to override model/provider per scope.
-                     *     Format: {"chat_ideation":{"provider":"anthropic","model":"claude-3-5-haiku-latest"}}.
+                     *     Format:
+                     *     {
+                     *       "chat_ideation":{"provider":"anthropic","model":"claude-3-5-haiku-latest"},
+                     *       "ingredient_enrich":{"provider":"openai","model":"gpt-5-mini"}
+                     *     }
+                     *     Common scope keys:
+                     *     chat_ideation, chat_generation, chat_iteration, classify,
+                     *     ingredient_alias_normalize, ingredient_phrase_split, ingredient_enrich,
+                     *     recipe_metadata_enrich, ingredient_relation_infer, preference_normalize, equipment_filter,
+                     *     onboarding, image, memory_extract, memory_select, memory_summarize, memory_conflict_resolve.
                      *     Not required for normal mobile clients.
                      */
                     "x-sim-model-overrides"?: components["parameters"]["SimModelOverrides"];
@@ -1510,6 +1546,11 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * @description Internal LLM pipeline scope key used for prompt/rule/model routing.
+         * @enum {string}
+         */
+        LlmScope: "chat" | "chat_ideation" | "chat_generation" | "chat_iteration" | "generate" | "tweak" | "classify" | "ingredient_alias_normalize" | "ingredient_phrase_split" | "ingredient_enrich" | "recipe_metadata_enrich" | "ingredient_relation_infer" | "preference_normalize" | "equipment_filter" | "onboarding" | "image" | "memory_extract" | "memory_select" | "memory_summarize" | "memory_conflict_resolve";
         ErrorEnvelope: {
             code: string;
             message: string;
@@ -1978,7 +2019,16 @@ export interface components {
         IngredientId: string;
         /**
          * @description Optional JSON string used by Admin Simulation Runner to override model/provider per scope.
-         *     Format: {"chat_ideation":{"provider":"anthropic","model":"claude-3-5-haiku-latest"}}.
+         *     Format:
+         *     {
+         *       "chat_ideation":{"provider":"anthropic","model":"claude-3-5-haiku-latest"},
+         *       "ingredient_enrich":{"provider":"openai","model":"gpt-5-mini"}
+         *     }
+         *     Common scope keys:
+         *     chat_ideation, chat_generation, chat_iteration, classify,
+         *     ingredient_alias_normalize, ingredient_phrase_split, ingredient_enrich,
+         *     recipe_metadata_enrich, ingredient_relation_infer, preference_normalize, equipment_filter,
+         *     onboarding, image, memory_extract, memory_select, memory_summarize, memory_conflict_resolve.
          *     Not required for normal mobile clients.
          */
         SimModelOverrides: string;

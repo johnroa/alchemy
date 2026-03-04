@@ -1,0 +1,257 @@
+import type { SupabaseClient } from "npm:@supabase/supabase-js@2";
+import { ApiError } from "./errors.ts";
+import {
+  getLlmScopeDefinition,
+  type GatewayScope,
+  type LlmRetryPolicy,
+} from "./llm-scope-registry.ts";
+import { callAnthropicJson } from "./llm-adapters/anthropic.ts";
+import { callOpenAiImage, callOpenAiJson } from "./llm-adapters/openai.ts";
+import type { GatewayConfig, JsonValue } from "./types.ts";
+
+export type ModelOverrideMap = Record<
+  string,
+  { provider: string; model: string }
+>;
+
+export type ProviderResult<T> = {
+  result: T;
+  inputTokens: number;
+  outputTokens: number;
+};
+
+const isRetryableErrorCode = (
+  error: unknown,
+  retryPolicy: LlmRetryPolicy,
+): boolean => {
+  const code = error instanceof ApiError ? error.code : null;
+  if (!code) {
+    return false;
+  }
+  return retryPolicy.retryable_codes.includes(code);
+};
+
+export const getActiveConfig = async (
+  client: SupabaseClient,
+  scope: GatewayScope,
+  modelOverride?: { provider: string; model: string },
+): Promise<GatewayConfig> => {
+  const [
+    { data: prompt, error: promptError },
+    { data: rule, error: ruleError },
+  ] = await Promise.all([
+    client.from("llm_prompts").select("template").eq("scope", scope).eq(
+      "is_active",
+      true,
+    ).maybeSingle(),
+    client.from("llm_rules").select("rule").eq("scope", scope).eq(
+      "is_active",
+      true,
+    ).maybeSingle(),
+  ]);
+
+  if (promptError || !prompt?.template) {
+    throw new ApiError(
+      500,
+      "gateway_prompt_missing",
+      `No active prompt configured for scope: ${scope}`,
+    );
+  }
+
+  if (ruleError || !rule?.rule) {
+    throw new ApiError(
+      500,
+      "gateway_rule_missing",
+      `No active rule configured for scope: ${scope}`,
+    );
+  }
+
+  let provider: string;
+  let model: string;
+  let modelConfig: Record<string, JsonValue>;
+
+  if (modelOverride) {
+    provider = modelOverride.provider;
+    model = modelOverride.model;
+    modelConfig = {};
+  } else {
+    const { data: route, error: routeError } = await client
+      .from("llm_model_routes")
+      .select("provider,model,config")
+      .eq("scope", scope)
+      .eq("is_active", true)
+      .maybeSingle();
+
+    if (routeError || !route) {
+      throw new ApiError(
+        500,
+        "gateway_route_missing",
+        `No active model route configured for scope: ${scope}`,
+      );
+    }
+
+    if (!route.provider || !route.model) {
+      throw new ApiError(
+        500,
+        "gateway_route_invalid",
+        `Active model route for ${scope} does not contain a model`,
+      );
+    }
+
+    provider = route.provider;
+    model = route.model;
+    modelConfig = (route.config as Record<string, JsonValue>) ?? {};
+  }
+
+  const { data: reg } = await client
+    .from("llm_model_registry")
+    .select("input_cost_per_1m_tokens,output_cost_per_1m_tokens")
+    .eq("provider", provider)
+    .eq("model", model)
+    .maybeSingle();
+
+  return {
+    promptTemplate: prompt.template,
+    rule: rule.rule as Record<string, JsonValue>,
+    provider,
+    model,
+    modelConfig,
+    inputCostPer1m: Number(reg?.input_cost_per_1m_tokens ?? 0),
+    outputCostPer1m: Number(reg?.output_cost_per_1m_tokens ?? 0),
+  };
+};
+
+export const executeWithConfig = async <T>(params: {
+  provider: string;
+  model: string;
+  modelConfig: Record<string, JsonValue>;
+  systemPrompt: string;
+  userInput: Record<string, JsonValue>;
+}): Promise<ProviderResult<T>> => {
+  if (params.provider === "anthropic") {
+    return await callAnthropicJson<T>({
+      model: params.model,
+      modelConfig: params.modelConfig,
+      systemPrompt: params.systemPrompt,
+      userInput: params.userInput,
+    });
+  }
+
+  if (params.provider === "openai") {
+    return await callOpenAiJson<T>({
+      model: params.model,
+      modelConfig: params.modelConfig,
+      systemPrompt: params.systemPrompt,
+      userInput: params.userInput,
+    });
+  }
+
+  throw new ApiError(
+    500,
+    "llm_provider_not_supported",
+    `Provider adapter not configured: ${params.provider}`,
+  );
+};
+
+export const executeScope = async <T>(params: {
+  client: SupabaseClient;
+  scope: GatewayScope;
+  userInput: Record<string, JsonValue>;
+  modelOverride?: { provider: string; model: string };
+  systemPromptOverride?: string;
+  modelConfigOverride?: Record<string, JsonValue>;
+  retryPolicyOverride?: LlmRetryPolicy;
+}): Promise<ProviderResult<T> & { config: GatewayConfig; attempts: number }> => {
+  const config = await getActiveConfig(
+    params.client,
+    params.scope,
+    params.modelOverride,
+  );
+  const definition = getLlmScopeDefinition(params.scope);
+  const retryPolicy = params.retryPolicyOverride ?? definition.retry_policy;
+
+  let attempts = 0;
+  let lastError: unknown = null;
+
+  while (attempts < retryPolicy.max_attempts) {
+    attempts += 1;
+    try {
+      const payload: Record<string, JsonValue> = Object.prototype.hasOwnProperty
+          .call(params.userInput, "rule")
+        ? params.userInput
+        : { rule: config.rule, ...params.userInput };
+      const result = await executeWithConfig<T>({
+        provider: config.provider,
+        model: config.model,
+        modelConfig: {
+          ...config.modelConfig,
+          ...(params.modelConfigOverride ?? {}),
+        },
+        systemPrompt: params.systemPromptOverride ?? config.promptTemplate,
+        userInput: payload,
+      });
+
+      return {
+        ...result,
+        config,
+        attempts,
+      };
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableErrorCode(error, retryPolicy)) {
+        throw error;
+      }
+      if (attempts >= retryPolicy.max_attempts) {
+        throw error;
+      }
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new ApiError(502, "llm_execution_failed", "LLM scope execution failed");
+};
+
+export const executeImageScope = async (params: {
+  client: SupabaseClient;
+  prompt: string;
+  modelOverride?: { provider: string; model: string };
+}): Promise<{ imageUrl: string; config: GatewayConfig }> => {
+  const config = await getActiveConfig(params.client, "image", params.modelOverride);
+  if (config.provider !== "openai") {
+    throw new ApiError(
+      500,
+      "image_provider_not_supported",
+      `Image provider adapter not configured: ${config.provider}`,
+    );
+  }
+
+  const imageUrl = await callOpenAiImage({
+    model: config.model,
+    modelConfig: config.modelConfig,
+    prompt: params.prompt,
+  });
+
+  return { imageUrl, config };
+};
+
+export const executeImageWithConfig = async (params: {
+  provider: string;
+  model: string;
+  modelConfig: Record<string, JsonValue>;
+  prompt: string;
+}): Promise<string> => {
+  if (params.provider !== "openai") {
+    throw new ApiError(
+      500,
+      "image_provider_not_supported",
+      `Image provider adapter not configured: ${params.provider}`,
+    );
+  }
+
+  return await callOpenAiImage({
+    model: params.model,
+    modelConfig: params.modelConfig,
+    prompt: params.prompt,
+  });
+};

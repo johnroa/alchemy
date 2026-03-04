@@ -668,13 +668,13 @@ const runSimulation = async (params: {
   };
   const loadTokenUsageWithTiming = async (
     apiRequestId: string | null
-  ): Promise<{ tokenUsage: TokenUsageSummary | null; dbMs: number; llmMs: number }> => {
+  ): Promise<{ tokenUsage: TokenUsageSummary | null; usageQueryMs: number; llmMs: number }> => {
     const dbStartedAt = Date.now();
     const tokenUsage = await loadTokenUsage(apiRequestId);
-    const dbMs = Date.now() - dbStartedAt;
+    const usageQueryMs = Date.now() - dbStartedAt;
     return {
       tokenUsage,
-      dbMs,
+      usageQueryMs,
       llmMs: sumLlmLatencyMs(tokenUsage)
     };
   };
@@ -778,11 +778,11 @@ const runSimulation = async (params: {
         method: "POST",
         body: { message: prompts.start },
         modelOverrides: params.modelOverrides,
-        retryAttempts: 2
+        retryAttempts: 1
       });
       const apiMs = Date.now() - apiStartedAt;
       const response = api.data;
-      const { tokenUsage, dbMs, llmMs } = await loadTokenUsageWithTiming(api.request_id);
+      const { tokenUsage, usageQueryMs, llmMs } = await loadTokenUsageWithTiming(api.request_id);
 
       assertCondition(typeof response.id === "string" && response.id.length > 0, "Chat session id missing");
 
@@ -791,7 +791,7 @@ const runSimulation = async (params: {
         user_prompt: prompts.start,
         api_request_id: api.request_id,
         token_usage: tokenUsage,
-        timing: { api_ms: apiMs, db_ms: dbMs, llm_ms: llmMs, server_ms: api.server_ms },
+        timing: { api_ms: apiMs, usage_query_ms: usageQueryMs, llm_ms: llmMs, server_ms: api.server_ms },
         loop_state: response.loop_state ?? "unknown",
         assistant_reply: extractAssistantText(response),
         message_count: Array.isArray(response.messages) ? response.messages.length : 0,
@@ -808,17 +808,17 @@ const runSimulation = async (params: {
         method: "POST",
         body: { message: prompts.refine },
         modelOverrides: params.modelOverrides,
-        retryAttempts: 2
+        retryAttempts: 1
       });
       const apiMs = Date.now() - apiStartedAt;
       const response = api.data;
-      const { tokenUsage, dbMs, llmMs } = await loadTokenUsageWithTiming(api.request_id);
+      const { tokenUsage, usageQueryMs, llmMs } = await loadTokenUsageWithTiming(api.request_id);
 
       return {
         user_prompt: prompts.refine,
         api_request_id: api.request_id,
         token_usage: tokenUsage,
-        timing: { api_ms: apiMs, db_ms: dbMs, llm_ms: llmMs, server_ms: api.server_ms },
+        timing: { api_ms: apiMs, usage_query_ms: usageQueryMs, llm_ms: llmMs, server_ms: api.server_ms },
         loop_state: response.loop_state ?? "unknown",
         assistant_reply: extractAssistantText(response),
         message_count: Array.isArray(response.messages) ? response.messages.length : 0,
@@ -857,74 +857,50 @@ const runSimulation = async (params: {
             scopes: [],
             scope_stats: {}
           },
-          timing: { api_ms: 0, db_ms: 0, llm_ms: 0, server_ms: 0 }
+          timing: { api_ms: 0, usage_query_ms: 0, llm_ms: 0, server_ms: 0 }
         };
       }
 
-      const generationPrompts = [
-        prompts.trigger,
-        "Please generate the full recipe set now.",
-        "Generate now and return the recipe."
-      ];
+      const generationPrompt = prompts.trigger;
+      const apiStartedAt = Date.now();
+      const api = await requestJson<ChatApiResponse>({
+        apiBase,
+        token,
+        path: `/chat/${chat.chat_id}/messages`,
+        method: "POST",
+        body: { message: generationPrompt },
+        modelOverrides: params.modelOverrides,
+        retryAttempts: 1
+      });
+      const apiMs = Date.now() - apiStartedAt;
+      const response = api.data;
+      const { tokenUsage, usageQueryMs, llmMs } = await loadTokenUsageWithTiming(api.request_id);
 
-      const attemptSummaries: Array<Record<string, unknown>> = [];
-
-      for (let idx = 0; idx < generationPrompts.length; idx += 1) {
-        const generationPrompt = generationPrompts[idx]!;
-        const apiStartedAt = Date.now();
-        const api = await requestJson<ChatApiResponse>({
-          apiBase,
-          token,
-          path: `/chat/${chat.chat_id}/messages`,
-          method: "POST",
-          body: { message: generationPrompt },
-          modelOverrides: params.modelOverrides,
-          retryAttempts: 2
-        });
-        const apiMs = Date.now() - apiStartedAt;
-        const response = api.data;
-        const { tokenUsage, dbMs, llmMs } = await loadTokenUsageWithTiming(api.request_id);
-
-        const components = summarizeComponents(response.candidate_recipe_set);
-        const loopState = response.loop_state ?? "unknown";
-        const assistantReply = extractAssistantText(response);
-        attemptSummaries.push({
-          attempt: idx + 1,
-          generation_prompt: generationPrompt,
-          api_request_id: api.request_id,
-          loop_state: loopState,
-          candidate_count: components.length,
-          assistant_reply: assistantReply
-        });
-
-        if (components.length > 0) {
-          return {
-            generation_prompt: generationPrompt,
-            generation_attempt: idx + 1,
-            generation_attempts: attemptSummaries,
-            generation_source: "chat_generation_trigger",
-            api_request_id: api.request_id,
-            token_usage: tokenUsage,
-            timing: { api_ms: apiMs, db_ms: dbMs, llm_ms: llmMs, server_ms: api.server_ms },
-            loop_state: loopState,
-            candidate_id: response.candidate_recipe_set?.candidate_id ?? "",
-            revision: response.candidate_recipe_set?.revision ?? null,
-            active_component_id: response.candidate_recipe_set?.active_component_id ?? null,
-            candidate_count: components.length,
-            candidate_summary: components,
-            candidate_snapshot: projectCandidateForTrace(response.candidate_recipe_set),
-            assistant_reply: assistantReply,
-            thread_tail: Array.isArray(response.messages) ? response.messages.slice(-6) : []
-          };
-        }
+      const components = summarizeComponents(response.candidate_recipe_set);
+      const loopState = response.loop_state ?? "unknown";
+      const assistantReply = extractAssistantText(response);
+      if (components.length === 0) {
+        throw new Error(
+          `Generation trigger did not produce a candidate recipe set (loop_state=${loopState})`
+        );
       }
 
-      const lastAttempt = attemptSummaries[attemptSummaries.length - 1];
-      throw new Error(
-        `Generation trigger did not produce a candidate recipe set after ${generationPrompts.length} attempts (loop_state=${
-          String(lastAttempt?.["loop_state"] ?? "unknown")
-        })`
-      );
+      return {
+        generation_prompt: generationPrompt,
+        generation_source: "chat_generation_trigger",
+        api_request_id: api.request_id,
+        token_usage: tokenUsage,
+        timing: { api_ms: apiMs, usage_query_ms: usageQueryMs, llm_ms: llmMs, server_ms: api.server_ms },
+        loop_state: loopState,
+        candidate_id: response.candidate_recipe_set?.candidate_id ?? "",
+        revision: response.candidate_recipe_set?.revision ?? null,
+        active_component_id: response.candidate_recipe_set?.active_component_id ?? null,
+        candidate_count: components.length,
+        candidate_summary: components,
+        candidate_snapshot: projectCandidateForTrace(response.candidate_recipe_set),
+        assistant_reply: assistantReply,
+        thread_tail: Array.isArray(response.messages) ? response.messages.slice(-6) : []
+      };
     });
 
     const iterated = await runStep("chat_iterate_candidate", async () => {
@@ -936,11 +912,11 @@ const runSimulation = async (params: {
         method: "POST",
         body: { message: prompts.iterate },
         modelOverrides: params.modelOverrides,
-        retryAttempts: 2
+        retryAttempts: 1
       });
       const apiMs = Date.now() - apiStartedAt;
       const response = api.data;
-      const { tokenUsage, dbMs, llmMs } = await loadTokenUsageWithTiming(api.request_id);
+      const { tokenUsage, usageQueryMs, llmMs } = await loadTokenUsageWithTiming(api.request_id);
 
       const components = summarizeComponents(response.candidate_recipe_set);
       assertCondition(components.length > 0, "Iteration response lost candidate recipe set");
@@ -950,7 +926,7 @@ const runSimulation = async (params: {
         tweak_prompt: prompts.iterate,
         api_request_id: api.request_id,
         token_usage: tokenUsage,
-        timing: { api_ms: apiMs, db_ms: dbMs, llm_ms: llmMs, server_ms: api.server_ms },
+        timing: { api_ms: apiMs, usage_query_ms: usageQueryMs, llm_ms: llmMs, server_ms: api.server_ms },
         loop_state: response.loop_state ?? "unknown",
         assistant_reply: extractAssistantText(response),
         message_count: Array.isArray(response.messages) ? response.messages.length : 0,
@@ -967,46 +943,6 @@ const runSimulation = async (params: {
       };
     });
 
-    await runStep("candidate_set_active_component", async () => {
-      const activeId = iterated.active_component_id;
-      if (!activeId) {
-        return {
-          skipped: true,
-          reason: "No active component id provided in candidate set",
-          api_request_id: null,
-          token_usage: null,
-          timing: { api_ms: 0, db_ms: 0, llm_ms: 0, server_ms: 0 }
-        };
-      }
-
-      const apiStartedAt = Date.now();
-      const api = await requestJson<ChatApiResponse>({
-        apiBase,
-        token,
-        path: `/chat/${chat.chat_id}/candidate`,
-        method: "PATCH",
-        body: {
-          action: "set_active_component",
-          component_id: activeId
-        },
-        modelOverrides: params.modelOverrides,
-        retryAttempts: 2
-      });
-      const apiMs = Date.now() - apiStartedAt;
-      const response = api.data;
-      const { tokenUsage, dbMs, llmMs } = await loadTokenUsageWithTiming(api.request_id);
-
-      return {
-        api_request_id: api.request_id,
-        token_usage: tokenUsage,
-        timing: { api_ms: apiMs, db_ms: dbMs, llm_ms: llmMs, server_ms: api.server_ms },
-        loop_state: response.loop_state ?? "unknown",
-        active_component_id: response.candidate_recipe_set?.active_component_id ?? null,
-        candidate_summary: summarizeComponents(response.candidate_recipe_set),
-        candidate_snapshot: projectCandidateForTrace(response.candidate_recipe_set)
-      };
-    });
-
     const committed = await runStep("commit_candidate_set", async () => {
       const apiStartedAt = Date.now();
       const api = await requestJson<ChatApiResponse>({
@@ -1016,11 +952,11 @@ const runSimulation = async (params: {
         method: "POST",
         body: {},
         modelOverrides: params.modelOverrides,
-        retryAttempts: 2
+        retryAttempts: 1
       });
       const apiMs = Date.now() - apiStartedAt;
       const response = api.data;
-      const { tokenUsage, dbMs, llmMs } = await loadTokenUsageWithTiming(api.request_id);
+      const { tokenUsage, usageQueryMs, llmMs } = await loadTokenUsageWithTiming(api.request_id);
 
       const recipes = Array.isArray(response.commit?.recipes) ? response.commit?.recipes : [];
       assertCondition(recipes.length > 0, "Commit did not return persisted recipe ids");
@@ -1028,7 +964,7 @@ const runSimulation = async (params: {
       return {
         api_request_id: api.request_id,
         token_usage: tokenUsage,
-        timing: { api_ms: apiMs, db_ms: dbMs, llm_ms: llmMs, server_ms: api.server_ms },
+        timing: { api_ms: apiMs, usage_query_ms: usageQueryMs, llm_ms: llmMs, server_ms: api.server_ms },
         loop_state: response.loop_state ?? "unknown",
         committed_count: Number(response.commit?.committed_count ?? recipes.length),
         recipes: recipes.map((recipe) => ({
@@ -1057,16 +993,16 @@ const runSimulation = async (params: {
         path: `/recipes/${primaryRecipeId}?units=metric&group_by=component&inline_measurements=true`,
         method: "GET",
         modelOverrides: params.modelOverrides,
-        retryAttempts: 2
+        retryAttempts: 1
       });
       const apiMs = Date.now() - apiStartedAt;
       const recipe = api.data;
-      const { tokenUsage, dbMs, llmMs } = await loadTokenUsageWithTiming(api.request_id);
+      const { tokenUsage, usageQueryMs, llmMs } = await loadTokenUsageWithTiming(api.request_id);
 
       return {
         api_request_id: api.request_id,
         token_usage: tokenUsage,
-        timing: { api_ms: apiMs, db_ms: dbMs, llm_ms: llmMs, server_ms: api.server_ms },
+        timing: { api_ms: apiMs, usage_query_ms: usageQueryMs, llm_ms: llmMs, server_ms: api.server_ms },
         recipe_id: primaryRecipeId,
         title: recipe.title ?? "",
         ingredient_count: Array.isArray(recipe.ingredients) ? recipe.ingredients.length : 0,
@@ -1083,11 +1019,11 @@ const runSimulation = async (params: {
         path: "/recipes/cookbook",
         method: "GET",
         modelOverrides: params.modelOverrides,
-        retryAttempts: 2
+        retryAttempts: 1
       });
       const apiMs = Date.now() - apiStartedAt;
       const response = api.data;
-      const { tokenUsage, dbMs, llmMs } = await loadTokenUsageWithTiming(api.request_id);
+      const { tokenUsage, usageQueryMs, llmMs } = await loadTokenUsageWithTiming(api.request_id);
 
       const items = Array.isArray(response.items) ? response.items : [];
       const containsCommitted = items.some((item) => {
@@ -1098,7 +1034,7 @@ const runSimulation = async (params: {
       return {
         api_request_id: api.request_id,
         token_usage: tokenUsage,
-        timing: { api_ms: apiMs, db_ms: dbMs, llm_ms: llmMs, server_ms: api.server_ms },
+        timing: { api_ms: apiMs, usage_query_ms: usageQueryMs, llm_ms: llmMs, server_ms: api.server_ms },
         item_count: items.length,
         contains_primary_recipe: containsCommitted
       };

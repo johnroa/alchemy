@@ -15,7 +15,7 @@ export default async function PromptsPage(): Promise<React.JSX.Element> {
         title="Prompts"
         description="Version and manage all LLM instruction templates. Each scope has one active prompt at a time."
       />
-      <Card className="border-blue-200 bg-blue-50/40">
+      <Card className="border-blue-200 bg-blue-50">
         <CardContent className="flex items-start gap-3 py-4">
           <Info className="mt-0.5 h-4 w-4 flex-none text-blue-600" />
           <div className="space-y-0.5">

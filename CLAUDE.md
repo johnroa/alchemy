@@ -17,13 +17,19 @@ packages/shared/      Shared utilities
 - Strict TypeScript. No `any`.
 - Minimal diffs. Do not touch unrelated code.
 - Do not add dependencies unless explicitly asked.
-- All LLM calls go through `supabase/functions/v1/` — never from the client.
+- All LLM calls must go through the LLM pipeline (`supabase/functions/_shared/llm-scope-registry.ts` + `llm-executor.ts` + `llm-adapters/*`) via `supabase/functions/v1/` — never from the client.
 - Supabase deploy is GitHub CI only; do not run local `supabase db push` / `supabase functions deploy`.
 - Never hit the DB directly for production changes. Use sequential, append-only migrations.
 - Change LLM prompts/rules/routes via API/Admin UI (`/api/admin/llm/prompts`, `/api/admin/llm/rules`, `/api/admin/llm/routes`), never direct DB edits.
 - The client is API-driven. No business logic beyond UI/UX orchestration.
 - Every user-facing screen needs loading, empty, and error states.
 - No silent data loss. Offline reads from cache are fine.
+
+## LLM Pipeline Workflow
+- Add LLM call: define a new scope in `llm-scope-registry.ts`, seed route/prompt/rule in sequential migration, add gateway wrapper through executor, wire callsite, add tests, update docs.
+- Edit LLM call: use Admin API/UI for prompts/rules/routes; if contract shape changes, update validators/tests and public OpenAPI examples as needed.
+- Remove LLM call: remove callsite/wrapper/scope and add migration deactivating corresponding scope rows.
+- Direct provider endpoints (`api.openai.com`, `api.anthropic.com`) are allowed only in `supabase/functions/_shared/llm-adapters/*`.
 
 ## Mobile Stack (`apps/mobile/`)
 - **Expo Router** — file-based routing

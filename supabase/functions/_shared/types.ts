@@ -1,3 +1,5 @@
+import type { GatewayScope } from "./llm-scope-registry.ts";
+
 export type JsonValue =
   | string
   | number
@@ -195,21 +197,6 @@ export type CandidateRecipeSet = {
   active_component_id: string;
   components: CandidateRecipeComponent[];
 };
-
-export type GatewayScope =
-  | "chat"
-  | "chat_ideation"
-  | "chat_generation"
-  | "chat_iteration"
-  | "generate"
-  | "tweak"
-  | "classify"
-  | "onboarding"
-  | "image"
-  | "memory_extract"
-  | "memory_select"
-  | "memory_summarize"
-  | "memory_conflict_resolve";
 
 export type GatewayConfig = {
   promptTemplate: string;

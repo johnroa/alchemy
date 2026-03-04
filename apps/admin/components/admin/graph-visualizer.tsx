@@ -1,6 +1,12 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import ForceGraph2D, {
+  type ForceGraphMethods,
+  type LinkObject,
+  type NodeObject
+} from "react-force-graph-2d";
+import { EntityTypeIcon } from "@/components/admin/entity-type-icon";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -30,14 +36,37 @@ type GraphData = {
   relation_types: string[];
 };
 
+type ForceNode = GraphEntity & {
+  val: number;
+  degree: number;
+  color: string;
+  x?: number;
+  y?: number;
+  fx?: number;
+  fy?: number;
+};
+
+type ForceLink = GraphEdge & {
+  source: string;
+  target: string;
+  color: string;
+};
+
+type ConfigurableForce = {
+  strength?: (value: number) => unknown;
+  distanceMax?: (value: number) => unknown;
+  distance?: (value: number | ((link: ForceLink) => number)) => unknown;
+  iterations?: (value: number) => unknown;
+};
+
 const nodeColors: Record<string, string> = {
-  recipe: "#1d4ed8",
+  recipe: "#2563eb",
   ingredient: "#047857",
   category: "#b45309",
   keyword: "#be123c"
 };
 
-const relationColors = ["#0ea5e9", "#f97316", "#10b981", "#a855f7", "#ef4444", "#14b8a6"];
+const relationColors = ["#0ea5e9", "#f97316", "#10b981", "#a855f7", "#ef4444", "#14b8a6", "#64748b"];
 
 const hashColor = (value: string): string => {
   let hash = 0;
@@ -49,7 +78,27 @@ const hashColor = (value: string): string => {
   return relationColors[Math.abs(hash) % relationColors.length] ?? "#64748b";
 };
 
-const truncate = (value: string, max = 18): string => {
+const clamp = (value: number, min: number, max: number): number => Math.max(min, Math.min(max, value));
+
+const escapeHtml = (value: string): string =>
+  value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+
+const resolveNodeId = (node: string | number | NodeObject<ForceNode> | undefined): string => {
+  if (typeof node === "string" || typeof node === "number") {
+    return String(node);
+  }
+  if (node && node.id != null) {
+    return String(node.id);
+  }
+  return "";
+};
+
+const labelForDisplay = (value: string, max = 36): string => {
   if (value.length <= max) {
     return value;
   }
@@ -61,17 +110,90 @@ export function GraphVisualizer({ graph }: { graph: GraphData }): React.JSX.Elem
     () => Array.from(new Set(graph.entities.map((entity) => entity.entity_type))).sort(),
     [graph.entities]
   );
-  const [maxNodes, setMaxNodes] = useState(120);
+
+  const [maxNodes, setMaxNodes] = useState(220);
   const [activeTypes, setActiveTypes] = useState<string[]>(entityTypes);
   const [relationFilter, setRelationFilter] = useState<string>("all");
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  const viewportRef = useRef<HTMLDivElement | null>(null);
+  const surfaceRef = useRef<HTMLDivElement | null>(null);
+  const graphRef = useRef<ForceGraphMethods<ForceNode, ForceLink> | undefined>(undefined);
+  const autoFitSignatureRef = useRef<string>("");
+  const [surfaceSize, setSurfaceSize] = useState({ width: 1080, height: 680 });
+
+  useEffect(() => {
+    setActiveTypes((current) => {
+      if (current.length === 0) {
+        return entityTypes;
+      }
+      const next = current.filter((type) => entityTypes.includes(type));
+      return next.length > 0 ? next : entityTypes;
+    });
+  }, [entityTypes]);
+
+  useEffect(() => {
+    const element = surfaceRef.current;
+    if (!element) {
+      return;
+    }
+
+    const update = (): void => {
+      setSurfaceSize({
+        width: Math.max(360, Math.floor(element.clientWidth)),
+        height: Math.max(440, Math.floor(element.clientHeight))
+      });
+    };
+
+    update();
+
+    const observer = new ResizeObserver(() => update());
+    observer.observe(element);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [isFullscreen]);
+
+  useEffect(() => {
+    const onFullscreenChange = (): void => {
+      const viewport = viewportRef.current;
+      if (!viewport) {
+        setIsFullscreen(false);
+        return;
+      }
+      const current = document.fullscreenElement;
+      setIsFullscreen(Boolean(current && (current === viewport || viewport.contains(current))));
+    };
+
+    document.addEventListener("fullscreenchange", onFullscreenChange);
+    return () => {
+      document.removeEventListener("fullscreenchange", onFullscreenChange);
+    };
+  }, []);
 
   const filtered = useMemo(() => {
-    const constrainedEntities = graph.entities
-      .filter((entity) => activeTypes.includes(entity.entity_type))
-      .slice(0, Math.max(10, Math.min(400, maxNodes)));
+    const degreeByEntityId = new Map<string, number>();
+    for (const edge of graph.edges) {
+      degreeByEntityId.set(edge.from_entity_id, (degreeByEntityId.get(edge.from_entity_id) ?? 0) + 1);
+      degreeByEntityId.set(edge.to_entity_id, (degreeByEntityId.get(edge.to_entity_id) ?? 0) + 1);
+    }
+
+    const typeFilteredEntities = graph.entities.filter((entity) => activeTypes.includes(entity.entity_type));
+    const constrainedEntities = [...typeFilteredEntities]
+      .sort((left, right) => {
+        const degreeDiff = (degreeByEntityId.get(right.id) ?? 0) - (degreeByEntityId.get(left.id) ?? 0);
+        if (degreeDiff !== 0) {
+          return degreeDiff;
+        }
+        return left.label.localeCompare(right.label);
+      })
+      .slice(0, clamp(maxNodes, 10, 500));
 
     const entityIdSet = new Set(constrainedEntities.map((entity) => entity.id));
+
     const constrainedEdges = graph.edges.filter((edge) => {
       if (!entityIdSet.has(edge.from_entity_id) || !entityIdSet.has(edge.to_entity_id)) {
         return false;
@@ -82,72 +204,275 @@ export function GraphVisualizer({ graph }: { graph: GraphData }): React.JSX.Elem
       return edge.relation_type === relationFilter;
     });
 
-    return { entities: constrainedEntities, edges: constrainedEdges };
-  }, [activeTypes, graph.edges, graph.entities, maxNodes, relationFilter]);
-
-  const positionedNodes = useMemo(() => {
-    const width = 980;
-    const height = 620;
-    const centerX = width / 2;
-    const centerY = height / 2;
-
-    const byType = new Map<string, GraphEntity[]>();
-    for (const entity of filtered.entities) {
-      const current = byType.get(entity.entity_type) ?? [];
-      current.push(entity);
-      byType.set(entity.entity_type, current);
+    const degreeWithinFiltered = new Map<string, number>();
+    for (const edge of constrainedEdges) {
+      degreeWithinFiltered.set(edge.from_entity_id, (degreeWithinFiltered.get(edge.from_entity_id) ?? 0) + 1);
+      degreeWithinFiltered.set(edge.to_entity_id, (degreeWithinFiltered.get(edge.to_entity_id) ?? 0) + 1);
     }
 
-    const types = Array.from(byType.keys()).sort();
-    const nodePositions = new Map<string, { x: number; y: number; entity: GraphEntity }>();
-
-    types.forEach((type, typeIndex) => {
-      const nodes = byType.get(type) ?? [];
-      const ringRadius = Math.min(250, 90 + typeIndex * 85);
-      const nodeCount = nodes.length;
-
-      nodes.forEach((entity, entityIndex) => {
-        const angle = (2 * Math.PI * entityIndex) / Math.max(1, nodeCount);
-        const jitterX = Math.sin(entityIndex * 3.17) * 8;
-        const jitterY = Math.cos(entityIndex * 2.71) * 8;
-        const x = centerX + ringRadius * Math.cos(angle) + jitterX;
-        const y = centerY + ringRadius * Math.sin(angle) + jitterY;
-
-        nodePositions.set(entity.id, { x, y, entity });
-      });
+    const nodes: ForceNode[] = constrainedEntities.map((entity) => {
+      const degree = degreeWithinFiltered.get(entity.id) ?? 0;
+      return {
+        ...entity,
+        degree,
+        val: Math.max(1, Math.sqrt(degree + 1)),
+        color: nodeColors[entity.entity_type] ?? "#334155"
+      };
     });
 
-    return {
-      width,
-      height,
-      nodes: nodePositions
-    };
-  }, [filtered.entities]);
+    const links: ForceLink[] = constrainedEdges.map((edge) => ({
+      ...edge,
+      source: edge.from_entity_id,
+      target: edge.to_entity_id,
+      color: hashColor(edge.relation_type)
+    }));
 
-  const selectedNode = selectedNodeId ? positionedNodes.nodes.get(selectedNodeId)?.entity ?? null : null;
-  const connectedEdges = useMemo(() => {
-    if (!selectedNode) {
-      return [] as GraphEdge[];
+    return {
+      nodes,
+      links,
+      nodeById: new Map(nodes.map((node) => [node.id, node]))
+    };
+  }, [activeTypes, graph.edges, graph.entities, maxNodes, relationFilter]);
+
+  useEffect(() => {
+    if (!selectedNodeId) {
+      return;
+    }
+    if (!filtered.nodeById.has(selectedNodeId)) {
+      setSelectedNodeId(null);
+    }
+  }, [filtered.nodeById, selectedNodeId]);
+
+  useEffect(() => {
+    const instance = graphRef.current;
+    if (!instance || filtered.nodes.length === 0) {
+      return;
     }
 
-    return filtered.edges.filter(
-      (edge) => edge.from_entity_id === selectedNode.id || edge.to_entity_id === selectedNode.id
-    );
-  }, [filtered.edges, selectedNode]);
+    const chargeForce = instance.d3Force("charge") as ConfigurableForce | undefined;
+    chargeForce?.strength?.(-220);
+    chargeForce?.distanceMax?.(900);
+
+    const linkForce = instance.d3Force("link") as ConfigurableForce | undefined;
+    linkForce?.distance?.((link: ForceLink) => clamp(90 - Number(link.confidence ?? 0.5) * 34, 52, 98));
+    linkForce?.iterations?.(2);
+
+    autoFitSignatureRef.current = "";
+    instance.d3ReheatSimulation();
+  }, [filtered.links.length, filtered.nodes.length]);
+
+  const onEngineStop = useCallback((): void => {
+    if (filtered.nodes.length === 0 || filtered.links.length === 0) {
+      return;
+    }
+
+    const signature = `${filtered.nodes.length}:${filtered.links.length}`;
+    if (autoFitSignatureRef.current === signature) {
+      return;
+    }
+
+    graphRef.current?.zoomToFit(320, 24);
+    autoFitSignatureRef.current = signature;
+  }, [filtered.links.length, filtered.nodes.length]);
+
+  const selectedNode = selectedNodeId ? filtered.nodeById.get(selectedNodeId) ?? null : null;
+  const connectedEdges = useMemo(() => {
+    if (!selectedNodeId) {
+      return [] as ForceLink[];
+    }
+
+    return filtered.links.filter((edge) => {
+      const sourceId = resolveNodeId(edge.source as string | number | NodeObject<ForceNode> | undefined);
+      const targetId = resolveNodeId(edge.target as string | number | NodeObject<ForceNode> | undefined);
+      return sourceId === selectedNodeId || targetId === selectedNodeId;
+    });
+  }, [filtered.links, selectedNodeId]);
 
   const toggleType = (type: string): void => {
     setActiveTypes((current) => {
       if (current.includes(type)) {
-        const next = current.filter((item) => item !== type);
+        const next = current.filter((value) => value !== type);
         return next.length > 0 ? next : current;
       }
       return [...current, type];
     });
   };
 
+  const toggleFullscreen = async (): Promise<void> => {
+    const viewport = viewportRef.current;
+    if (!viewport) {
+      return;
+    }
+
+    if (document.fullscreenElement) {
+      await document.exitFullscreen();
+      return;
+    }
+
+    await viewport.requestFullscreen();
+  };
+
+  const fitGraph = (): void => {
+    graphRef.current?.zoomToFit(350, 26);
+  };
+
+  const centerGraph = (): void => {
+    graphRef.current?.centerAt(0, 0, 350);
+  };
+
+  const resetZoom = (): void => {
+    graphRef.current?.zoomToFit(320, 24);
+  };
+
+  const releasePinnedNodes = (): void => {
+    for (const node of filtered.nodes) {
+      delete node.fx;
+      delete node.fy;
+    }
+    graphRef.current?.d3ReheatSimulation();
+  };
+
+  const onNodeClick = (node: NodeObject<ForceNode>): void => {
+    const id = resolveNodeId(node);
+    if (!id) {
+      return;
+    }
+    setSelectedNodeId(id);
+  };
+
+  const onNodeDragEnd = (node: NodeObject<ForceNode>): void => {
+    delete node.fx;
+    delete node.fy;
+    graphRef.current?.d3ReheatSimulation();
+  };
+
+  const nodeCanvasObject = useCallback(
+    (node: NodeObject<ForceNode>, canvasContext: CanvasRenderingContext2D, globalScale: number) => {
+      const degree = Number(node.degree ?? 0);
+      const baseRadius = 2 + Math.sqrt(Math.max(1, degree + 1)) * 0.8;
+      const radius = Math.max(2.4, Math.min(8, baseRadius));
+      const isSelected = selectedNodeId != null && resolveNodeId(node) === selectedNodeId;
+      const isHovered = hoveredNodeId != null && resolveNodeId(node) === hoveredNodeId;
+      const color = typeof node.color === "string" ? node.color : "#334155";
+      const x = Number(node.x ?? 0);
+      const y = Number(node.y ?? 0);
+
+      canvasContext.beginPath();
+      canvasContext.arc(x, y, radius, 0, 2 * Math.PI, false);
+      canvasContext.fillStyle = color;
+      canvasContext.fill();
+
+      canvasContext.lineWidth = isSelected ? 2.8 : isHovered ? 1.8 : 1.1;
+      canvasContext.strokeStyle = isSelected ? "#0f172a" : "#f8fafc";
+      canvasContext.stroke();
+
+      const shouldDrawLabel =
+        isSelected ||
+        isHovered ||
+        degree >= 10 ||
+        (filtered.nodes.length <= 220 && globalScale >= 1.18) ||
+        globalScale >= 1.7;
+      if (!shouldDrawLabel) {
+        return;
+      }
+
+      const label = labelForDisplay(String(node.label ?? node.id ?? ""), 32);
+      const fontSize = (isSelected ? 11 : 10) / globalScale;
+      canvasContext.font = `600 ${fontSize}px ui-sans-serif, system-ui, sans-serif`;
+      const textWidth = canvasContext.measureText(label).width;
+      const boxPaddingX = 3 / globalScale;
+      const boxPaddingY = 2 / globalScale;
+      const labelX = x + radius + 3 / globalScale;
+      const labelY = y;
+      const labelTop = labelY - fontSize / 2 - boxPaddingY;
+      const labelHeight = fontSize + boxPaddingY * 2;
+
+      canvasContext.fillStyle = "rgba(255,255,255,0.9)";
+      canvasContext.fillRect(
+        labelX - boxPaddingX,
+        labelTop,
+        textWidth + boxPaddingX * 2,
+        labelHeight
+      );
+
+      canvasContext.fillStyle = "#0f172a";
+      canvasContext.textBaseline = "middle";
+      canvasContext.fillText(label, labelX, labelY);
+    },
+    [filtered.nodes.length, hoveredNodeId, selectedNodeId]
+  );
+
+  const linkColor = useCallback(
+    (link: LinkObject<ForceNode, ForceLink>) => {
+      const color = typeof link.color === "string" ? link.color : "#64748b";
+      if (!selectedNodeId) {
+        return color;
+      }
+
+      const sourceId = resolveNodeId(link.source as string | number | NodeObject<ForceNode> | undefined);
+      const targetId = resolveNodeId(link.target as string | number | NodeObject<ForceNode> | undefined);
+      if (sourceId === selectedNodeId || targetId === selectedNodeId) {
+        return color;
+      }
+      return "rgba(148,163,184,0.20)";
+    },
+    [selectedNodeId]
+  );
+
+  const linkWidth = useCallback(
+    (link: LinkObject<ForceNode, ForceLink>) => {
+      const confidence = Number(link.confidence ?? 0.45);
+      const base = Math.max(0.35, confidence * 1.7);
+      if (!selectedNodeId) {
+        return base;
+      }
+      const sourceId = resolveNodeId(link.source as string | number | NodeObject<ForceNode> | undefined);
+      const targetId = resolveNodeId(link.target as string | number | NodeObject<ForceNode> | undefined);
+      return sourceId === selectedNodeId || targetId === selectedNodeId ? Math.max(base, 1.25) : Math.max(0.16, base * 0.35);
+    },
+    [selectedNodeId]
+  );
+
+  const nodeLabel = useCallback((node: NodeObject<ForceNode>) => {
+    const label = escapeHtml(String(node.label ?? "unknown"));
+    const type = escapeHtml(String(node.entity_type ?? "unknown"));
+    const degree = Number(node.degree ?? 0);
+    const nodeId = escapeHtml(String(node.id ?? ""));
+
+    return `
+      <div style="padding:6px 8px; max-width: 280px;">
+        <div style="font-weight:600; margin-bottom:2px;">${label}</div>
+        <div style="font-size:11px; opacity:0.8; margin-bottom:2px;">${type}</div>
+        <div style="font-size:11px; opacity:0.75;">degree: ${degree}</div>
+        <div style="font-size:10px; opacity:0.6; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;">${nodeId}</div>
+      </div>
+    `;
+  }, []);
+
+  const linkLabel = useCallback((link: LinkObject<ForceNode, ForceLink>) => {
+    const relation = escapeHtml(String(link.relation_type ?? "relation"));
+    const source = escapeHtml(String(link.from_label ?? resolveNodeId(link.source as string | number | NodeObject<ForceNode> | undefined)));
+    const target = escapeHtml(String(link.to_label ?? resolveNodeId(link.target as string | number | NodeObject<ForceNode> | undefined)));
+    const confidence = Number(link.confidence ?? 0).toFixed(2);
+
+    return `
+      <div style="padding:6px 8px; max-width: 320px;">
+        <div style="font-weight:600; margin-bottom:2px;">${relation}</div>
+        <div style="font-size:11px; opacity:0.8;">${source} → ${target}</div>
+        <div style="font-size:11px; opacity:0.75;">confidence: ${confidence}</div>
+      </div>
+    `;
+  }, []);
+
   return (
-    <div className="space-y-4">
-      <div className="grid gap-3 lg:grid-cols-[1fr_300px]">
+    <div
+      ref={viewportRef}
+      className={cn(
+        "space-y-3",
+        isFullscreen && "fixed inset-3 z-50 overflow-auto rounded-lg border bg-background p-4 shadow-2xl"
+      )}
+    >
+      <div className="grid gap-3 xl:grid-cols-[1fr_300px]">
         <div className="space-y-2">
           <div className="flex flex-wrap items-end gap-3 rounded-md border bg-white p-3">
             <label className="w-32 text-xs font-medium text-muted-foreground">
@@ -155,7 +480,7 @@ export function GraphVisualizer({ graph }: { graph: GraphData }): React.JSX.Elem
               <Input
                 type="number"
                 min={10}
-                max={400}
+                max={500}
                 value={maxNodes}
                 className="mt-1 h-8"
                 onChange={(event) => {
@@ -166,6 +491,7 @@ export function GraphVisualizer({ graph }: { graph: GraphData }): React.JSX.Elem
                 }}
               />
             </label>
+
             <label className="w-44 text-xs font-medium text-muted-foreground">
               Relation Filter
               <select
@@ -181,6 +507,7 @@ export function GraphVisualizer({ graph }: { graph: GraphData }): React.JSX.Elem
                 ))}
               </select>
             </label>
+
             <div className="flex flex-wrap gap-1.5">
               {entityTypes.map((type) => (
                 <Button
@@ -191,67 +518,70 @@ export function GraphVisualizer({ graph }: { graph: GraphData }): React.JSX.Elem
                   className="h-7 px-2 text-[11px]"
                   onClick={() => toggleType(type)}
                 >
+                  <EntityTypeIcon entityType={type} className="mr-1 h-3.5 w-3.5" />
                   {type}
                 </Button>
               ))}
             </div>
+
+            <div className="ml-auto flex flex-wrap gap-1.5">
+              <Button type="button" variant="outline" size="sm" className="h-7 text-[11px]" onClick={fitGraph}>
+                Fit
+              </Button>
+              <Button type="button" variant="outline" size="sm" className="h-7 text-[11px]" onClick={centerGraph}>
+                Center
+              </Button>
+              <Button type="button" variant="outline" size="sm" className="h-7 text-[11px]" onClick={resetZoom}>
+                Reset Zoom
+              </Button>
+              <Button type="button" variant="outline" size="sm" className="h-7 text-[11px]" onClick={releasePinnedNodes}>
+                Release Pins
+              </Button>
+              <Button type="button" variant="outline" size="sm" className="h-7 text-[11px]" onClick={() => void toggleFullscreen()}>
+                {isFullscreen ? "Exit Fullscreen" : "Fullscreen"}
+              </Button>
+            </div>
           </div>
 
-          <div className="overflow-hidden rounded-lg border bg-white">
-            <svg viewBox={`0 0 ${positionedNodes.width} ${positionedNodes.height}`} className="h-[620px] w-full">
-              <rect x={0} y={0} width={positionedNodes.width} height={positionedNodes.height} fill="#fafafa" />
-
-              {filtered.edges.map((edge) => {
-                const from = positionedNodes.nodes.get(edge.from_entity_id);
-                const to = positionedNodes.nodes.get(edge.to_entity_id);
-                if (!from || !to) {
-                  return null;
-                }
-
-                return (
-                  <line
-                    key={edge.id}
-                    x1={from.x}
-                    y1={from.y}
-                    x2={to.x}
-                    y2={to.y}
-                    stroke={hashColor(edge.relation_type)}
-                    strokeOpacity={Math.max(0.2, Math.min(1, edge.confidence))}
-                    strokeWidth={Math.max(1, edge.confidence * 2.5)}
-                  />
-                );
-              })}
-
-              {Array.from(positionedNodes.nodes.values()).map((node) => {
-                const active = selectedNode?.id === node.entity.id;
-                const color = nodeColors[node.entity.entity_type] ?? "#334155";
-
-                return (
-                  <g
-                    key={node.entity.id}
-                    onClick={() => setSelectedNodeId(node.entity.id)}
-                    className="cursor-pointer"
-                  >
-                    <circle
-                      cx={node.x}
-                      cy={node.y}
-                      r={active ? 11 : 8}
-                      fill={color}
-                      stroke={active ? "#111827" : "#ffffff"}
-                      strokeWidth={active ? 2 : 1}
-                    />
-                    <text
-                      x={node.x + 10}
-                      y={node.y - 10}
-                      fontSize="11"
-                      fill="#1f2937"
-                    >
-                      {truncate(node.entity.label)}
-                    </text>
-                  </g>
-                );
-              })}
-            </svg>
+          <div
+            ref={surfaceRef}
+            className={cn(
+              "overflow-hidden rounded-lg border bg-white",
+              isFullscreen ? "h-[calc(100vh-220px)] min-h-[520px]" : "h-[680px]"
+            )}
+          >
+            <ForceGraph2D
+              ref={graphRef}
+              width={surfaceSize.width}
+              height={surfaceSize.height}
+              graphData={{ nodes: filtered.nodes, links: filtered.links }}
+              nodeId="id"
+              linkSource="source"
+              linkTarget="target"
+              nodeRelSize={2}
+              warmupTicks={80}
+              cooldownTicks={160}
+              cooldownTime={4500}
+              d3AlphaDecay={0.05}
+              d3VelocityDecay={0.35}
+              minZoom={0.22}
+              maxZoom={10}
+              linkColor={linkColor}
+              linkWidth={linkWidth}
+              linkDirectionalParticles={0}
+              nodeLabel={nodeLabel}
+              linkLabel={linkLabel}
+              nodeCanvasObject={nodeCanvasObject}
+              nodeCanvasObjectMode={() => "replace"}
+              onNodeClick={onNodeClick}
+              onNodeHover={(node) => setHoveredNodeId(node ? resolveNodeId(node) : null)}
+              onNodeDragEnd={onNodeDragEnd}
+              onEngineStop={onEngineStop}
+              onBackgroundClick={() => setSelectedNodeId(null)}
+              enableNodeDrag
+              enableZoomInteraction
+              enablePanInteraction
+            />
           </div>
 
           <div className="flex flex-wrap items-center gap-3 rounded-md border bg-white p-3">
@@ -267,29 +597,29 @@ export function GraphVisualizer({ graph }: { graph: GraphData }): React.JSX.Elem
         <div className="space-y-3">
           <div className="rounded-md border bg-white p-3">
             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Filtered Graph</p>
-            <p className="mt-1 text-sm">{filtered.entities.length} nodes</p>
-            <p className="text-sm">{filtered.edges.length} edges</p>
+            <p className="mt-1 text-sm tabular-nums">{filtered.nodes.length} nodes</p>
+            <p className="text-sm tabular-nums">{filtered.links.length} edges</p>
           </div>
 
           <div className="rounded-md border bg-white p-3">
             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Node Detail</p>
             {!selectedNode ? (
-              <p className="mt-2 text-sm text-muted-foreground">Click a node to inspect metadata and neighbors.</p>
+              <p className="mt-2 text-sm text-muted-foreground">Click or hover a node for detail. Drag nodes to pull/pin them.</p>
             ) : (
               <div className="mt-2 space-y-2 text-sm">
                 <p className="font-medium">{selectedNode.label}</p>
-                <Badge variant="outline" className="text-[10px]">
+                <Badge variant="outline" className="inline-flex items-center gap-1 text-[10px]">
+                  <EntityTypeIcon entityType={selectedNode.entity_type} className="h-3 w-3" />
                   {selectedNode.entity_type}
                 </Badge>
+                <p className="text-xs text-muted-foreground">Degree: {selectedNode.degree}</p>
                 <p className="font-mono text-[11px] text-muted-foreground">{selectedNode.id}</p>
                 <p className="text-xs text-muted-foreground">Connected edges: {connectedEdges.length}</p>
                 <div className="max-h-48 overflow-auto rounded border bg-zinc-50 p-2 text-[11px]">
                   {Object.keys(selectedNode.metadata ?? {}).length === 0 ? (
                     <p className="text-muted-foreground">No metadata</p>
                   ) : (
-                    <pre className="whitespace-pre-wrap break-words">
-                      {JSON.stringify(selectedNode.metadata, null, 2)}
-                    </pre>
+                    <pre className="whitespace-pre-wrap break-words">{JSON.stringify(selectedNode.metadata, null, 2)}</pre>
                   )}
                 </div>
               </div>
@@ -297,15 +627,17 @@ export function GraphVisualizer({ graph }: { graph: GraphData }): React.JSX.Elem
           </div>
 
           <div className="rounded-md border bg-white p-3">
-            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Connected Nodes</p>
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Connected Edges</p>
             {connectedEdges.length === 0 ? (
-              <p className="mt-2 text-sm text-muted-foreground">No node selected.</p>
+              <p className="mt-2 text-sm text-muted-foreground">No selected node.</p>
             ) : (
               <div className="mt-2 space-y-1">
-                {connectedEdges.slice(0, 12).map((edge) => (
-                  <div key={edge.id} className={cn("rounded border px-2 py-1 text-[11px]")}>
+                {connectedEdges.slice(0, 14).map((edge) => (
+                  <div key={edge.id} className="rounded border px-2 py-1 text-[11px]">
                     <p>{edge.from_label} → {edge.to_label}</p>
-                    <p className="text-muted-foreground">{edge.relation_type} · {edge.confidence.toFixed(2)}</p>
+                    <p className="text-muted-foreground">
+                      {edge.relation_type} · {edge.confidence.toFixed(2)}
+                    </p>
                   </div>
                 ))}
               </div>

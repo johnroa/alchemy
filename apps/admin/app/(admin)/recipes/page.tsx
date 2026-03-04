@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { AlertCircle, ArrowDownRight, ArrowUpRight, BookOpen, ImageIcon, Network } from "lucide-react";
+import { EntityTypeIcon } from "@/components/admin/entity-type-icon";
 import { PageHeader } from "@/components/admin/page-header";
 import { RevertVersionDialog } from "@/components/admin/revert-version-dialog";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -150,9 +151,9 @@ const shortId = (value: string): string => {
 };
 
 const imageStatusBadgeClass = (status: string): string => {
-  if (status === "ready") return "border-emerald-300/60 bg-emerald-50 text-emerald-700";
-  if (status === "failed") return "border-red-300/60 bg-red-50 text-red-700";
-  return "border-amber-300/60 bg-amber-50 text-amber-700";
+  if (status === "ready") return "border-emerald-300 bg-emerald-50 text-emerald-700";
+  if (status === "failed") return "border-red-300 bg-red-50 text-red-700";
+  return "border-amber-300 bg-amber-50 text-amber-700";
 };
 
 const getContextLoopState = (context: Record<string, unknown> | undefined): string | null => {
@@ -239,6 +240,7 @@ export default async function RecipesPage({
         <PageHeader
           title="Recipes Console"
           description="Inventory, version lineage, prompt trail, attachment graph, and changelog."
+          icon={<EntityTypeIcon entityType="recipe" className="h-6 w-6 text-blue-600" />}
         />
         <Badge variant="outline" className="font-mono text-xs">
           Showing {shownRecipeCount} / {totals.recipes}
@@ -246,9 +248,12 @@ export default async function RecipesPage({
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-6">
-        <Card className="border-blue-200/80 bg-blue-50/30">
+        <Card className="border-blue-200 bg-blue-50">
           <CardHeader className="pb-2">
-            <CardDescription className="text-[11px] uppercase tracking-wider text-muted-foreground">Recipes</CardDescription>
+            <CardDescription className="inline-flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-muted-foreground">
+              <EntityTypeIcon entityType="recipe" className="h-3.5 w-3.5 text-blue-600" />
+              Recipes
+            </CardDescription>
             <CardTitle className="text-3xl tabular-nums">{shownRecipeCount.toLocaleString()}</CardTitle>
           </CardHeader>
           <CardContent className="pt-0 text-xs text-muted-foreground">
@@ -273,7 +278,7 @@ export default async function RecipesPage({
             {totals.chatBacked.toLocaleString()} recipes linked to chats
           </CardContent>
         </Card>
-        <Card className={cn(readyImageRate >= 70 ? "border-emerald-200/80 bg-emerald-50/25" : "border-zinc-200")}>
+        <Card className={cn(readyImageRate >= 70 ? "border-emerald-200 bg-emerald-50" : "border-zinc-200")}>
           <CardHeader className="pb-2">
             <CardDescription className="text-[11px] uppercase tracking-wider text-muted-foreground">Ready Image Rate</CardDescription>
             <CardTitle className="text-3xl tabular-nums">{readyImageRate.toFixed(1)}%</CardTitle>
@@ -318,7 +323,7 @@ export default async function RecipesPage({
       </div>
 
       {unresolvedOwners > 0 && (
-        <Alert className="border-amber-300/60 bg-amber-50/70">
+        <Alert className="border-amber-300 bg-amber-50">
           <AlertCircle className="h-4 w-4 text-amber-700" />
           <AlertTitle className="text-amber-900">Owner profiles need backfill</AlertTitle>
           <AlertDescription className="text-amber-800">
@@ -408,7 +413,10 @@ export default async function RecipesPage({
                   >
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
-                        <p className="truncate text-sm font-semibold">{row.title}</p>
+                        <p className="inline-flex max-w-full items-center gap-1.5 truncate text-sm font-semibold">
+                          <EntityTypeIcon entityType="recipe" className="h-3.5 w-3.5 flex-none text-blue-600" />
+                          <span className="truncate">{row.title}</span>
+                        </p>
                         <p className="truncate text-xs text-muted-foreground">
                           {row.owner_email ?? "No owner"}
                         </p>
@@ -453,7 +461,10 @@ export default async function RecipesPage({
                 <CardHeader className="pb-3">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
-                      <CardTitle className="text-base">{detail.recipe.title}</CardTitle>
+                      <CardTitle className="inline-flex items-center gap-2 text-base">
+                        <EntityTypeIcon entityType="recipe" className="h-4 w-4 text-blue-600" />
+                        {detail.recipe.title}
+                      </CardTitle>
                       <CardDescription>
                         {detail.recipe.owner_email ?? "Unknown owner"} · {detail.recipe.visibility}
                       </CardDescription>
@@ -690,7 +701,10 @@ export default async function RecipesPage({
                                     <Badge variant="outline" className="text-xs">{attachment.relation_type}</Badge>
                                   </TableCell>
                                   <TableCell>
-                                    <p className="text-sm">{attachment.child_recipe_title ?? "Untitled"}</p>
+                                    <p className="inline-flex items-center gap-1.5 text-sm">
+                                      <EntityTypeIcon entityType="recipe" className="h-3.5 w-3.5 text-blue-600" />
+                                      {attachment.child_recipe_title ?? "Untitled"}
+                                    </p>
                                     <p className="font-mono text-[10px] text-muted-foreground">
                                       {shortId(attachment.child_recipe_id)}
                                     </p>
@@ -754,7 +768,14 @@ export default async function RecipesPage({
                                   </p>
                                 </TableCell>
                                 <TableCell className="text-xs">
-                                  {row.canonical_name ?? <span className="text-muted-foreground">Unresolved</span>}
+                                  {row.canonical_name ? (
+                                    <span className="inline-flex items-center gap-1.5">
+                                      <EntityTypeIcon entityType="ingredient" className="h-3.5 w-3.5 text-emerald-600" />
+                                      {row.canonical_name}
+                                    </span>
+                                  ) : (
+                                    <span className="text-muted-foreground">Unresolved</span>
+                                  )}
                                 </TableCell>
                                 <TableCell className="text-xs">
                                   {row.normalized_amount_si != null ? (
@@ -770,8 +791,8 @@ export default async function RecipesPage({
                                     variant="outline"
                                     className={
                                       row.normalized_status === "normalized"
-                                        ? "border-emerald-300/60 bg-emerald-50 text-emerald-700 text-[10px]"
-                                        : "border-amber-300/60 bg-amber-50 text-amber-700 text-[10px]"
+                                        ? "border-emerald-300 bg-emerald-50 text-emerald-700 text-[10px]"
+                                        : "border-amber-300 bg-amber-50 text-amber-700 text-[10px]"
                                     }
                                   >
                                     {row.normalized_status}
@@ -830,9 +851,9 @@ export default async function RecipesPage({
                                     variant="outline"
                                     className={
                                       item.action === "create"
-                                        ? "border-emerald-300/60 bg-emerald-50 text-emerald-700 text-xs"
+                                        ? "border-emerald-300 bg-emerald-50 text-emerald-700 text-xs"
                                         : item.action === "delete"
-                                          ? "border-red-300/60 bg-red-50 text-red-700 text-xs"
+                                          ? "border-red-300 bg-red-50 text-red-700 text-xs"
                                           : "text-xs"
                                     }
                                   >

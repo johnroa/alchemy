@@ -1,0 +1,43 @@
+name: LLM Pipeline Guardrails
+
+on:
+  pull_request:
+    paths:
+      - "supabase/functions/**"
+      - "supabase/migrations/**"
+      - "apps/admin/**"
+      - "README.md"
+      - "AGENTS.md"
+      - "CLAUDE.md"
+      - "codex.md"
+      - "scripts/check-llm-pipeline-guardrails.mjs"
+      - ".github/workflows/llm-pipeline-guardrails.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "supabase/functions/**"
+      - "supabase/migrations/**"
+      - "apps/admin/**"
+      - "README.md"
+      - "AGENTS.md"
+      - "CLAUDE.md"
+      - "codex.md"
+      - "scripts/check-llm-pipeline-guardrails.mjs"
+      - ".github/workflows/llm-pipeline-guardrails.yml"
+
+jobs:
+  guardrails:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Run LLM pipeline guardrails
+        run: node ./scripts/check-llm-pipeline-guardrails.mjs

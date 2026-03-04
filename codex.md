@@ -17,6 +17,7 @@ Ship a premium-feeling iOS app with excellent UX, fast iteration, and a clean AP
 - Every user-facing screen has loading, empty, and error states.
 - Offline behavior must be intentional (read-only cache is fine, but no silent data loss).
 - Avoid LLM spaghetti: all model calls go through a single server API.
+- All LLM calls must go through the LLM pipeline (`supabase/functions/_shared/llm-scope-registry.ts` + `llm-executor.ts` + `llm-adapters/*`); no direct provider calls outside adapters.
 
 ## Deployment + DB Governance (Required)
 - No local Supabase deploy path in this project.
@@ -30,6 +31,11 @@ Ship a premium-feeling iOS app with excellent UX, fast iteration, and a clean AP
   - `/api/admin/llm/rules`
   - `/api/admin/llm/routes`
 - Do not edit LLM prompt/rule rows directly in DB.
+
+## LLM Pipeline Agent Workflow
+- Add call: add scope registry entry, seed route/prompt/rule via sequential migration, add gateway wrapper using executor, wire callsite, add tests, update docs.
+- Edit call: change prompt/rule/model via Admin API/UI; update contract validators/tests when response shape changes.
+- Remove call: remove callsite/wrapper/scope and add migration deactivating corresponding scope config rows.
 
 ## Product Pillars
 - Creation: generate recipes from preferences and prompts.

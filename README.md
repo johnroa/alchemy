@@ -201,6 +201,13 @@ Next.js 15 App Router. All pages under `app/(admin)/`:
 
 All LLM configuration is **runtime DB-driven** — no redeployment required for model swaps, prompt edits, or rule changes. The gateway reads the active record for the requested scope on every call.
 
+All LLM calls must flow through the shared pipeline:
+- scope registry: `supabase/functions/_shared/llm-scope-registry.ts`
+- executor: `supabase/functions/_shared/llm-executor.ts`
+- provider adapters: `supabase/functions/_shared/llm-adapters/*`
+
+No direct provider calls are allowed outside adapters.
+
 ### Scopes
 
 | Scope | Used by | Behavior |
@@ -209,6 +216,13 @@ All LLM configuration is **runtime DB-driven** — no redeployment required for 
 | `chat_generation` | `POST /chat/{id}/messages` when generation is triggered | Returns full `candidate_recipe_set` (max 3 components). |
 | `chat_iteration` | `POST /chat/{id}/messages` when candidate exists | Returns revised `candidate_recipe_set`. |
 | `classify` | Async audit + normalization utilities | Used for non-blocking telemetry/helpers; not a blocking gate in the core chat loop. |
+| `ingredient_alias_normalize` | Canonical ingredient identity stage | Normalizes alias keys to canonical ingredient names. |
+| `ingredient_phrase_split` | Canonical ingredient identity stage | Splits compound ingredient phrases into atomic items. |
+| `ingredient_enrich` | Metadata pipeline | Enriches ingredient metadata and ontology terms. |
+| `recipe_metadata_enrich` | Metadata pipeline | Enriches recipe-level tags/metadata. |
+| `ingredient_relation_infer` | Metadata pipeline | Infers ingredient graph relations. |
+| `preference_normalize` | Preference pipeline | Normalizes user preference list updates. |
+| `equipment_filter` | Preference pipeline | Filters durable equipment updates to explicit user claims. |
 | `onboarding` | First-run preference interview | Conversational. Collects dietary, skill, equipment context. |
 | `image` | Recipe image generation | Text-to-image prompt construction |
 | `memory_extract` | Post-conversation memory extraction | Extracts preference signals |
@@ -247,6 +261,21 @@ curl -X POST https://admin.cookwithalchemy.com/api/admin/llm/prompts \
   -H "Content-Type: application/json" \
   -d '{"action":"activate","prompt_id":"<uuid>"}'
 ```
+
+### LLM call lifecycle workflow (agent-safe)
+
+1. Add call:
+- add scope definition in `llm-scope-registry.ts`
+- add migration seed rows for `llm_model_routes`, `llm_prompts`, `llm_rules`
+- add/update gateway wrapper to execute via `llm-executor.ts`
+- wire callsite in `supabase/functions/v1/index.ts` or related service
+- add tests + docs
+2. Edit call:
+- prompt/rule/model changes through Admin API/UI
+- if response contract changes, update validators/tests and OpenAPI examples if public behavior changed
+3. Remove call:
+- remove callsite + wrapper + scope
+- add migration that deactivates scope rows (do not hard-delete operational history)
 
 ---
 

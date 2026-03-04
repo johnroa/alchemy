@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Alchemy API
-  version: 1.1.1
+  version: 1.1.2
   description: API contract for Alchemy mobile and admin workflows.
 servers:
   - url: https://api.cookwithalchemy.com/v1
@@ -1215,7 +1215,16 @@ components:
         type: string
       description: |
         Optional JSON string used by Admin Simulation Runner to override model/provider per scope.
-        Format: {"chat_ideation":{"provider":"anthropic","model":"claude-3-5-haiku-latest"}}.
+        Format:
+        {
+          "chat_ideation":{"provider":"anthropic","model":"claude-3-5-haiku-latest"},
+          "ingredient_enrich":{"provider":"openai","model":"gpt-5-mini"}
+        }
+        Common scope keys:
+        chat_ideation, chat_generation, chat_iteration, classify,
+        ingredient_alias_normalize, ingredient_phrase_split, ingredient_enrich,
+        recipe_metadata_enrich, ingredient_relation_infer, preference_normalize, equipment_filter,
+        onboarding, image, memory_extract, memory_select, memory_summarize, memory_conflict_resolve.
         Not required for normal mobile clients.
   responses:
     ErrorResponse:
@@ -1225,6 +1234,30 @@ components:
           schema:
             $ref: '#/components/schemas/ErrorEnvelope'
   schemas:
+    LlmScope:
+      type: string
+      description: Internal LLM pipeline scope key used for prompt/rule/model routing.
+      enum:
+        - chat
+        - chat_ideation
+        - chat_generation
+        - chat_iteration
+        - generate
+        - tweak
+        - classify
+        - ingredient_alias_normalize
+        - ingredient_phrase_split
+        - ingredient_enrich
+        - recipe_metadata_enrich
+        - ingredient_relation_infer
+        - preference_normalize
+        - equipment_filter
+        - onboarding
+        - image
+        - memory_extract
+        - memory_select
+        - memory_summarize
+        - memory_conflict_resolve
     ErrorEnvelope:
       type: object
       required: [code, message, request_id]
