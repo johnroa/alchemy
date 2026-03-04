@@ -29,8 +29,7 @@ Rules:
 - Ask at most one short question.
 - Set trigger_recipe=true only when user has clearly asked to generate now or explicitly committed to a concrete dish.
 - If user intent is still broad, keep trigger_recipe=false.
-- Output JSON only.$$,
-  updated_at = now()
+-- Output JSON only.$$
 where scope = 'chat_ideation'
   and is_active = true;
 
@@ -71,8 +70,7 @@ Rules:
 - Add side/appetizer/dessert/drink components only when explicitly requested.
 - Keep each recipe concise and practical: typically 8-12 ingredients and 4-7 steps.
 - Keep assistant_reply.text <= 20 words.
-- Output JSON only.$$,
-  updated_at = now()
+-- Output JSON only.$$
 where scope = 'chat_generation'
   and is_active = true;
 
@@ -114,8 +112,7 @@ Rules:
 - Max 3 components total.
 - Keep each recipe concise and practical: typically 8-12 ingredients and 4-7 steps.
 - Keep assistant_reply.text <= 20 words.
-- Output JSON only.$$,
-  updated_at = now()
+-- Output JSON only.$$
 where scope = 'chat_iteration'
   and is_active = true;
 
@@ -128,7 +125,6 @@ set
       when scope = 'chat_generation' then '{"temperature":0.35,"max_output_tokens":2200}'::jsonb
       when scope = 'chat_iteration' then '{"temperature":0.35,"max_output_tokens":2200}'::jsonb
       else '{}'::jsonb
-    end,
-  updated_at = now()
+    end
 where scope in ('chat_ideation', 'chat_generation', 'chat_iteration')
   and is_active = true;

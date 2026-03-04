@@ -30,8 +30,7 @@ set
     when scope = 'generate' then 'gpt-5'
     when scope = 'image' then 'gpt-image-1.5'
     else 'gpt-5-mini'
-  end,
-  updated_at = now()
+  end
 where provider = 'openai'
   and model in ('gpt-4o', 'gpt-4o-mini', 'o3', 'o4-mini');
 

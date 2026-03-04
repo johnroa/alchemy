@@ -2,8 +2,7 @@
 -- This migration replaces active chat-loop prompt/rule rows with intent-aware, JSON-only contracts.
 
 update public.llm_prompts
-set is_active = false,
-    updated_at = now()
+set is_active = false
 where scope in ('chat_ideation', 'chat_generation', 'chat_iteration')
   and is_active = true;
 
@@ -96,12 +95,10 @@ on conflict (scope, version) do update
 set name = excluded.name,
     template = excluded.template,
     metadata = excluded.metadata,
-    is_active = excluded.is_active,
-    updated_at = now();
+    is_active = excluded.is_active;
 
 update public.llm_rules
-set is_active = false,
-    updated_at = now()
+set is_active = false
 where scope in ('chat_ideation', 'chat_generation', 'chat_iteration')
   and is_active = true;
 
@@ -146,5 +143,4 @@ values
 on conflict (scope, version) do update
 set name = excluded.name,
     rule = excluded.rule,
-    is_active = excluded.is_active,
-    updated_at = now();
+    is_active = excluded.is_active;
