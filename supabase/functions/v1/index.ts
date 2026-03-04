@@ -22,6 +22,7 @@ import {
   deriveCanonicalIngredientIdentity,
   type GroupByPreference,
   type IngredientGroup,
+  normalizeIngredientKey,
   type NormalizedStatus,
   projectIngredientsForOutput,
   projectInlineMeasurements,
@@ -1266,6 +1267,373 @@ const resolveAliasCanonicalIdentity = async (params: {
   }
 
   return resolved;
+};
+
+type EnrichmentStage =
+  | "ingredient_resolution"
+  | "ingredient_enrichment"
+  | "recipe_enrichment"
+  | "edge_inference"
+  | "finalize";
+
+const startEnrichmentRun = async (params: {
+  serviceClient: SupabaseClient;
+  jobId: string;
+  recipeId: string;
+  recipeVersionId: string;
+  stage: EnrichmentStage;
+  inputPayload?: Record<string, JsonValue>;
+}): Promise<string | null> => {
+  const { data, error } = await params.serviceClient.from("enrichment_runs")
+    .insert({
+      job_id: params.jobId,
+      recipe_id: params.recipeId,
+      recipe_version_id: params.recipeVersionId,
+      stage: params.stage,
+      status: "processing",
+      input_payload: params.inputPayload ?? {},
+      metadata: {},
+      started_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    })
+    .select("id")
+    .maybeSingle();
+
+  if (error) {
+    if (isSchemaMissingError(error) || isRlsError(error)) {
+      return null;
+    }
+    throw new ApiError(
+      500,
+      "enrichment_run_start_failed",
+      "Could not start enrichment run",
+      error.message,
+    );
+  }
+  return data?.id ?? null;
+};
+
+const completeEnrichmentRun = async (params: {
+  serviceClient: SupabaseClient;
+  runId: string | null;
+  status: "ready" | "failed" | "discarded";
+  outputPayload?: Record<string, JsonValue>;
+  confidenceSummary?: Record<string, JsonValue>;
+  rejectionCount?: number;
+  metadata?: Record<string, JsonValue>;
+}): Promise<void> => {
+  if (!params.runId) {
+    return;
+  }
+
+  const { error } = await params.serviceClient.from("enrichment_runs").update({
+    status: params.status,
+    output_payload: params.outputPayload ?? {},
+    confidence_summary: params.confidenceSummary ?? {},
+    rejection_count: Math.max(0, Number(params.rejectionCount ?? 0)),
+    metadata: params.metadata ?? {},
+    completed_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  }).eq("id", params.runId);
+
+  if (error && !isSchemaMissingError(error) && !isRlsError(error)) {
+    throw new ApiError(
+      500,
+      "enrichment_run_finalize_failed",
+      "Could not finalize enrichment run",
+      error.message,
+    );
+  }
+};
+
+type ResolvedIngredientComponent = {
+  canonical_name: string;
+  canonical_key: string;
+  confidence: number;
+  ingredient_id: string | null;
+};
+
+const resolveCanonicalRecipeIngredientsAsync = async (params: {
+  serviceClient: SupabaseClient;
+  userId: string;
+  requestId: string;
+  jobId: string;
+  recipeId: string;
+  recipeVersionId: string;
+}): Promise<{ resolvedCount: number; rejectedCount: number }> => {
+  const canonicalRows = await fetchCanonicalIngredientRows(
+    params.serviceClient,
+    params.recipeVersionId,
+  );
+  const unresolvedRows = canonicalRows.filter((row) =>
+    !row.ingredient_id || row.normalized_status !== "normalized"
+  );
+
+  if (unresolvedRows.length === 0) {
+    return { resolvedCount: 0, rejectedCount: 0 };
+  }
+
+  const runId = await startEnrichmentRun({
+    serviceClient: params.serviceClient,
+    jobId: params.jobId,
+    recipeId: params.recipeId,
+    recipeVersionId: params.recipeVersionId,
+    stage: "ingredient_resolution",
+    inputPayload: {
+      unresolved_count: unresolvedRows.length,
+    },
+  });
+
+  let rejectedCount = 0;
+  try {
+    const splitItems = await llmGateway.splitIngredientPhrases({
+      client: params.serviceClient,
+      userId: params.userId,
+      requestId: params.requestId,
+      sourceNames: unresolvedRows.map((row) => row.source_name),
+    });
+    const splitBySource = new Map(
+      splitItems.map((item) => [item.source_name.toLocaleLowerCase(), item]),
+    );
+
+    const unresolvedAliases: Array<{
+      alias_key: string;
+      source_name: string;
+      fallback_canonical_name: string;
+    }> = [];
+    const rowComponents = new Map<string, ResolvedIngredientComponent[]>();
+
+    for (const row of unresolvedRows) {
+      const split = splitBySource.get(row.source_name.toLocaleLowerCase());
+      const candidates = split?.items?.length
+        ? split.items
+        : [{ name: row.source_name, confidence: 0.5 }];
+
+      const components: ResolvedIngredientComponent[] = [];
+      for (const candidate of candidates) {
+        const confidence = clampConfidence(candidate.confidence, 0.5);
+        const identity = deriveCanonicalIngredientIdentity(
+          candidate.name,
+          row.source_name,
+        );
+        if (!identity.canonicalKey) {
+          rejectedCount += 1;
+          continue;
+        }
+        components.push({
+          canonical_name: identity.canonicalName,
+          canonical_key: identity.canonicalKey,
+          confidence,
+          ingredient_id: null,
+        });
+
+        if (confidence >= ENRICHMENT_TRACK_CONFIDENCE) {
+          unresolvedAliases.push({
+            alias_key: identity.canonicalKey,
+            source_name: candidate.name,
+            fallback_canonical_name: identity.canonicalName,
+          });
+        } else {
+          rejectedCount += 1;
+        }
+      }
+      rowComponents.set(row.id, components);
+    }
+
+    const uniqueAliases = Array.from(
+      new Map(
+        unresolvedAliases.map((alias) => [alias.alias_key, alias]),
+      ).values(),
+    );
+
+    const aliasKeys = uniqueAliases.map((entry) => entry.alias_key);
+    const ingredientIdByAliasKey = await loadIngredientIdsByAliasKey(
+      params.serviceClient,
+      aliasKeys,
+    );
+
+    const missingAliases = uniqueAliases.filter((alias) =>
+      !ingredientIdByAliasKey.has(alias.alias_key)
+    );
+    const canonicalByAlias = await resolveAliasCanonicalIdentity({
+      serviceClient: params.serviceClient,
+      userId: params.userId,
+      requestId: params.requestId,
+      unresolvedAliases: missingAliases,
+    });
+
+    const ingredientRowsByKey = new Map<string, {
+      canonical_name: string;
+      normalized_key: string;
+      metadata: Record<string, JsonValue>;
+    }>();
+
+    for (const [aliasKey, resolved] of canonicalByAlias.entries()) {
+      if (!shouldPersistEnrichment(resolved.confidence)) {
+        rejectedCount += 1;
+        continue;
+      }
+      ingredientRowsByKey.set(aliasKey, {
+        canonical_name: resolved.canonical_name,
+        normalized_key: resolved.canonical_key,
+        metadata: {
+          source: "llm",
+          metadata_schema_version: 2,
+          last_enriched_at: new Date().toISOString(),
+        },
+      });
+    }
+
+    if (ingredientRowsByKey.size > 0) {
+      const ingredientRows = Array.from(ingredientRowsByKey.values());
+      const { error: ingredientUpsertError } = await params.serviceClient
+        .from("ingredients")
+        .upsert(ingredientRows, {
+          onConflict: "normalized_key",
+          ignoreDuplicates: false,
+        });
+      if (ingredientUpsertError) {
+        throw new ApiError(
+          500,
+          "ingredient_resolution_upsert_failed",
+          "Could not persist resolved canonical ingredients",
+          ingredientUpsertError.message,
+        );
+      }
+
+      const resolvedIngredientByKey = await loadIngredientsByNormalizedKey(
+        params.serviceClient,
+        ingredientRows.map((row) => row.normalized_key),
+      );
+      for (const [aliasKey, ingredient] of resolvedIngredientByKey.entries()) {
+        ingredientIdByAliasKey.set(aliasKey, ingredient.id);
+      }
+    }
+
+    const aliasRows = Array.from(canonicalByAlias.entries())
+      .map(([aliasKey, resolved]) => {
+        const ingredientId = ingredientIdByAliasKey.get(resolved.canonical_key);
+        if (!ingredientId || !shouldPersistEnrichment(resolved.confidence)) {
+          return null;
+        }
+        return {
+          alias_key: aliasKey,
+          ingredient_id: ingredientId,
+          source: "llm",
+          confidence: clampConfidence(resolved.confidence, 0.5),
+        };
+      })
+      .filter((row): row is {
+        alias_key: string;
+        ingredient_id: string;
+        source: string;
+        confidence: number;
+      } => row !== null);
+
+    if (aliasRows.length > 0) {
+      const { error: aliasError } = await params.serviceClient
+        .from("ingredient_aliases")
+        .upsert(aliasRows, {
+          onConflict: "alias_key",
+          ignoreDuplicates: false,
+        });
+      if (aliasError) {
+        throw new ApiError(
+          500,
+          "ingredient_resolution_alias_upsert_failed",
+          "Could not upsert ingredient aliases",
+          aliasError.message,
+        );
+      }
+    }
+
+    let resolvedCount = 0;
+    for (const row of unresolvedRows) {
+      const components = rowComponents.get(row.id) ?? [];
+      const withIds = components.map((component) => {
+        const ingredientId = ingredientIdByAliasKey.get(component.canonical_key) ??
+          null;
+        return {
+          ...component,
+          ingredient_id: ingredientId,
+        };
+      });
+
+      const best = withIds.find((component) =>
+        component.ingredient_id !== null &&
+        shouldPersistEnrichment(component.confidence)
+      ) ?? null;
+
+      const normalizedStatus = row.normalized_status === "normalized" &&
+          best?.ingredient_id
+        ? "normalized"
+        : "needs_retry";
+      if (best?.ingredient_id) {
+        resolvedCount += 1;
+      }
+
+      const nextMetadata: Record<string, JsonValue> = {
+        ...(row.metadata ?? {}),
+        alias_key: row.metadata?.alias_key ?? normalizeIngredientKey(row.source_name),
+        needs_ingredient_resolution: !best?.ingredient_id,
+        components: withIds.map((component) => ({
+          canonical_name: component.canonical_name,
+          canonical_key: component.canonical_key,
+          ingredient_id: component.ingredient_id,
+          confidence: component.confidence,
+        })),
+      };
+
+      const { error: rowUpdateError } = await params.serviceClient
+        .from("recipe_ingredients")
+        .update({
+          ingredient_id: best?.ingredient_id ?? null,
+          normalized_status: normalizedStatus,
+          metadata: nextMetadata,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", row.id);
+
+      if (rowUpdateError) {
+        throw new ApiError(
+          500,
+          "recipe_ingredient_resolution_update_failed",
+          "Could not update resolved recipe ingredient row",
+          rowUpdateError.message,
+        );
+      }
+    }
+
+    await completeEnrichmentRun({
+      serviceClient: params.serviceClient,
+      runId,
+      status: "ready",
+      outputPayload: {
+        resolved_count: resolvedCount,
+        rejected_count: rejectedCount,
+      },
+      confidenceSummary: {
+        persist_threshold: ENRICHMENT_PERSIST_CONFIDENCE,
+        track_threshold: ENRICHMENT_TRACK_CONFIDENCE,
+      },
+      rejectionCount: rejectedCount,
+    });
+
+    return { resolvedCount, rejectedCount };
+  } catch (error) {
+    await completeEnrichmentRun({
+      serviceClient: params.serviceClient,
+      runId,
+      status: "failed",
+      outputPayload: {},
+      confidenceSummary: {},
+      rejectionCount,
+      metadata: {
+        error: error instanceof Error ? error.message : "unknown_error",
+      },
+    });
+    throw error;
+  }
 };
 
 const persistCanonicalRecipeIngredients = async (params: {
