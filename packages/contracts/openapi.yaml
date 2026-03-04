@@ -668,6 +668,8 @@ paths:
   /chat:
     post:
       summary: Start a new chat session
+      parameters:
+        - $ref: '#/components/parameters/SimModelOverrides'
       requestBody:
         required: true
         content:
@@ -728,6 +730,7 @@ paths:
           schema:
             type: string
             format: uuid
+        - $ref: '#/components/parameters/SimModelOverrides'
       requestBody:
         required: true
         content:
@@ -815,12 +818,28 @@ paths:
           schema:
             type: string
             format: uuid
+        - $ref: '#/components/parameters/SimModelOverrides'
       requestBody:
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/PatchCandidateRequest'
+            examples:
+              setActiveComponent:
+                summary: Set active tab
+                value:
+                  action: "set_active_component"
+                  component_id: "component-side"
+              deleteComponent:
+                summary: Remove an extra tab before commit
+                value:
+                  action: "delete_component"
+                  component_id: "component-side"
+              clearCandidate:
+                summary: Clear candidate set and return to ideation mode
+                value:
+                  action: "clear_candidate"
       responses:
         '200':
           description: Updated chat session candidate set
@@ -828,6 +847,51 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PatchCandidateResponse'
+              examples:
+                candidateUpdated:
+                  summary: Candidate still present
+                  value:
+                    id: "e3fa8890-1111-2222-3333-444455556666"
+                    loop_state: "candidate_presented"
+                    assistant_reply:
+                      text: "Updated the active tab."
+                    candidate_recipe_set:
+                      candidate_id: "8f32d780-1111-2222-3333-444455556666"
+                      revision: 3
+                      active_component_id: "component-side"
+                      components:
+                        - component_id: "component-main"
+                          role: "main"
+                          title: "Lighter Spicy Chicken Parm"
+                          recipe:
+                            title: "Lighter Spicy Chicken Parm"
+                            servings: 2
+                            ingredients: []
+                            steps: []
+                        - component_id: "component-side"
+                          role: "side"
+                          title: "Garlicky Broccolini"
+                          recipe:
+                            title: "Garlicky Broccolini"
+                            servings: 2
+                            ingredients: []
+                            steps: []
+                    messages: []
+                    memory_context_ids: []
+                    context_version: 2
+                    ui_hints:
+                      focus_component_id: "component-side"
+                candidateCleared:
+                  summary: Candidate cleared, back to ideation
+                  value:
+                    id: "e3fa8890-1111-2222-3333-444455556666"
+                    loop_state: "ideation"
+                    assistant_reply:
+                      text: "Ready for a fresh start."
+                    candidate_recipe_set: null
+                    messages: []
+                    memory_context_ids: []
+                    context_version: 2
         default:
           $ref: '#/components/responses/ErrorResponse'
   /chat/{id}/commit:
@@ -840,12 +904,16 @@ paths:
           schema:
             type: string
             format: uuid
+        - $ref: '#/components/parameters/SimModelOverrides'
       requestBody:
         required: false
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/CommitChatRecipesRequest'
+            examples:
+              default:
+                value: {}
       responses:
         '200':
           description: Candidate components committed and linked
@@ -980,6 +1048,16 @@ components:
       schema:
         type: string
         format: uuid
+    SimModelOverrides:
+      in: header
+      name: x-sim-model-overrides
+      required: false
+      schema:
+        type: string
+      description: |
+        Optional JSON string used by Admin Simulation Runner to override model/provider per scope.
+        Format: {"chat_ideation":{"provider":"anthropic","model":"claude-3-5-haiku-latest"}}.
+        Not required for normal mobile clients.
   responses:
     ErrorResponse:
       description: Error envelope

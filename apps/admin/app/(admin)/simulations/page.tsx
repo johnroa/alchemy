@@ -27,7 +27,7 @@ export default async function SimulationsPage(): Promise<React.JSX.Element> {
         <KpiCard
           label="Runs Started"
           value={String(started)}
-          hint="Total simulation sessions initiated"
+          hint="Simulation sessions initiated"
           icon={PlayCircle}
         />
         <KpiCard

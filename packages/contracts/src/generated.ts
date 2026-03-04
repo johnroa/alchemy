@@ -1031,7 +1031,14 @@ export interface paths {
         post: {
             parameters: {
                 query?: never;
-                header?: never;
+                header?: {
+                    /**
+                     * @description Optional JSON string used by Admin Simulation Runner to override model/provider per scope.
+                     *     Format: {"chat_ideation":{"provider":"anthropic","model":"claude-3-5-haiku-latest"}}.
+                     *     Not required for normal mobile clients.
+                     */
+                    "x-sim-model-overrides"?: components["parameters"]["SimModelOverrides"];
+                };
                 path?: never;
                 cookie?: never;
             };
@@ -1113,7 +1120,14 @@ export interface paths {
         post: {
             parameters: {
                 query?: never;
-                header?: never;
+                header?: {
+                    /**
+                     * @description Optional JSON string used by Admin Simulation Runner to override model/provider per scope.
+                     *     Format: {"chat_ideation":{"provider":"anthropic","model":"claude-3-5-haiku-latest"}}.
+                     *     Not required for normal mobile clients.
+                     */
+                    "x-sim-model-overrides"?: components["parameters"]["SimModelOverrides"];
+                };
                 path: {
                     id: string;
                 };
@@ -1162,7 +1176,14 @@ export interface paths {
         patch: {
             parameters: {
                 query?: never;
-                header?: never;
+                header?: {
+                    /**
+                     * @description Optional JSON string used by Admin Simulation Runner to override model/provider per scope.
+                     *     Format: {"chat_ideation":{"provider":"anthropic","model":"claude-3-5-haiku-latest"}}.
+                     *     Not required for normal mobile clients.
+                     */
+                    "x-sim-model-overrides"?: components["parameters"]["SimModelOverrides"];
+                };
                 path: {
                     id: string;
                 };
@@ -1201,7 +1222,14 @@ export interface paths {
         post: {
             parameters: {
                 query?: never;
-                header?: never;
+                header?: {
+                    /**
+                     * @description Optional JSON string used by Admin Simulation Runner to override model/provider per scope.
+                     *     Format: {"chat_ideation":{"provider":"anthropic","model":"claude-3-5-haiku-latest"}}.
+                     *     Not required for normal mobile clients.
+                     */
+                    "x-sim-model-overrides"?: components["parameters"]["SimModelOverrides"];
+                };
                 path: {
                     id: string;
                 };
@@ -1787,6 +1815,12 @@ export interface components {
     };
     parameters: {
         RecipeId: string;
+        /**
+         * @description Optional JSON string used by Admin Simulation Runner to override model/provider per scope.
+         *     Format: {"chat_ideation":{"provider":"anthropic","model":"claude-3-5-haiku-latest"}}.
+         *     Not required for normal mobile clients.
+         */
+        SimModelOverrides: string;
     };
     requestBodies: never;
     headers: never;

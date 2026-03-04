@@ -2,10 +2,15 @@ import SwiftUI
 
 struct CookbookView: View {
     @Environment(APIClient.self) private var api
-    @State private var vm = CookbookViewModel()
+    @Bindable var vm: CookbookViewModel
     @Namespace private var recipeAnimation
     var onProfileTap: () -> Void
     @State private var filterSelection: String?
+
+    init(viewModel: CookbookViewModel, onProfileTap: @escaping () -> Void) {
+        self._vm = Bindable(viewModel)
+        self.onProfileTap = onProfileTap
+    }
 
     var body: some View {
         NavigationStack {
@@ -60,6 +65,7 @@ struct CookbookView: View {
             }
             .padding(.bottom, Sizing.tabBarHeight + Spacing.xl)
         }
+        .contentMargins(.top, 0, for: .scrollContent)
     }
 
     // MARK: - Staggered Grid
@@ -141,38 +147,17 @@ struct CookbookView: View {
             }
             .padding(.bottom, Sizing.tabBarHeight + Spacing.xxxl)
         }
+        .contentMargins(.top, 0, for: .scrollContent)
     }
 
     private func cookbookHeader(searchText: Binding<String>, isInteractive: Bool) -> some View {
         VStack(alignment: .leading, spacing: Spacing.md) {
-            HStack(alignment: .center, spacing: Spacing.md) {
-                Text("Cookbook")
-                    .font(AlchemyFont.largeTitle)
-                    .foregroundStyle(AlchemyColors.textPrimary)
-                    .tracking(0.4)
-
-                Spacer(minLength: Spacing.md)
-
-                Button(action: onProfileTap) {
-                    Image("chef-hat")
-                        .renderingMode(.template)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: 22, height: 22)
-                        .foregroundStyle(AlchemyColors.grey2)
-                        .frame(width: 36, height: 36)
-                        .background(
-                            Circle().fill(Color.white.opacity(0.6))
-                        )
-                }
-                .buttonStyle(.plain)
-                .allowsHitTesting(isInteractive)
-                .opacity(isInteractive ? 1 : 0.92)
-            }
-            .frame(height: 52)
-            .padding(.horizontal, Spacing.md)
-            .padding(.top, 20)
-            .padding(.bottom, Spacing.sm)
+            AlchemyScreenHeader(
+                title: "Cookbook",
+                onProfileTap: onProfileTap,
+                isProfileInteractive: isInteractive,
+                leading: nil
+            )
 
             Text(vm.cookbookInsight)
                 .font(AlchemyFont.body)

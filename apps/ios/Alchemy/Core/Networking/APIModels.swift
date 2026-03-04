@@ -219,10 +219,10 @@ struct RecipeCard: Codable, Identifiable {
     }
 }
 
-// MARK: - Chat Recipe (LLM-generated, pre-save)
+// MARK: - Chat Recipe Payload (LLM-generated, pre-save)
 
-/// A recipe returned during chat — not yet persisted, so it lacks DB fields like `id`, `visibility`, `updated_at`.
-struct ChatRecipe: Codable {
+/// Normalized recipe payload returned by chat-loop candidate components.
+struct RecipePayload: Codable {
     let title: String
     var description: String?
     let servings: Int
@@ -234,9 +234,9 @@ struct ChatRecipe: Codable {
     var metadata: RecipeMetadata?
 
     /// Convert to a display-friendly RecipeView with placeholder DB fields.
-    var asRecipeView: RecipeView {
+    func asRecipeView(id: String = "draft", updatedAt: String = "") -> RecipeView {
         RecipeView(
-            id: "draft",
+            id: id,
             title: title,
             description: description,
             summary: description ?? title,
@@ -250,7 +250,7 @@ struct ChatRecipe: Codable {
             metadata: metadata,
             emoji: emoji,
             visibility: "draft",
-            updatedAt: "",
+            updatedAt: updatedAt,
             attachments: nil,
             category: nil,
             version: nil
@@ -286,27 +286,196 @@ struct ChatMessageItem: Codable, Identifiable {
     }
 }
 
-struct ChatResponse: Codable, Identifiable {
-    let id: String
-    var activeRecipe: ChatRecipe?
-    var assistantReply: AssistantReply?
-    var memoryContextIds: [String]?
+enum ChatLoopState: String, Codable {
+    case ideation
+    case candidatePresented = "candidate_presented"
+    case iterating
+}
+
+enum CandidateComponentRole: String, Codable {
+    case main
+    case side
+    case appetizer
+    case dessert
+    case drink
+}
+
+struct CandidateRecipeComponent: Codable, Identifiable {
+    let componentId: String
+    let role: CandidateComponentRole
+    let title: String
+    let recipe: RecipePayload
 
     enum CodingKeys: String, CodingKey {
-        case id
-        case activeRecipe = "active_recipe"
-        case assistantReply = "assistant_reply"
-        case memoryContextIds = "memory_context_ids"
+        case role, title, recipe
+        case componentId = "component_id"
+    }
+
+    var id: String { componentId }
+}
+
+struct CandidateRecipeSet: Codable {
+    let candidateId: String
+    let revision: Int
+    var activeComponentId: String
+    var components: [CandidateRecipeComponent]
+
+    enum CodingKeys: String, CodingKey {
+        case revision, components
+        case candidateId = "candidate_id"
+        case activeComponentId = "active_component_id"
     }
 }
 
-struct GenerateResponse: Codable {
-    let recipe: RecipeView
-    var assistantReply: AssistantReply?
+struct ChatUiHints: Codable {
+    var showGenerationAnimation: Bool?
+    var focusComponentId: String?
 
     enum CodingKeys: String, CodingKey {
-        case recipe
+        case showGenerationAnimation = "show_generation_animation"
+        case focusComponentId = "focus_component_id"
+    }
+}
+
+struct ChatSession: Codable, Identifiable {
+    let id: String
+    var messages: [ChatMessageItem]
+    var loopState: ChatLoopState
+    var assistantReply: AssistantReply?
+    var candidateRecipeSet: CandidateRecipeSet?
+    var memoryContextIds: [String]
+    var contextVersion: Int
+    var uiHints: ChatUiHints?
+    var createdAt: String?
+    var updatedAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, messages
+        case loopState = "loop_state"
         case assistantReply = "assistant_reply"
+        case candidateRecipeSet = "candidate_recipe_set"
+        case memoryContextIds = "memory_context_ids"
+        case contextVersion = "context_version"
+        case uiHints = "ui_hints"
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+    }
+}
+
+struct PatchCandidateRequest: Encodable {
+    enum Action: String, Encodable {
+        case setActiveComponent = "set_active_component"
+        case deleteComponent = "delete_component"
+        case clearCandidate = "clear_candidate"
+    }
+
+    let action: Action
+    let componentId: String?
+
+    enum CodingKeys: String, CodingKey {
+        case action
+        case componentId = "component_id"
+    }
+
+    static func setActiveComponent(_ componentId: String) -> PatchCandidateRequest {
+        PatchCandidateRequest(action: .setActiveComponent, componentId: componentId)
+    }
+
+    static func deleteComponent(_ componentId: String) -> PatchCandidateRequest {
+        PatchCandidateRequest(action: .deleteComponent, componentId: componentId)
+    }
+
+    static func clearCandidate() -> PatchCandidateRequest {
+        PatchCandidateRequest(action: .clearCandidate, componentId: nil)
+    }
+}
+
+struct CommitRecipeItem: Codable, Identifiable {
+    let componentId: String
+    let role: CandidateComponentRole
+    let title: String
+    let recipeId: String
+    let recipeVersionId: String
+
+    enum CodingKeys: String, CodingKey {
+        case role, title
+        case componentId = "component_id"
+        case recipeId = "recipe_id"
+        case recipeVersionId = "recipe_version_id"
+    }
+
+    var id: String { componentId }
+}
+
+struct CommitRecipeLink: Codable, Identifiable {
+    let id: String
+    let parentRecipeId: String
+    let childRecipeId: String
+    let relationType: String
+    let position: Int
+
+    enum CodingKeys: String, CodingKey {
+        case id, position
+        case parentRecipeId = "parent_recipe_id"
+        case childRecipeId = "child_recipe_id"
+        case relationType = "relation_type"
+    }
+}
+
+struct CommitPayload: Codable {
+    let candidateId: String
+    let revision: Int
+    let committedCount: Int
+    let recipes: [CommitRecipeItem]
+    let links: [CommitRecipeLink]
+    let postSaveOptions: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case revision, recipes, links
+        case candidateId = "candidate_id"
+        case committedCount = "committed_count"
+        case postSaveOptions = "post_save_options"
+    }
+}
+
+struct CommitChatRecipesResponse: Codable {
+    let id: String
+    var messages: [ChatMessageItem]
+    var loopState: ChatLoopState
+    var assistantReply: AssistantReply?
+    var candidateRecipeSet: CandidateRecipeSet?
+    var memoryContextIds: [String]
+    var contextVersion: Int
+    var uiHints: ChatUiHints?
+    var createdAt: String?
+    var updatedAt: String?
+    let commit: CommitPayload
+
+    enum CodingKeys: String, CodingKey {
+        case id, messages, commit
+        case loopState = "loop_state"
+        case assistantReply = "assistant_reply"
+        case candidateRecipeSet = "candidate_recipe_set"
+        case memoryContextIds = "memory_context_ids"
+        case contextVersion = "context_version"
+        case uiHints = "ui_hints"
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+    }
+
+    var session: ChatSession {
+        ChatSession(
+            id: id,
+            messages: messages,
+            loopState: loopState,
+            assistantReply: assistantReply,
+            candidateRecipeSet: candidateRecipeSet,
+            memoryContextIds: memoryContextIds,
+            contextVersion: contextVersion,
+            uiHints: uiHints,
+            createdAt: createdAt,
+            updatedAt: updatedAt
+        )
     }
 }
 
@@ -465,18 +634,6 @@ struct SaveResponse: Codable {
 
 struct OkResponse: Codable {
     let ok: Bool
-}
-
-// FinalizeResponse removed — use GenerateResponse from chat flow
-
-struct TweakResponse: Codable {
-    let recipe: RecipeView
-    var assistantReply: AssistantReply?
-
-    enum CodingKeys: String, CodingKey {
-        case recipe
-        case assistantReply = "assistant_reply"
-    }
 }
 
 struct AttachmentResponse: Codable {

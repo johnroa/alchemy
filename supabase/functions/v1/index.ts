@@ -3037,6 +3037,87 @@ const renderChatMessageForPrompt = (message: ChatMessageView): string => {
   return message.content;
 };
 
+const truncatePromptText = (value: string, maxChars: number): string => {
+  if (value.length <= maxChars) {
+    return value;
+  }
+  return `${value.slice(0, Math.max(0, maxChars - 1)).trimEnd()}…`;
+};
+
+const isExplicitGenerateCommand = (message: string): boolean => {
+  const normalized = message.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  if (
+    normalized === "generate" || normalized === "generate now" ||
+    normalized === "create recipe" || normalized === "make recipe" ||
+    normalized === "show recipe"
+  ) {
+    return true;
+  }
+  if (
+    normalized.includes("generate now") ||
+    normalized.includes("generate the recipe") ||
+    normalized.includes("generate recipe") ||
+    normalized.includes("full candidate recipe set") ||
+    normalized.includes("candidate recipe set now") ||
+    normalized.includes("generate candidate recipe set") ||
+    normalized.includes("generate candidate set") ||
+    normalized.includes("generate the candidate")
+  ) {
+    return true;
+  }
+  return false;
+};
+
+const buildThreadForPrompt = (
+  messages: ChatMessageView[],
+  maxMessages = 6,
+): Array<{ role: string; content: string }> => {
+  const scoped = messages
+    .filter((message) => message.role === "user" || message.role === "assistant")
+    .slice(-maxMessages);
+
+  return scoped.map((message) => ({
+    role: message.role,
+    content: truncatePromptText(renderChatMessageForPrompt(message), 900),
+  }));
+};
+
+const buildCompactChatContext = (
+  context: ChatSessionContext,
+): Record<string, JsonValue> => ({
+  loop_state: context.loop_state ?? "ideation",
+  candidate_revision: context.candidate_revision ?? 0,
+  active_component_id: context.active_component_id ?? null,
+});
+
+const buildCandidateOutlineForPrompt = (
+  candidate: CandidateRecipeSet | null,
+): Record<string, JsonValue> | null => {
+  if (!candidate) {
+    return null;
+  }
+
+  return {
+    candidate_id: candidate.candidate_id,
+    revision: candidate.revision,
+    active_component_id: candidate.active_component_id,
+    components: candidate.components.map((component) => ({
+      component_id: component.component_id,
+      role: component.role,
+      title: component.title,
+      ingredient_count: Array.isArray(component.recipe.ingredients)
+        ? component.recipe.ingredients.length
+        : 0,
+      step_count: Array.isArray(component.recipe.steps)
+        ? component.recipe.steps.length
+        : 0,
+    })),
+  };
+};
+
 const updateChatSessionLoopContext = async (params: {
   client: SupabaseClient;
   chatId: string;
@@ -3413,6 +3494,47 @@ const generateCookbookInsight = async (params: {
   }
 };
 
+const converseChatWithRetry = async (params: {
+  client: SupabaseClient;
+  userId: string;
+  requestId: string;
+  prompt: string;
+  context: Record<string, JsonValue>;
+  scopeHint?: "chat" | "chat_ideation" | "chat_generation" | "chat_iteration" |
+    "tweak";
+  modelOverrides?: ModelOverrideMap;
+}): Promise<Awaited<ReturnType<typeof llmGateway.converseChat>>> => {
+  const maxAttempts = params.scopeHint === "chat_ideation" ? 2 : 1;
+  let lastError: unknown = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await llmGateway.converseChat({
+        client: params.client,
+        userId: params.userId,
+        requestId: params.requestId,
+        prompt: params.prompt,
+        context: params.context,
+        scopeHint: params.scopeHint,
+        modelOverrides: params.modelOverrides,
+      });
+    } catch (error) {
+      lastError = error;
+      const code = error instanceof ApiError ? error.code : "";
+      const retryable = code === "llm_invalid_json" ||
+        code === "llm_empty_output" ||
+        code === "chat_schema_invalid";
+      if (!retryable || attempt >= maxAttempts) {
+        throw error;
+      }
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new ApiError(502, "chat_generation_failed", "Chat generation failed");
+};
+
 const processImageJobs = async (params: {
   userClient: SupabaseClient;
   serviceClient: SupabaseClient;
@@ -3645,6 +3767,12 @@ const processImageJobs = async (params: {
 
 Deno.serve(async (request) => {
   const requestId = crypto.randomUUID();
+  const respond = (status: number, body: unknown): Response => {
+    const response = jsonResponse(status, body);
+    response.headers.set("x-request-id", requestId);
+    response.headers.set("x-alchemy-request-id", requestId);
+    return response;
+  };
 
   try {
     const url = new URL(request.url);
@@ -3655,7 +3783,7 @@ Deno.serve(async (request) => {
     if (
       segments.length === 1 && segments[0] === "healthz" && method === "GET"
     ) {
-      return jsonResponse(200, {
+      return respond(200, {
         status: "ok",
         service: "alchemy-api",
         timestamp: new Date().toISOString(),
@@ -3686,7 +3814,7 @@ Deno.serve(async (request) => {
     if (segments.length === 1 && segments[0] === "preferences") {
       if (method === "GET") {
         const preferences = await getPreferences(client, auth.userId);
-        return jsonResponse(200, preferences);
+        return respond(200, preferences);
       }
 
       if (method === "PATCH") {
@@ -3740,7 +3868,7 @@ Deno.serve(async (request) => {
           afterJson: data as unknown as JsonValue,
         });
 
-        return jsonResponse(200, data);
+        return respond(200, data);
       }
     }
 
@@ -3759,7 +3887,7 @@ Deno.serve(async (request) => {
           state: storedState?.state ?? {},
         };
 
-      return jsonResponse(200, onboardingState);
+      return respond(200, onboardingState);
     }
 
     if (
@@ -3945,7 +4073,7 @@ Deno.serve(async (request) => {
         }
       })();
 
-      return jsonResponse(200, {
+      return respond(200, {
         assistant_reply: interview.assistant_reply,
         onboarding_state: onboardingState,
         preference_updates: interview.preference_updates ?? {},
@@ -3960,7 +4088,7 @@ Deno.serve(async (request) => {
           getLimit(url, 100),
         );
         const snapshot = await getMemorySnapshot(client, auth.userId);
-        return jsonResponse(200, { items: memories, snapshot });
+        return respond(200, { items: memories, snapshot });
       }
     }
 
@@ -4023,7 +4151,7 @@ Deno.serve(async (request) => {
         requestId,
       });
 
-      return jsonResponse(200, { ok: true });
+      return respond(200, { ok: true });
     }
 
     if (
@@ -4073,7 +4201,7 @@ Deno.serve(async (request) => {
         requestId,
       });
 
-      return jsonResponse(200, { ok: true });
+      return respond(200, { ok: true });
     }
 
     if (
@@ -4127,10 +4255,10 @@ Deno.serve(async (request) => {
           metadata: {},
           created_at: event.created_at,
         }));
-        return jsonResponse(200, { items });
+        return respond(200, { items });
       }
 
-      return jsonResponse(200, { items: changelogResult.data ?? [] });
+      return respond(200, { items: changelogResult.data ?? [] });
     }
 
     if (
@@ -4167,7 +4295,7 @@ Deno.serve(async (request) => {
         },
       });
 
-      return jsonResponse(200, result);
+      return respond(200, result);
     }
 
     if (
@@ -4206,7 +4334,7 @@ Deno.serve(async (request) => {
         },
       });
 
-      return jsonResponse(200, result);
+      return respond(200, result);
     }
 
     if (
@@ -4258,7 +4386,7 @@ Deno.serve(async (request) => {
         requestId,
       });
 
-      return jsonResponse(200, { ok: true, job: retried });
+      return respond(200, { ok: true, job: retried });
     }
 
     if (
@@ -4295,7 +4423,7 @@ Deno.serve(async (request) => {
         },
       });
 
-      return jsonResponse(200, result);
+      return respond(200, result);
     }
 
     if (
@@ -4342,7 +4470,7 @@ Deno.serve(async (request) => {
         requestId,
       });
 
-      return jsonResponse(200, { ok: true, job: retried });
+      return respond(200, { ok: true, job: retried });
     }
 
     if (segments.length === 1 && segments[0] === "collections") {
@@ -4360,7 +4488,7 @@ Deno.serve(async (request) => {
           );
         }
 
-        return jsonResponse(200, { items: data ?? [] });
+        return respond(200, { items: data ?? [] });
       }
 
       if (method === "POST") {
@@ -4400,7 +4528,7 @@ Deno.serve(async (request) => {
           afterJson: data as unknown as JsonValue,
         });
 
-        return jsonResponse(200, data);
+        return respond(200, data);
       }
     }
 
@@ -4436,7 +4564,7 @@ Deno.serve(async (request) => {
         requestId,
       });
 
-      return jsonResponse(200, { ok: true });
+      return respond(200, { ok: true });
     }
 
     if (
@@ -4461,7 +4589,7 @@ Deno.serve(async (request) => {
         requestId,
         items,
       });
-      return jsonResponse(200, { items, cookbook_insight: cookbookInsight });
+      return respond(200, { items, cookbook_insight: cookbookInsight });
     }
 
     if (
@@ -4477,7 +4605,7 @@ Deno.serve(async (request) => {
         >,
       });
       const recipe = await fetchRecipeView(client, recipeId, true, viewOptions);
-      return jsonResponse(200, recipe);
+      return respond(200, recipe);
     }
 
     if (
@@ -4550,7 +4678,7 @@ Deno.serve(async (request) => {
         chatMessages = await fetchChatMessages(client, recipe.source_chat_id);
       }
 
-      return jsonResponse(200, {
+      return respond(200, {
         recipe_id: recipeId,
         source_chat_id: recipe.source_chat_id,
         versions: versions ?? [],
@@ -4694,7 +4822,7 @@ Deno.serve(async (request) => {
       });
 
       const recipe = await fetchRecipeView(client, parentRecipeId);
-      return jsonResponse(200, { recipe, attachment_id: insertedLink.id });
+      return respond(200, { recipe, attachment_id: insertedLink.id });
     }
 
     if (
@@ -4751,7 +4879,7 @@ Deno.serve(async (request) => {
       });
 
       const recipe = await fetchRecipeView(client, parentRecipeId);
-      return jsonResponse(200, { recipe });
+      return respond(200, { recipe });
     }
 
     if (
@@ -4787,7 +4915,7 @@ Deno.serve(async (request) => {
       });
 
       const recipe = await fetchRecipeView(client, parentRecipeId);
-      return jsonResponse(200, { recipe });
+      return respond(200, { recipe });
     }
 
     if (
@@ -4832,7 +4960,7 @@ Deno.serve(async (request) => {
           await enqueueImageJob(client, recipeId);
         }
 
-        return jsonResponse(200, { saved: true });
+        return respond(200, { saved: true });
       }
 
       if (method === "DELETE") {
@@ -4861,7 +4989,7 @@ Deno.serve(async (request) => {
           requestId,
         });
 
-        return jsonResponse(200, { saved: false });
+        return respond(200, { saved: false });
       }
     }
 
@@ -4903,7 +5031,7 @@ Deno.serve(async (request) => {
           requestId,
         });
 
-        return jsonResponse(200, { ok: true });
+        return respond(200, { ok: true });
       }
     }
 
@@ -4941,7 +5069,7 @@ Deno.serve(async (request) => {
           requestId,
         });
 
-        return jsonResponse(200, { ok: true });
+        return respond(200, { ok: true });
       }
     }
 
@@ -4982,7 +5110,7 @@ Deno.serve(async (request) => {
 
       const entityIds = (links ?? []).map((item) => item.entity_id);
       if (entityIds.length === 0) {
-        return jsonResponse(200, { entities: [], edges: [] });
+        return respond(200, { entities: [], edges: [] });
       }
 
       const { data: entities, error: entitiesError } = await client
@@ -5071,7 +5199,7 @@ Deno.serve(async (request) => {
         source: edge.source,
       }));
 
-      return jsonResponse(200, {
+      return respond(200, {
         entities: entities ?? [],
         edges: responseEdges,
       });
@@ -5139,7 +5267,9 @@ Deno.serve(async (request) => {
         );
       }
 
-      let assistantChatResponse = await llmGateway.converseChat({
+      const directGenerationIntent = isExplicitGenerateCommand(message);
+
+      let assistantChatResponse = await converseChatWithRetry({
         client: serviceClient,
         userId: auth.userId,
         requestId,
@@ -5150,11 +5280,12 @@ Deno.serve(async (request) => {
           memory_snapshot: contextPack.memorySnapshot,
           selected_memories: contextPack.selectedMemories,
         },
-        scopeHint: "chat_ideation",
+        scopeHint: directGenerationIntent ? "chat_generation" : "chat_ideation",
         modelOverrides,
       });
 
       if (
+        !directGenerationIntent &&
         assistantChatResponse.trigger_recipe === true &&
         !assistantChatResponse.candidate_recipe_set &&
         !assistantChatResponse.recipe
@@ -5164,7 +5295,7 @@ Deno.serve(async (request) => {
         > | null = null;
 
         try {
-          generationResponse = await llmGateway.converseChat({
+          generationResponse = await converseChatWithRetry({
             client: serviceClient,
             userId: auth.userId,
             requestId,
@@ -5188,25 +5319,13 @@ Deno.serve(async (request) => {
         ) {
           assistantChatResponse = generationResponse;
         } else {
-          const fallbackGeneration = await llmGateway.generateRecipe({
-            client: serviceClient,
-            userId: auth.userId,
-            requestId,
-            prompt: message,
-            context: {
-              preferences: contextPack.preferences,
-              memory_snapshot: contextPack.memorySnapshot,
-              selected_memories: contextPack.selectedMemories,
-              loop_state: "iterating",
-              thread: [{ role: "user", content: message }],
-            },
-            modelOverrides,
-          });
           assistantChatResponse = {
-            assistant_reply: fallbackGeneration.assistant_reply,
-            recipe: fallbackGeneration.recipe,
-            trigger_recipe: true,
-            response_context: fallbackGeneration.response_context,
+            ...assistantChatResponse,
+            trigger_recipe: false,
+            response_context: {
+              ...(assistantChatResponse.response_context ?? {}),
+              mode: "ideation",
+            },
           };
         }
       }
@@ -5317,7 +5436,7 @@ Deno.serve(async (request) => {
         },
       });
 
-      return jsonResponse(
+      return respond(
         200,
         buildChatLoopResponse({
           chatId: chatSession.id,
@@ -5363,7 +5482,7 @@ Deno.serve(async (request) => {
         )
         : [];
 
-      return jsonResponse(
+      return respond(
         200,
         buildChatLoopResponse({
           chatId: chatSession.id,
@@ -5415,6 +5534,10 @@ Deno.serve(async (request) => {
       const existingCandidate = normalizeCandidateRecipeSet(
         sessionContext.candidate_recipe_set ?? null,
       );
+      const candidateOutlineForPrompt = buildCandidateOutlineForPrompt(
+        existingCandidate,
+      );
+      const compactChatContext = buildCompactChatContext(sessionContext);
       const activeComponent = existingCandidate?.components.find((component) =>
         component.component_id === existingCandidate.active_component_id
       ) ??
@@ -5431,7 +5554,7 @@ Deno.serve(async (request) => {
           chat_context: (chatSession.context as Record<string, JsonValue>) ??
             {},
           loop_state: deriveLoopState(sessionContext, existingCandidate),
-          candidate_recipe_set: existingCandidate as unknown as JsonValue,
+          candidate_recipe_set_outline: candidateOutlineForPrompt,
         },
         selectionMode: "fast",
       });
@@ -5456,32 +5579,39 @@ Deno.serve(async (request) => {
       }
 
       const threadMessages = await fetchChatMessages(client, chatId);
+      const threadForPrompt = buildThreadForPrompt(threadMessages);
+      const directGenerationIntent = !existingCandidate &&
+        isExplicitGenerateCommand(message);
 
-      let assistantChatResponse = await llmGateway.converseChat({
+      let assistantChatResponse = await converseChatWithRetry({
         client: serviceClient,
         userId: auth.userId,
         requestId,
         prompt: message,
         context: {
-          chat_context: (chatSession.context as Record<string, JsonValue>) ??
-            {},
-          thread: threadMessages,
+          chat_context: compactChatContext,
+          thread: threadForPrompt,
           active_recipe: activeComponent?.recipe
             ? (activeComponent.recipe as unknown as JsonValue)
             : null,
-          candidate_recipe_set: existingCandidate as unknown as JsonValue,
+          candidate_recipe_set_outline: candidateOutlineForPrompt,
           loop_state: deriveLoopState(sessionContext, existingCandidate),
           preferences: contextPack.preferences,
           preferences_natural_language: contextPack.preferencesNaturalLanguage,
           memory_snapshot: contextPack.memorySnapshot,
           selected_memories: contextPack.selectedMemories,
         },
-        scopeHint: existingCandidate ? "chat_iteration" : "chat_ideation",
+        scopeHint: existingCandidate
+          ? "chat_iteration"
+          : directGenerationIntent
+          ? "chat_generation"
+          : "chat_ideation",
         modelOverrides,
       });
 
       if (
         !existingCandidate &&
+        !directGenerationIntent &&
         assistantChatResponse.trigger_recipe === true &&
         !assistantChatResponse.candidate_recipe_set &&
         !assistantChatResponse.recipe
@@ -5491,15 +5621,14 @@ Deno.serve(async (request) => {
         > | null = null;
 
         try {
-          generationResponse = await llmGateway.converseChat({
+          generationResponse = await converseChatWithRetry({
             client: serviceClient,
             userId: auth.userId,
             requestId,
             prompt: message,
             context: {
-              chat_context: (chatSession.context as Record<string, JsonValue>) ??
-                {},
-              thread: threadMessages,
+              chat_context: compactChatContext,
+              thread: threadForPrompt,
               loop_state: "iterating",
               preferences: contextPack.preferences,
               memory_snapshot: contextPack.memorySnapshot,
@@ -5517,27 +5646,13 @@ Deno.serve(async (request) => {
         ) {
           assistantChatResponse = generationResponse;
         } else {
-          const fallbackGeneration = await llmGateway.generateRecipe({
-            client: serviceClient,
-            userId: auth.userId,
-            requestId,
-            prompt: message,
-            context: {
-              chat_context: (chatSession.context as Record<string, JsonValue>) ??
-                {},
-              thread: threadMessages,
-              loop_state: "iterating",
-              preferences: contextPack.preferences,
-              memory_snapshot: contextPack.memorySnapshot,
-              selected_memories: contextPack.selectedMemories,
-            },
-            modelOverrides,
-          });
           assistantChatResponse = {
-            assistant_reply: fallbackGeneration.assistant_reply,
-            recipe: fallbackGeneration.recipe,
-            trigger_recipe: true,
-            response_context: fallbackGeneration.response_context,
+            ...assistantChatResponse,
+            trigger_recipe: false,
+            response_context: {
+              ...(assistantChatResponse.response_context ?? {}),
+              mode: "ideation",
+            },
           };
         }
       }
@@ -5665,7 +5780,7 @@ Deno.serve(async (request) => {
       const messages = await fetchChatMessages(client, chatId);
       const justGenerated = !existingCandidate && Boolean(nextCandidateSet);
 
-      return jsonResponse(
+      return respond(
         200,
         buildChatLoopResponse({
           chatId,
@@ -5852,7 +5967,7 @@ Deno.serve(async (request) => {
       });
 
       const messages = await fetchChatMessages(client, chatId);
-      return jsonResponse(
+      return respond(
         200,
         buildChatLoopResponse({
           chatId,
@@ -5916,55 +6031,48 @@ Deno.serve(async (request) => {
         )
         : [];
 
-      const committedComponents: Array<{
-        component_id: string;
-        role: CandidateRecipeRole;
-        title: string;
-        recipe_id: string;
-        recipe_version_id: string;
-      }> = [];
+      const committedComponents = await Promise.all(
+        candidateSet.components.map(async (component) => {
+          const saved = await persistRecipe({
+            client,
+            serviceClient,
+            userId: auth.userId,
+            requestId,
+            payload: component.recipe,
+            sourceChatId: chatId,
+            diffSummary: `Committed from chat candidate (${component.role})`,
+            selectedMemoryIds,
+          });
 
-      for (let index = 0; index < candidateSet.components.length; index += 1) {
-        const component = candidateSet.components[index];
-        const saved = await persistRecipe({
-          client,
-          serviceClient,
-          userId: auth.userId,
-          requestId,
-          payload: component.recipe,
-          sourceChatId: chatId,
-          diffSummary: `Committed from chat candidate (${component.role})`,
-          selectedMemoryIds,
-        });
+          const { error: saveError } = await client
+            .from("recipe_saves")
+            .upsert(
+              {
+                user_id: auth.userId,
+                recipe_id: saved.recipeId,
+              },
+              { onConflict: "user_id,recipe_id" },
+            );
+          if (saveError) {
+            throw new ApiError(
+              500,
+              "recipe_save_failed",
+              "Could not save committed recipe to cookbook",
+              saveError.message,
+            );
+          }
 
-        const { error: saveError } = await client
-          .from("recipe_saves")
-          .upsert(
-            {
-              user_id: auth.userId,
-              recipe_id: saved.recipeId,
-            },
-            { onConflict: "user_id,recipe_id" },
-          );
-        if (saveError) {
-          throw new ApiError(
-            500,
-            "recipe_save_failed",
-            "Could not save committed recipe to cookbook",
-            saveError.message,
-          );
-        }
+          await enqueueImageJob(client, saved.recipeId);
 
-        await enqueueImageJob(client, saved.recipeId);
-
-        committedComponents.push({
-          component_id: component.component_id,
-          role: component.role,
-          title: component.title,
-          recipe_id: saved.recipeId,
-          recipe_version_id: saved.versionId,
-        });
-      }
+          return {
+            component_id: component.component_id,
+            role: component.role,
+            title: component.title,
+            recipe_id: saved.recipeId,
+            recipe_version_id: saved.versionId,
+          };
+        }),
+      );
 
       const primary = committedComponents[0];
       const links: Array<{
@@ -6059,7 +6167,7 @@ Deno.serve(async (request) => {
         updatedAt: new Date().toISOString(),
       });
 
-      return jsonResponse(200, {
+      return respond(200, {
         ...loopResponse,
         commit: {
           candidate_id: candidateSet.candidate_id,
@@ -6093,6 +6201,9 @@ Deno.serve(async (request) => {
       "Requested route does not exist",
     );
   } catch (error) {
-    return errorResponse(requestId, error);
+    const response = errorResponse(requestId, error);
+    response.headers.set("x-request-id", requestId);
+    response.headers.set("x-alchemy-request-id", requestId);
+    return response;
   }
 });

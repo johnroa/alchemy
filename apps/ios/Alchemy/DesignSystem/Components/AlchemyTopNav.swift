@@ -42,6 +42,62 @@ struct AlchemyTopNav: View {
     }
 }
 
+struct HeaderProfileButton: View {
+    var isInteractive: Bool = true
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image("chef-hat")
+                .renderingMode(.template)
+                .resizable()
+                .scaledToFit()
+                .frame(width: 22, height: 22)
+                .foregroundStyle(AlchemyColors.deepDark)
+                .frame(width: 36, height: 36)
+                .background(
+                    Circle().fill(Color.white.opacity(0.6))
+                )
+        }
+        .buttonStyle(.plain)
+        .allowsHitTesting(isInteractive)
+        .opacity(isInteractive ? 1 : 0.92)
+    }
+}
+
+struct AlchemyScreenHeader: View {
+    let title: String
+    var onProfileTap: () -> Void
+    var isProfileInteractive: Bool = true
+    var leading: AnyView?
+
+    var body: some View {
+        HStack(alignment: .center, spacing: Spacing.md) {
+            if let leading {
+                leading
+            }
+
+            Text(title)
+                .font(AlchemyFont.largeTitle)
+                .foregroundStyle(AlchemyColors.textPrimary)
+                .tracking(0.4)
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+
+            Spacer(minLength: Spacing.md)
+
+            HeaderProfileButton(
+                isInteractive: isProfileInteractive,
+                action: onProfileTap
+            )
+        }
+        .frame(height: Sizing.headerRowHeight)
+        .padding(.horizontal, Spacing.md)
+        .padding(.top, Sizing.headerTopInset + 24)
+        .padding(.bottom, Spacing.sm)
+    }
+}
+
 #if DEBUG
 #Preview("Top Nav") {
     ZStack {

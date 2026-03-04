@@ -16,8 +16,22 @@ type CandidateRecipeComponent = {
   title?: string;
   recipe?: {
     title?: string;
-    ingredients?: unknown[];
-    steps?: unknown[];
+    description?: string;
+    servings?: number;
+    notes?: string;
+    ingredients?: Array<{
+      name?: string;
+      amount?: number;
+      unit?: string;
+      category?: string;
+      preparation?: string;
+    }>;
+    steps?: Array<{
+      index?: number;
+      instruction?: string;
+      notes?: string;
+      timer_seconds?: number;
+    }>;
   };
 };
 
@@ -64,6 +78,29 @@ type RecipeApiResponse = {
 
 type CookbookApiResponse = {
   items?: Array<{ id?: string; recipe_id?: string }>;
+};
+
+type TokenUsageSummary = {
+  request_id: string | null;
+  llm_call_count: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  cost_usd: number;
+  scopes: string[];
+  scope_stats: Record<string, {
+    llm_call_count: number;
+    input_tokens: number;
+    output_tokens: number;
+    total_tokens: number;
+    cost_usd: number;
+    latency_ms: number;
+  }>;
+};
+
+type ApiCallResult<T> = {
+  data: T;
+  request_id: string | null;
 };
 
 type SimStep = {
@@ -119,6 +156,26 @@ const normalizeApiBase = (raw: string | undefined): string => {
   return withoutTrailing.endsWith("/v1") ? withoutTrailing : `${withoutTrailing}/v1`;
 };
 
+const extractRequestId = (
+  payload: unknown,
+  alchemyRequestIdHeader: string | null,
+  requestIdHeader: string | null
+): string | null => {
+  if (typeof alchemyRequestIdHeader === "string" && alchemyRequestIdHeader.trim().length > 0) {
+    return alchemyRequestIdHeader.trim();
+  }
+  if (typeof requestIdHeader === "string" && requestIdHeader.trim().length > 0) {
+    return requestIdHeader.trim();
+  }
+  if (payload && typeof payload === "object" && "request_id" in payload) {
+    const candidate = (payload as { request_id?: unknown }).request_id;
+    if (typeof candidate === "string" && candidate.trim().length > 0) {
+      return candidate.trim();
+    }
+  }
+  return null;
+};
+
 const requestJson = async <T>(params: {
   apiBase: string;
   token: string;
@@ -126,7 +183,7 @@ const requestJson = async <T>(params: {
   method?: "GET" | "POST" | "PATCH" | "DELETE";
   body?: Record<string, unknown>;
   modelOverrides?: Record<string, ModelOverride>;
-}): Promise<T> => {
+}): Promise<ApiCallResult<T>> => {
   const headers: Record<string, string> = {
     "content-type": "application/json",
     authorization: `Bearer ${params.token}`
@@ -163,7 +220,14 @@ const requestJson = async <T>(params: {
     );
   }
 
-  return payload as T;
+  return {
+    data: payload as T,
+    request_id: extractRequestId(
+      payload,
+      response.headers.get("x-alchemy-request-id"),
+      response.headers.get("x-request-id")
+    )
+  };
 };
 
 const assertCondition = (condition: boolean, message: string): void => {
@@ -221,6 +285,64 @@ const summarizeComponents = (candidate: CandidateRecipeSet | null | undefined): 
     ingredient_count: Array.isArray(component.recipe?.ingredients) ? component.recipe?.ingredients.length : 0,
     step_count: Array.isArray(component.recipe?.steps) ? component.recipe?.steps.length : 0
   }));
+};
+
+const projectCandidateForTrace = (candidate: CandidateRecipeSet | null | undefined): Record<string, unknown> | null => {
+  if (!candidate || !Array.isArray(candidate.components) || candidate.components.length === 0) {
+    return null;
+  }
+
+  const components = candidate.components.map((component) => {
+    const recipe = component.recipe ?? {};
+    const ingredients = Array.isArray(recipe.ingredients)
+      ? recipe.ingredients
+          .map((ingredient) => ({
+            name: typeof ingredient.name === "string" ? ingredient.name : "",
+            amount: typeof ingredient.amount === "number" ? ingredient.amount : null,
+            unit: typeof ingredient.unit === "string" ? ingredient.unit : "",
+            category: typeof ingredient.category === "string" ? ingredient.category : "",
+            preparation: typeof ingredient.preparation === "string" ? ingredient.preparation : ""
+          }))
+          .filter((ingredient) => ingredient.name.length > 0)
+      : [];
+
+    const steps = Array.isArray(recipe.steps)
+      ? recipe.steps
+          .map((step, index) => ({
+            index: typeof step.index === "number" && Number.isFinite(step.index) ? step.index : index + 1,
+            instruction: typeof step.instruction === "string" ? step.instruction : "",
+            notes: typeof step.notes === "string" ? step.notes : "",
+            timer_seconds:
+              typeof step.timer_seconds === "number" && Number.isFinite(step.timer_seconds) ? step.timer_seconds : null
+          }))
+          .filter((step) => step.instruction.length > 0)
+      : [];
+
+    const servings = typeof recipe.servings === "number" && Number.isFinite(recipe.servings) ? recipe.servings : null;
+
+    return {
+      component_id: component.component_id ?? "",
+      role: component.role ?? "",
+      title: component.title ?? "",
+      recipe: {
+        title: recipe.title ?? component.title ?? "",
+        description: typeof recipe.description === "string" ? recipe.description : "",
+        servings,
+        notes: typeof recipe.notes === "string" ? recipe.notes : "",
+        ingredient_count: ingredients.length,
+        step_count: steps.length,
+        ingredients,
+        steps
+      }
+    };
+  });
+
+  return {
+    candidate_id: candidate.candidate_id ?? "",
+    revision: typeof candidate.revision === "number" && Number.isFinite(candidate.revision) ? candidate.revision : null,
+    active_component_id: candidate.active_component_id ?? null,
+    components
+  };
 };
 
 const readJsonBody = async (response: Response): Promise<Record<string, unknown>> => {
@@ -331,6 +453,110 @@ const runSimulation = async (params: {
   };
 
   const eventAt = (): string => new Date().toISOString();
+  const toFiniteNumber = (value: unknown): number => {
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+      return 0;
+    }
+    return value;
+  };
+  const loadTokenUsage = async (apiRequestId: string | null): Promise<TokenUsageSummary | null> => {
+    if (!apiRequestId) {
+      return null;
+    }
+
+    const { data, error } = await client
+      .from("events")
+      .select("token_input,token_output,token_total,cost_usd,latency_ms,event_payload")
+      .eq("request_id", apiRequestId)
+      .eq("event_type", "llm_call");
+
+    if (error) {
+      return {
+        request_id: apiRequestId,
+        llm_call_count: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+        total_tokens: 0,
+        cost_usd: 0,
+        scopes: [],
+        scope_stats: {}
+      };
+    }
+
+    let inputTokens = 0;
+    let outputTokens = 0;
+    let totalTokens = 0;
+    let costUsd = 0;
+    const scopes = new Set<string>();
+    const scopeStats = new Map<string, {
+      llm_call_count: number;
+      input_tokens: number;
+      output_tokens: number;
+      total_tokens: number;
+      cost_usd: number;
+      latency_ms: number;
+    }>();
+    const rows = Array.isArray(data) ? data : [];
+
+    for (const row of rows) {
+      const input = toFiniteNumber((row as { token_input?: unknown }).token_input);
+      const output = toFiniteNumber((row as { token_output?: unknown }).token_output);
+      const total = Math.max(toFiniteNumber((row as { token_total?: unknown }).token_total), input + output);
+      inputTokens += input;
+      outputTokens += output;
+      totalTokens += total;
+      costUsd += toFiniteNumber((row as { cost_usd?: unknown }).cost_usd);
+      const latency = toFiniteNumber((row as { latency_ms?: unknown }).latency_ms);
+
+      const payload = (row as { event_payload?: unknown }).event_payload;
+      let scopeName = "unknown";
+      if (payload && typeof payload === "object" && "scope" in payload) {
+        const scope = (payload as { scope?: unknown }).scope;
+        if (typeof scope === "string" && scope.trim().length > 0) {
+          scopeName = scope.trim();
+        }
+      }
+      scopes.add(scopeName);
+      const current = scopeStats.get(scopeName) ?? {
+        llm_call_count: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+        total_tokens: 0,
+        cost_usd: 0,
+        latency_ms: 0
+      };
+      current.llm_call_count += 1;
+      current.input_tokens += input;
+      current.output_tokens += output;
+      current.total_tokens += total;
+      current.cost_usd += toFiniteNumber((row as { cost_usd?: unknown }).cost_usd);
+      current.latency_ms += latency;
+      scopeStats.set(scopeName, current);
+    }
+
+    const scopeStatsObj: TokenUsageSummary["scope_stats"] = {};
+    for (const [scope, stats] of scopeStats.entries()) {
+      scopeStatsObj[scope] = {
+        llm_call_count: stats.llm_call_count,
+        input_tokens: stats.input_tokens,
+        output_tokens: stats.output_tokens,
+        total_tokens: stats.total_tokens,
+        cost_usd: Number(stats.cost_usd.toFixed(6)),
+        latency_ms: stats.latency_ms
+      };
+    }
+
+    return {
+      request_id: apiRequestId,
+      llm_call_count: rows.length,
+      input_tokens: inputTokens,
+      output_tokens: outputTokens,
+      total_tokens: totalTokens,
+      cost_usd: Number(costUsd.toFixed(6)),
+      scopes: Array.from(scopes),
+      scope_stats: scopeStatsObj
+    };
+  };
 
   const runStep = async <T extends Record<string, unknown>>(
     name: string,
@@ -421,12 +647,12 @@ const runSimulation = async (params: {
     const prompts = {
       start: "I want a quick high-protein dinner for two. Keep it simple and weeknight-friendly.",
       refine: "Let's make it spicy chicken with one vegetable side. Keep prep practical.",
-      trigger: "Great. Generate the full candidate recipe set now.",
+      trigger: "That sounds exactly right. Let's do this one.",
       iterate: "Tweak it: keep total time under 45 minutes and make it dairy-free."
     } as const;
 
     const chat = await runStep("chat_start", async () => {
-      const response = await requestJson<ChatApiResponse>({
+      const api = await requestJson<ChatApiResponse>({
         apiBase,
         token,
         path: "/chat",
@@ -434,11 +660,16 @@ const runSimulation = async (params: {
         body: { message: prompts.start },
         modelOverrides: params.modelOverrides
       });
+      const response = api.data;
+      const tokenUsage = await loadTokenUsage(api.request_id);
 
       assertCondition(typeof response.id === "string" && response.id.length > 0, "Chat session id missing");
 
       return {
         chat_id: response.id,
+        user_prompt: prompts.start,
+        api_request_id: api.request_id,
+        token_usage: tokenUsage,
         loop_state: response.loop_state ?? "unknown",
         assistant_reply: extractAssistantText(response),
         message_count: Array.isArray(response.messages) ? response.messages.length : 0,
@@ -447,7 +678,7 @@ const runSimulation = async (params: {
     });
 
     const refine = await runStep("chat_refine", async () => {
-      const response = await requestJson<ChatApiResponse>({
+      const api = await requestJson<ChatApiResponse>({
         apiBase,
         token,
         path: `/chat/${chat.chat_id}/messages`,
@@ -455,12 +686,18 @@ const runSimulation = async (params: {
         body: { message: prompts.refine },
         modelOverrides: params.modelOverrides
       });
+      const response = api.data;
+      const tokenUsage = await loadTokenUsage(api.request_id);
 
       return {
+        user_prompt: prompts.refine,
+        api_request_id: api.request_id,
+        token_usage: tokenUsage,
         loop_state: response.loop_state ?? "unknown",
         assistant_reply: extractAssistantText(response),
         message_count: Array.isArray(response.messages) ? response.messages.length : 0,
         candidate_summary: summarizeComponents(response.candidate_recipe_set),
+        candidate_snapshot: projectCandidateForTrace(response.candidate_recipe_set),
         candidate_count: Array.isArray(response.candidate_recipe_set?.components)
           ? response.candidate_recipe_set.components.length
           : 0,
@@ -471,65 +708,73 @@ const runSimulation = async (params: {
     const ensuredCandidate = await runStep("chat_generation_trigger", async () => {
       if (refine.candidate_count > 0) {
         return {
+          generation_prompt: prompts.refine,
+          generation_source: "chat_refine",
           loop_state: refine.loop_state,
           candidate_id: "",
           revision: null,
           active_component_id: null,
           candidate_count: refine.candidate_count,
           candidate_summary: refine.candidate_summary,
+          candidate_snapshot: refine.candidate_snapshot ?? null,
           assistant_reply: "",
-          thread_tail: []
+          thread_tail: [],
+          reused_candidate_from_step: "chat_refine",
+          api_request_id: null,
+          token_usage: {
+            request_id: null,
+            llm_call_count: 0,
+            input_tokens: 0,
+            output_tokens: 0,
+            total_tokens: 0,
+            cost_usd: 0,
+            scopes: [],
+            scope_stats: {}
+          }
         };
       }
 
-      const triggerMessages = [
-        prompts.trigger,
-        "Generate the candidate recipe set now. Include complete normalized ingredients and steps."
-      ] as const;
+      const generationPrompt = prompts.trigger;
 
-      const attemptNotes: string[] = [];
-      for (let attempt = 0; attempt < triggerMessages.length; attempt += 1) {
-        const attemptNumber = attempt + 1;
-        const triggerMessage = triggerMessages[attempt];
+      const api = await requestJson<ChatApiResponse>({
+        apiBase,
+        token,
+        path: `/chat/${chat.chat_id}/messages`,
+        method: "POST",
+        body: { message: generationPrompt },
+        modelOverrides: params.modelOverrides
+      });
+      const response = api.data;
+      const tokenUsage = await loadTokenUsage(api.request_id);
 
-        try {
-          const response = await requestJson<ChatApiResponse>({
-            apiBase,
-            token,
-            path: `/chat/${chat.chat_id}/messages`,
-            method: "POST",
-            body: { message: triggerMessage },
-            modelOverrides: params.modelOverrides
-          });
-
-          const components = summarizeComponents(response.candidate_recipe_set);
-          if (components.length > 0) {
-            return {
-              loop_state: response.loop_state ?? "unknown",
-              candidate_id: response.candidate_recipe_set?.candidate_id ?? "",
-              revision: response.candidate_recipe_set?.revision ?? null,
-              active_component_id: response.candidate_recipe_set?.active_component_id ?? null,
-              candidate_count: components.length,
-              candidate_summary: components,
-              assistant_reply: extractAssistantText(response),
-              thread_tail: Array.isArray(response.messages) ? response.messages.slice(-6) : []
-            };
-          }
-
-          attemptNotes.push(
-            `attempt ${attemptNumber}: no candidate (loop_state=${response.loop_state ?? "unknown"})`
-          );
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          attemptNotes.push(`attempt ${attemptNumber}: ${message}`);
-        }
+      const components = summarizeComponents(response.candidate_recipe_set);
+      if (components.length > 0) {
+        return {
+          generation_prompt: generationPrompt,
+          generation_source: "chat_generation_trigger",
+          api_request_id: api.request_id,
+          token_usage: tokenUsage,
+          loop_state: response.loop_state ?? "unknown",
+          candidate_id: response.candidate_recipe_set?.candidate_id ?? "",
+          revision: response.candidate_recipe_set?.revision ?? null,
+          active_component_id: response.candidate_recipe_set?.active_component_id ?? null,
+          candidate_count: components.length,
+          candidate_summary: components,
+          candidate_snapshot: projectCandidateForTrace(response.candidate_recipe_set),
+          assistant_reply: extractAssistantText(response),
+          thread_tail: Array.isArray(response.messages) ? response.messages.slice(-6) : []
+        };
       }
 
-      throw new Error(`Generation trigger did not produce a candidate recipe set: ${attemptNotes.join(" | ")}`);
+      throw new Error(
+        `Generation trigger did not produce a candidate recipe set: no candidate (loop_state=${
+          response.loop_state ?? "unknown"
+        })`
+      );
     });
 
     const iterated = await runStep("chat_iterate_candidate", async () => {
-      const response = await requestJson<ChatApiResponse>({
+      const api = await requestJson<ChatApiResponse>({
         apiBase,
         token,
         path: `/chat/${chat.chat_id}/messages`,
@@ -537,11 +782,17 @@ const runSimulation = async (params: {
         body: { message: prompts.iterate },
         modelOverrides: params.modelOverrides
       });
+      const response = api.data;
+      const tokenUsage = await loadTokenUsage(api.request_id);
 
       const components = summarizeComponents(response.candidate_recipe_set);
       assertCondition(components.length > 0, "Iteration response lost candidate recipe set");
 
       return {
+        user_prompt: prompts.iterate,
+        tweak_prompt: prompts.iterate,
+        api_request_id: api.request_id,
+        token_usage: tokenUsage,
         loop_state: response.loop_state ?? "unknown",
         assistant_reply: extractAssistantText(response),
         message_count: Array.isArray(response.messages) ? response.messages.length : 0,
@@ -549,6 +800,11 @@ const runSimulation = async (params: {
         revision: response.candidate_recipe_set?.revision ?? ensuredCandidate.revision,
         active_component_id: response.candidate_recipe_set?.active_component_id ?? ensuredCandidate.active_component_id,
         candidate_summary: components,
+        candidate_snapshot_before:
+          typeof ensuredCandidate.candidate_snapshot === "object" && ensuredCandidate.candidate_snapshot !== null
+            ? ensuredCandidate.candidate_snapshot
+            : null,
+        candidate_snapshot: projectCandidateForTrace(response.candidate_recipe_set),
         thread_tail: Array.isArray(response.messages) ? response.messages.slice(-6) : []
       };
     });
@@ -558,11 +814,13 @@ const runSimulation = async (params: {
       if (!activeId) {
         return {
           skipped: true,
-          reason: "No active component id provided in candidate set"
+          reason: "No active component id provided in candidate set",
+          api_request_id: null,
+          token_usage: null
         };
       }
 
-      const response = await requestJson<ChatApiResponse>({
+      const api = await requestJson<ChatApiResponse>({
         apiBase,
         token,
         path: `/chat/${chat.chat_id}/candidate`,
@@ -573,16 +831,21 @@ const runSimulation = async (params: {
         },
         modelOverrides: params.modelOverrides
       });
+      const response = api.data;
+      const tokenUsage = await loadTokenUsage(api.request_id);
 
       return {
+        api_request_id: api.request_id,
+        token_usage: tokenUsage,
         loop_state: response.loop_state ?? "unknown",
         active_component_id: response.candidate_recipe_set?.active_component_id ?? null,
-        candidate_summary: summarizeComponents(response.candidate_recipe_set)
+        candidate_summary: summarizeComponents(response.candidate_recipe_set),
+        candidate_snapshot: projectCandidateForTrace(response.candidate_recipe_set)
       };
     });
 
     const committed = await runStep("commit_candidate_set", async () => {
-      const response = await requestJson<ChatApiResponse>({
+      const api = await requestJson<ChatApiResponse>({
         apiBase,
         token,
         path: `/chat/${chat.chat_id}/commit`,
@@ -590,11 +853,15 @@ const runSimulation = async (params: {
         body: {},
         modelOverrides: params.modelOverrides
       });
+      const response = api.data;
+      const tokenUsage = await loadTokenUsage(api.request_id);
 
       const recipes = Array.isArray(response.commit?.recipes) ? response.commit?.recipes : [];
       assertCondition(recipes.length > 0, "Commit did not return persisted recipe ids");
 
       return {
+        api_request_id: api.request_id,
+        token_usage: tokenUsage,
         loop_state: response.loop_state ?? "unknown",
         committed_count: Number(response.commit?.committed_count ?? recipes.length),
         recipes: recipes.map((recipe) => ({
@@ -616,15 +883,19 @@ const runSimulation = async (params: {
     const fetchedRecipe = await runStep("fetch_committed_recipe", async () => {
       assertCondition(primaryRecipeId.length > 0, "No primary recipe id available after commit");
 
-      const recipe = await requestJson<RecipeApiResponse>({
+      const api = await requestJson<RecipeApiResponse>({
         apiBase,
         token,
         path: `/recipes/${primaryRecipeId}?units=metric&group_by=component&inline_measurements=true`,
         method: "GET",
         modelOverrides: params.modelOverrides
       });
+      const recipe = api.data;
+      const tokenUsage = await loadTokenUsage(api.request_id);
 
       return {
+        api_request_id: api.request_id,
+        token_usage: tokenUsage,
         recipe_id: primaryRecipeId,
         title: recipe.title ?? "",
         ingredient_count: Array.isArray(recipe.ingredients) ? recipe.ingredients.length : 0,
@@ -634,13 +905,15 @@ const runSimulation = async (params: {
     });
 
     await runStep("fetch_cookbook", async () => {
-      const response = await requestJson<CookbookApiResponse>({
+      const api = await requestJson<CookbookApiResponse>({
         apiBase,
         token,
         path: "/recipes/cookbook",
         method: "GET",
         modelOverrides: params.modelOverrides
       });
+      const response = api.data;
+      const tokenUsage = await loadTokenUsage(api.request_id);
 
       const items = Array.isArray(response.items) ? response.items : [];
       const containsCommitted = items.some((item) => {
@@ -649,6 +922,8 @@ const runSimulation = async (params: {
       });
 
       return {
+        api_request_id: api.request_id,
+        token_usage: tokenUsage,
         item_count: items.length,
         contains_primary_recipe: containsCommitted
       };

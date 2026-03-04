@@ -36,6 +36,10 @@ enum Sizing {
     static let searchBarHeight: CGFloat = 56
     /// Tab bar total height
     static let tabBarHeight: CGFloat = 64
+    /// Standard top header row height
+    static let headerRowHeight: CGFloat = 52
+    /// Standard header top inset from safe area
+    static let headerTopInset: CGFloat = 20
     /// Recipe card aspect ratio
     static let recipeCardAspect: CGFloat = 0.78
 }

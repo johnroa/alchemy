@@ -10,6 +10,17 @@ final class APIClient {
         return d
     }()
 
+    private struct ErrorEnvelope: Decodable {
+        let code: String
+        let message: String
+        let requestId: String?
+
+        enum CodingKeys: String, CodingKey {
+            case code, message
+            case requestId = "request_id"
+        }
+    }
+
     init(baseURL: String = AppEnvironment.apiBaseURL, supabaseClient: SupabaseClient) {
         self.baseURL = baseURL.hasSuffix("/") ? String(baseURL.dropLast()) : baseURL
         self.supabaseClient = supabaseClient
@@ -47,11 +58,17 @@ final class APIClient {
         }
 
         guard (200...299).contains(httpResponse.statusCode) else {
-            let message = parseErrorMessage(from: data) ?? "Request failed"
+            let envelope = parseErrorEnvelope(from: data)
+            let message = envelope?.message ?? "Request failed"
             if httpResponse.statusCode == 401 {
                 throw APIError.notAuthenticated
             }
-            throw APIError.serverError(statusCode: httpResponse.statusCode, message: message)
+            throw APIError.serverError(
+                statusCode: httpResponse.statusCode,
+                code: envelope?.code,
+                message: message,
+                requestId: envelope?.requestId
+            )
         }
 
         do {
@@ -77,23 +94,27 @@ final class APIClient {
 
     // MARK: - Chat
 
-    func createChat(message: String) async throws -> ChatResponse {
+    func createChat(message: String) async throws -> ChatSession {
         try await request("POST", path: "/chat", body: ["message": message])
     }
 
-    func sendChatMessage(chatId: String, message: String) async throws -> ChatResponse {
+    func getChat(id: String) async throws -> ChatSession {
+        try await request(path: "/chat/\(id)")
+    }
+
+    func sendChatMessage(chatId: String, message: String) async throws -> ChatSession {
         try await request("POST", path: "/chat/\(chatId)/messages", body: ["message": message])
     }
 
-    func generateFromChat(chatId: String) async throws -> GenerateResponse {
-        try await request("POST", path: "/chat/\(chatId)/generate")
+    func patchCandidate(chatId: String, requestBody: PatchCandidateRequest) async throws -> ChatSession {
+        try await request("PATCH", path: "/chat/\(chatId)/candidate", body: requestBody)
+    }
+
+    func commitChat(chatId: String) async throws -> CommitChatRecipesResponse {
+        try await request("POST", path: "/chat/\(chatId)/commit", body: EmptyBody())
     }
 
     // MARK: - Recipe Actions
-
-    func tweakRecipe(id: String, message: String) async throws -> TweakResponse {
-        try await request("POST", path: "/recipes/\(id)/tweak", body: ["message": message])
-    }
 
     func saveRecipe(id: String) async throws -> SaveResponse {
         try await request("POST", path: "/recipes/\(id)/save")
@@ -158,9 +179,8 @@ final class APIClient {
         return session.accessToken
     }
 
-    private func parseErrorMessage(from data: Data) -> String? {
-        struct ErrorBody: Decodable { let message: String? }
-        return try? JSONDecoder().decode(ErrorBody.self, from: data).message
+    private func parseErrorEnvelope(from data: Data) -> ErrorEnvelope? {
+        try? decoder.decode(ErrorEnvelope.self, from: data)
     }
 }
 

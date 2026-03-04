@@ -4,509 +4,561 @@ import Lottie
 struct GenerateView: View {
     @Environment(APIClient.self) private var api
     @EnvironmentObject private var keyboard: KeyboardMonitor
-    @State private var vm = GenerateViewModel()
+    @Bindable var vm: GenerateViewModel
+
     @FocusState private var isInputFocused: Bool
+    @State private var showResetConfirmation = false
+    @State private var messageContentHeight: CGFloat = 0
+    @State private var messageViewportHeight: CGFloat = 0
+
     var onProfileTap: () -> Void = {}
+    var onGoToCookbook: ([String]) -> Void = { _ in }
 
-    // Whether the glass chat panel is expanded (full-height) or collapsed (bottom bar)
+    init(
+        viewModel: GenerateViewModel,
+        onProfileTap: @escaping () -> Void = {},
+        onGoToCookbook: @escaping ([String]) -> Void = { _ in }
+    ) {
+        self._vm = Bindable(viewModel)
+        self.onProfileTap = onProfileTap
+        self.onGoToCookbook = onGoToCookbook
+    }
+
     private var panelExpanded: Bool {
-        switch vm.mode {
-        case .idle, .chatting: return true
-        case .generating, .recipe, .tweaking, .tweakLoading: return false
-        }
+        vm.uiState == .ideation || !vm.hasCandidate
     }
 
-    private var messageListTopInset: CGFloat {
-        vm.hasRecipe ? Spacing.sm2 : Spacing.lg2
-    }
-
-    // Figma: on default generate, the whole chat window starts lower on screen.
     private var chatWindowTopGap: CGFloat {
-        vm.activeRecipe == nil ? 96 : 22
+        vm.hasCandidate ? 18 : 92
     }
 
     private var composerBottomInset: CGFloat {
-        keyboard.height + Spacing.sm2
+        keyboard.height > 0 ? keyboard.height + 12 : Sizing.tabBarHeight + 72
     }
 
-    private var panelBottomClearance: CGFloat {
-        // Smoothly hand off from tab-bar clearance to keyboard clearance to avoid a hard "kink".
-        let tabBarClearance = Sizing.tabBarHeight + 24
-        let blended = smoothMax(keyboard.height, tabBarClearance, softness: 22)
-        return max(0, blended - keyboard.height)
+    private var chatDockReservedHeight: CGFloat {
+        let composerHeight: CGFloat = 56
+        let iteratingHeight: CGFloat = vm.uiState == .iterating ? 44 : 0
+        let dockSpacing = Spacing.sm + Spacing.xs
+        return composerHeight + iteratingHeight + dockSpacing + composerBottomInset
+    }
+
+    private var messageListIsScrollable: Bool {
+        messageContentHeight > (messageViewportHeight + 1)
     }
 
     var body: some View {
-        ZStack {
-            AlchemyColors.deepDark.ignoresSafeArea()
+        NavigationStack {
+            ZStack {
+                AlchemyColors.deepDark.ignoresSafeArea()
 
-            VStack(spacing: 0) {
-                generateHeader
-                .padding(.bottom, chatWindowTopGap)
+                VStack(spacing: 0) {
+                    generateHeader
+                        .padding(.bottom, chatWindowTopGap)
 
-                // Content area — glass panel overlays recipe
-                ZStack(alignment: .bottom) {
-                    if let recipe = vm.activeRecipe {
-                        recipeScrollView(recipe)
-                            .opacity(vm.mode == .tweakLoading ? 0.3 : 1.0)
-                    } else {
-                        generatingSkeletonBackdrop
+                    ZStack(alignment: .top) {
+                        recipeBackdrop
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                        if vm.hasCandidate {
+                            VStack(spacing: Spacing.sm2) {
+                                candidateTabs
+                                candidateActions
+                            }
                             .padding(.horizontal, Spacing.md)
-                            .padding(.top, Spacing.lg2)
-                            .padding(.bottom, Sizing.tabBarHeight + 24)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                            .allowsHitTesting(false)
-                            .transition(.opacity)
-                    }
+                            .padding(.top, Spacing.sm2)
+                        }
 
-                    // Centered loading animation (generating / tweaking)
-                    if vm.mode == .generating {
-                        generatingOverlay
-                            .transition(.opacity)
-                    }
-                    if vm.mode == .tweakLoading {
-                        tweakLoadingOverlay
-                            .transition(.opacity)
-                    }
-
-                    // Glass chat panel — extends to bottom, behind tab bar
-                    if vm.mode != .tweaking {
-                        glassPanel
-                            .animation(.spring(response: 0.4, dampingFraction: 0.85), value: panelExpanded)
-                            .animation(.spring(response: 0.4, dampingFraction: 0.85), value: vm.mode)
-                    }
-
-                    // Tweak bottom sheet overlay
-                    if vm.mode == .tweaking {
-                        tweakSheet
-                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                    chatPanel
+                        .padding(.horizontal, Spacing.xs)
+                        .zIndex(5)
                     }
                 }
             }
-
-            // Saved toast
-            if vm.showSavedConfirmation {
-                savedToast
-                    .transition(.move(edge: .top).combined(with: .opacity))
-            }
+            .toolbar(.hidden, for: .navigationBar)
         }
         .ignoresSafeArea(.keyboard, edges: .bottom)
-        .animation(.easeInOut(duration: 0.35), value: vm.mode)
-        .animation(.spring(response: 0.4), value: vm.showSavedConfirmation)
+        .confirmationDialog(
+            "Start over?",
+            isPresented: $showResetConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Start Over", role: .destructive) {
+                Task { await vm.clearCandidate(api: api) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This clears the current draft and returns to chat in the same session.")
+        }
+        .confirmationDialog(
+            "Recipes saved",
+            isPresented: $vm.showCommitOptionsSheet,
+            titleVisibility: .visible
+        ) {
+            Button("Continue Chat") {
+                vm.continueChatAfterCommit()
+            }
+            Button("Restart Chat") {
+                vm.restartChatAfterCommit()
+            }
+            Button("Go to Cookbook") {
+                let recipeIds = vm.takeCommittedRecipeIds()
+                onGoToCookbook(recipeIds)
+            }
+        }
     }
 
-    // MARK: - Glass Panel
+    // MARK: - Header
 
-    private var glassPanel: some View {
-        VStack(spacing: 0) {
+    private var generateHeader: some View {
+        AlchemyScreenHeader(
+            title: "Generate Recipe",
+            onProfileTap: onProfileTap,
+            leading: vm.hasCandidate
+                ? AnyView(
+                    Button {
+                        showResetConfirmation = true
+                    } label: {
+                        Image(systemName: "arrow.counterclockwise")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(AlchemyColors.textSecondary)
+                            .frame(width: 34, height: 34)
+                            .background(Circle().fill(Color.white.opacity(0.08)))
+                    }
+                    .buttonStyle(.plain)
+                )
+                : nil
+        )
+    }
+
+    // MARK: - Background Content
+
+    @ViewBuilder
+    private var recipeBackdrop: some View {
+        if let recipe = vm.activeRecipe {
+            recipeScrollView(recipe)
+                .opacity(vm.uiState == .iterating ? 0.5 : 1)
+        } else if vm.shouldShowRecipeSkeleton {
+            subtleRecipeSkeleton
+                .padding(.horizontal, Spacing.md)
+                .padding(.top, vm.hasCandidate ? 82 : Spacing.lg2)
+                .padding(.bottom, Sizing.tabBarHeight + 24)
+                .allowsHitTesting(false)
+                .transition(.opacity)
+        }
+    }
+
+    private var subtleRecipeSkeleton: some View {
+        VStack(alignment: .leading, spacing: Spacing.md) {
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.white.opacity(0.028))
+                .frame(width: 180, height: 12)
+
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.white.opacity(0.022))
+                .frame(maxWidth: .infinity, minHeight: 10, maxHeight: 10)
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.white.opacity(0.02))
+                .frame(width: 260, height: 10)
+
+            RoundedRectangle(cornerRadius: Radius.lg)
+                .fill(Color.white.opacity(0.017))
+                .frame(height: 128)
+                .overlay(
+                    RoundedRectangle(cornerRadius: Radius.lg)
+                        .stroke(Color.white.opacity(0.04), lineWidth: 0.6)
+                )
+
+            Spacer(minLength: 0)
+        }
+        .opacity(0.42)
+    }
+
+    // MARK: - Candidate Tabs
+
+    private var candidateTabs: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: Spacing.sm) {
+                ForEach(vm.candidateComponents) { component in
+                    candidateTab(for: component)
+                }
+            }
+            .padding(.vertical, 2)
+        }
+    }
+
+    private func candidateTab(for component: CandidateRecipeComponent) -> some View {
+        let isActive = vm.activeComponentId == component.componentId
+        let canDelete = vm.candidateComponents.count > 1
+
+        return HStack(spacing: 6) {
+            Button {
+                Task { await vm.switchActiveComponent(component.componentId, api: api) }
+            } label: {
+                Text(component.title)
+                    .font(AlchemyFont.captionLight)
+                    .foregroundStyle(isActive ? AlchemyColors.textPrimary : AlchemyColors.textSecondary)
+                    .lineLimit(1)
+                    .padding(.horizontal, Spacing.sm2)
+                    .padding(.vertical, Spacing.sm)
+            }
+            .buttonStyle(.plain)
+
+            if canDelete {
+                Button {
+                    Task { await vm.deleteComponent(component.componentId, api: api) }
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(AlchemyColors.textTertiary)
+                }
+                .buttonStyle(.plain)
+                .padding(.trailing, Spacing.sm)
+            }
+        }
+        .chatLiquidSurface(
+            role: .chip,
+            focused: isActive,
+            cornerRadius: Radius.lg
+        )
+    }
+
+    private var candidateActions: some View {
+        HStack(spacing: Spacing.sm2) {
+            Button {
+                Task { await vm.commitCandidate(api: api) }
+            } label: {
+                HStack(spacing: Spacing.xs) {
+                    if vm.isCommitting {
+                        ProgressView()
+                            .tint(AlchemyColors.textPrimary)
+                            .scaleEffect(0.85)
+                    }
+                    Text("Add All to Cookbook")
+                        .font(AlchemyFont.bodyBold)
+                        .foregroundStyle(AlchemyColors.textPrimary)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, Spacing.sm)
+            }
+            .disabled(vm.isCommitting || vm.isMutatingCandidate)
+            .buttonStyle(.plain)
+            .chatLiquidSurface(role: .chip, focused: true, cornerRadius: Radius.lg)
+        }
+    }
+
+    // MARK: - Chat Panel
+
+    private var chatPanel: some View {
+        ZStack(alignment: .bottom) {
             if panelExpanded {
-                expandedPanelContent
+                messageTimeline
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .padding(.top, Spacing.lg + 4)
+                    .padding(.bottom, chatDockReservedHeight)
             } else {
-                collapsedPanelContent
+                messageTimeline
+                    .frame(maxWidth: .infinity, maxHeight: 170, alignment: .top)
+                    .padding(.top, Spacing.md)
+                    .padding(.bottom, chatDockReservedHeight)
             }
 
-            // Tab bar + safe area clearance inside the panel
-            Color.clear.frame(height: panelBottomClearance)
+            VStack(spacing: Spacing.xs) {
+                if vm.uiState == .iterating {
+                    iteratingShell
+                        .padding(.horizontal, Spacing.md)
+                }
+
+                chatComposer
+                    .padding(.horizontal, Spacing.md)
+            }
+            .padding(.bottom, composerBottomInset)
+            .padding(.top, Spacing.sm)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-        .glassPanelBackground()
+        .chatLiquidPanelBackground(
+            UnevenRoundedRectangle(
+                topLeadingRadius: 26,
+                bottomLeadingRadius: 0,
+                bottomTrailingRadius: 0,
+                topTrailingRadius: 26
+            )
+        )
         .ignoresSafeArea(.container, edges: .bottom)
+        .animation(.spring(response: 0.38, dampingFraction: 0.86), value: panelExpanded)
+        .animation(.spring(response: 0.35, dampingFraction: 0.88), value: vm.uiState)
     }
 
-    // MARK: - Expanded Panel (idle, chatting, tweaking)
-
-    private var expandedPanelContent: some View {
-        VStack(spacing: 0) {
-            // Drag handle (only when recipe exists — can collapse)
-            if vm.hasRecipe {
-                dragHandle
-            }
-
-            // Messages
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(spacing: Spacing.sm2) {
-                        // Intro message for idle
-                        if vm.messages.isEmpty {
-                            introMessage
-                        }
-
-                        ForEach(vm.messages) { message in
-                            chatBubble(message)
-                                .id(message.id)
-                        }
-
-                        // Suggestion chips after the last assistant message
-                        if !vm.suggestions.isEmpty && !vm.isLoading {
-                            suggestionChips
-                        }
-
-                        if vm.isLoading {
-                            thinkingIndicator
-                                .id("loading")
-                        }
-
-                        if let error = vm.error {
-                            Text(error)
-                                .font(AlchemyFont.captionLight)
-                                .foregroundStyle(AlchemyColors.danger)
-                                .padding(.horizontal, Spacing.md)
-                        }
+    private var messageTimeline: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: Spacing.sm2) {
+                    if vm.messages.isEmpty {
+                        introMessage
                     }
-                    .padding(.top, messageListTopInset)
-                    .padding(.bottom, Spacing.sm)
-                }
-                .scrollDismissesKeyboard(.interactively)
-                .simultaneousGesture(
-                    DragGesture(minimumDistance: 8).onChanged { value in
-                        if value.translation.height > 4 {
-                            isInputFocused = false
-                        }
+
+                    ForEach(vm.messages) { message in
+                        chatBubble(message)
+                            .id(message.id)
                     }
-                )
-                .onChange(of: vm.messages.count) { _, _ in
-                    if let lastId = vm.messages.last?.id {
-                        withAnimation(.spring(response: 0.3)) {
-                            proxy.scrollTo(lastId, anchor: .bottom)
-                        }
+
+                    if !vm.suggestions.isEmpty && !vm.isSendingMessage {
+                        suggestionChips
+                    }
+
+                    if vm.isSendingMessage {
+                        thinkingShell
+                            .padding(.horizontal, Spacing.md)
+                            .id("thinking")
+                    }
+
+                    if let error = vm.error {
+                        Text(error)
+                            .font(AlchemyFont.captionLight)
+                            .foregroundStyle(AlchemyColors.danger)
+                            .padding(.horizontal, Spacing.md)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
-            }
-            .padding(.top, 0)
-
-            // Composer
-            chatComposer
-                .padding(.horizontal, Spacing.md)
-                .padding(.bottom, composerBottomInset)
-        }
-    }
-
-    // MARK: - Collapsed Panel (generating, recipe, tweakLoading)
-
-    private var collapsedPanelContent: some View {
-        VStack(spacing: Spacing.sm2) {
-            if vm.mode == .generating || vm.mode == .tweakLoading {
-                // Read-only pill showing last user message
-                HStack {
-                    Text(vm.lastUserMessage.isEmpty ? "Baking..." : vm.lastUserMessage)
-                        .font(AlchemyFont.body)
-                        .foregroundStyle(AlchemyColors.textTertiary)
-                        .lineLimit(1)
-                    Spacer()
-                }
-                .padding(.horizontal, Spacing.md)
-                .padding(.vertical, Spacing.sm2)
-                .background(AlchemyColors.card)
-                .clipShape(RoundedRectangle(cornerRadius: Radius.lg))
-                .padding(.horizontal, Spacing.sm2)
-                .padding(.top, Spacing.sm2)
-            }
-
-            if vm.mode == .recipe {
-                // Assistant reply + action buttons
-                if let reply = vm.assistantReply {
-                    Text(reply.text)
-                        .font(AlchemyFont.body)
-                        .foregroundStyle(AlchemyColors.textPrimary)
-                        .padding(.horizontal, Spacing.md)
-                        .padding(.vertical, Spacing.sm2)
-                        .background(
-                            RoundedRectangle(cornerRadius: Radius.lg)
-                                .fill(AlchemyColors.elevated)
-                        )
-                        .padding(.horizontal, Spacing.sm2)
-                        .padding(.top, Spacing.sm2)
-                }
-
-                // Action buttons
-                HStack(spacing: Spacing.sm2) {
-                    Button {
-                        withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
-                            vm.isTweakSheetOpen = true
-                        }
-                    } label: {
-                        Text("Make Tweaks")
-                            .font(AlchemyFont.bodyBold)
-                            .foregroundStyle(AlchemyColors.textPrimary)
-                            .padding(.horizontal, Spacing.lg)
-                            .padding(.vertical, Spacing.sm2)
-                            .background(
-                                Capsule().stroke(Color.white.opacity(0.2), lineWidth: 1)
+                .background(
+                    GeometryReader { geo in
+                        Color.clear
+                            .preference(
+                                key: GenerateMessageContentHeightKey.self,
+                                value: geo.size.height
                             )
                     }
-
-                    Button {
-                        Task { await vm.saveToCookbook(api: api) }
-                    } label: {
-                        HStack(spacing: Spacing.xs) {
-                            if vm.isSaving {
-                                ProgressView()
-                                    .tint(AlchemyColors.textPrimary)
-                                    .scaleEffect(0.8)
-                            }
-                            Text(vm.isSaved ? "Saved" : "Save to Cookbook")
-                                .font(AlchemyFont.bodyBold)
-                                .foregroundStyle(AlchemyColors.textPrimary)
-                        }
-                        .padding(.horizontal, Spacing.lg)
-                        .padding(.vertical, Spacing.sm2)
-                        .background(
-                            Capsule().stroke(Color.white.opacity(0.2), lineWidth: 1)
-                        )
-                    }
-                    .disabled(vm.isSaving || vm.isSaved)
-                }
-                .padding(.horizontal, Spacing.sm2)
-                .padding(.bottom, Spacing.sm2)
-            }
-        }
-    }
-
-    // MARK: - Tweak Sheet (bottom overlay in tweaking mode)
-
-    private var tweakSheet: some View {
-        VStack(spacing: 0) {
-            // Drag handle to dismiss
-            Button {
-                withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
-                    vm.isTweakSheetOpen = false
-                }
-            } label: {
-                Capsule()
-                    .fill(AlchemyColors.grey1.opacity(0.5))
-                    .frame(width: 36, height: 4)
-                    .padding(.top, Spacing.sm)
-                    .padding(.bottom, Spacing.xs)
-                    .frame(maxWidth: .infinity)
-            }
-
-            // Scrollable message history (compact)
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(spacing: Spacing.xs) {
-                        ForEach(vm.messages.suffix(4)) { message in
-                            chatBubble(message)
-                                .id(message.id)
-                        }
-
-                        if !vm.suggestions.isEmpty && !vm.isLoading {
-                            suggestionChips
-                        }
-
-                        if vm.isLoading {
-                            thinkingIndicator
-                                .id("loading")
-                        }
-                    }
-                    .padding(.top, Spacing.xs)
-                    .padding(.bottom, Spacing.xs)
-                }
-                .scrollDismissesKeyboard(.interactively)
-                .simultaneousGesture(
-                    DragGesture(minimumDistance: 8).onChanged { value in
-                        if value.translation.height > 4 {
-                            isInputFocused = false
-                        }
-                    }
                 )
-                .frame(maxHeight: 200)
-                .onChange(of: vm.messages.count) { _, _ in
-                    if let lastId = vm.messages.last?.id {
-                        withAnimation(.spring(response: 0.3)) {
-                            proxy.scrollTo(lastId, anchor: .bottom)
-                        }
+                .padding(.bottom, Spacing.sm)
+            }
+            .background(
+                GeometryReader { geo in
+                    Color.clear
+                        .preference(
+                            key: GenerateMessageViewportHeightKey.self,
+                            value: geo.size.height
+                        )
+                }
+            )
+            .scrollDisabled(!messageListIsScrollable)
+            .scrollDismissesKeyboard(.interactively)
+            .overlay(alignment: .top) {
+                if messageListIsScrollable {
+                    messageTopFade
+                }
+            }
+            .onPreferenceChange(GenerateMessageContentHeightKey.self) { messageContentHeight = $0 }
+            .onPreferenceChange(GenerateMessageViewportHeightKey.self) { messageViewportHeight = $0 }
+            .onChange(of: vm.messages.count) { _, _ in
+                if let lastId = vm.messages.last?.id {
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        proxy.scrollTo(lastId, anchor: .bottom)
                     }
                 }
             }
-
-            // Composer
-            chatComposer
-                .padding(.horizontal, Spacing.md)
-                .padding(.bottom, composerBottomInset)
-
-            // Tab bar clearance
-            Color.clear.frame(height: panelBottomClearance)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-        .glassPanelBackground()
-        .ignoresSafeArea(.container, edges: .bottom)
     }
 
-    // MARK: - Intro Message
+    private var messageTopFade: some View {
+        ZStack(alignment: .top) {
+            Rectangle()
+                .fill(.ultraThinMaterial)
+                .opacity(0.32)
+                .mask(
+                    LinearGradient(
+                        colors: [.black.opacity(0.95), .clear],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+
+            LinearGradient(
+                colors: [
+                    Color.black.opacity(0.34),
+                    Color.black.opacity(0.12),
+                    .clear
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        }
+        .frame(height: 44)
+        .allowsHitTesting(false)
+    }
 
     private var introMessage: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("What would you like to make today?")
+            Text(vm.welcomePromptText)
                 .font(AlchemyFont.chatBody)
-                .foregroundStyle(AlchemyColors.textPrimary)
+                .foregroundStyle(AlchemyColors.textPrimary.opacity(0.98))
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, Spacing.md)
-                .padding(.vertical, Spacing.sm2)
-                .background(
-                    RoundedRectangle(cornerRadius: Radius.lg)
-                        .fill(Color.white.opacity(0.1))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: Radius.lg)
-                                .stroke(Color.white.opacity(0.2), lineWidth: 0.5)
-                        )
-                )
+                .padding(.leading, Spacing.sm2)
+                .padding(.vertical, 2)
+                .shadow(color: Color.black.opacity(0.32), radius: 2, x: 0, y: 1)
 
             Text(Date.now, style: .time)
                 .font(AlchemyFont.chatTimestamp)
                 .foregroundStyle(AlchemyColors.textTertiary)
-                .padding(.horizontal, Spacing.xs)
+                .padding(.leading, Spacing.sm2)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.leading, 39)
-        .padding(.trailing, 29)
+        .padding(.leading, 32)
+        .padding(.trailing, 32)
     }
 
-    // MARK: - Drag Handle
+    private func chatBubble(_ message: GenerateMessage) -> some View {
+        let isUser = message.role == "user"
+        let timestampLeadingInset = isUser ? 0.0 : Spacing.sm2
+        let timestampTrailingInset = isUser ? Spacing.md : 0.0
 
-    private var dragHandle: some View {
-        Capsule()
-            .fill(AlchemyColors.grey1.opacity(0.5))
-            .frame(width: 36, height: 4)
-            .padding(.top, Spacing.sm)
-            .padding(.bottom, Spacing.xs)
-    }
+        return VStack(alignment: isUser ? .trailing : .leading, spacing: 4) {
+            HStack {
+                if isUser { Spacer(minLength: 60) }
 
-    // MARK: - Thinking Indicator
+                if isUser {
+                    Text(message.content)
+                        .font(AlchemyFont.chatBody)
+                        .foregroundStyle(AlchemyColors.textPrimary)
+                        .padding(.horizontal, Spacing.md)
+                        .padding(.vertical, Spacing.sm2)
+                        .chatLiquidSurface(
+                            role: .userBubble,
+                            focused: false,
+                            cornerRadius: Radius.lg
+                        )
+                } else {
+                    Text(message.content)
+                        .font(AlchemyFont.chatBody)
+                        .foregroundStyle(AlchemyColors.textPrimary.opacity(0.98))
+                        .padding(.horizontal, Spacing.sm2)
+                        .padding(.vertical, 2)
+                        .shadow(color: Color.black.opacity(0.32), radius: 2, x: 0, y: 1)
+                }
 
-    private var thinkingIndicator: some View {
-        HStack(spacing: Spacing.sm) {
-            LottieView(animation: .named("alchemy-loading"))
-                .playbackMode(.playing(.toProgress(1, loopMode: .loop)))
-                .frame(width: 28, height: 28)
-            Text("Thinking...")
-                .font(AlchemyFont.captionLight)
+                if !isUser { Spacer(minLength: 60) }
+            }
+
+            Text(message.timestamp, style: .time)
+                .font(AlchemyFont.chatTimestamp)
                 .foregroundStyle(AlchemyColors.textTertiary)
+                .padding(.leading, timestampLeadingInset)
+                .padding(.trailing, timestampTrailingInset)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, Spacing.md)
     }
 
-    // MARK: - Generating Skeleton Backdrop
-
-    private var generatingSkeletonBackdrop: some View {
-        VStack(alignment: .leading, spacing: Spacing.md) {
-            subtleSkeletonBar(width: 142, height: 10)
-
-            VStack(alignment: .leading, spacing: Spacing.sm) {
-                subtleSkeletonBar(height: 13)
-                subtleSkeletonBar(width: 234, height: 13)
-                subtleSkeletonBar(width: 272, height: 13)
-            }
-
-            RoundedRectangle(cornerRadius: Radius.lg, style: .continuous)
-                .fill(Color.white.opacity(0.014))
-                .frame(height: 120)
-                .overlay(
-                    VStack(alignment: .leading, spacing: Spacing.sm) {
-                        subtleSkeletonBar(width: 172, height: 11)
-                        subtleSkeletonBar(height: 11)
-                        subtleSkeletonBar(width: 208, height: 11)
+    private var suggestionChips: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: Spacing.sm) {
+                ForEach(vm.suggestions, id: \.self) { suggestion in
+                    Button {
+                        Task { await vm.sendMessage(text: suggestion, api: api) }
+                    } label: {
+                        Text(suggestion)
+                            .font(AlchemyFont.captionLight)
+                            .foregroundStyle(AlchemyColors.textPrimary)
+                            .padding(.horizontal, Spacing.sm2)
+                            .padding(.vertical, Spacing.sm)
+                            .chatLiquidSurface(role: .chip, focused: false, cornerRadius: Radius.lg)
                     }
-                    .padding(Spacing.md),
-                    alignment: .topLeading
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: Radius.lg, style: .continuous)
-                        .stroke(Color.white.opacity(0.03), lineWidth: 0.6)
-                )
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, Spacing.md)
+        }
+    }
+
+    private var thinkingShell: some View {
+        HStack(spacing: Spacing.sm) {
+            LottieView(animation: .named("alchemy-loading"))
+                .playbackMode(.playing(.toProgress(1, loopMode: .loop)))
+                .frame(width: 26, height: 26)
+            Text(vm.typingDescriptor)
+                .font(AlchemyFont.captionLight)
+                .foregroundStyle(AlchemyColors.textSecondary)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, Spacing.md)
+        .padding(.vertical, Spacing.sm)
+        .chatLiquidSurface(role: .shell, focused: false, cornerRadius: Radius.lg)
+    }
+
+    private var iteratingShell: some View {
+        HStack(spacing: Spacing.sm) {
+            LottieView(animation: .named("alchemy-loading"))
+                .playbackMode(.playing(.toProgress(1, loopMode: .loop)))
+                .frame(width: 24, height: 24)
+
+            Text("Updating recipe…")
+                .font(AlchemyFont.captionLight)
+                .foregroundStyle(AlchemyColors.textSecondary)
 
             Spacer(minLength: 0)
+        }
+        .padding(.horizontal, Spacing.md)
+        .padding(.vertical, Spacing.sm)
+        .chatLiquidSurface(role: .shell, focused: false, cornerRadius: Radius.lg)
+    }
 
-            HStack(spacing: Spacing.sm2) {
-                subtleSkeletonCapsule
-                subtleSkeletonCapsule
+    // MARK: - Composer
+
+    private var chatComposer: some View {
+        let sendDisabled = vm.isSendingMessage || vm.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+
+        return ZStack(alignment: .trailing) {
+            TextField(
+                "",
+                text: $vm.input,
+                prompt: Text("I want some ideas for dinner tonight")
+                    .foregroundStyle(Color.white.opacity(0.56)),
+                axis: .vertical
+            )
+            .font(AlchemyFont.body)
+            .foregroundStyle(AlchemyColors.textPrimary)
+            .tint(AlchemyColors.gold)
+            .lineLimit(1...6)
+            .focused($isInputFocused)
+            .padding(.leading, Spacing.md)
+            .padding(.trailing, 50)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Button {
+                Task { await vm.sendMessage(api: api) }
+            } label: {
+                Image(systemName: "paperplane.fill")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [
+                                Color.white.opacity(0.98),
+                                Color(hex: 0xDFE9F3).opacity(0.92)
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    .frame(width: 26, height: 26)
             }
-            .padding(.bottom, 6)
+            .disabled(sendDisabled)
+            .opacity(sendDisabled ? 0.5 : 1)
+            .padding(.trailing, 12)
         }
-        .opacity(0.24)
+        .frame(minHeight: 52, alignment: .center)
+        .chatLiquidSurface(role: .composer, focused: isInputFocused, cornerRadius: Radius.xl)
+        .animation(.easeInOut(duration: 0.18), value: vm.input.count)
+        .animation(.easeInOut(duration: 0.2), value: isInputFocused)
     }
 
-    private var subtleSkeletonCapsule: some View {
-        Capsule()
-            .fill(Color.white.opacity(0.022))
-            .frame(maxWidth: .infinity, minHeight: 40, maxHeight: 40)
-            .overlay(
-                Capsule()
-                    .fill(Color.white.opacity(0.05))
-                    .shimmer()
-                    .opacity(0.14)
-            )
-            .overlay(
-                Capsule()
-                    .stroke(Color.white.opacity(0.03), lineWidth: 0.55)
-            )
-    }
-
-    private func subtleSkeletonBar(width: CGFloat? = nil, height: CGFloat) -> some View {
-        RoundedRectangle(cornerRadius: 7, style: .continuous)
-            .fill(Color.white.opacity(0.025))
-            .frame(width: width, height: height)
-            .overlay(
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .fill(Color.white.opacity(0.05))
-                    .shimmer()
-                    .opacity(0.14)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .stroke(Color.white.opacity(0.028), lineWidth: 0.5)
-            )
-    }
-
-    // MARK: - Generating Overlay
-
-    private var generatingOverlay: some View {
-        VStack(spacing: Spacing.lg) {
-            Spacer()
-
-            LottieView(animation: .named("alchemy-loading"))
-                .playbackMode(.playing(.toProgress(1, loopMode: .loop)))
-                .frame(width: 160, height: 160)
-
-            Text("generating recipe...")
-                .font(AlchemyFont.titleMD)
-                .foregroundStyle(AlchemyColors.textPrimary)
-
-            Spacer()
-            Spacer()
-        }
-    }
-
-    // MARK: - Tweak Loading Overlay
-
-    private var tweakLoadingOverlay: some View {
-        VStack(spacing: Spacing.lg) {
-            Spacer()
-
-            LottieView(animation: .named("alchemy-loading"))
-                .playbackMode(.playing(.toProgress(1, loopMode: .loop)))
-                .frame(width: 160, height: 160)
-
-            Text("tweaking recipe...")
-                .font(AlchemyFont.titleMD)
-                .foregroundStyle(AlchemyColors.textPrimary)
-
-            Spacer()
-            Spacer()
-        }
-    }
-
-    // MARK: - Recipe Scroll View
+    // MARK: - Recipe Detail
 
     private func recipeScrollView(_ recipe: RecipeView) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Spacing.lg) {
-                // Title
                 Text(recipe.title)
                     .font(AlchemyFont.serifLG)
                     .foregroundStyle(AlchemyColors.textPrimary)
 
-                // Description
                 if let description = recipe.description, !description.isEmpty {
                     Text(description)
                         .font(AlchemyFont.bodySmallLight)
@@ -517,7 +569,6 @@ struct GenerateView: View {
                         .foregroundStyle(AlchemyColors.textSecondary)
                 }
 
-                // Meta row
                 HStack(spacing: Spacing.lg) {
                     if let timing = recipe.metadata?.timing, let total = timing.totalMinutes {
                         HStack(spacing: Spacing.xs) {
@@ -540,7 +591,6 @@ struct GenerateView: View {
                     }
                 }
 
-                // Ingredients
                 VStack(alignment: .leading, spacing: Spacing.sm) {
                     Text("Ingredients")
                         .font(AlchemyFont.titleSM)
@@ -566,7 +616,6 @@ struct GenerateView: View {
                     }
                 }
 
-                // Method
                 VStack(alignment: .leading, spacing: Spacing.sm) {
                     Text("Method")
                         .font(AlchemyFont.titleSM)
@@ -588,393 +637,31 @@ struct GenerateView: View {
                     }
                 }
 
-                // Bottom padding for collapsed panel + tab bar
                 Color.clear.frame(height: 320)
             }
             .padding(.horizontal, Spacing.md)
-            .padding(.top, Spacing.lg2)
+            .padding(.top, 110)
         }
         .scrollDismissesKeyboard(.interactively)
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 8).onChanged { value in
-                if value.translation.height > 4 {
-                    isInputFocused = false
-                }
-            }
-        )
     }
-
-    // MARK: - Chat Bubble
-
-    private func chatBubble(_ message: GenerateMessage) -> some View {
-        VStack(alignment: message.role == "user" ? .trailing : .leading, spacing: 4) {
-            HStack {
-                if message.role == "user" { Spacer(minLength: 60) }
-
-                Text(message.content)
-                    .font(AlchemyFont.chatBody)
-                    .foregroundStyle(AlchemyColors.textPrimary)
-                    .padding(.horizontal, Spacing.md)
-                    .padding(.vertical, Spacing.sm2)
-                    .background(
-                        RoundedRectangle(cornerRadius: Radius.lg)
-                            .fill(message.role == "user" ? Color.white.opacity(0.2) : Color.white.opacity(0.1))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: Radius.lg)
-                                    .stroke(Color.white.opacity(message.role == "user" ? 0.35 : 0.2), lineWidth: 0.5)
-                            )
-                    )
-
-                if message.role == "assistant" { Spacer(minLength: 60) }
-            }
-
-            Text(message.timestamp, style: .time)
-                .font(AlchemyFont.chatTimestamp)
-                .foregroundStyle(AlchemyColors.textTertiary)
-                .padding(.horizontal, Spacing.xs)
-        }
-        .padding(.horizontal, Spacing.md)
-    }
-
-    // MARK: - Suggestion Chips
-
-    private var suggestionChips: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: Spacing.sm) {
-                ForEach(vm.suggestions, id: \.self) { suggestion in
-                    Button {
-                        isInputFocused = false
-                        vm.input = suggestion
-                        Task { await vm.sendMessage(api: api) }
-                    } label: {
-                        Text(suggestion)
-                            .font(AlchemyFont.captionLight)
-                            .foregroundStyle(AlchemyColors.textPrimary)
-                            .padding(.horizontal, Spacing.sm2)
-                            .padding(.vertical, Spacing.sm)
-                            .background(
-                                Capsule()
-                                    .stroke(Color.white.opacity(0.15), lineWidth: 1)
-                            )
-                    }
-                }
-            }
-            .padding(.horizontal, Spacing.md)
-        }
-    }
-
-    // MARK: - Chat Composer
-
-    private var chatComposer: some View {
-        let sendDisabled = vm.isLoading || vm.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-
-        return ZStack(alignment: .topTrailing) {
-            TextField(
-                "",
-                text: $vm.input,
-                prompt: Text("I want some ideas for dinner tonight")
-                    .foregroundStyle(Color.white.opacity(0.48)),
-                axis: .vertical
-            )
-                .font(AlchemyFont.body)
-                .foregroundStyle(AlchemyColors.textPrimary)
-                .tint(AlchemyColors.gold)
-                .lineLimit(1...6)
-                .focused($isInputFocused)
-                .padding(.leading, Spacing.md)
-                .padding(.trailing, 56)
-                .padding(.vertical, 14)
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-            Button {
-                isInputFocused = false
-                Task { await vm.sendMessage(api: api) }
-            } label: {
-                Image(systemName: "paperplane.fill")
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(
-                        LinearGradient(
-                            colors: [
-                                Color.white.opacity(0.98),
-                                Color(hex: 0xD7E9FF).opacity(0.92)
-                            ],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                    )
-                    .frame(width: 32, height: 32)
-                    .shadow(color: Color(hex: 0x73B8FF).opacity(isInputFocused ? 0.35 : 0.2), radius: 6, x: 0, y: 1)
-            }
-            .disabled(sendDisabled)
-            .opacity(sendDisabled ? 0.52 : 1)
-            .padding(.trailing, Spacing.sm)
-            .padding(.top, 10)
-        }
-        .frame(minHeight: 56, alignment: .top)
-        .background(ephemeralComposerBackground)
-        .shadow(
-            color: Color(hex: 0x4EA6FF).opacity(isInputFocused ? 0.2 : 0.1),
-            radius: isInputFocused ? 16 : 10,
-            x: 0,
-            y: 4
-        )
-        .animation(.easeInOut(duration: 0.22), value: isInputFocused)
-        .animation(.easeInOut(duration: 0.18), value: vm.input.count)
-    }
-
-    private var ephemeralComposerBackground: some View {
-        let shape = RoundedRectangle(cornerRadius: Radius.xl, style: .continuous)
-
-        return TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: false)) { timeline in
-            let time = timeline.date.timeIntervalSinceReferenceDate
-            let sweep = CGFloat(sin(time * 0.34))
-
-            ZStack {
-                shape.fill(Color(hex: 0x182D44).opacity(0.88))
-                shape.fill(.ultraThinMaterial).opacity(0.34)
-
-                shape.fill(
-                    LinearGradient(
-                        colors: [
-                            Color(hex: 0x234A74).opacity(0.5),
-                            Color(hex: 0x162F49).opacity(0.42),
-                            Color(hex: 0x1E3F63).opacity(0.48)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-
-                shape
-                    .fill(
-                        RadialGradient(
-                            colors: [
-                                Color(hex: 0x7CC1FF).opacity(isInputFocused ? 0.22 : 0.12),
-                                .clear
-                            ],
-                            center: UnitPoint(x: 0.16 + 0.06 * sweep, y: 0.44),
-                            startRadius: 8,
-                            endRadius: 190
-                        )
-                    )
-                    .blendMode(.screen)
-
-                shape
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                .clear,
-                                Color.white.opacity(isInputFocused ? 0.2 : 0.12),
-                                .clear
-                            ],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        )
-                    )
-                    .scaleEffect(x: 1.8, y: 1.0)
-                    .offset(x: 82 * sweep)
-                    .blur(radius: 12)
-                    .opacity(0.3)
-                    .mask(shape)
-
-                shape
-                    .stroke(Color.white.opacity(isInputFocused ? 0.24 : 0.14), lineWidth: 0.9)
-                shape
-                    .stroke(Color(hex: 0x8CC8FF).opacity(isInputFocused ? 0.25 : 0.13), lineWidth: 0.8)
-                    .blur(radius: 0.8)
-            }
-        }
-    }
-
-    // MARK: - Header
-
-    private var generateHeader: some View {
-        HStack(alignment: .center, spacing: Spacing.md) {
-            Text("Generate Recipe")
-                .font(AlchemyFont.largeTitle)
-                .foregroundStyle(AlchemyColors.textPrimary)
-                .tracking(0.4)
-
-            Spacer(minLength: Spacing.md)
-
-            Button(action: onProfileTap) {
-                Image("chef-hat")
-                    .renderingMode(.template)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 22, height: 22)
-                    .foregroundStyle(AlchemyColors.deepDark)
-                    .frame(width: 36, height: 36)
-                    .background(
-                        Circle().fill(Color.white.opacity(0.6))
-                    )
-            }
-            .buttonStyle(.plain)
-        }
-        .frame(height: 52)
-        .padding(.horizontal, Spacing.md)
-        .padding(.top, 20)
-        .padding(.bottom, Spacing.sm)
-    }
-
-    // MARK: - Saved Toast
-
-    private var savedToast: some View {
-        VStack {
-            HStack(spacing: Spacing.sm) {
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundStyle(AlchemyColors.success)
-                Text("Saved to Cookbook")
-                    .font(AlchemyFont.bodyBold)
-                    .foregroundStyle(AlchemyColors.textPrimary)
-            }
-            .padding(.horizontal, Spacing.lg)
-            .padding(.vertical, Spacing.sm2)
-            .alchemyGlassCapsule()
-            .padding(.top, Spacing.xxxl)
-
-            Spacer()
-        }
-    }
-
-    // MARK: - Helpers
 
     private func formatAmount(_ amount: Double) -> String {
         amount.truncatingRemainder(dividingBy: 1) == 0
             ? String(format: "%.0f", amount)
             : String(format: "%.1f", amount)
     }
+}
 
-    // Smooth approximation of max(a, b). Higher softness softens the handoff curve.
-    private func smoothMax(_ a: CGFloat, _ b: CGFloat, softness: CGFloat) -> CGFloat {
-        let delta = a - b
-        return 0.5 * (a + b + sqrt((delta * delta) + (softness * softness)))
+private struct GenerateMessageContentHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
     }
 }
 
-// MARK: - Glass Panel Background (top corners only)
-
-private extension View {
-    func glassPanelBackground() -> some View {
-        let shape = UnevenRoundedRectangle(
-            topLeadingRadius: 40,
-            bottomLeadingRadius: 0,
-            bottomTrailingRadius: 0,
-            topTrailingRadius: 40
-        )
-
-        return self
-            .background(
-                TimelineView(.animation(minimumInterval: 1.0 / 24.0, paused: false)) { timeline in
-                    let time = timeline.date.timeIntervalSinceReferenceDate
-                    let pulse = (sin(time * 0.18) + 1) / 2
-                    let drift = CGFloat(sin(time * 0.14))
-                    let driftY = CGFloat(cos(time * 0.12))
-
-                    let baseGradient = LinearGradient(
-                        stops: [
-                            .init(color: Color(hex: 0x1B3248).opacity(0.55), location: 0.0),
-                            .init(color: Color(hex: 0x0E2B42).opacity(0.5), location: 0.34),
-                            .init(color: Color(hex: 0x081D34).opacity(0.46), location: 0.72),
-                            .init(color: Color(hex: 0x051425).opacity(0.44), location: 1.0)
-                        ],
-                        startPoint: UnitPoint(
-                            x: 0.76 + 0.05 * CGFloat(sin(time * 0.07)),
-                            y: 0.06 + 0.03 * CGFloat(cos(time * 0.05))
-                        ),
-                        endPoint: UnitPoint(
-                            x: 0.22 + 0.05 * CGFloat(cos(time * 0.06)),
-                            y: 0.98 - 0.03 * CGFloat(sin(time * 0.05))
-                        )
-                    )
-
-                    ZStack {
-                        shape.fill(.ultraThinMaterial)
-                        shape.fill(baseGradient)
-                        shape
-                            .fill(
-                                RadialGradient(
-                                    colors: [Color(hex: 0x4F88A9).opacity(0.22 + 0.06 * pulse), .clear],
-                                    center: UnitPoint(x: 0.18 + 0.04 * drift, y: 0.46 + 0.03 * driftY),
-                                    startRadius: 14,
-                                    endRadius: 320
-                                )
-                            )
-                            .blendMode(.screen)
-                        shape
-                            .fill(
-                                RadialGradient(
-                                    colors: [Color(hex: 0xA4B8C8).opacity(0.18 + 0.05 * (1 - pulse)), .clear],
-                                    center: UnitPoint(x: 0.86 - 0.03 * drift, y: 0.18 + 0.02 * driftY),
-                                    startRadius: 16,
-                                    endRadius: 240
-                                )
-                            )
-                            .blendMode(.screen)
-                        shape
-                            .fill(
-                                RadialGradient(
-                                    colors: [Color(hex: 0x2C6E93).opacity(0.18 + 0.05 * pulse), .clear],
-                                    center: UnitPoint(x: 0.58 + 0.04 * driftY, y: 0.74 - 0.02 * drift),
-                                    startRadius: 12,
-                                    endRadius: 260
-                                )
-                            )
-                            .blendMode(.screen)
-                        shape
-                            .fill(
-                                LinearGradient(
-                                    colors: [
-                                        .clear,
-                                        Color.white.opacity(0.16),
-                                        .clear
-                                    ],
-                                    startPoint: .leading,
-                                    endPoint: .trailing
-                                )
-                            )
-                            .scaleEffect(x: 2.1, y: 1.0)
-                            .offset(x: CGFloat(sin(time * 0.11)) * 110)
-                            .blur(radius: 24)
-                            .opacity(0.28)
-                            .mask(shape)
-                        shape
-                            .fill(
-                                LinearGradient(
-                                    colors: [
-                                        .clear,
-                                        Color.white.opacity(0.14),
-                                        .clear
-                                    ],
-                                    startPoint: .leading,
-                                    endPoint: .trailing
-                                )
-                            )
-                            .scaleEffect(x: 1.7, y: 1.0)
-                            .offset(x: CGFloat(cos(time * 0.09 + 1.7)) * 86, y: CGFloat(sin(time * 0.08)) * 8)
-                            .blur(radius: 18)
-                            .opacity(0.2)
-                            .mask(shape)
-                        shape.fill(Color.black.opacity(0.22))
-                        shape
-                            .fill(
-                                LinearGradient(
-                                    colors: [
-                                        Color.white.opacity(0.13),
-                                        Color.white.opacity(0.07),
-                                        .clear
-                                    ],
-                                    startPoint: .top,
-                                    endPoint: .center
-                                )
-                            )
-                            .mask(shape)
-                        shape.stroke(Color.white.opacity(0.18), lineWidth: 0.8)
-                        shape
-                            .stroke(Color.black.opacity(0.16), lineWidth: 1.2)
-                            .blur(radius: 1.2)
-                    }
-                }
-            )
+private struct GenerateMessageViewportHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
     }
 }

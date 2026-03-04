@@ -77,6 +77,24 @@ final class CookbookViewModel {
         }
     }
 
+    func refreshAfterCommit(api: APIClient, committedRecipeIds: [String]? = nil) async {
+        await refresh(api: api)
+
+        guard let committedRecipeIds, !committedRecipeIds.isEmpty else {
+            return
+        }
+
+        let committedIdSet = Set(committedRecipeIds)
+        let fetchedIdSet = Set(recipes.map(\.id))
+        guard !committedIdSet.isSubset(of: fetchedIdSet) else {
+            return
+        }
+
+        // Commit persistence and cookbook projection can settle asynchronously.
+        try? await Task.sleep(for: .milliseconds(300))
+        await refresh(api: api)
+    }
+
     private func normalizedInsight(_ candidate: String?) -> String {
         guard let candidate else {
             return Self.fallbackInsight

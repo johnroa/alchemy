@@ -12,6 +12,16 @@ enum APIError: LocalizedError {
         return code
     }
 
+    var serverStatusCode: Int? {
+        guard case .serverError(let statusCode, _, _, _) = self else { return nil }
+        return statusCode
+    }
+
+    var serverRequestId: String? {
+        guard case .serverError(_, _, _, let requestId) = self else { return nil }
+        return requestId
+    }
+
     var errorDescription: String? {
         switch self {
         case .notAuthenticated:

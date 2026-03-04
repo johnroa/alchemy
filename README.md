@@ -1,6 +1,6 @@
 # Alchemy Monorepo
 
-iOS-first AI recipe app — users set dietary/skill/equipment preferences, generate recipes via LLM, tweak them iteratively, and organize favorites. An admin console manages users, LLM config, content moderation, and observability.
+iOS-first AI recipe app — users set dietary/skill/equipment preferences, chat with the assistant to converge on dishes, iterate candidate recipe tabs, and commit to cookbook. An admin console manages users, LLM config, content moderation, and observability.
 
 ## Structure
 
@@ -103,15 +103,44 @@ Expo Router + TanStack Query + Zustand. Key screens:
 
 Design system: `components/alchemy/primitives.tsx` + `theme.ts`
 
-### Generate Screen flow
+### Generate Screen flow (current contract)
 
-The generate screen has two distinct LLM phases:
+The loop is chat-driven and endpoint-minimal:
 
-1. **Chat phase** (no active recipe): `api.createChat()` / `api.continueChat()` → uses the `chat` scope. The LLM explores intent, asks at most one question per turn, and includes a recipe in the response only when the user commits to an idea. The chat panel fills the screen.
+1. Start session: `POST /chat` with `{ message }`.
+2. Continue loop: `POST /chat/{id}/messages` for all user turns (ideation + tweaks).
+3. Candidate tab actions: `PATCH /chat/{id}/candidate` with:
+   - `set_active_component`
+   - `delete_component`
+   - `clear_candidate`
+4. Save all remaining tabs: `POST /chat/{id}/commit`.
+5. Read committed recipes: `GET /recipes/{id}` and `GET /recipes/cookbook`.
 
-2. **Tweak phase** (recipe exists): `api.tweakRecipe()` or `api.continueChat()` with active recipe in context → uses the `tweak` scope. The LLM always returns an updated recipe immediately. The panel auto-minimizes to expose the recipe canvas.
+Deprecated loop endpoints are removed:
 
-3. **Generate**: `api.generateFromChat()` triggers the `generate` scope — always outputs a complete recipe, no questions.
+- `POST /recipes/generate`
+- `POST /recipes/{id}/tweak`
+- `POST /chat/{id}/generate`
+
+UI state mapping from `ChatSession.loop_state`:
+
+- `ideation`: full chat panel, no recipe tabs shown.
+- `candidate_presented`: collapse chat panel, show generation animation once, render tabs from `candidate_recipe_set.components`.
+- `iterating`: show tweak chat overlay while waiting, then return to candidate presentation on response.
+
+Core response fields to wire:
+
+- `assistant_reply.text`
+- `candidate_recipe_set` (`candidate_id`, `revision`, `active_component_id`, `components[]`)
+- `ui_hints.show_generation_animation`
+- `ui_hints.focus_component_id`
+- `memory_context_ids`
+
+Commit UX contract (`POST /chat/{id}/commit`):
+
+- `commit.recipes[]`: committed recipe ids per tab/component
+- `commit.links[]`: parent/child links across committed components
+- `commit.post_save_options`: `continue_chat | restart_chat | go_to_cookbook`
 
 ### Running the app
 
@@ -160,10 +189,10 @@ All LLM configuration is **runtime DB-driven** — no redeployment required for 
 
 | Scope | Used by | Behavior |
 |---|---|---|
-| `chat` | Pre-recipe ideation conversation | Conversational. CAN ask questions. Includes recipe only when user commits. |
-| `generate` | `generateFromChat()` | Always outputs a complete recipe immediately. No questions. |
-| `tweak` | Post-recipe editing | Always outputs a full updated recipe. No questions. |
-| `classify` | Content safety check before generate/tweak | Returns allow/deny + reason |
+| `chat_ideation` | `POST /chat`, `POST /chat/{id}/messages` while no candidate is active | Conversational. Learns preferences and decides whether to trigger generation. |
+| `chat_generation` | `POST /chat/{id}/messages` when generation is triggered | Returns full `candidate_recipe_set` (max 3 components). |
+| `chat_iteration` | `POST /chat/{id}/messages` when candidate exists | Returns revised `candidate_recipe_set`. |
+| `classify` | Safety gate for chat scopes | Returns allow/deny + reason before assistant output. |
 | `onboarding` | First-run preference interview | Conversational. Collects dietary, skill, equipment context. |
 | `image` | Recipe image generation | Text-to-image prompt construction |
 | `memory_extract` | Post-conversation memory extraction | Extracts preference signals |
@@ -184,7 +213,7 @@ Use the Admin UI at `/provider-model`, or call the API directly:
 ```bash
 curl -X POST https://admin.cookwithalchemy.com/api/admin/llm/routes \
   -H "Content-Type: application/json" \
-  -d '{"scope":"generate","provider":"openai","model":"gpt-4.1"}'
+  -d '{"scope":"chat_generation","provider":"anthropic","model":"claude-3-5-haiku-latest"}'
 ```
 
 This deactivates the current active route for the scope and inserts a new active one.
@@ -196,7 +225,7 @@ Use the Admin UI at `/prompts`, or:
 ```bash
 curl -X POST https://admin.cookwithalchemy.com/api/admin/llm/prompts \
   -H "Content-Type: application/json" \
-  -d '{"action":"create","scope":"generate","name":"my_prompt_v7","template":"You are..."}'
+  -d '{"action":"create","scope":"chat_ideation","name":"chat_ideation_v1","template":"You are..."}'
 # Then activate it:
 curl -X POST https://admin.cookwithalchemy.com/api/admin/llm/prompts \
   -H "Content-Type: application/json" \
@@ -459,7 +488,7 @@ pnpm dev:mobile:ios     # Expo iOS simulator
 
 ## API UX Simulation
 
-End-to-end API simulation (full generate → tweak → save flow):
+End-to-end API simulation (chat start → refine → generation trigger → iterate → commit):
 
 ```bash
 API_URL=https://api.cookwithalchemy.com/v1 \

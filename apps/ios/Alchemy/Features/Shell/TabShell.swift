@@ -1,48 +1,67 @@
 import SwiftUI
 
 struct TabShell: View {
+    @Environment(APIClient.self) private var api
+
     @State private var selectedTab: AlchemyTab = .generate
     @State private var showPreferences = false
     @State private var showSettings = false
     @State private var showProfileMenu = false
-    @StateObject private var keyboard = KeyboardMonitor()
+    @State private var tabBarVisible = true
 
-    // Drive tab-bar visibility continuously from keyboard height to avoid snap/jitter.
-    private var keyboardHideProgress: CGFloat {
-        let transitionRange: CGFloat = 150
-        return min(max(keyboard.height / transitionRange, 0), 1)
-    }
+    @State private var tabRevealTask: Task<Void, Never>?
+
+    @State private var generateViewModel = GenerateViewModel()
+    @State private var cookbookViewModel = CookbookViewModel()
+
+    @StateObject private var keyboard = KeyboardMonitor()
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            // Tab content
             Group {
                 switch selectedTab {
                 case .cookbook:
-                    CookbookView(onProfileTap: {
-                        withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
-                            showProfileMenu.toggle()
+                    CookbookView(
+                        viewModel: cookbookViewModel,
+                        onProfileTap: {
+                            withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+                                showProfileMenu.toggle()
+                            }
                         }
-                    })
+                    )
                 case .generate:
-                    GenerateView(onProfileTap: {
-                        withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
-                            showProfileMenu.toggle()
+                    GenerateView(
+                        viewModel: generateViewModel,
+                        onProfileTap: {
+                            withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+                                showProfileMenu.toggle()
+                            }
+                        },
+                        onGoToCookbook: { committedIds in
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                selectedTab = .cookbook
+                            }
+                            Task {
+                                await cookbookViewModel.refreshAfterCommit(
+                                    api: api,
+                                    committedRecipeIds: committedIds
+                                )
+                            }
                         }
-                    })
+                    )
                 }
             }
             .environmentObject(keyboard)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .animation(.easeInOut(duration: 0.2), value: selectedTab)
 
-            // Floating tab bar
             AlchemyTabBar(selectedTab: $selectedTab)
-                .opacity(1 - keyboardHideProgress)
-                .scaleEffect(1 - (0.028 * keyboardHideProgress), anchor: .bottom)
-                .offset(y: 20 * keyboardHideProgress)
-                .allowsHitTesting(keyboardHideProgress < 0.05)
+                .opacity(tabBarVisible ? 1 : 0)
+                .offset(y: tabBarVisible ? 0 : 24)
+                .scaleEffect(tabBarVisible ? 1 : 0.97, anchor: .bottom)
+                .allowsHitTesting(tabBarVisible)
                 .zIndex(10)
+                .animation(tabBarVisible ? .spring(response: 0.4, dampingFraction: 0.84) : .easeOut(duration: 0.12), value: tabBarVisible)
 
             if showProfileMenu {
                 Color.black.opacity(0.001)
@@ -91,6 +110,7 @@ struct TabShell: View {
                 .zIndex(41)
             }
         }
+        .ignoresSafeArea(.keyboard, edges: .bottom)
         .ignoresSafeArea(.container, edges: .bottom)
         .background(AlchemyColors.deepDark)
         .sheet(isPresented: $showPreferences) {
@@ -100,5 +120,30 @@ struct TabShell: View {
             SettingsView()
         }
         .animation(.spring(response: 0.35, dampingFraction: 0.88), value: showProfileMenu)
+        .onChange(of: keyboard.height) { _, newHeight in
+            if newHeight > 4 {
+                tabRevealTask?.cancel()
+                tabRevealTask = nil
+                withAnimation(.easeOut(duration: 0.12)) {
+                    tabBarVisible = false
+                }
+                return
+            }
+
+            if newHeight < 1 {
+                tabRevealTask?.cancel()
+                tabRevealTask = Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(50))
+                    guard keyboard.height < 1 else { return }
+                    withAnimation(.spring(response: 0.4, dampingFraction: 0.84)) {
+                        tabBarVisible = true
+                    }
+                }
+            }
+        }
+        .onDisappear {
+            tabRevealTask?.cancel()
+            tabRevealTask = nil
+        }
     }
 }

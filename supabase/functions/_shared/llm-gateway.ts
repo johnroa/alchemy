@@ -66,6 +66,113 @@ type ConflictResolution = {
 };
 
 const DEFAULT_OUT_OF_SCOPE_FALLBACK_TEXT = "i didnt understand that";
+const OUTPUT_ERROR_DETAIL_MAX_CHARS = 6_000;
+
+const truncateErrorDetailText = (value: string): string => {
+  if (value.length <= OUTPUT_ERROR_DETAIL_MAX_CHARS) {
+    return value;
+  }
+  return value.slice(0, OUTPUT_ERROR_DETAIL_MAX_CHARS);
+};
+
+const defaultChatPromptForScope = (
+  scope: Extract<
+    GatewayScope,
+    "chat" | "chat_ideation" | "chat_generation" | "chat_iteration" | "tweak"
+  >,
+): string => {
+  if (scope === "chat_generation") {
+    return `You are Alchemy. Generate candidate recipe tabs from chat context.
+Return ONLY strict JSON with keys:
+- assistant_reply
+- candidate_recipe_set
+- response_context
+Rules:
+- Max 3 components.
+- If the user did not explicitly request multiple dishes, return exactly 1 component (role "main").
+- Keep each recipe concise and practical (typically 5-7 ingredients, 3-4 steps).
+- Omit optional verbose fields (attachments, long notes, extended metadata) unless explicitly requested.
+- Keep assistant_reply.text concise (<= 20 words).
+- candidate_recipe_set is REQUIRED and must include:
+  - candidate_id (string)
+  - revision (integer >= 1)
+  - active_component_id (must match a component_id)
+  - components[] where each component has:
+    - component_id (string)
+    - role (main|side|appetizer|dessert|drink)
+    - title (string)
+    - recipe object with REQUIRED keys:
+      - title (string)
+      - servings (number >= 1)
+      - ingredients[] of {name, amount, unit}
+      - steps[] of {index, instruction}
+- Output JSON only.`;
+  }
+
+  if (scope === "chat_iteration") {
+    return `You are Alchemy. Update existing candidate recipe tabs based on the latest user tweak.
+Return ONLY strict JSON with keys:
+- assistant_reply
+- candidate_recipe_set
+- response_context
+Rules:
+- Return full updated candidate_recipe_set, not a patch.
+- Preserve component count unless user explicitly asks to add/remove dishes.
+- Max 3 components.
+- Keep each recipe concise and practical (typically 5-7 ingredients, 3-4 steps).
+- Omit optional verbose fields (attachments, long notes, extended metadata) unless explicitly requested.
+- Keep assistant_reply.text concise (<= 20 words).
+- candidate_recipe_set is REQUIRED and must include valid components with full recipe payloads.
+- Do not return ideation output or trigger-only output.
+- Output JSON only.`;
+  }
+
+  return `You are Alchemy, a concise cooking copilot in ideation mode.
+Return ONLY strict JSON with keys:
+- assistant_reply
+- trigger_recipe (boolean)
+- response_context
+Rules:
+- assistant_reply.text must be concise (<= 22 words).
+- Ask at most one short follow-up question.
+- Set trigger_recipe=true only when user clearly asks to generate now or commits to a specific dish.
+- If intent is broad or exploratory, keep trigger_recipe=false.
+- If trigger_recipe=true, you MAY return candidate_recipe_set with one or more full recipe components in the same response.
+- If trigger_recipe=true and you return candidate_recipe_set, include complete recipe payloads (title, servings, ingredients, steps).
+- Output JSON only.`;
+};
+
+const defaultChatRuleForScope = (
+  scope: Extract<
+    GatewayScope,
+    "chat" | "chat_ideation" | "chat_generation" | "chat_iteration" | "tweak"
+  >,
+): Record<string, JsonValue> => {
+  if (scope === "chat_generation") {
+    return {
+      response_contract: "chat_generation_v1",
+      strict_json_only: true,
+      max_components: 3,
+      require_complete_recipes: true,
+    };
+  }
+
+  if (scope === "chat_iteration") {
+    return {
+      response_contract: "chat_iteration_v1",
+      strict_json_only: true,
+      max_components: 3,
+      return_full_candidate_set: true,
+    };
+  }
+
+  return {
+    response_contract: "chat_ideation_v1",
+    strict_json_only: true,
+    max_questions_per_turn: 1,
+    emit_preference_updates: true,
+  };
+};
 
 const getActiveConfig = async (
   client: SupabaseClient,
@@ -469,6 +576,57 @@ const parseResponseOutputText = (payload: unknown): string | null => {
     }
   }
 
+  const collectKnownOutputText = (value: unknown, parts: string[]): void => {
+    if (!value) {
+      return;
+    }
+
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        collectKnownOutputText(item, parts);
+      }
+      return;
+    }
+
+    if (typeof value !== "object") {
+      return;
+    }
+
+    const record = value as Record<string, unknown>;
+    const directCandidates = [
+      record.output_text,
+      record.text,
+      record.refusal,
+      record.arguments,
+    ];
+
+    for (const candidate of directCandidates) {
+      const text = normalizeTextValue(candidate);
+      if (text) {
+        parts.push(text);
+      }
+    }
+
+    if (Array.isArray(record.summary)) {
+      collectKnownOutputText(record.summary, parts);
+    }
+    if (Array.isArray(record.content)) {
+      collectKnownOutputText(record.content, parts);
+    }
+    if (Array.isArray(record.output)) {
+      collectKnownOutputText(record.output, parts);
+    }
+    if (record.message && typeof record.message === "object") {
+      collectKnownOutputText(record.message, parts);
+    }
+  };
+
+  const fallbackParts: string[] = [];
+  collectKnownOutputText(payload, fallbackParts);
+  if (fallbackParts.length > 0) {
+    return fallbackParts.join("\n");
+  }
+
   return null;
 };
 
@@ -509,6 +667,8 @@ const callProvider = async <T>(params: {
 
     const maxTokens = typeof params.modelConfig.max_tokens === "number"
       ? params.modelConfig.max_tokens
+      : typeof params.modelConfig.max_output_tokens === "number"
+      ? params.modelConfig.max_output_tokens
       : 8096;
 
     let response: Response;
@@ -585,7 +745,7 @@ const callProvider = async <T>(params: {
       502,
       "llm_invalid_json",
       "Anthropic output is not valid JSON",
-      anthropicText.slice(0, 1000),
+      truncateErrorDetailText(anthropicText),
     );
   }
 
@@ -598,10 +758,19 @@ const callProvider = async <T>(params: {
     );
   }
 
-  const endpoint = (typeof params.modelConfig.endpoint === "string" &&
-    params.modelConfig.endpoint) ||
-    Deno.env.get("OPENAI_RESPONSES_ENDPOINT") ||
-    "https://api.openai.com/v1/responses";
+  const apiMode = typeof params.modelConfig.api_mode === "string" &&
+      params.modelConfig.api_mode.trim() === "chat_completions"
+    ? "chat_completions"
+    : "responses";
+  const endpoint = apiMode === "chat_completions"
+    ? ((typeof params.modelConfig.chat_completions_endpoint === "string" &&
+          params.modelConfig.chat_completions_endpoint) ||
+      Deno.env.get("OPENAI_CHAT_COMPLETIONS_ENDPOINT") ||
+      "https://api.openai.com/v1/chat/completions")
+    : ((typeof params.modelConfig.endpoint === "string" &&
+          params.modelConfig.endpoint) ||
+      Deno.env.get("OPENAI_RESPONSES_ENDPOINT") ||
+      "https://api.openai.com/v1/responses");
   const apiKeyEnv = (typeof params.modelConfig.api_key_env === "string" &&
     params.modelConfig.api_key_env) || "OPENAI_API_KEY";
   const apiKey = Deno.env.get(apiKeyEnv);
@@ -614,22 +783,62 @@ const callProvider = async <T>(params: {
     );
   }
 
-  const requestConfig: Record<string, JsonValue> = { ...params.modelConfig };
-  delete requestConfig.endpoint;
-  delete requestConfig.api_key_env;
+  const requestConfig: Record<string, JsonValue> = {};
+  const maxOutputTokens = Number(
+    params.modelConfig.max_output_tokens ?? params.modelConfig.max_tokens,
+  );
+  const temperature = Number(params.modelConfig.temperature);
+  const topP = Number(params.modelConfig.top_p);
+  const frequencyPenalty = Number(params.modelConfig.frequency_penalty);
+  const presencePenalty = Number(params.modelConfig.presence_penalty);
+  const reasoning = params.modelConfig.reasoning;
 
-  let response: Response;
-  try {
-    response = await fetch(endpoint, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "content-type": "application/json",
-      },
-      signal: AbortSignal.timeout(timeoutMs),
-      body: JSON.stringify({
+  if (Number.isFinite(maxOutputTokens) && maxOutputTokens > 0) {
+    if (apiMode === "chat_completions") {
+      requestConfig.max_tokens = Math.trunc(maxOutputTokens);
+    } else {
+      requestConfig.max_output_tokens = Math.trunc(maxOutputTokens);
+    }
+  }
+  if (Number.isFinite(temperature)) {
+    requestConfig.temperature = temperature;
+  }
+  if (Number.isFinite(topP)) {
+    requestConfig.top_p = topP;
+  }
+  if (Number.isFinite(frequencyPenalty)) {
+    requestConfig.frequency_penalty = frequencyPenalty;
+  }
+  if (Number.isFinite(presencePenalty)) {
+    requestConfig.presence_penalty = presencePenalty;
+  }
+  if (
+    reasoning && typeof reasoning === "object" && !Array.isArray(reasoning) &&
+    apiMode === "responses"
+  ) {
+    requestConfig.reasoning = reasoning;
+  }
+
+  const openAiRequestBody = (config: Record<string, JsonValue>): Record<string, JsonValue> =>
+    apiMode === "chat_completions"
+      ? {
         model: params.model,
-        ...requestConfig,
+        ...config,
+        response_format: { type: "json_object" },
+        messages: [
+          {
+            role: "system",
+            content: params.systemPrompt,
+          },
+          {
+            role: "user",
+            content: JSON.stringify(params.userInput),
+          },
+        ],
+      }
+      : {
+        model: params.model,
+        ...config,
         input: [
           {
             role: "system",
@@ -644,35 +853,125 @@ const callProvider = async <T>(params: {
           },
         ],
         text: { format: { type: "json_object" } },
-      }),
-    });
-  } catch (error) {
-    if (error instanceof DOMException && error.name === "TimeoutError") {
-      throw new ApiError(
-        504,
-        "llm_provider_timeout",
-        "LLM provider timed out",
-        {
-          endpoint,
-          model: params.model,
-          timeout_ms: timeoutMs,
+      };
+
+  let payload: unknown = null;
+  let lastErrorBody = "";
+  const adaptiveConfig: Record<string, JsonValue> = { ...requestConfig };
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    let response: Response;
+    try {
+      response = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "content-type": "application/json",
         },
+        signal: AbortSignal.timeout(timeoutMs),
+        body: JSON.stringify(openAiRequestBody(adaptiveConfig)),
+      });
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "TimeoutError") {
+        throw new ApiError(
+          504,
+          "llm_provider_timeout",
+          "LLM provider timed out",
+          {
+            endpoint,
+            model: params.model,
+            timeout_ms: timeoutMs,
+          },
+        );
+      }
+      throw error;
+    }
+
+    if (response.ok) {
+      payload = (await response.json()) as unknown;
+      break;
+    }
+
+    const body = await response.text();
+    lastErrorBody = body;
+    const unsupportedMatch = body.match(
+      /(?:Unsupported|Unknown)\s+parameter:\s*['"]([^'"]+)['"]/i,
+    );
+    if (!unsupportedMatch) {
+      throw new ApiError(
+        502,
+        "llm_provider_error",
+        "LLM provider returned an error",
+        body.slice(0, 1000),
       );
     }
-    throw error;
+
+    const unsupportedParam = unsupportedMatch[1];
+    const removableKeys = new Set<string>([unsupportedParam]);
+    if (unsupportedParam === "max_tokens") {
+      removableKeys.add("max_output_tokens");
+    }
+    if (unsupportedParam === "max_output_tokens") {
+      removableKeys.add("max_tokens");
+    }
+    if (unsupportedParam === "response_format" || unsupportedParam === "text") {
+      break;
+    }
+
+    let removed = false;
+    for (const key of removableKeys) {
+      if (Object.prototype.hasOwnProperty.call(adaptiveConfig, key)) {
+        delete adaptiveConfig[key];
+        removed = true;
+      }
+    }
+    if (!removed) {
+      throw new ApiError(
+        502,
+        "llm_provider_error",
+        "LLM provider returned an error",
+        body.slice(0, 1000),
+      );
+    }
   }
 
-  if (!response.ok) {
-    const body = await response.text();
+  if (!payload) {
     throw new ApiError(
       502,
       "llm_provider_error",
       "LLM provider returned an error",
-      body.slice(0, 1000),
+      lastErrorBody.slice(0, 1000),
     );
   }
+  if (apiMode === "chat_completions") {
+    const completionPayload = payload as {
+      choices?: Array<{ message?: { content?: string | null } }>;
+      usage?: { prompt_tokens?: number; completion_tokens?: number };
+    };
+    const outputText = completionPayload.choices?.[0]?.message?.content ?? "";
+    if (!outputText) {
+      throw new ApiError(
+        502,
+        "llm_empty_output",
+        "LLM provider returned an empty output payload",
+      );
+    }
+    const parsed = parseJsonFromText(outputText);
+    if (!parsed) {
+      throw new ApiError(
+        502,
+        "llm_invalid_json",
+        "LLM output is not valid JSON",
+        truncateErrorDetailText(outputText),
+      );
+    }
+    return {
+      result: parsed as T,
+      inputTokens: completionPayload.usage?.prompt_tokens ?? 0,
+      outputTokens: completionPayload.usage?.completion_tokens ?? 0,
+    };
+  }
 
-  const payload = (await response.json()) as unknown;
   const usageRaw = (payload as Record<string, unknown> | null)?.usage as
     | { input_tokens?: number; output_tokens?: number }
     | undefined;
@@ -687,11 +986,26 @@ const callProvider = async <T>(params: {
   const outputText = parseResponseOutputText(payload);
 
   if (!outputText) {
+    const payloadRecord = payload && typeof payload === "object" &&
+        !Array.isArray(payload)
+      ? (payload as Record<string, unknown>)
+      : null;
+    const status = payloadRecord
+      ? normalizeTextValue(payloadRecord.status)
+      : null;
+    const incompleteRaw = payloadRecord?.incomplete_details ??
+      payloadRecord?.error ??
+      null;
+    const incompleteDetails = normalizeTextValue(incompleteRaw) ??
+      (incompleteRaw ? JSON.stringify(incompleteRaw).slice(0, 1000) : null);
+
     throw new ApiError(
       502,
       "llm_empty_output",
       "LLM provider returned an empty output payload",
       {
+        status: status ?? null,
+        incomplete_details: incompleteDetails,
         payload_shape: payload && typeof payload === "object"
           ? Object.keys(payload as Record<string, unknown>)
           : "unknown",
@@ -708,7 +1022,7 @@ const callProvider = async <T>(params: {
     502,
     "llm_invalid_json",
     "LLM output is not valid JSON",
-    outputText.slice(0, 1000),
+    truncateErrorDetailText(outputText),
   );
 };
 
@@ -1493,7 +1807,15 @@ const normalizeCandidateRecipeSet = (
         return null;
       }
       const value = component as Record<string, unknown>;
-      const recipe = normalizeRecipeShape(value.recipe);
+      const nestedRecipe = value.recipe ??
+        value.recipe_payload ??
+        value.recipePayload ??
+        ((value.data as Record<string, unknown> | undefined)
+          ?.recipe as unknown) ??
+        ((value.result as Record<string, unknown> | undefined)
+          ?.recipe as unknown) ??
+        value;
+      const recipe = normalizeRecipeShape(nestedRecipe);
       if (!recipe) {
         return null;
       }
@@ -1550,6 +1872,72 @@ const normalizeCandidateRecipeSet = (
     active_component_id: activeComponentId,
     components,
   };
+};
+
+const normalizeCandidateRecipeSetFromPayload = (
+  payload: Record<string, unknown>,
+): ChatAssistantEnvelope["candidate_recipe_set"] | undefined => {
+  const nestedData = payload.data && typeof payload.data === "object" &&
+      !Array.isArray(payload.data)
+    ? (payload.data as Record<string, unknown>)
+    : undefined;
+  const nestedResult = payload.result && typeof payload.result === "object" &&
+      !Array.isArray(payload.result)
+    ? (payload.result as Record<string, unknown>)
+    : undefined;
+
+  const directCandidates: unknown[] = [
+    payload.candidate_recipe_set,
+    payload.candidate_set,
+    payload.recipe_set,
+    payload.candidate,
+    nestedData?.candidate_recipe_set,
+    nestedData?.candidate_set,
+    nestedResult?.candidate_recipe_set,
+    nestedResult?.candidate_set,
+  ];
+
+  for (const candidate of directCandidates) {
+    const normalized = normalizeCandidateRecipeSet(candidate);
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  const fromComponents = Array.isArray(payload.components)
+    ? normalizeCandidateRecipeSet({
+      candidate_id: payload.candidate_id,
+      revision: payload.revision,
+      active_component_id: payload.active_component_id,
+      components: payload.components,
+    })
+    : undefined;
+  if (fromComponents) {
+    return fromComponents;
+  }
+
+  const recipeList = Array.isArray(payload.recipes) ? payload.recipes : null;
+  if (recipeList && recipeList.length > 0) {
+    const components = recipeList.map((recipe, index) => ({
+      component_id: crypto.randomUUID(),
+      role: index === 0 ? "main" : "side",
+      title: typeof (recipe as Record<string, unknown>).title === "string"
+        ? (recipe as Record<string, unknown>).title
+        : `Recipe ${index + 1}`,
+      recipe,
+    }));
+    const normalized = normalizeCandidateRecipeSet({
+      candidate_id: payload.candidate_id,
+      revision: payload.revision,
+      active_component_id: payload.active_component_id,
+      components,
+    });
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  return undefined;
 };
 
 const normalizeResponseContext = (
@@ -1646,20 +2034,6 @@ const normalizeChatEnvelope = (
   }
 
   const payload = candidate as Record<string, unknown>;
-  const nestedAssistantReply = payload.assistant_reply ??
-    ((payload.data as Record<string, unknown> | undefined)
-      ?.assistant_reply as unknown) ??
-    ((payload.result as Record<string, unknown> | undefined)
-      ?.assistant_reply as unknown) ??
-    payload.assistant;
-
-  const assistantReply = normalizeAssistantReply(
-    nestedAssistantReply ?? payload,
-  );
-  if (!assistantReply) {
-    return null;
-  }
-
   const nestedRecipe = payload.recipe ??
     ((payload.data as Record<string, unknown> | undefined)
       ?.recipe as unknown) ??
@@ -1667,19 +2041,42 @@ const normalizeChatEnvelope = (
       ?.recipe as unknown);
 
   const recipe = normalizeRecipeShape(nestedRecipe);
+  const candidateRecipeSet = normalizeCandidateRecipeSetFromPayload(payload);
+  const nestedAssistantReply = payload.assistant_reply ??
+    ((payload.data as Record<string, unknown> | undefined)
+      ?.assistant_reply as unknown) ??
+    ((payload.result as Record<string, unknown> | undefined)
+      ?.assistant_reply as unknown) ??
+    payload.assistant;
+
+  const deriveFallbackReply = (candidateRecipe: RecipePayload | null):
+    | AssistantReply
+    | null => {
+      if (!candidateRecipe) {
+        return null;
+      }
+      const textCandidate = [
+        candidateRecipe.notes,
+        candidateRecipe.description,
+        candidateRecipe.title,
+      ].find((value): value is string =>
+        typeof value === "string" && value.trim().length > 0
+      );
+      return textCandidate ? { text: textCandidate.trim() } : null;
+    };
+
+  const derivedReply = deriveFallbackReply(recipe) ??
+    deriveFallbackReply(candidateRecipeSet?.components?.[0]?.recipe ?? null);
+  const assistantReply = normalizeAssistantReply(
+    nestedAssistantReply ?? payload,
+  ) ?? derivedReply;
+  if (!assistantReply) {
+    return null;
+  }
+
   const triggerRecipe = typeof payload.trigger_recipe === "boolean"
     ? payload.trigger_recipe
     : undefined;
-  const candidateRecipeSet =
-    normalizeCandidateRecipeSet(payload.candidate_recipe_set) ??
-      normalizeCandidateRecipeSet(
-        (payload.data as Record<string, unknown> | undefined)
-          ?.candidate_recipe_set,
-      ) ??
-      normalizeCandidateRecipeSet(
-        (payload.result as Record<string, unknown> | undefined)
-          ?.candidate_recipe_set,
-      );
 
   const nestedResponseContext = payload.response_context ??
     ((payload.data as Record<string, unknown> | undefined)
@@ -1945,31 +2342,20 @@ const generateChatConversationPayload = async (
   overrides?: ModelOverrideMap,
   accum?: TokenAccum,
 ): Promise<ChatAssistantEnvelope> => {
-  const config = await (async () => {
-    try {
-      return await getActiveConfig(client, scope, overrides?.[scope]);
-    } catch (error) {
-      if (
-        scope !== "chat" &&
-        (scope === "chat_ideation" || scope === "chat_generation" ||
-          scope === "chat_iteration") &&
-        error instanceof ApiError &&
-        [
-          "gateway_prompt_missing",
-          "gateway_rule_missing",
-          "gateway_route_missing",
-        ].includes(error.code)
-      ) {
-        return await getActiveConfig(client, "chat", overrides?.chat);
-      }
-      throw error;
-    }
-  })();
+  const chatScope = scope === "chat" || scope === "tweak"
+    ? "chat_ideation"
+    : scope;
+  const runtimeOverride = overrides?.[scope] ?? overrides?.[chatScope] ??
+    overrides?.chat;
+  const config = await getActiveConfig(client, "chat", runtimeOverride);
 
-  const runtimeModelConfig: Record<string, JsonValue> = {
+  let runtimeModelConfig: Record<string, JsonValue> = {
     ...config.modelConfig,
   };
-  const outputTokenCap = scope === "chat_ideation" ? 650 : 2200;
+  const outputTokenCap = chatScope === "chat_ideation" ? 700 : 1_800;
+  const timeoutCapMs = chatScope === "chat_ideation" ? 18_000 : 12_000;
+  let runtimeProvider = config.provider;
+  let runtimeModel = config.model;
 
   const configuredMaxTokens = Number(runtimeModelConfig.max_output_tokens);
   if (
@@ -1978,62 +2364,190 @@ const generateChatConversationPayload = async (
   ) {
     runtimeModelConfig.max_output_tokens = outputTokenCap;
   }
-
-  if (!Number.isFinite(Number(runtimeModelConfig.temperature))) {
-    runtimeModelConfig.temperature = scope === "chat_ideation" ? 0.3 : 0.35;
+  const configuredTimeoutMs = Number(runtimeModelConfig.timeout_ms);
+  if (
+    !Number.isFinite(configuredTimeoutMs) || configuredTimeoutMs < 5_000 ||
+    configuredTimeoutMs > timeoutCapMs
+  ) {
+    runtimeModelConfig.timeout_ms = timeoutCapMs;
   }
 
-  const scopeSpecificRuntimeRules = scope === "chat_ideation"
+  if (!Number.isFinite(Number(runtimeModelConfig.temperature))) {
+    runtimeModelConfig.temperature = chatScope === "chat_ideation" ? 0.3 : 0.35;
+  }
+
+  const scopeSpecificRuntimeRules = chatScope === "chat_ideation"
     ? `Runtime constraints:
 - Keep assistant_reply.text under 22 words.
 - Ask at most one concise question.
-- trigger_recipe=true only when the user explicitly asks to generate now or commits to a concrete dish.`
-    : scope === "chat_generation"
+- trigger_recipe=true only when the user explicitly asks to generate now or commits to a concrete dish.
+- When trigger_recipe=true, prefer returning candidate_recipe_set in the same response to avoid extra roundtrips.`
+    : chatScope === "chat_generation"
     ? `Runtime constraints:
 - Keep assistant_reply.text under 20 words.
 - If user did not explicitly request multiple dishes, return exactly one component with role "main".
 - Add additional components only when explicitly requested.
-- Keep each recipe concise and practical: usually 8-12 ingredients and 4-7 steps.`
-    : scope === "chat_iteration"
+- candidate_recipe_set is required in this response.
+- Keep each recipe concise and practical: usually 5-7 ingredients and 3-4 steps.
+- Omit optional verbose fields unless explicitly requested.`
+    : chatScope === "chat_iteration"
     ? `Runtime constraints:
 - Keep assistant_reply.text under 20 words.
 - Preserve current component count unless user explicitly asks to add or remove components.
-- Keep each recipe concise and practical: usually 8-12 ingredients and 4-7 steps.`
+- candidate_recipe_set is required in this response.
+- Keep each recipe concise and practical: usually 5-7 ingredients and 3-4 steps.
+- Omit optional verbose fields unless explicitly requested.`
     : `Runtime constraints:
 - Keep assistant replies concise and practical.
 - Output strictly valid JSON.`;
 
-  const runtimeSystemPrompt = `${config.promptTemplate}\n\n${scopeSpecificRuntimeRules}`;
+  const runtimePromptTemplate = defaultChatPromptForScope(chatScope);
+  const runtimeRule = defaultChatRuleForScope(chatScope);
+  const runtimeSystemPrompt =
+    `${runtimePromptTemplate}\n\n${scopeSpecificRuntimeRules}`;
+  const contract = chatScope === "chat_ideation"
+    ? {
+      format: "json_object",
+      required_keys: ["assistant_reply", "trigger_recipe"],
+      optional_keys: ["response_context", "candidate_recipe_set", "recipe"],
+    }
+    : {
+      format: "json_object",
+      required_keys: ["assistant_reply", "candidate_recipe_set"],
+      optional_keys: ["response_context", "trigger_recipe"],
+    };
 
-  const { result, inputTokens, outputTokens } = await callProvider<
-    Record<string, JsonValue>
-  >({
-    provider: config.provider,
-    model: config.model,
-    modelConfig: runtimeModelConfig,
-    systemPrompt: runtimeSystemPrompt,
-    userInput: {
-      task: "chat_conversation",
-      rule: config.rule,
-      contract: {
-        format: "json_object",
-        required_keys: ["assistant_reply"],
-        optional_keys: [
-          "recipe",
-          "candidate_recipe_set",
-          "trigger_recipe",
-          "response_context",
-        ],
+  let result: Record<string, JsonValue>;
+  let inputTokens = 0;
+  let outputTokens = 0;
+  try {
+    const response = await callProvider<Record<string, JsonValue>>({
+      provider: runtimeProvider,
+      model: runtimeModel,
+      modelConfig: runtimeModelConfig,
+      systemPrompt: runtimeSystemPrompt,
+      userInput: {
+        task: "chat_conversation",
+        rule: runtimeRule,
+        contract,
+        prompt: input.userPrompt,
+        context: input.context,
       },
-      prompt: input.userPrompt,
-      context: input.context,
-    },
-  });
+    });
+    result = response.result;
+    inputTokens += response.inputTokens;
+    outputTokens += response.outputTokens;
+  } catch (error) {
+    const invalidJsonText = error instanceof ApiError &&
+        error.code === "llm_invalid_json" && typeof error.details === "string"
+      ? error.details
+      : null;
+
+    if (
+      error instanceof ApiError &&
+      error.code === "llm_provider_timeout" &&
+      chatScope !== "chat_ideation"
+    ) {
+      // Fail fast for generation/iteration and use deterministic fallback.
+      result = {};
+    } else if (
+      error instanceof ApiError &&
+      error.code === "llm_invalid_json"
+    ) {
+      if (chatScope === "chat_ideation") {
+        const rescueConfig: Record<string, JsonValue> = {
+          ...runtimeModelConfig,
+          max_tokens: 240,
+          max_output_tokens: 240,
+        };
+        const rescue = await callProvider<Record<string, JsonValue>>({
+          provider: runtimeProvider,
+          model: runtimeModel,
+          modelConfig: rescueConfig,
+          systemPrompt:
+            `${defaultChatPromptForScope("chat_ideation")}\n\nCRITICAL: return only assistant_reply, trigger_recipe, response_context. Do NOT include recipe or candidate_recipe_set.`,
+          userInput: {
+            task: "chat_ideation_rescue",
+            rule: defaultChatRuleForScope("chat_ideation"),
+            prompt: input.userPrompt,
+            context: {
+              loop_state: input.context.loop_state ?? "ideation",
+              latest_user_message: input.userPrompt,
+              thread: input.context.thread ?? null,
+              preferences: input.context.preferences ?? null,
+            },
+          },
+        });
+        result = rescue.result;
+        inputTokens += rescue.inputTokens;
+        outputTokens += rescue.outputTokens;
+      } else {
+        const parsedInvalid = invalidJsonText
+          ? parseJsonFromText(invalidJsonText)
+          : null;
+        if (parsedInvalid) {
+          result = parsedInvalid;
+        } else {
+          const rawMaxTokens = Number(
+            runtimeModelConfig.max_tokens ?? runtimeModelConfig.max_output_tokens,
+          );
+          const rescueTokenCap = Number.isFinite(rawMaxTokens)
+            ? Math.max(900, rawMaxTokens)
+            : 900;
+          const rescueConfig: Record<string, JsonValue> = {
+            ...runtimeModelConfig,
+            max_tokens: rescueTokenCap,
+            max_output_tokens: rescueTokenCap,
+            temperature: 0,
+          };
+          try {
+            const rescue = await callProvider<Record<string, JsonValue>>({
+              provider: runtimeProvider,
+              model: runtimeModel,
+              modelConfig: rescueConfig,
+              systemPrompt:
+                `${runtimeSystemPrompt}\n\nCRITICAL: Your previous output was not valid JSON. Return one valid JSON object only. Do not use markdown fences. Do not include explanatory text.`,
+              userInput: {
+                task: "repair_chat_schema_from_raw_text",
+                rule: runtimeRule,
+                prompt: input.userPrompt,
+                context: input.context,
+                contract,
+                invalid_output_text: invalidJsonText
+                  ? truncateErrorDetailText(invalidJsonText)
+                  : null,
+              },
+            });
+            result = rescue.result;
+            inputTokens += rescue.inputTokens;
+            outputTokens += rescue.outputTokens;
+          } catch {
+            result = invalidJsonText
+              ? { invalid_output_text: truncateErrorDetailText(invalidJsonText) }
+              : {};
+          }
+        }
+      }
+    } else {
+      throw error;
+    }
+  }
   if (accum) addTokens(accum, inputTokens, outputTokens, config);
 
   const directChatEnvelope = normalizeChatEnvelope(result);
   if (directChatEnvelope) {
-    return directChatEnvelope;
+    if (chatScope === "chat_ideation") {
+      return {
+        assistant_reply: directChatEnvelope.assistant_reply,
+        trigger_recipe: directChatEnvelope.trigger_recipe ?? false,
+        candidate_recipe_set: directChatEnvelope.candidate_recipe_set,
+        recipe: directChatEnvelope.recipe,
+        response_context: directChatEnvelope.response_context,
+      };
+    }
+    if (directChatEnvelope.candidate_recipe_set || directChatEnvelope.recipe) {
+      return directChatEnvelope;
+    }
   }
 
   const recipeEnvelope = normalizeRecipeEnvelope(result);
@@ -2077,16 +2591,26 @@ const generateChatConversationPayload = async (
     };
   }
 
+  // Generation/iteration already ran a dedicated invalid-JSON salvage pass.
+  // Avoid extra repair cascades here to keep latency bounded.
+  if (chatScope !== "chat_ideation") {
+    throw new ApiError(
+      422,
+      "chat_schema_invalid",
+      "Chat reply did not match required envelope schema",
+    );
+  }
+
   const { result: repaired, inputTokens: ri, outputTokens: ro } =
     await callProvider<Record<string, JsonValue>>({
-      provider: config.provider,
-      model: config.model,
+      provider: runtimeProvider,
+      model: runtimeModel,
       modelConfig: runtimeModelConfig,
       systemPrompt:
         `${runtimeSystemPrompt}\n\nYou are in strict schema normalization mode for chat. Return one valid JSON object with keys assistant_reply, optional recipe, optional candidate_recipe_set, optional trigger_recipe, and optional response_context. No markdown or prose.`,
       userInput: {
         task: "repair_chat_schema",
-        rule: config.rule,
+        rule: runtimeRule,
         prompt: input.userPrompt,
         context: input.context,
         invalid_payload: result,
@@ -2096,7 +2620,20 @@ const generateChatConversationPayload = async (
 
   const repairedChatEnvelope = normalizeChatEnvelope(repaired);
   if (repairedChatEnvelope) {
-    return repairedChatEnvelope;
+    if (chatScope === "chat_ideation") {
+      return {
+        assistant_reply: repairedChatEnvelope.assistant_reply,
+        trigger_recipe: repairedChatEnvelope.trigger_recipe ?? false,
+        candidate_recipe_set: repairedChatEnvelope.candidate_recipe_set,
+        recipe: repairedChatEnvelope.recipe,
+        response_context: repairedChatEnvelope.response_context,
+      };
+    }
+    if (
+      repairedChatEnvelope.candidate_recipe_set || repairedChatEnvelope.recipe
+    ) {
+      return repairedChatEnvelope;
+    }
   }
 
   const repairedRecipeEnvelope = normalizeRecipeEnvelope(repaired);
@@ -2536,7 +3073,9 @@ export const llmGateway = {
         Date.now() - startedAt,
         "ok",
         {
-          chat_mode: envelope.recipe ? "recipe" : "ideation",
+          chat_mode: envelope.recipe || envelope.candidate_recipe_set
+            ? "recipe"
+            : "ideation",
           classification_skipped: true,
         },
         accum,

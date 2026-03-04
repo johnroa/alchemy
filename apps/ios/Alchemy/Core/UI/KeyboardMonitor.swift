@@ -53,6 +53,9 @@ final class KeyboardMonitor: ObservableObject {
         if duration <= 0.01 {
             height = keyboardHeight
             isVisible = visible
+            #if DEBUG
+            print("[KeyboardMonitor] immediate height=\(keyboardHeight) visible=\(visible) endFrame=\(NSCoder.string(for: endFrame))")
+            #endif
             return
         }
 
@@ -60,6 +63,9 @@ final class KeyboardMonitor: ObservableObject {
             height = keyboardHeight
             isVisible = visible
         }
+        #if DEBUG
+        print("[KeyboardMonitor] animated height=\(keyboardHeight) visible=\(visible) endFrame=\(NSCoder.string(for: endFrame))")
+        #endif
     }
 
     private static func keyboardHeight(from endFrame: CGRect) -> CGFloat {
