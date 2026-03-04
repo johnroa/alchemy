@@ -3220,11 +3220,20 @@ const processMetadataJobs = async (params: {
     claimed += 1;
 
     try {
-      const { data: version, error: versionError } = await params.serviceClient
+      let versionResult = await params.serviceClient
         .from("recipe_versions")
         .select("id,payload,metadata_schema_version")
         .eq("id", job.recipe_version_id)
         .maybeSingle();
+      if (versionResult.error && isSchemaMissingError(versionResult.error)) {
+        versionResult = await params.serviceClient
+          .from("recipe_versions")
+          .select("id,payload")
+          .eq("id", job.recipe_version_id)
+          .maybeSingle();
+      }
+      const version = versionResult.data;
+      const versionError = versionResult.error;
 
       if (versionError || !version?.payload) {
         throw new Error("recipe_version_payload_missing");
@@ -3558,6 +3567,43 @@ const processMetadataJobs = async (params: {
   };
 
   return { reaped, claimed, processed, ready, failed, pending, queue };
+};
+
+const runInBackground = (task: Promise<void>): void => {
+  const runtime = (globalThis as {
+    EdgeRuntime?: { waitUntil?: (promise: Promise<void>) => void };
+  }).EdgeRuntime;
+  if (runtime && typeof runtime.waitUntil === "function") {
+    runtime.waitUntil(task);
+    return;
+  }
+  void task;
+};
+
+const scheduleMetadataQueueDrain = (params: {
+  serviceClient: SupabaseClient;
+  actorUserId: string;
+  requestId: string;
+  limit?: number;
+}): void => {
+  const limit = Number.isFinite(Number(params.limit))
+    ? Math.max(1, Math.min(50, Number(params.limit)))
+    : 2;
+
+  const task = processMetadataJobs({
+    serviceClient: params.serviceClient,
+    actorUserId: params.actorUserId,
+    requestId: params.requestId,
+    limit,
+  }).then(() => undefined).catch((error) => {
+    console.error("metadata_queue_drain_failed", {
+      request_id: params.requestId,
+      actor_user_id: params.actorUserId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
+
+  runInBackground(task);
 };
 
 const fetchGraphNeighborhood = async (params: {
@@ -4100,6 +4146,12 @@ const persistRecipe = async (params: {
     serviceClient: params.serviceClient,
     recipeId,
     recipeVersionId: version.id,
+  });
+  scheduleMetadataQueueDrain({
+    serviceClient: params.serviceClient,
+    actorUserId: params.userId,
+    requestId: params.requestId,
+    limit: 2,
   });
 
   // Image jobs are only enqueued when a recipe is explicitly saved to cookbook.
@@ -6659,6 +6711,12 @@ Deno.serve(async (request) => {
         recipeId: recipeId,
         recipeVersionId: recipeVersionId,
       });
+      scheduleMetadataQueueDrain({
+        serviceClient,
+        actorUserId: auth.userId,
+        requestId,
+        limit: 5,
+      });
 
       await logChangelog({
         serviceClient,
@@ -6749,6 +6807,12 @@ Deno.serve(async (request) => {
         entityId: jobId,
         action: "manual_retry",
         requestId,
+      });
+      scheduleMetadataQueueDrain({
+        serviceClient,
+        actorUserId: auth.userId,
+        requestId,
+        limit: 5,
       });
 
       return respond(200, { ok: true, job: retried });

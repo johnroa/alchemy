@@ -844,6 +844,12 @@ export const getGraphData = async (recipeId?: string): Promise<{
     source: string;
   }>;
   relation_types: string[];
+  metadata_queue: {
+    pending: number;
+    processing: number;
+    ready: number;
+    failed: number;
+  };
 }> => {
   const client = getAdminClient();
 
@@ -905,7 +911,8 @@ export const getGraphData = async (recipeId?: string): Promise<{
   }
 
   if (entityIds.length === 0) {
-    return { context_recipe_id: contextRecipeId, entities: [], edges: [], relation_types: [] };
+    const queue = await getMetadataQueueSnapshot(client);
+    return { context_recipe_id: contextRecipeId, entities: [], edges: [], relation_types: [], metadata_queue: queue };
   }
 
   const [{ data: edgesFrom, error: edgesFromError }, { data: edgesTo, error: edgesToError }] = await Promise.all([
@@ -974,7 +981,35 @@ export const getGraphData = async (recipeId?: string): Promise<{
       confidence: Number(edge.confidence ?? 0),
       source: String(edge.source ?? "unknown")
     })),
-    relation_types: Array.from(new Set(edges.map((edge) => relationNameById.get(edge.relation_type_id) ?? "unknown"))).sort()
+    relation_types: Array.from(new Set(edges.map((edge) => relationNameById.get(edge.relation_type_id) ?? "unknown"))).sort(),
+    metadata_queue: await getMetadataQueueSnapshot(client)
+  };
+};
+
+const getMetadataQueueSnapshot = async (
+  client: ReturnType<typeof getAdminClient>
+): Promise<{ pending: number; processing: number; ready: number; failed: number }> => {
+  const [pending, processing, ready, failed] = await Promise.all([
+    client.from("recipe_metadata_jobs").select("id", { count: "exact", head: true }).eq("status", "pending"),
+    client.from("recipe_metadata_jobs").select("id", { count: "exact", head: true }).eq("status", "processing"),
+    client.from("recipe_metadata_jobs").select("id", { count: "exact", head: true }).eq("status", "ready"),
+    client.from("recipe_metadata_jobs").select("id", { count: "exact", head: true }).eq("status", "failed")
+  ]);
+
+  const errors = [pending.error, processing.error, ready.error, failed.error].filter(
+    (error): error is NonNullable<typeof pending.error> => Boolean(error)
+  );
+
+  const blockingError = errors.find((error) => !isSchemaMissingError(error));
+  if (blockingError) {
+    throw new Error(blockingError.message);
+  }
+
+  return {
+    pending: pending.count ?? 0,
+    processing: processing.count ?? 0,
+    ready: ready.count ?? 0,
+    failed: failed.count ?? 0
   };
 };
 
@@ -1192,6 +1227,11 @@ export const getIngredientsData = async (): Promise<{
     normalized_key: string;
     alias_count: number;
     usage_count: number;
+    metadata: Record<string, unknown>;
+    metadata_key_count: number;
+    enrichment_confidence: number | null;
+    ontology_link_count: number;
+    pair_link_count: number;
     updated_at: string;
   }>;
   aliases: Array<{
@@ -1218,7 +1258,7 @@ export const getIngredientsData = async (): Promise<{
   const [ingredientsResult, aliasesResult, usageResult, unresolvedResult] = await Promise.all([
     client
       .from("ingredients")
-      .select("id,canonical_name,normalized_key,updated_at")
+      .select("id,canonical_name,normalized_key,metadata,updated_at")
       .order("updated_at", { ascending: false })
       .limit(300),
     client
@@ -1256,6 +1296,7 @@ export const getIngredientsData = async (): Promise<{
     id: string;
     canonical_name: string;
     normalized_key: string;
+    metadata: Record<string, unknown> | null;
     updated_at: string;
   }>;
 
@@ -1291,14 +1332,90 @@ export const getIngredientsData = async (): Promise<{
   }
 
   const canonicalNameById = new Map(ingredients.map((ingredient) => [ingredient.id, ingredient.canonical_name]));
+  const ingredientIds = ingredients.map((ingredient) => ingredient.id);
+
+  let ontologyRows: Array<{ ingredient_id: string }> = [];
+  let pairRowsA: Array<{ ingredient_a_id: string; ingredient_b_id: string }> = [];
+  let pairRowsB: Array<{ ingredient_a_id: string; ingredient_b_id: string }> = [];
+
+  if (ingredientIds.length > 0) {
+    const [ontologyResult, pairAResult, pairBResult] = await Promise.all([
+      client
+        .from("ingredient_ontology_links")
+        .select("ingredient_id")
+        .in("ingredient_id", ingredientIds)
+        .limit(5000),
+      client
+        .from("ingredient_pair_stats")
+        .select("ingredient_a_id,ingredient_b_id")
+        .in("ingredient_a_id", ingredientIds)
+        .limit(5000),
+      client
+        .from("ingredient_pair_stats")
+        .select("ingredient_a_id,ingredient_b_id")
+        .in("ingredient_b_id", ingredientIds)
+        .limit(5000)
+    ]);
+
+    if (ontologyResult.error && !isSchemaMissingError(ontologyResult.error)) {
+      throw new Error(ontologyResult.error.message);
+    }
+    if (pairAResult.error && !isSchemaMissingError(pairAResult.error)) {
+      throw new Error(pairAResult.error.message);
+    }
+    if (pairBResult.error && !isSchemaMissingError(pairBResult.error)) {
+      throw new Error(pairBResult.error.message);
+    }
+
+    ontologyRows = (ontologyResult.data ?? []) as Array<{ ingredient_id: string }>;
+    pairRowsA = (pairAResult.data ?? []) as Array<{ ingredient_a_id: string; ingredient_b_id: string }>;
+    pairRowsB = (pairBResult.data ?? []) as Array<{ ingredient_a_id: string; ingredient_b_id: string }>;
+  }
+
+  const ontologyCountByIngredientId = new Map<string, number>();
+  for (const row of ontologyRows) {
+    ontologyCountByIngredientId.set(
+      row.ingredient_id,
+      (ontologyCountByIngredientId.get(row.ingredient_id) ?? 0) + 1
+    );
+  }
+
+  const pairCountByIngredientId = new Map<string, number>();
+  const uniquePairs = new Set<string>();
+  for (const row of [...pairRowsA, ...pairRowsB]) {
+    const a = row.ingredient_a_id;
+    const b = row.ingredient_b_id;
+    if (!a || !b) continue;
+    const key = a < b ? `${a}:${b}` : `${b}:${a}`;
+    if (uniquePairs.has(key)) continue;
+    uniquePairs.add(key);
+
+    pairCountByIngredientId.set(a, (pairCountByIngredientId.get(a) ?? 0) + 1);
+    pairCountByIngredientId.set(b, (pairCountByIngredientId.get(b) ?? 0) + 1);
+  }
 
   return {
     ingredients: ingredients.map((ingredient) => ({
+      ...(() => {
+        const metadata =
+          ingredient.metadata && typeof ingredient.metadata === "object" && !Array.isArray(ingredient.metadata)
+            ? (ingredient.metadata as Record<string, unknown>)
+            : {};
+        const confidenceRaw = metadata["enrichment_confidence"];
+        const confidenceValue = Number(confidenceRaw);
+        return {
+          metadata,
+          metadata_key_count: Object.keys(metadata).length,
+          enrichment_confidence: Number.isFinite(confidenceValue) ? confidenceValue : null
+        };
+      })(),
       id: ingredient.id,
       canonical_name: ingredient.canonical_name,
       normalized_key: ingredient.normalized_key,
       alias_count: aliasCountByIngredientId.get(ingredient.id) ?? 0,
       usage_count: usageCountByIngredientId.get(ingredient.id) ?? 0,
+      ontology_link_count: ontologyCountByIngredientId.get(ingredient.id) ?? 0,
+      pair_link_count: pairCountByIngredientId.get(ingredient.id) ?? 0,
       updated_at: ingredient.updated_at
     })),
     aliases: aliases.map((alias) => ({

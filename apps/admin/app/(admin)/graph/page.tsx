@@ -30,6 +30,7 @@ export default async function GraphPage({
     graph.edges.length > 0
       ? graph.edges.reduce((sum, edge) => sum + edge.confidence, 0) / graph.edges.length
       : 0;
+  const activeQueueJobs = graph.metadata_queue.pending + graph.metadata_queue.processing;
 
   return (
     <div className="space-y-6">
@@ -69,6 +70,18 @@ export default async function GraphPage({
           </CardContent>
         </Card>
       </div>
+
+      {graph.entities.length === 0 && activeQueueJobs > 0 ? (
+        <Card>
+          <CardContent className="py-4">
+            <p className="text-sm">
+              Graph is empty because metadata enrichment is still queued:{" "}
+              <span className="font-mono">{graph.metadata_queue.pending}</span> pending,{" "}
+              <span className="font-mono">{graph.metadata_queue.processing}</span> processing.
+            </p>
+          </CardContent>
+        </Card>
+      ) : null}
 
       {graph.context_recipe_id ? (
         <Card>
