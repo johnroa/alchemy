@@ -1,38 +1,236 @@
-import { AlertTriangle, Link2, Scale, SearchCheck } from "lucide-react";
+import { ArrowDownRight, ArrowUpRight } from "lucide-react";
 import { PageHeader } from "@/components/admin/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { KpiCard } from "@/components/admin/kpi-card";
+import { cn } from "@/lib/utils";
 import { getIngredientsData } from "@/lib/admin-data";
+
+const toPercent = (value: number): string => `${(value * 100).toFixed(1)}%`;
+
+const toDecimal = (value: number | null, digits = 2): string => {
+  if (value == null) return "—";
+  return value.toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits });
+};
+
+const toShortInteger = (value: number): string => value.toLocaleString();
+
+type Delta = {
+  absolute: number;
+  percent: number | null;
+};
+
+const deltaFromWindow = (current: number, previous: number): Delta => {
+  const absolute = current - previous;
+  if (previous === 0) {
+    return { absolute, percent: null };
+  }
+  return { absolute, percent: (absolute / previous) * 100 };
+};
+
+const deltaTone = (delta: Delta): "up" | "down" | "flat" => {
+  if (delta.absolute > 0) return "up";
+  if (delta.absolute < 0) return "down";
+  return "flat";
+};
+
+function DeltaBadge({
+  delta,
+  positiveIsGood = true
+}: {
+  delta: Delta;
+  positiveIsGood?: boolean;
+}): React.JSX.Element {
+  const tone = deltaTone(delta);
+  const effectiveTone =
+    tone === "flat"
+      ? "flat"
+      : positiveIsGood
+        ? tone
+        : tone === "up"
+          ? "down"
+          : "up";
+
+  const Icon = effectiveTone === "up" ? ArrowUpRight : effectiveTone === "down" ? ArrowDownRight : null;
+  const deltaAbsoluteLabel = `${delta.absolute >= 0 ? "+" : ""}${delta.absolute.toLocaleString()}`;
+  const deltaPercentLabel =
+    delta.percent == null ? (delta.absolute === 0 ? "0%" : "new") : `${delta.percent >= 0 ? "+" : ""}${delta.percent.toFixed(1)}%`;
+
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-medium",
+        effectiveTone === "up" && "border-emerald-300/60 bg-emerald-50 text-emerald-700",
+        effectiveTone === "down" && "border-red-300/60 bg-red-50 text-red-700",
+        effectiveTone === "flat" && "border-zinc-300/60 bg-zinc-50 text-zinc-600"
+      )}
+    >
+      {Icon ? <Icon className="h-3 w-3" /> : null}
+      <span>{deltaAbsoluteLabel}</span>
+      <span className="text-[10px] opacity-80">({deltaPercentLabel})</span>
+    </span>
+  );
+}
 
 export default async function IngredientsPage(): Promise<React.JSX.Element> {
   const data = await getIngredientsData();
+  const { totals, rates, averages, windows } = data.summary;
 
-  const totalIngredients = data.ingredients.length;
-  const totalAliases = data.aliases.length;
-  const unresolvedCount = data.unresolved_rows.length;
-  const mappedIngredients = data.ingredients.filter((ingredient) => ingredient.usage_count > 0).length;
-  const enrichedIngredients = data.ingredients.filter((ingredient) => ingredient.enrichment_confidence != null).length;
-  const ontologyLinkTotal = data.ingredients.reduce((sum, ingredient) => sum + ingredient.ontology_link_count, 0);
-  const pairLinkTotal = data.ingredients.reduce((sum, ingredient) => sum + ingredient.pair_link_count, 0);
+  const ingredientsAddedDelta = deltaFromWindow(windows.ingredients_added.current, windows.ingredients_added.previous);
+  const aliasesAddedDelta = deltaFromWindow(windows.aliases_added.current, windows.aliases_added.previous);
+  const enrichmentsCompletedDelta = deltaFromWindow(windows.enrichments_completed.current, windows.enrichments_completed.previous);
+  const ontologyLinksAddedDelta = deltaFromWindow(windows.ontology_links_added.current, windows.ontology_links_added.previous);
+  const pairLinksUpdatedDelta = deltaFromWindow(windows.pair_links_updated.current, windows.pair_links_updated.previous);
+  const unresolvedTouchedDelta = deltaFromWindow(windows.unresolved_touched.current, windows.unresolved_touched.previous);
+
+  const metricCards = [
+    {
+      label: "Canonical Ingredients",
+      value: toShortInteger(totals.ingredients),
+      hint: `${toShortInteger(totals.mapped_ingredients)} mapped (${toPercent(rates.mapped_coverage)})`,
+      progress: rates.mapped_coverage
+    },
+    {
+      label: "Enrichment Coverage",
+      value: toPercent(rates.enriched_coverage),
+      hint: `${toShortInteger(totals.enriched_ingredients)} enriched ingredients`,
+      progress: rates.enriched_coverage
+    },
+    {
+      label: "Avg Confidence",
+      value: toDecimal(averages.enrichment_confidence),
+      hint: averages.enrichment_confidence == null ? "No confidence scores yet" : `${toPercent(averages.enrichment_confidence)} mean score`,
+      progress: averages.enrichment_confidence ?? 0
+    },
+    {
+      label: "Avg Ingredients / Recipe",
+      value: toDecimal(averages.ingredients_per_recipe),
+      hint: `${toShortInteger(totals.recipes_with_current_version)} recipes with current versions`,
+      progress: totals.recipe_ingredient_rows > 0 ? Math.min(1, (averages.ingredients_per_recipe ?? 0) / 20) : 0
+    },
+    {
+      label: "Ontology Coverage",
+      value: toPercent(rates.ontology_coverage),
+      hint: `${toShortInteger(totals.ontology_links)} ontology links`,
+      progress: rates.ontology_coverage
+    },
+    {
+      label: "Needs Retry Rate",
+      value: toPercent(rates.unresolved_rate),
+      hint: `${toShortInteger(totals.unresolved_rows)} unresolved of ${toShortInteger(totals.recipe_ingredient_rows)} rows`,
+      progress: rates.unresolved_rate,
+      warning: rates.unresolved_rate > 0.1
+    }
+  ];
+
+  const totalIngredients = totals.ingredients;
+  const totalAliases = totals.aliases;
+  const unresolvedCount = totals.unresolved_rows;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <PageHeader
         title="Ingredients"
         description="Canonical ingredient registry, enrichment metadata, ontology links, and unresolved normalization rows."
       />
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-6">
-        <KpiCard label="Ingredients" value={String(totalIngredients)} hint="Canonical rows" icon={Scale} variant={totalIngredients > 0 ? "success" : "muted"} />
-        <KpiCard label="Aliases" value={String(totalAliases)} hint="Alias keys mapped" icon={Link2} variant={totalAliases > 0 ? "default" : "muted"} />
-        <KpiCard label="Enriched" value={String(enrichedIngredients)} hint="Confidence-scored metadata" icon={SearchCheck} variant={enrichedIngredients > 0 ? "success" : "muted"} />
-        <KpiCard label="Ontology Links" value={String(ontologyLinkTotal)} hint="Ingredient taxonomy links" icon={SearchCheck} variant={ontologyLinkTotal > 0 ? "success" : "muted"} />
-        <KpiCard label="Pair Links" value={String(pairLinkTotal)} hint="Ingredient pair graph degree sum" icon={SearchCheck} variant={pairLinkTotal > 0 ? "default" : "muted"} />
-        <KpiCard label="Mapped" value={String(mappedIngredients)} hint="Used in recipe ingredients" icon={SearchCheck} variant={mappedIngredients > 0 ? "success" : "muted"} />
-        <KpiCard label="Needs Retry" value={String(unresolvedCount)} hint="Unresolved normalization" icon={AlertTriangle} variant={unresolvedCount > 0 ? "warning" : "success"} />
-      </div>
+      <section className="space-y-3">
+        <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground/70">Coverage Snapshot</p>
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          {metricCards.map((metric) => (
+            <Card
+              key={metric.label}
+              className={cn(
+                "transition-colors",
+                metric.warning
+                  ? "border-amber-200/80 bg-amber-50/30"
+                  : metric.progress >= 0.7
+                    ? "border-emerald-200/80 bg-emerald-50/25"
+                    : "border-zinc-200"
+              )}
+            >
+              <CardHeader className="pb-2">
+                <CardDescription className="text-[11px] uppercase tracking-wider text-muted-foreground/80">{metric.label}</CardDescription>
+                <CardTitle className="text-3xl tabular-nums">{metric.value}</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2 pt-0">
+                <p className="text-xs text-muted-foreground">{metric.hint}</p>
+                <div className="h-1.5 w-full overflow-hidden rounded-full bg-zinc-200/80">
+                  <div
+                    className={cn(
+                      "h-full rounded-full transition-all",
+                      metric.warning ? "bg-amber-500" : metric.progress >= 0.7 ? "bg-emerald-500" : "bg-zinc-500"
+                    )}
+                    style={{ width: `${Math.max(0, Math.min(100, metric.progress * 100))}%` }}
+                  />
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      </section>
+
+      <section className="space-y-3">
+        <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground/70">
+          Velocity (Last 24h vs Prior 24h)
+        </p>
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Ingredients Added</CardDescription>
+              <CardTitle className="text-2xl tabular-nums">{windows.ingredients_added.current}</CardTitle>
+            </CardHeader>
+            <CardContent className="pt-0">
+              <DeltaBadge delta={ingredientsAddedDelta} />
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Aliases Added</CardDescription>
+              <CardTitle className="text-2xl tabular-nums">{windows.aliases_added.current}</CardTitle>
+            </CardHeader>
+            <CardContent className="pt-0">
+              <DeltaBadge delta={aliasesAddedDelta} />
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Enrichments Completed</CardDescription>
+              <CardTitle className="text-2xl tabular-nums">{windows.enrichments_completed.current}</CardTitle>
+            </CardHeader>
+            <CardContent className="pt-0">
+              <DeltaBadge delta={enrichmentsCompletedDelta} />
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Ontology Links Added</CardDescription>
+              <CardTitle className="text-2xl tabular-nums">{windows.ontology_links_added.current}</CardTitle>
+            </CardHeader>
+            <CardContent className="pt-0">
+              <DeltaBadge delta={ontologyLinksAddedDelta} />
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Pair Links Updated</CardDescription>
+              <CardTitle className="text-2xl tabular-nums">{windows.pair_links_updated.current}</CardTitle>
+            </CardHeader>
+            <CardContent className="pt-0">
+              <DeltaBadge delta={pairLinksUpdatedDelta} />
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Unresolved Rows Touched</CardDescription>
+              <CardTitle className="text-2xl tabular-nums">{windows.unresolved_touched.current}</CardTitle>
+            </CardHeader>
+            <CardContent className="pt-0">
+              <DeltaBadge delta={unresolvedTouchedDelta} positiveIsGood={false} />
+            </CardContent>
+          </Card>
+        </div>
+      </section>
 
       <Card>
         <CardHeader className="flex flex-row items-center justify-between pb-3">
@@ -102,9 +300,12 @@ export default async function IngredientsPage(): Promise<React.JSX.Element> {
 
       <div className="grid gap-4 xl:grid-cols-2">
         <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base">Aliases</CardTitle>
-            <CardDescription>Alias keys linked to canonical ingredient IDs.</CardDescription>
+          <CardHeader className="flex flex-row items-center justify-between pb-3">
+            <div>
+              <CardTitle className="text-base">Aliases</CardTitle>
+              <CardDescription>Alias keys linked to canonical ingredient IDs.</CardDescription>
+            </div>
+            <Badge variant="outline" className="font-mono text-xs">{totalAliases} rows</Badge>
           </CardHeader>
           <CardContent className="pt-0">
             <Table>
@@ -135,9 +336,20 @@ export default async function IngredientsPage(): Promise<React.JSX.Element> {
         </Card>
 
         <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base">Unresolved Rows</CardTitle>
-            <CardDescription>Recipe ingredient rows that still need normalization retries.</CardDescription>
+          <CardHeader className="flex flex-row items-center justify-between pb-3">
+            <div>
+              <CardTitle className="text-base">Unresolved Rows</CardTitle>
+              <CardDescription>Recipe ingredient rows that still need normalization retries.</CardDescription>
+            </div>
+            <Badge
+              variant="outline"
+              className={cn(
+                "font-mono text-xs",
+                unresolvedCount > 0 && "border-amber-300/60 bg-amber-50 text-amber-700"
+              )}
+            >
+              {unresolvedCount} rows
+            </Badge>
           </CardHeader>
           <CardContent className="pt-0">
             <Table>
