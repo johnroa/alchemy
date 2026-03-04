@@ -20,7 +20,7 @@ export default async function SimulationsPage(): Promise<React.JSX.Element> {
     <div className="space-y-6">
       <PageHeader
         title="Simulation Runner"
-        description="Live end-to-end simulation runs with real-time trace streaming, full chat/candidate/commit visibility, and latency timing per step."
+        description="Live end-to-end simulation runs with seeded natural prompts, real-time trace streaming, and per-step latency breakdowns."
       />
 
       <div className="grid gap-4 sm:grid-cols-3">

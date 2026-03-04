@@ -41,7 +41,7 @@ struct TabShell: View {
                             withAnimation(.easeInOut(duration: 0.2)) {
                                 selectedTab = .cookbook
                             }
-                            Task {
+                            Task { @MainActor in
                                 await cookbookViewModel.refreshAfterCommit(
                                     api: api,
                                     committedRecipeIds: committedIds
@@ -61,7 +61,7 @@ struct TabShell: View {
                 .scaleEffect(tabBarVisible ? 1 : 0.97, anchor: .bottom)
                 .allowsHitTesting(tabBarVisible)
                 .zIndex(10)
-                .animation(tabBarVisible ? .spring(response: 0.4, dampingFraction: 0.84) : .easeOut(duration: 0.12), value: tabBarVisible)
+                .ignoresSafeArea(.keyboard, edges: .bottom)
 
             if showProfileMenu {
                 Color.black.opacity(0.001)
@@ -110,7 +110,6 @@ struct TabShell: View {
                 .zIndex(41)
             }
         }
-        .ignoresSafeArea(.keyboard, edges: .bottom)
         .ignoresSafeArea(.container, edges: .bottom)
         .background(AlchemyColors.deepDark)
         .sheet(isPresented: $showPreferences) {
@@ -124,8 +123,10 @@ struct TabShell: View {
             if newHeight > 4 {
                 tabRevealTask?.cancel()
                 tabRevealTask = nil
-                withAnimation(.easeOut(duration: 0.12)) {
-                    tabBarVisible = false
+                if tabBarVisible {
+                    withAnimation(.easeOut(duration: 0.12)) {
+                        tabBarVisible = false
+                    }
                 }
                 return
             }
@@ -140,6 +141,9 @@ struct TabShell: View {
                     }
                 }
             }
+        }
+        .onAppear {
+            tabBarVisible = !keyboard.isVisible
         }
         .onDisappear {
             tabRevealTask?.cancel()

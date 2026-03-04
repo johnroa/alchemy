@@ -1,6 +1,7 @@
 import {
   buildIngredientGroups,
   canonicalizeIngredients,
+  deriveCanonicalIngredientIdentity,
   parseAmountValue,
   projectIngredientsForOutput,
   projectInlineMeasurements,
@@ -41,6 +42,18 @@ Deno.test("canonicalizeIngredients marks unknown units as needs_retry", () => {
   }
 });
 
+Deno.test("deriveCanonicalIngredientIdentity title-cases canonical keys", () => {
+  const identity = deriveCanonicalIngredientIdentity("  black-pepper  ");
+
+  if (identity.canonicalKey !== "black pepper") {
+    throw new Error(`expected canonical key black pepper, received ${identity.canonicalKey}`);
+  }
+
+  if (identity.canonicalName !== "Black Pepper") {
+    throw new Error(`expected canonical name Black Pepper, received ${identity.canonicalName}`);
+  }
+});
+
 Deno.test("projectIngredientsForOutput converts SI to imperial", () => {
   const ingredients: RecipePayload["ingredients"] = [
     { name: "Flour", amount: 500, unit: "g" }
@@ -71,11 +84,11 @@ Deno.test("projectIngredientsForOutput converts SI to imperial", () => {
     throw new Error("expected projected ingredient");
   }
 
-  if (first.unit !== "oz") {
-    throw new Error(`expected oz, received ${String(first.unit)}`);
+  if (first.unit !== "lb") {
+    throw new Error(`expected lb, received ${String(first.unit)}`);
   }
 
-  if (Math.abs(first.amount - 17.64) > 0.01) {
+  if (Math.abs(first.amount - 1.1) > 0.01) {
     throw new Error(`unexpected converted amount: ${String(first.amount)}`);
   }
 });

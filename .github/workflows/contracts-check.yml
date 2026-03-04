@@ -1,0 +1,45 @@
+name: Contracts Check
+
+on:
+  pull_request:
+    paths:
+      - "packages/contracts/openapi.yaml"
+      - "packages/contracts/src/generated.ts"
+      - ".github/workflows/contracts-check.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "packages/contracts/openapi.yaml"
+      - "packages/contracts/src/generated.ts"
+      - ".github/workflows/contracts-check.yml"
+
+jobs:
+  generated-types:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Regenerate contracts
+        run: pnpm --filter @alchemy/contracts generate
+
+      - name: Ensure generated contracts are up to date
+        run: |
+          git diff -- packages/contracts/src/generated.ts
+          git diff --exit-code -- packages/contracts/src/generated.ts

@@ -152,6 +152,45 @@ struct PreferencesView: View {
                     }
 
                     sectionCard(.style) {
+                        VStack(alignment: .leading, spacing: Spacing.sm2) {
+                            Text("Recipe Rendering")
+                                .font(AlchemyFont.caption)
+                                .foregroundStyle(AlchemyColors.textSecondary)
+
+                            VStack(alignment: .leading, spacing: Spacing.sm2) {
+                                Text("Units")
+                                    .font(AlchemyFont.captionLight)
+                                    .foregroundStyle(AlchemyColors.textTertiary)
+                                Picker("Units", selection: $vm.recipeUnits) {
+                                    Text("Source").tag(RecipeUnits.source)
+                                    Text("Metric").tag(RecipeUnits.metric)
+                                    Text("Imperial").tag(RecipeUnits.imperial)
+                                }
+                                .pickerStyle(.segmented)
+                            }
+
+                            VStack(alignment: .leading, spacing: Spacing.sm2) {
+                                Text("Ingredient Grouping")
+                                    .font(AlchemyFont.captionLight)
+                                    .foregroundStyle(AlchemyColors.textTertiary)
+                                Picker("Ingredient Grouping", selection: $vm.recipeGroupBy) {
+                                    Text("Flat").tag(RecipeGroupBy.flat)
+                                    Text("Category").tag(RecipeGroupBy.category)
+                                    Text("Component").tag(RecipeGroupBy.component)
+                                }
+                                .pickerStyle(.segmented)
+                            }
+
+                            Toggle(isOn: $vm.inlineMeasurements) {
+                                Text("Inline measurements in instructions")
+                                    .font(AlchemyFont.captionLight)
+                                    .foregroundStyle(AlchemyColors.textSecondary)
+                            }
+                            .tint(AlchemyColors.gold)
+                        }
+                        .padding(Spacing.md)
+                        .background(inputBackground)
+
                         prefField(
                             "Skill Level",
                             text: $vm.skillLevel,

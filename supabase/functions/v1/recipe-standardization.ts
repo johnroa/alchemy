@@ -196,7 +196,10 @@ export const normalizeIngredientKey = (input: string): string => {
     .trim();
 };
 
-const toCanonicalName = (normalizedKey: string, fallback: string): string => {
+export const toCanonicalIngredientName = (
+  normalizedKey: string,
+  fallback: string,
+): string => {
   if (normalizedKey.length === 0) {
     return fallback.trim();
   }
@@ -205,6 +208,28 @@ const toCanonicalName = (normalizedKey: string, fallback: string): string => {
     .split(" ")
     .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
     .join(" ");
+};
+
+export const deriveCanonicalIngredientIdentity = (
+  input: string,
+  fallback?: string,
+): { canonicalName: string; canonicalKey: string } => {
+  const canonicalKey = normalizeIngredientKey(input);
+  if (canonicalKey.length > 0) {
+    return {
+      canonicalKey,
+      canonicalName: toCanonicalIngredientName(canonicalKey, input),
+    };
+  }
+
+  const fallbackValue = typeof fallback === "string" && fallback.trim().length > 0
+    ? fallback
+    : input;
+  const fallbackKey = normalizeIngredientKey(fallbackValue);
+  return {
+    canonicalKey: fallbackKey,
+    canonicalName: toCanonicalIngredientName(fallbackKey, fallbackValue),
+  };
 };
 
 export const parseAmountValue = (value: unknown): number | null => {
@@ -325,8 +350,7 @@ const toSi = (amount: number | null, unitToken: string | null): {
 export const canonicalizeIngredients = (ingredients: RecipePayload["ingredients"]): CanonicalIngredientRecord[] => {
   return ingredients.map((ingredient, position) => {
     const sourceName = ingredient.name.trim();
-    const normalizedKey = normalizeIngredientKey(sourceName);
-    const canonicalName = toCanonicalName(normalizedKey, sourceName);
+    const identity = deriveCanonicalIngredientIdentity(sourceName);
 
     const parsedAmount = parseAmountValue(
       ingredient.amount ?? ingredient.display_amount ?? null
@@ -348,8 +372,8 @@ export const canonicalizeIngredients = (ingredients: RecipePayload["ingredients"
       category: toStringOrNull(ingredient.category),
       component: toStringOrNull(dynamicIngredient["component"]),
       preparation: toStringOrNull(ingredient.preparation),
-      normalized_key: normalizedKey,
-      canonical_name: canonicalName
+      normalized_key: identity.canonicalKey,
+      canonical_name: identity.canonicalName
     };
   });
 };

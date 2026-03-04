@@ -6,6 +6,13 @@ enum GenerateLoopUIState: Equatable {
     case iterating
 }
 
+enum GeneratePresentationMode: Equatable {
+    case ideationExpanded
+    case generationMinimized
+    case candidatePresented
+    case iterating
+}
+
 struct GenerateMessage: Identifiable {
     let id: String
     let role: String
@@ -14,15 +21,14 @@ struct GenerateMessage: Identifiable {
 }
 
 @Observable
+@MainActor
 final class GenerateViewModel {
     private static let welcomeMessageId = "assistant-welcome"
     private static let genericWelcomeVariants = [
         "Hi Chef! What are we cooking today?",
-        "Welcome back, Chef. What are we cooking today?",
-        "Hey Chef! What sounds good to cook right now?",
-        "Hi Chef! What are you in the mood to make?",
-        "Chef, what should we cook up today?",
-        "Hi Chef! What kind of recipe should I build for you?"
+        "Hi Chef! What should we cook today?",
+        "Hey Chef! What are you in the mood for?",
+        "Welcome back, Chef. What are we making today?"
     ]
     private static let typingDescriptors = [
         "Baking...",
@@ -82,6 +88,9 @@ final class GenerateViewModel {
     private var optimisticActiveComponentId: String?
     private var typingDescriptorIndex = 0
     private var lastWelcomeMessageText: String?
+    private var shownGenerationAnimationKeys = Set<String>()
+    private var generationAnimationTask: Task<Void, Never>?
+    private var isGenerationAnimationActive = false
 
     init() {
         seedWelcomeMessageIfNeeded()
@@ -92,17 +101,30 @@ final class GenerateViewModel {
     }
 
     var uiState: GenerateLoopUIState {
-        if isSendingMessage && hasCandidate {
-            return .iterating
-        }
-        switch loopState {
-        case .ideation:
+        switch presentationMode {
+        case .ideationExpanded, .generationMinimized:
             return .ideation
         case .candidatePresented:
             return .candidatePresented
         case .iterating:
             return .iterating
         }
+    }
+
+    var presentationMode: GeneratePresentationMode {
+        if isGenerationAnimationActive {
+            return .generationMinimized
+        }
+
+        guard hasCandidate else {
+            return .ideationExpanded
+        }
+
+        if isSendingMessage || loopState == .iterating {
+            return .iterating
+        }
+
+        return .candidatePresented
     }
 
     var candidateRecipeSet: CandidateRecipeSet? {
@@ -300,6 +322,8 @@ final class GenerateViewModel {
     }
 
     func resetAll() {
+        generationAnimationTask?.cancel()
+        generationAnimationTask = nil
         chatId = nil
         chatSession = nil
         messages = []
@@ -311,11 +335,14 @@ final class GenerateViewModel {
         commitResult = nil
         showCommitOptionsSheet = false
         optimisticActiveComponentId = nil
+        shownGenerationAnimationKeys.removeAll()
+        isGenerationAnimationActive = false
         seedWelcomeMessageIfNeeded()
         typingDescriptorIndex = 0
     }
 
     private func applySession(_ session: ChatSession) {
+        updateGenerationAnimationState(from: session)
         chatId = session.id
         chatSession = session
         optimisticActiveComponentId = nil
@@ -364,6 +391,7 @@ final class GenerateViewModel {
         session.loopState = .ideation
         session.uiHints = nil
         chatSession = session
+        isGenerationAnimationActive = false
     }
 
     private func handleServerError(_ error: Error, resetCandidateOnMissing: Bool = false) -> Bool {
@@ -374,6 +402,17 @@ final class GenerateViewModel {
                 resetCandidateToIdeationInPlace()
             }
             self.error = "That draft recipe is no longer available. Send a new message to generate again."
+            return true
+        }
+
+        if apiError.serverStatusCode == 409 && apiError.serverCode == "candidate_last_component" {
+            self.error = "At least one recipe tab must remain."
+            return true
+        }
+
+        if apiError.serverStatusCode == 404 && apiError.serverCode == "chat_not_found" {
+            resetAll()
+            self.error = "This chat session expired. Start a new chat to continue."
             return true
         }
 
@@ -409,6 +448,37 @@ final class GenerateViewModel {
         await reconcileSession(api: api)
         if self.error == nil {
             self.error = "Couldn’t update recipe tabs. Please try again."
+        }
+    }
+
+    private func updateGenerationAnimationState(from session: ChatSession) {
+        guard
+            session.loopState == .candidatePresented,
+            let candidateSet = session.candidateRecipeSet
+        else {
+            isGenerationAnimationActive = false
+            generationAnimationTask?.cancel()
+            generationAnimationTask = nil
+            return
+        }
+
+        let shouldShowAnimation = session.uiHints?.showGenerationAnimation == true
+        guard shouldShowAnimation else {
+            return
+        }
+
+        let key = "\(candidateSet.candidateId):\(candidateSet.revision)"
+        guard !shownGenerationAnimationKeys.contains(key) else {
+            return
+        }
+
+        shownGenerationAnimationKeys.insert(key)
+        isGenerationAnimationActive = true
+        generationAnimationTask?.cancel()
+        generationAnimationTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(1200))
+            guard let self else { return }
+            self.isGenerationAnimationActive = false
         }
     }
 
@@ -449,19 +519,20 @@ final class GenerateViewModel {
 
     private func mergeServerMessages(_ serverMessages: [ChatMessageItem]) {
         guard !serverMessages.isEmpty else { return }
-        let mapped = serverMessages.map { mapMessage($0) }
-        var existingIds = Set(messages.map(\.id))
-
-        for message in mapped where !existingIds.contains(message.id) {
-            let hasEquivalentLocal = messages.contains(where: {
-                $0.role == message.role &&
-                $0.content.trimmingCharacters(in: .whitespacesAndNewlines) == message.content.trimmingCharacters(in: .whitespacesAndNewlines)
-            })
-            if !hasEquivalentLocal {
-                messages.append(message)
-                existingIds.insert(message.id)
-            }
+        let mapped = serverMessages.map(mapMessage)
+        let welcome = messages.first(where: { $0.id == Self.welcomeMessageId })
+        let serverHasEquivalentWelcome = mapped.contains {
+            $0.role == "assistant"
+                && $0.content.trimmingCharacters(in: .whitespacesAndNewlines)
+                    == welcome?.content.trimmingCharacters(in: .whitespacesAndNewlines)
         }
+
+        var merged: [GenerateMessage] = []
+        if let welcome, !serverHasEquivalentWelcome {
+            merged.append(welcome)
+        }
+        merged.append(contentsOf: mapped)
+        messages = merged
     }
 
     private func advanceTypingDescriptor() {

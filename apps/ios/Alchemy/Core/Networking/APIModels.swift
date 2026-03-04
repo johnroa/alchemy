@@ -43,6 +43,18 @@ enum JSONValue: Codable, Equatable {
     }
 }
 
+extension JSONValue {
+    var stringValue: String? {
+        guard case .string(let value) = self else { return nil }
+        return value
+    }
+
+    var boolValue: Bool? {
+        guard case .bool(let value) = self else { return nil }
+        return value
+    }
+}
+
 // MARK: - Recipe Models
 
 struct RecipeIngredient: Codable, Identifiable {
@@ -479,6 +491,40 @@ struct CommitChatRecipesResponse: Codable {
     }
 }
 
+enum RecipeUnits: String, Codable, CaseIterable, Identifiable {
+    case source
+    case metric
+    case imperial
+
+    var id: String { rawValue }
+}
+
+enum RecipeGroupBy: String, Codable, CaseIterable, Identifiable {
+    case flat
+    case category
+    case component
+
+    var id: String { rawValue }
+}
+
+struct RecipeProjection: Equatable, Codable {
+    var units: RecipeUnits
+    var groupBy: RecipeGroupBy
+    var inlineMeasurements: Bool
+
+    static let fallback = RecipeProjection(
+        units: .source,
+        groupBy: .flat,
+        inlineMeasurements: true
+    )
+}
+
+enum PresentationPreferenceKey {
+    static let recipeUnits = "recipe_units"
+    static let recipeGroupBy = "recipe_group_by"
+    static let recipeInlineMeasurements = "recipe_inline_measurements"
+}
+
 // MARK: - Preference Models
 
 struct PreferenceProfile: Codable {
@@ -502,6 +548,31 @@ struct PreferenceProfile: Codable {
         case cookingFor = "cooking_for"
         case maxDifficulty = "max_difficulty"
         case presentationPreferences = "presentation_preferences"
+    }
+}
+
+extension PreferenceProfile {
+    var recipeProjection: RecipeProjection {
+        guard let presentationPreferences else {
+            return .fallback
+        }
+
+        let units = presentationPreferences[PresentationPreferenceKey.recipeUnits]
+            .flatMap(\.stringValue)
+            .flatMap(RecipeUnits.init(rawValue:)) ?? RecipeProjection.fallback.units
+
+        let groupBy = presentationPreferences[PresentationPreferenceKey.recipeGroupBy]
+            .flatMap(\.stringValue)
+            .flatMap(RecipeGroupBy.init(rawValue:)) ?? RecipeProjection.fallback.groupBy
+
+        let inlineMeasurements = presentationPreferences[PresentationPreferenceKey.recipeInlineMeasurements]
+            .flatMap(\.boolValue) ?? RecipeProjection.fallback.inlineMeasurements
+
+        return RecipeProjection(
+            units: units,
+            groupBy: groupBy,
+            inlineMeasurements: inlineMeasurements
+        )
     }
 }
 

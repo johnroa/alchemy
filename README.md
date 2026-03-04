@@ -128,6 +128,13 @@ UI state mapping from `ChatSession.loop_state`:
 - `candidate_presented`: collapse chat panel, show generation animation once, render tabs from `candidate_recipe_set.components`.
 - `iterating`: show tweak chat overlay while waiting, then return to candidate presentation on response.
 
+Out-of-scope behavior:
+
+- Non-cooking asks (for example directions/travel/history) stay in `ideation`.
+- API returns `candidate_recipe_set=null` and `response_context.intent=out_of_scope`.
+- Assistant replies with a concise refusal + redirect back to cooking support.
+- Generation is never triggered from out-of-scope turns.
+
 Core response fields to wire:
 
 - `assistant_reply.text`
@@ -141,6 +148,15 @@ Commit UX contract (`POST /chat/{id}/commit`):
 - `commit.recipes[]`: committed recipe ids per tab/component
 - `commit.links[]`: parent/child links across committed components
 - `commit.post_save_options`: `continue_chat | restart_chat | go_to_cookbook`
+
+Mobile UI handoff checklist:
+
+1. Send first turn to `POST /chat`; all later turns to `POST /chat/{id}/messages`.
+2. Never call removed endpoints (`/recipes/generate`, `/recipes/{id}/tweak`, `/chat/{id}/generate`).
+3. Use `PATCH /chat/{id}/candidate` for `set_active_component`, `delete_component`, `clear_candidate`.
+4. Keep `Add All to Cookbook` wired only to `POST /chat/{id}/commit`.
+5. Interpret `response_context.intent=out_of_scope` as ideation-only (no generation animation, no candidate tabs).
+6. Keep three post-save actions only: continue chat, restart chat, go to cookbook.
 
 ### Running the app
 
@@ -173,7 +189,7 @@ Next.js 15 App Router. All pages under `app/(admin)/`:
 | `/rules` | Policy rules per scope — active/inactive versions, inline editing |
 | `/memory` | User memory snapshots + confidence/salience quality signals |
 | `/image-pipeline` | Image job queue with retry controls |
-| `/simulations` | A/B simulation runner — compare step latency across two model configs |
+| `/simulations` | Seeded simulation runner — single or concurrent A/B with full trace, latency segments, and token deltas |
 | `/request-trace` | Gateway event log — clickable rows, payload details, error highlighting |
 | `/changelog` | Changelog event audit with action/scope distribution charts |
 | `/graph` | Entity relationship graph with confidence-ranked edges |
@@ -192,7 +208,7 @@ All LLM configuration is **runtime DB-driven** — no redeployment required for 
 | `chat_ideation` | `POST /chat`, `POST /chat/{id}/messages` while no candidate is active | Conversational. Learns preferences and decides whether to trigger generation. |
 | `chat_generation` | `POST /chat/{id}/messages` when generation is triggered | Returns full `candidate_recipe_set` (max 3 components). |
 | `chat_iteration` | `POST /chat/{id}/messages` when candidate exists | Returns revised `candidate_recipe_set`. |
-| `classify` | Safety gate for chat scopes | Returns allow/deny + reason before assistant output. |
+| `classify` | Async audit + normalization utilities | Used for non-blocking telemetry/helpers; not a blocking gate in the core chat loop. |
 | `onboarding` | First-run preference interview | Conversational. Collects dietary, skill, equipment context. |
 | `image` | Recipe image generation | Text-to-image prompt construction |
 | `memory_extract` | Post-conversation memory extraction | Extracts preference signals |
@@ -267,7 +283,11 @@ set name = excluded.name,
 ### Pushing migrations
 
 ```bash
-supabase db push --project-ref dwptbjcxrsmmgjmnumpg
+# link once per machine/workspace
+supabase link --project-ref dwptbjcxrsmmgjmnumpg
+
+# then push migrations (DB password required)
+supabase db push --password "$SUPABASE_DB_PASSWORD"
 ```
 
 ### Troubleshooting `db push` auth failures
@@ -284,10 +304,10 @@ Use:
 
 ```bash
 # 1) Link project with DB password from Supabase Dashboard → Project Settings → Database
-supabase link --project-ref dwptbjcxrsmmgjmnumpg -p '<db-password>'
+supabase link --project-ref dwptbjcxrsmmgjmnumpg --password '<db-password>'
 
 # 2) Push migrations
-supabase db push --linked -p '<db-password>'
+supabase db push --password '<db-password>'
 ```
 
 If you only need to push seed/backfill data (not schema changes) and DB password is unavailable, use service-role + PostgREST as an emergency path:
@@ -326,6 +346,11 @@ Use this fallback only for controlled operational fixes. For normal schema + mig
 | `0011_seed_model_registry` | Seed 9 models (GPT-4.1, GPT-4o, o3, o4-mini, Claude Opus/Sonnet/Haiku) |
 | `0012_seed_additional_openai_models` | Normalize OpenAI catalog to GPT-5/GPT-4.1/GPT Image and remove 4o/o-series defaults |
 | `0013_backfill_onboarding_prompt_default` | Backfill active onboarding prompt/rule defaults if missing |
+| `0014_rename_draft_to_chat` | Renamed draft chat tables/fields to final chat loop naming |
+| `0015_recipe_standardization_dev` | Canonical ingredients + metadata job queue + graph links |
+| `0016_chat_loop_refactor_dev` | Chat-only candidate loop tables/contracts + commit path |
+| `0017_chat_loop_latency_tuning` | Prompt/model-config tuning for faster chat-generation/iteration turns |
+| `0018_chat_loop_contract_hardening` | Strict intent-aware chat prompt/rule contracts for ideation/generation/iteration |
 
 ---
 
@@ -339,14 +364,14 @@ Use this fallback only for controlled operational fixes. For normal schema + mig
 
 ```bash
 # Deploy the v1 edge function
-supabase functions deploy v1 --project-ref dwptbjcxrsmmgjmnumpg
+supabase functions deploy v1
 
 # Set secrets (if not already set)
-supabase secrets set OPENAI_API_KEY=<key> --project-ref dwptbjcxrsmmgjmnumpg
-supabase secrets set ANTHROPIC_API_KEY=<key> --project-ref dwptbjcxrsmmgjmnumpg
+supabase secrets set OPENAI_API_KEY=<key>
+supabase secrets set ANTHROPIC_API_KEY=<key>
 
 # List current secrets (shows digests only)
-supabase secrets list --project-ref dwptbjcxrsmmgjmnumpg
+supabase secrets list
 ```
 
 ---
@@ -401,8 +426,9 @@ npx wrangler login
 ### Push Supabase (schema + edge function)
 
 ```bash
-supabase db push --project-ref dwptbjcxrsmmgjmnumpg
-supabase functions deploy v1 --project-ref dwptbjcxrsmmgjmnumpg
+supabase link --project-ref dwptbjcxrsmmgjmnumpg
+supabase db push --password "$SUPABASE_DB_PASSWORD"
+supabase functions deploy v1
 ```
 
 ### GitHub CI for Supabase deploys (recommended)
@@ -464,10 +490,11 @@ supabase login
 npx wrangler login
 
 # 3. Apply DB migrations
-supabase db push --project-ref dwptbjcxrsmmgjmnumpg
+supabase link --project-ref dwptbjcxrsmmgjmnumpg
+supabase db push --password "$SUPABASE_DB_PASSWORD"
 
 # 4. Deploy edge function
-supabase functions deploy v1 --project-ref dwptbjcxrsmmgjmnumpg
+supabase functions deploy v1
 
 # 5. Deploy API gateway
 npx wrangler deploy --config infra/cloudflare/api-gateway/wrangler.jsonc

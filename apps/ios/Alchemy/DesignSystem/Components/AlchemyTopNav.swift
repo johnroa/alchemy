@@ -61,7 +61,6 @@ struct HeaderProfileButton: View {
         }
         .buttonStyle(.plain)
         .allowsHitTesting(isInteractive)
-        .opacity(isInteractive ? 1 : 0.92)
     }
 }
 

@@ -84,8 +84,26 @@ final class APIClient {
         try await request(path: "/recipes/cookbook?limit=50")
     }
 
-    func getRecipe(_ id: String) async throws -> RecipeView {
-        try await request(path: "/recipes/\(id)")
+    func getRecipe(_ id: String, projection: RecipeProjection = .fallback) async throws -> RecipeView {
+        let query = [
+            URLQueryItem(name: "units", value: projection.units.rawValue),
+            URLQueryItem(name: "group_by", value: projection.groupBy.rawValue),
+            URLQueryItem(name: "inline_measurements", value: projection.inlineMeasurements ? "true" : "false")
+        ]
+        let queryString = query
+            .compactMap { item -> String? in
+                guard
+                    let value = item.value,
+                    let encodedName = item.name.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+                    let encodedValue = value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)
+                else {
+                    return nil
+                }
+                return "\(encodedName)=\(encodedValue)"
+            }
+            .joined(separator: "&")
+
+        return try await request(path: "/recipes/\(id)?\(queryString)")
     }
 
     func getRecipeHistory(_ id: String) async throws -> RecipeHistoryResponse {

@@ -25,6 +25,9 @@ struct CookbookView: View {
                     cookbookContent
                 }
             }
+            .safeAreaInset(edge: .top, spacing: 0) {
+                cookbookHeaderBar
+            }
             .toolbar(.hidden, for: .navigationBar)
             .refreshable {
                 await vm.refresh(api: api)
@@ -44,6 +47,13 @@ struct CookbookView: View {
     }
 
     // MARK: - Content
+
+    private var cookbookHeaderBar: some View {
+        AlchemyScreenHeader(
+            title: "Cookbook",
+            onProfileTap: onProfileTap
+        )
+    }
 
     private var cookbookContent: some View {
         ScrollView {
@@ -152,13 +162,6 @@ struct CookbookView: View {
 
     private func cookbookHeader(searchText: Binding<String>, isInteractive: Bool) -> some View {
         VStack(alignment: .leading, spacing: Spacing.md) {
-            AlchemyScreenHeader(
-                title: "Cookbook",
-                onProfileTap: onProfileTap,
-                isProfileInteractive: isInteractive,
-                leading: nil
-            )
-
             Text(vm.cookbookInsight)
                 .font(AlchemyFont.body)
                 .foregroundStyle(AlchemyColors.textTertiary)

@@ -1,6 +1,7 @@
 import SwiftUI
 
 @Observable
+@MainActor
 final class CookbookViewModel {
     static let fallbackInsight = "You’ve been putting together a great cookbook."
     static let emptyCookbookInsight = "Start your first recipe on the Generate tab and build your cookbook."

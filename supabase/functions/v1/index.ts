@@ -19,6 +19,7 @@ import {
   buildIngredientGroups,
   type CanonicalIngredientView,
   canonicalizeIngredients,
+  deriveCanonicalIngredientIdentity,
   type GroupByPreference,
   type IngredientGroup,
   type NormalizedStatus,
@@ -95,6 +96,7 @@ type RecipeView = {
 
 type ChatLoopState = "ideation" | "candidate_presented" | "iterating";
 type CandidateRecipeRole = "main" | "side" | "appetizer" | "dessert" | "drink";
+type ChatIntent = "in_scope_ideation" | "in_scope_generate" | "out_of_scope";
 
 type CandidateRecipeComponent = {
   component_id: string;
@@ -131,6 +133,13 @@ type ChatLoopResponse = {
   loop_state: ChatLoopState;
   assistant_reply: AssistantReply | null;
   candidate_recipe_set: CandidateRecipeSet | null;
+  response_context?: {
+    mode?: string;
+    intent?: ChatIntent;
+    changed_sections?: string[];
+    personalization_notes?: string[];
+    preference_updates?: Record<string, JsonValue>;
+  };
   memory_context_ids: string[];
   context_version: number;
   ui_hints?: ChatUiHints;
@@ -721,25 +730,9 @@ const applyModelPreferenceUpdates = async (params: {
     return params.currentPreferences;
   }
 
-  const safePatch = sanitizeModelPreferencePatch(patch);
-  if (Array.isArray(safePatch.equipment) && safePatch.equipment.length > 0) {
-    const filteredEquipment = await llmGateway.filterEquipmentPreferenceUpdates(
-      {
-        client: params.serviceClient,
-        userId: params.userId,
-        requestId: params.requestId,
-        latestUserMessage: params.latestUserMessage,
-        userMessages: params.userMessages ?? [],
-        candidateEquipment: safePatch.equipment,
-      },
-    );
-
-    if (filteredEquipment.length > 0) {
-      safePatch.equipment = filteredEquipment;
-    } else {
-      delete safePatch.equipment;
-    }
-  }
+  const safePatch = normalizePreferencePatchDeterministic(
+    sanitizeModelPreferencePatch(patch),
+  );
 
   if (Object.keys(safePatch).length === 0) {
     return params.currentPreferences;
@@ -1103,8 +1096,144 @@ const loadIngredientNameById = async (
   return new Map((data ?? []).map((row) => [row.id, row.canonical_name]));
 };
 
+const loadIngredientIdsByAliasKey = async (
+  client: SupabaseClient,
+  aliasKeys: string[],
+): Promise<Map<string, string>> => {
+  if (aliasKeys.length === 0) {
+    return new Map();
+  }
+
+  const { data, error } = await client.from("ingredient_aliases").select(
+    "alias_key,ingredient_id",
+  ).in("alias_key", aliasKeys);
+  if (error) {
+    if (isSchemaMissingError(error) || isRlsError(error)) {
+      return new Map();
+    }
+    throw new ApiError(
+      500,
+      "ingredient_aliases_fetch_failed",
+      "Could not fetch ingredient aliases",
+      error.message,
+    );
+  }
+
+  return new Map(
+    (data ?? [])
+      .filter((row): row is { alias_key: string; ingredient_id: string } =>
+        typeof row.alias_key === "string" &&
+        typeof row.ingredient_id === "string" &&
+        row.alias_key.length > 0 &&
+        row.ingredient_id.length > 0
+      )
+      .map((row) => [row.alias_key, row.ingredient_id]),
+  );
+};
+
+const loadIngredientsByNormalizedKey = async (
+  client: SupabaseClient,
+  normalizedKeys: string[],
+): Promise<Map<string, { id: string; canonical_name: string }>> => {
+  if (normalizedKeys.length === 0) {
+    return new Map();
+  }
+
+  const { data, error } = await client.from("ingredients").select(
+    "id,normalized_key,canonical_name",
+  ).in("normalized_key", normalizedKeys);
+  if (error) {
+    throw new ApiError(
+      500,
+      "ingredients_fetch_by_key_failed",
+      "Could not fetch canonical ingredients by key",
+      error.message,
+    );
+  }
+
+  return new Map(
+    (data ?? [])
+      .filter((row): row is {
+        id: string;
+        normalized_key: string;
+        canonical_name: string;
+      } =>
+        typeof row.id === "string" &&
+        typeof row.normalized_key === "string" &&
+        typeof row.canonical_name === "string" &&
+        row.id.length > 0 &&
+        row.normalized_key.length > 0
+      )
+      .map((row) => [
+        row.normalized_key,
+        { id: row.id, canonical_name: row.canonical_name },
+      ]),
+  );
+};
+
+const resolveAliasCanonicalIdentity = async (params: {
+  serviceClient: SupabaseClient;
+  userId: string;
+  requestId: string;
+  unresolvedAliases: Array<{
+    alias_key: string;
+    source_name: string;
+    fallback_canonical_name: string;
+  }>;
+}): Promise<Map<string, {
+  canonical_key: string;
+  canonical_name: string;
+  confidence: number;
+}>> => {
+  if (params.unresolvedAliases.length === 0) {
+    return new Map();
+  }
+
+  const suggested = await llmGateway.normalizeIngredientAliases({
+    client: params.serviceClient,
+    userId: params.userId,
+    requestId: params.requestId,
+    aliases: params.unresolvedAliases.map((alias) => ({
+      alias_key: alias.alias_key,
+      source_name: alias.source_name,
+      fallback_canonical_name: alias.fallback_canonical_name,
+    })),
+  });
+  const suggestedByAlias = new Map(
+    suggested.map((entry) => [entry.alias_key, entry]),
+  );
+
+  const resolved = new Map<string, {
+    canonical_key: string;
+    canonical_name: string;
+    confidence: number;
+  }>();
+  for (const alias of params.unresolvedAliases) {
+    const suggestion = suggestedByAlias.get(alias.alias_key);
+    const identity = deriveCanonicalIngredientIdentity(
+      suggestion?.canonical_name ?? alias.fallback_canonical_name,
+      alias.source_name,
+    );
+    if (!identity.canonicalKey) {
+      continue;
+    }
+
+    resolved.set(alias.alias_key, {
+      canonical_key: identity.canonicalKey,
+      canonical_name: identity.canonicalName,
+      confidence: Number.isFinite(Number(suggestion?.confidence))
+        ? Math.max(0, Math.min(1, Number(suggestion?.confidence)))
+        : 0.8,
+    });
+  }
+
+  return resolved;
+};
+
 const persistCanonicalRecipeIngredients = async (params: {
   serviceClient: SupabaseClient;
+  userId: string;
+  requestId: string;
   recipeVersionId: string;
   recipe: RecipePayload;
 }): Promise<void> => {
@@ -1125,58 +1254,169 @@ const persistCanonicalRecipeIngredients = async (params: {
     return;
   }
 
-  const ingredientRows = canonicalRows.map((row) => ({
-    canonical_name: row.canonical_name,
-    normalized_key: row.normalized_key,
-    metadata: {
-      source: "llm",
-      last_seen_at: new Date().toISOString(),
-    },
-  }));
-
-  const { data: ingredients, error: ingredientsError } = await params
-    .serviceClient
-    .from("ingredients")
-    .upsert(ingredientRows, { onConflict: "normalized_key" })
-    .select("id,normalized_key,canonical_name");
-
-  if (ingredientsError || !ingredients) {
-    throw new ApiError(
-      500,
-      "canonical_ingredient_upsert_failed",
-      "Could not persist canonical ingredients",
-      ingredientsError?.message,
-    );
-  }
-
-  const ingredientByKey = new Map(
-    ingredients.map((ingredient) => [ingredient.normalized_key, ingredient]),
+  const now = new Date().toISOString();
+  const ingredientIdByAliasKey = await loadIngredientIdsByAliasKey(
+    params.serviceClient,
+    keySet,
   );
 
-  const aliases = canonicalRows
-    .filter((row) => row.normalized_key.length > 0)
-    .map((row) => ({
-      alias_key: row.normalized_key,
-      ingredient_id: ingredientByKey.get(row.normalized_key)?.id ?? null,
-      source: "llm",
-      confidence: 1,
-    }))
-    .filter((row) => Boolean(row.ingredient_id));
+  const fallbackByAlias = new Map<string, {
+    source_name: string;
+    fallback_canonical_name: string;
+  }>();
+  for (const row of canonicalRows) {
+    if (!row.normalized_key || fallbackByAlias.has(row.normalized_key)) {
+      continue;
+    }
+    fallbackByAlias.set(row.normalized_key, {
+      source_name: row.source_name,
+      fallback_canonical_name: row.canonical_name,
+    });
+  }
 
-  if (aliases.length > 0) {
-    const { error: aliasError } = await params.serviceClient
-      .from("ingredient_aliases")
-      .upsert(aliases, { onConflict: "alias_key" });
+  const unresolvedAliases = keySet
+    .filter((aliasKey) => !ingredientIdByAliasKey.has(aliasKey))
+    .map((aliasKey) => {
+      const fallback = fallbackByAlias.get(aliasKey);
+      return {
+        alias_key: aliasKey,
+        source_name: fallback?.source_name ?? aliasKey,
+        fallback_canonical_name: fallback?.fallback_canonical_name ?? aliasKey,
+      };
+    });
 
-    if (aliasError) {
-      throw new ApiError(
-        500,
-        "ingredient_alias_upsert_failed",
-        "Could not persist ingredient aliases",
-        aliasError.message,
+  const canonicalByAlias = await resolveAliasCanonicalIdentity({
+    serviceClient: params.serviceClient,
+    userId: params.userId,
+    requestId: params.requestId,
+    unresolvedAliases,
+  });
+  for (const alias of unresolvedAliases) {
+    if (canonicalByAlias.has(alias.alias_key)) {
+      continue;
+    }
+    const identity = deriveCanonicalIngredientIdentity(
+      alias.fallback_canonical_name,
+      alias.source_name,
+    );
+    if (!identity.canonicalKey) {
+      continue;
+    }
+    canonicalByAlias.set(alias.alias_key, {
+      canonical_key: identity.canonicalKey,
+      canonical_name: identity.canonicalName,
+      confidence: 0.8,
+    });
+  }
+
+  if (unresolvedAliases.length > 0) {
+    const ingredientRowsByKey = new Map<string, {
+      canonical_name: string;
+      normalized_key: string;
+      metadata: Record<string, JsonValue>;
+    }>();
+
+    for (const alias of unresolvedAliases) {
+      const resolved = canonicalByAlias.get(alias.alias_key);
+
+      if (!resolved || !resolved.canonical_key) {
+        continue;
+      }
+
+      if (!ingredientRowsByKey.has(resolved.canonical_key)) {
+        ingredientRowsByKey.set(resolved.canonical_key, {
+          canonical_name: resolved.canonical_name,
+          normalized_key: resolved.canonical_key,
+          metadata: {
+            source: "llm",
+            last_seen_at: now,
+          },
+        });
+      }
+    }
+
+    const ingredientRows = Array.from(ingredientRowsByKey.values());
+    if (ingredientRows.length > 0) {
+      const { error: ingredientsError } = await params.serviceClient
+        .from("ingredients")
+        .upsert(ingredientRows, {
+          onConflict: "normalized_key",
+          ignoreDuplicates: true,
+        });
+
+      if (ingredientsError) {
+        throw new ApiError(
+          500,
+          "canonical_ingredient_upsert_failed",
+          "Could not persist canonical ingredients",
+          ingredientsError.message,
+        );
+      }
+
+      const ingredientByCanonicalKey = await loadIngredientsByNormalizedKey(
+        params.serviceClient,
+        ingredientRows.map((row) => row.normalized_key),
       );
+
+      for (const alias of unresolvedAliases) {
+        const resolved = canonicalByAlias.get(alias.alias_key);
+        if (!resolved) {
+          continue;
+        }
+        const ingredient = ingredientByCanonicalKey.get(resolved.canonical_key);
+        if (ingredient?.id) {
+          ingredientIdByAliasKey.set(alias.alias_key, ingredient.id);
+        }
+      }
+
+      const aliasRows = unresolvedAliases
+        .map((alias) => {
+          const resolved = canonicalByAlias.get(alias.alias_key);
+          const ingredientId = ingredientIdByAliasKey.get(alias.alias_key);
+          if (!resolved || !ingredientId) {
+            return null;
+          }
+          return {
+            alias_key: alias.alias_key,
+            ingredient_id: ingredientId,
+            source: "llm",
+            confidence: resolved.confidence,
+          };
+        })
+        .filter((row): row is {
+          alias_key: string;
+          ingredient_id: string;
+          source: string;
+          confidence: number;
+        } => row !== null);
+
+      if (aliasRows.length > 0) {
+        const { error: aliasError } = await params.serviceClient
+          .from("ingredient_aliases")
+          .upsert(aliasRows, {
+            onConflict: "alias_key",
+            ignoreDuplicates: true,
+          });
+
+        if (aliasError) {
+          throw new ApiError(
+            500,
+            "ingredient_alias_upsert_failed",
+            "Could not persist ingredient aliases",
+            aliasError.message,
+          );
+        }
+      }
     }
   }
+
+  const persistedAliasMap = await loadIngredientIdsByAliasKey(
+    params.serviceClient,
+    keySet,
+  );
+  const resolvedIngredientIdByAlias = persistedAliasMap.size > 0
+    ? persistedAliasMap
+    : ingredientIdByAliasKey;
 
   const { error: clearError } = await params.serviceClient
     .from("recipe_ingredients")
@@ -1193,7 +1433,7 @@ const persistCanonicalRecipeIngredients = async (params: {
 
   const rowsToInsert = canonicalRows.map((row) => ({
     recipe_version_id: params.recipeVersionId,
-    ingredient_id: ingredientByKey.get(row.normalized_key)?.id ?? null,
+    ingredient_id: resolvedIngredientIdByAlias.get(row.normalized_key) ?? null,
     source_name: row.source_name,
     source_amount: row.source_amount,
     source_unit: row.source_unit,
@@ -2163,6 +2403,8 @@ const persistRecipe = async (params: {
 
   await persistCanonicalRecipeIngredients({
     serviceClient: params.serviceClient,
+    userId: params.userId,
+    requestId: params.requestId,
     recipeVersionId: version.id,
     recipe: params.payload,
   });
@@ -2904,6 +3146,7 @@ const parseAssistantChatPayload = (
   recipe: RecipePayload | null;
   assistantReply: AssistantReply | null;
   candidateSet: CandidateRecipeSet | null;
+  responseContext: ChatLoopResponse["response_context"] | null;
 } | null => {
   try {
     const parsed = JSON.parse(message.content) as unknown;
@@ -2956,8 +3199,43 @@ const parseAssistantChatPayload = (
 
       return null;
     })();
+    const rawResponseContext = candidate.response_context;
+    const responseContext = rawResponseContext &&
+        typeof rawResponseContext === "object" &&
+        !Array.isArray(rawResponseContext)
+      ? (() => {
+        const raw = rawResponseContext as Record<string, unknown>;
+        const intent = typeof raw.intent === "string" &&
+            (
+              raw.intent === "in_scope_ideation" ||
+              raw.intent === "in_scope_generate" ||
+              raw.intent === "out_of_scope"
+            )
+          ? (raw.intent as ChatIntent)
+          : undefined;
+        return {
+          mode: typeof raw.mode === "string" ? raw.mode : undefined,
+          intent,
+          changed_sections: Array.isArray(raw.changed_sections)
+            ? raw.changed_sections.filter((item): item is string =>
+              typeof item === "string"
+            )
+            : undefined,
+          personalization_notes: Array.isArray(raw.personalization_notes)
+            ? raw.personalization_notes.filter((item): item is string =>
+              typeof item === "string"
+            )
+            : undefined,
+          preference_updates: raw.preference_updates &&
+              typeof raw.preference_updates === "object" &&
+              !Array.isArray(raw.preference_updates)
+            ? (raw.preference_updates as Record<string, JsonValue>)
+            : undefined,
+        };
+      })()
+      : null;
 
-    if (!recipe && !assistantReply && !candidateSet) {
+    if (!recipe && !assistantReply && !candidateSet && !responseContext) {
       return null;
     }
 
@@ -2965,6 +3243,7 @@ const parseAssistantChatPayload = (
       recipe,
       assistantReply,
       candidateSet,
+      responseContext,
     };
   } catch {
     return null;
@@ -3044,32 +3323,20 @@ const truncatePromptText = (value: string, maxChars: number): string => {
   return `${value.slice(0, Math.max(0, maxChars - 1)).trimEnd()}…`;
 };
 
-const isExplicitGenerateCommand = (message: string): boolean => {
-  const normalized = message.trim().toLowerCase();
-  if (!normalized) {
-    return false;
-  }
+const normalizeChatIntent = (value: unknown): ChatIntent | null => {
   if (
-    normalized === "generate" || normalized === "generate now" ||
-    normalized === "create recipe" || normalized === "make recipe" ||
-    normalized === "show recipe"
+    value === "in_scope_ideation" || value === "in_scope_generate" ||
+    value === "out_of_scope"
   ) {
-    return true;
+    return value;
   }
-  if (
-    normalized.includes("generate now") ||
-    normalized.includes("generate the recipe") ||
-    normalized.includes("generate recipe") ||
-    normalized.includes("full candidate recipe set") ||
-    normalized.includes("candidate recipe set now") ||
-    normalized.includes("generate candidate recipe set") ||
-    normalized.includes("generate candidate set") ||
-    normalized.includes("generate the candidate")
-  ) {
-    return true;
-  }
-  return false;
+  return null;
 };
+
+const getChatIntentFromResponse = (
+  response: Awaited<ReturnType<typeof llmGateway.converseChat>>,
+): ChatIntent | null =>
+  normalizeChatIntent(response.response_context?.intent);
 
 const buildThreadForPrompt = (
   messages: ChatMessageView[],
@@ -3146,6 +3413,7 @@ const buildChatLoopResponse = (params: {
   messages: ChatMessageView[];
   context: ChatSessionContext;
   assistantReply?: AssistantReply | null;
+  responseContext?: ChatLoopResponse["response_context"] | null;
   memoryContextIds: string[];
   createdAt?: string;
   updatedAt?: string;
@@ -3157,6 +3425,17 @@ const buildChatLoopResponse = (params: {
   const loopState = deriveLoopState(params.context, candidateSet);
   const reply = params.assistantReply ??
     extractLatestAssistantReply(params.messages);
+  const responseContext = params.responseContext ??
+    (() => {
+      for (let index = params.messages.length - 1; index >= 0; index -= 1) {
+        const message = params.messages[index];
+        if (message.role !== "assistant") {
+          continue;
+        }
+        return parseAssistantChatPayload(message)?.responseContext ?? null;
+      }
+      return null;
+    })();
 
   return {
     id: params.chatId,
@@ -3164,6 +3443,7 @@ const buildChatLoopResponse = (params: {
     loop_state: loopState,
     assistant_reply: reply ?? null,
     candidate_recipe_set: candidateSet,
+    response_context: responseContext ?? undefined,
     memory_context_ids: params.memoryContextIds,
     context_version: 2,
     ui_hints: params.uiHints,
@@ -3500,11 +3780,13 @@ const converseChatWithRetry = async (params: {
   requestId: string;
   prompt: string;
   context: Record<string, JsonValue>;
-  scopeHint?: "chat" | "chat_ideation" | "chat_generation" | "chat_iteration" |
-    "tweak";
+  scopeHint?: "chat_ideation" | "chat_generation" | "chat_iteration";
   modelOverrides?: ModelOverrideMap;
 }): Promise<Awaited<ReturnType<typeof llmGateway.converseChat>>> => {
-  const maxAttempts = params.scopeHint === "chat_ideation" ? 2 : 1;
+  const maxAttempts = params.scopeHint === "chat_generation" ||
+      params.scopeHint === "chat_iteration"
+    ? 2
+    : 1;
   let lastError: unknown = null;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -3533,6 +3815,277 @@ const converseChatWithRetry = async (params: {
   throw lastError instanceof Error
     ? lastError
     : new ApiError(502, "chat_generation_failed", "Chat generation failed");
+};
+
+const sanitizePreferenceStringList = (values: unknown): string[] => {
+  if (!Array.isArray(values)) {
+    return [];
+  }
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const value of values) {
+    if (typeof value !== "string") {
+      continue;
+    }
+    const normalized = value.replace(/\s+/g, " ").trim();
+    if (!normalized) {
+      continue;
+    }
+    const key = normalized.toLocaleLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    out.push(normalized);
+    if (out.length >= 32) {
+      break;
+    }
+  }
+  return out;
+};
+
+const clampMaxDifficulty = (value: unknown, fallback: number): number => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return fallback;
+  }
+  return Math.max(1, Math.min(5, Math.round(numeric)));
+};
+
+const normalizePreferencePatchDeterministic = (
+  patch: ReturnType<typeof sanitizeModelPreferencePatch>,
+): ReturnType<typeof sanitizeModelPreferencePatch> => {
+  const normalized = { ...patch };
+  if ("dietary_preferences" in normalized) {
+    normalized.dietary_preferences = sanitizePreferenceStringList(
+      normalized.dietary_preferences,
+    );
+  }
+  if ("dietary_restrictions" in normalized) {
+    normalized.dietary_restrictions = sanitizePreferenceStringList(
+      normalized.dietary_restrictions,
+    );
+  }
+  if ("equipment" in normalized) {
+    normalized.equipment = sanitizePreferenceStringList(normalized.equipment);
+  }
+  if ("cuisines" in normalized) {
+    normalized.cuisines = sanitizePreferenceStringList(normalized.cuisines);
+  }
+  if ("aversions" in normalized) {
+    normalized.aversions = sanitizePreferenceStringList(normalized.aversions);
+  }
+  if (typeof normalized.skill_level === "string") {
+    normalized.skill_level = normalized.skill_level.trim().slice(0, 48);
+  }
+  if (typeof normalized.cooking_for === "string") {
+    normalized.cooking_for = normalized.cooking_for.trim().slice(0, 120);
+  }
+  if (typeof normalized.max_difficulty !== "undefined") {
+    normalized.max_difficulty = clampMaxDifficulty(
+      normalized.max_difficulty,
+      3,
+    );
+  }
+  return normalized;
+};
+
+type OrchestratedChatTurn = {
+  assistantChatResponse: Awaited<ReturnType<typeof llmGateway.converseChat>>;
+  nextCandidateSet: CandidateRecipeSet | null;
+  nextLoopState: ChatLoopState;
+  nextContext: ChatSessionContext;
+  effectivePreferences: PreferenceContext;
+  responseContext: ChatLoopResponse["response_context"] | null;
+  justGenerated: boolean;
+};
+
+const orchestrateChatTurn = async (params: {
+  client: SupabaseClient;
+  serviceClient: SupabaseClient;
+  userId: string;
+  requestId: string;
+  message: string;
+  existingCandidate: CandidateRecipeSet | null;
+  sessionContext: ChatSessionContext;
+  contextPack: ContextPack;
+  threadForPrompt: Array<{ role: string; content: string }>;
+  modelOverrides?: ModelOverrideMap;
+}): Promise<OrchestratedChatTurn> => {
+  const candidateOutlineForPrompt = buildCandidateOutlineForPrompt(
+    params.existingCandidate,
+  );
+  const compactChatContext = buildCompactChatContext(params.sessionContext);
+  const activeComponent = params.existingCandidate?.components.find((component) =>
+    component.component_id === params.existingCandidate?.active_component_id
+  ) ??
+    params.existingCandidate?.components[0] ??
+    null;
+
+  let assistantChatResponse = await converseChatWithRetry({
+    client: params.serviceClient,
+    userId: params.userId,
+    requestId: params.requestId,
+    prompt: params.message,
+    context: {
+      chat_context: compactChatContext,
+      thread: params.threadForPrompt,
+      active_recipe: activeComponent?.recipe
+        ? (activeComponent.recipe as unknown as JsonValue)
+        : null,
+      candidate_recipe_set_outline: candidateOutlineForPrompt,
+      loop_state: deriveLoopState(params.sessionContext, params.existingCandidate),
+      preferences: params.contextPack.preferences,
+      preferences_natural_language: params.contextPack.preferencesNaturalLanguage,
+      memory_snapshot: params.contextPack.memorySnapshot,
+      selected_memories: params.contextPack.selectedMemories,
+    },
+    scopeHint: params.existingCandidate ? "chat_iteration" : "chat_ideation",
+    modelOverrides: params.modelOverrides,
+  });
+
+  const intent = getChatIntentFromResponse(assistantChatResponse);
+  const isOutOfScope = intent === "out_of_scope";
+
+  if (!params.existingCandidate && !isOutOfScope) {
+    const shouldGenerate = intent === "in_scope_generate" ||
+      assistantChatResponse.trigger_recipe === true;
+    if (
+      shouldGenerate && !assistantChatResponse.candidate_recipe_set &&
+      !assistantChatResponse.recipe
+    ) {
+      const generationResponse = await converseChatWithRetry({
+        client: params.serviceClient,
+        userId: params.userId,
+        requestId: params.requestId,
+        prompt: params.message,
+        context: {
+          chat_context: compactChatContext,
+          thread: params.threadForPrompt,
+          loop_state: "iterating",
+          preferences: params.contextPack.preferences,
+          preferences_natural_language:
+            params.contextPack.preferencesNaturalLanguage,
+          memory_snapshot: params.contextPack.memorySnapshot,
+          selected_memories: params.contextPack.selectedMemories,
+          candidate_recipe_set_outline: candidateOutlineForPrompt,
+        },
+        scopeHint: "chat_generation",
+        modelOverrides: params.modelOverrides,
+      });
+
+      if (
+        !generationResponse.candidate_recipe_set && !generationResponse.recipe
+      ) {
+        throw new ApiError(
+          502,
+          "chat_generation_missing_candidate",
+          "Generation trigger did not produce a candidate recipe set",
+        );
+      }
+
+      assistantChatResponse = generationResponse;
+    }
+  }
+
+  if (isOutOfScope) {
+    assistantChatResponse = {
+      ...assistantChatResponse,
+      trigger_recipe: false,
+      recipe: undefined,
+      candidate_recipe_set: undefined,
+      response_context: {
+        ...(assistantChatResponse.response_context ?? {}),
+        mode: "ideation",
+        intent: "out_of_scope",
+      },
+      assistant_reply: assistantChatResponse.assistant_reply?.text?.trim()
+        ? assistantChatResponse.assistant_reply
+        : {
+          text:
+            "I can’t help with that here. I can help with recipes, cooking techniques, or meal planning.",
+        },
+    };
+  }
+
+  const effectivePreferences = await applyModelPreferenceUpdates({
+    client: params.client,
+    serviceClient: params.serviceClient,
+    userId: params.userId,
+    requestId: params.requestId,
+    currentPreferences: params.contextPack.preferences,
+    preferenceUpdates: assistantChatResponse.response_context
+      ?.preference_updates,
+    latestUserMessage: params.message,
+  });
+
+  const modelCandidateSet = normalizeCandidateRecipeSet(
+    assistantChatResponse.candidate_recipe_set ?? null,
+  );
+  let nextCandidateSet: CandidateRecipeSet | null = modelCandidateSet;
+  if (!nextCandidateSet && assistantChatResponse.recipe && !isOutOfScope) {
+    nextCandidateSet = mergeRecipeIntoCandidate(
+      params.existingCandidate,
+      assistantChatResponse.recipe,
+    );
+  }
+  if (!nextCandidateSet && params.existingCandidate) {
+    nextCandidateSet = params.existingCandidate;
+  }
+
+  if (params.existingCandidate && nextCandidateSet) {
+    nextCandidateSet = {
+      ...nextCandidateSet,
+      candidate_id: params.existingCandidate.candidate_id,
+      revision: Math.max(
+        params.existingCandidate.revision + 1,
+        nextCandidateSet.revision,
+      ),
+      active_component_id: nextCandidateSet.active_component_id &&
+          nextCandidateSet.components.some((component) =>
+            component.component_id === nextCandidateSet?.active_component_id
+          )
+        ? nextCandidateSet.active_component_id
+        : nextCandidateSet.components[0]?.component_id ??
+          params.existingCandidate.active_component_id,
+    };
+  }
+
+  const nextLoopState: ChatLoopState = nextCandidateSet
+    ? "candidate_presented"
+    : "ideation";
+  const responseContext = assistantChatResponse.response_context
+    ? {
+      mode: assistantChatResponse.response_context.mode,
+      intent: normalizeChatIntent(assistantChatResponse.response_context.intent) ??
+        (nextCandidateSet ? "in_scope_generate" : "in_scope_ideation"),
+      changed_sections: assistantChatResponse.response_context.changed_sections,
+      personalization_notes: assistantChatResponse.response_context
+        .personalization_notes,
+      preference_updates: assistantChatResponse.response_context
+        .preference_updates,
+    }
+    : null;
+
+  const nextContext: ChatSessionContext = {
+    preferences: effectivePreferences,
+    memory_snapshot: params.contextPack.memorySnapshot,
+    selected_memory_ids: params.contextPack.selectedMemoryIds,
+    loop_state: nextLoopState,
+    candidate_recipe_set: nextCandidateSet,
+    candidate_revision: nextCandidateSet?.revision ?? 0,
+    active_component_id: nextCandidateSet?.active_component_id ?? null,
+  };
+
+  return {
+    assistantChatResponse,
+    nextCandidateSet,
+    nextLoopState,
+    nextContext,
+    effectivePreferences,
+    responseContext,
+    justGenerated: !params.existingCandidate && Boolean(nextCandidateSet),
+  };
 };
 
 const processImageJobs = async (params: {
@@ -4569,17 +5122,6 @@ Deno.serve(async (request) => {
 
     if (
       segments.length === 2 && segments[0] === "recipes" &&
-      segments[1] === "generate" && method === "POST"
-    ) {
-      throw new ApiError(
-        404,
-        "route_not_found",
-        "Use chat loop endpoints: POST /chat and POST /chat/{id}/messages",
-      );
-    }
-
-    if (
-      segments.length === 2 && segments[0] === "recipes" &&
       segments[1] === "cookbook" && method === "GET"
     ) {
       const items = await buildCookbookItems(client, auth.userId);
@@ -4685,17 +5227,6 @@ Deno.serve(async (request) => {
         version_events: events,
         chat_messages: chatMessages,
       });
-    }
-
-    if (
-      segments.length === 3 && segments[0] === "recipes" &&
-      segments[2] === "tweak" && method === "POST"
-    ) {
-      throw new ApiError(
-        404,
-        "route_not_found",
-        "Use chat loop endpoints: POST /chat and POST /chat/{id}/messages",
-      );
     }
 
     if (
@@ -5267,106 +5798,34 @@ Deno.serve(async (request) => {
         );
       }
 
-      const directGenerationIntent = isExplicitGenerateCommand(message);
-
-      let assistantChatResponse = await converseChatWithRetry({
-        client: serviceClient,
-        userId: auth.userId,
-        requestId,
-        prompt: message,
-        context: {
-          preferences: contextPack.preferences,
-          preferences_natural_language: contextPack.preferencesNaturalLanguage,
-          memory_snapshot: contextPack.memorySnapshot,
-          selected_memories: contextPack.selectedMemories,
-        },
-        scopeHint: directGenerationIntent ? "chat_generation" : "chat_ideation",
-        modelOverrides,
-      });
-
-      if (
-        !directGenerationIntent &&
-        assistantChatResponse.trigger_recipe === true &&
-        !assistantChatResponse.candidate_recipe_set &&
-        !assistantChatResponse.recipe
-      ) {
-        let generationResponse: Awaited<
-          ReturnType<typeof llmGateway.converseChat>
-        > | null = null;
-
-        try {
-          generationResponse = await converseChatWithRetry({
-            client: serviceClient,
-            userId: auth.userId,
-            requestId,
-            prompt: message,
-            context: {
-              preferences: contextPack.preferences,
-              memory_snapshot: contextPack.memorySnapshot,
-              selected_memories: contextPack.selectedMemories,
-              loop_state: "iterating",
-              thread: [{ role: "user", content: message }],
-            },
-            scopeHint: "chat_generation",
-            modelOverrides,
-          });
-        } catch {
-          generationResponse = null;
-        }
-
-        if (
-          generationResponse?.candidate_recipe_set || generationResponse?.recipe
-        ) {
-          assistantChatResponse = generationResponse;
-        } else {
-          assistantChatResponse = {
-            ...assistantChatResponse,
-            trigger_recipe: false,
-            response_context: {
-              ...(assistantChatResponse.response_context ?? {}),
-              mode: "ideation",
-            },
-          };
-        }
-      }
-      const effectivePreferences = await applyModelPreferenceUpdates({
+      const threadMessages = await fetchChatMessages(client, chatSession.id);
+      const threadForPrompt = buildThreadForPrompt(threadMessages);
+      const initialContext: ChatSessionContext = {
+        preferences: contextPack.preferences,
+        memory_snapshot: contextPack.memorySnapshot,
+        selected_memory_ids: contextPack.selectedMemoryIds,
+        loop_state: "ideation",
+        candidate_recipe_set: null,
+        candidate_revision: 0,
+        active_component_id: null,
+      };
+      const orchestrated = await orchestrateChatTurn({
         client,
         serviceClient,
         userId: auth.userId,
         requestId,
-        currentPreferences: contextPack.preferences,
-        preferenceUpdates: assistantChatResponse.response_context
-          ?.preference_updates,
-        latestUserMessage: message,
+        message,
+        existingCandidate: null,
+        sessionContext: initialContext,
+        contextPack,
+        threadForPrompt,
+        modelOverrides,
       });
-
-      let candidateSet = normalizeCandidateRecipeSet(
-        assistantChatResponse.candidate_recipe_set ?? null,
-      );
-      if (!candidateSet && assistantChatResponse.recipe) {
-        candidateSet = candidateFromRecipePayload(
-          assistantChatResponse.recipe,
-          null,
-        );
-      }
-
-      const nextLoopState: ChatLoopState = candidateSet
-        ? "candidate_presented"
-        : "ideation";
-      const nextContext: ChatSessionContext = {
-        preferences: effectivePreferences,
-        memory_snapshot: contextPack.memorySnapshot,
-        selected_memory_ids: contextPack.selectedMemoryIds,
-        loop_state: nextLoopState,
-        candidate_recipe_set: candidateSet,
-        candidate_revision: candidateSet?.revision ?? 0,
-        active_component_id: candidateSet?.active_component_id ?? null,
-      };
 
       await updateChatSessionLoopContext({
         client,
         chatId: chatSession.id,
-        context: nextContext,
+        context: orchestrated.nextContext,
       });
 
       const { error: assistantMessageError } = await client.from(
@@ -5375,16 +5834,17 @@ Deno.serve(async (request) => {
         chat_id: chatSession.id,
         role: "assistant",
         content: JSON.stringify({
-          assistant_reply: assistantChatResponse.assistant_reply,
-          trigger_recipe: assistantChatResponse.trigger_recipe ??
-            Boolean(candidateSet),
-          candidate_recipe_set: candidateSet,
-          recipe: assistantChatResponse.recipe,
-          response_context: assistantChatResponse.response_context,
+          assistant_reply: orchestrated.assistantChatResponse.assistant_reply,
+          trigger_recipe: orchestrated.assistantChatResponse.trigger_recipe ??
+            Boolean(orchestrated.nextCandidateSet),
+          candidate_recipe_set: orchestrated.nextCandidateSet,
+          recipe: orchestrated.assistantChatResponse.recipe,
+          response_context: orchestrated.responseContext,
         }),
         metadata: {
           format: "assistant_chat_envelope_v2",
-          loop_state: nextLoopState,
+          loop_state: orchestrated.nextLoopState,
+          intent: orchestrated.responseContext?.intent ?? null,
         },
       });
 
@@ -5400,16 +5860,19 @@ Deno.serve(async (request) => {
       const interactionContext: Record<string, JsonValue> = {
         prompt: message,
         chat_id: chatSession.id,
-        assistant_reply: assistantChatResponse.assistant_reply,
-        preferences: effectivePreferences,
+        assistant_reply: orchestrated.assistantChatResponse.assistant_reply,
+        preferences: orchestrated.effectivePreferences,
         selected_memory_ids: contextPack.selectedMemoryIds,
-        loop_state: nextLoopState,
+        loop_state: orchestrated.nextLoopState,
+        response_context: (orchestrated.responseContext ??
+          {}) as unknown as JsonValue,
+        thread_size: threadMessages.length,
       };
-      if (candidateSet) {
+      if (orchestrated.nextCandidateSet) {
         interactionContext.candidate_recipe_set =
-          candidateSet as unknown as JsonValue;
-      } else if (assistantChatResponse.recipe) {
-        interactionContext.assistant_recipe = assistantChatResponse
+          orchestrated.nextCandidateSet as unknown as JsonValue;
+      } else if (orchestrated.assistantChatResponse.recipe) {
+        interactionContext.assistant_recipe = orchestrated.assistantChatResponse
           .recipe as unknown as JsonValue;
       }
 
@@ -5441,15 +5904,17 @@ Deno.serve(async (request) => {
         buildChatLoopResponse({
           chatId: chatSession.id,
           messages,
-          context: nextContext,
-          assistantReply: assistantChatResponse.assistant_reply,
+          context: orchestrated.nextContext,
+          assistantReply: orchestrated.assistantChatResponse.assistant_reply,
+          responseContext: orchestrated.responseContext,
           memoryContextIds: contextPack.selectedMemoryIds,
           createdAt: chatSession.created_at,
           updatedAt: new Date().toISOString(),
-          uiHints: candidateSet
+          uiHints: orchestrated.nextCandidateSet
             ? {
-              show_generation_animation: true,
-              focus_component_id: candidateSet.active_component_id,
+              show_generation_animation: orchestrated.justGenerated,
+              focus_component_id:
+                orchestrated.nextCandidateSet.active_component_id,
             }
             : undefined,
         }),
@@ -5534,15 +5999,6 @@ Deno.serve(async (request) => {
       const existingCandidate = normalizeCandidateRecipeSet(
         sessionContext.candidate_recipe_set ?? null,
       );
-      const candidateOutlineForPrompt = buildCandidateOutlineForPrompt(
-        existingCandidate,
-      );
-      const compactChatContext = buildCompactChatContext(sessionContext);
-      const activeComponent = existingCandidate?.components.find((component) =>
-        component.component_id === existingCandidate.active_component_id
-      ) ??
-        existingCandidate?.components[0] ??
-        null;
 
       const contextPack = await buildContextPack({
         userClient: client,
@@ -5554,7 +6010,9 @@ Deno.serve(async (request) => {
           chat_context: (chatSession.context as Record<string, JsonValue>) ??
             {},
           loop_state: deriveLoopState(sessionContext, existingCandidate),
-          candidate_recipe_set_outline: candidateOutlineForPrompt,
+          candidate_recipe_set_outline: buildCandidateOutlineForPrompt(
+            existingCandidate,
+          ),
         },
         selectionMode: "fast",
       });
@@ -5580,148 +6038,23 @@ Deno.serve(async (request) => {
 
       const threadMessages = await fetchChatMessages(client, chatId);
       const threadForPrompt = buildThreadForPrompt(threadMessages);
-      const directGenerationIntent = !existingCandidate &&
-        isExplicitGenerateCommand(message);
-
-      let assistantChatResponse = await converseChatWithRetry({
-        client: serviceClient,
-        userId: auth.userId,
-        requestId,
-        prompt: message,
-        context: {
-          chat_context: compactChatContext,
-          thread: threadForPrompt,
-          active_recipe: activeComponent?.recipe
-            ? (activeComponent.recipe as unknown as JsonValue)
-            : null,
-          candidate_recipe_set_outline: candidateOutlineForPrompt,
-          loop_state: deriveLoopState(sessionContext, existingCandidate),
-          preferences: contextPack.preferences,
-          preferences_natural_language: contextPack.preferencesNaturalLanguage,
-          memory_snapshot: contextPack.memorySnapshot,
-          selected_memories: contextPack.selectedMemories,
-        },
-        scopeHint: existingCandidate
-          ? "chat_iteration"
-          : directGenerationIntent
-          ? "chat_generation"
-          : "chat_ideation",
-        modelOverrides,
-      });
-
-      if (
-        !existingCandidate &&
-        !directGenerationIntent &&
-        assistantChatResponse.trigger_recipe === true &&
-        !assistantChatResponse.candidate_recipe_set &&
-        !assistantChatResponse.recipe
-      ) {
-        let generationResponse: Awaited<
-          ReturnType<typeof llmGateway.converseChat>
-        > | null = null;
-
-        try {
-          generationResponse = await converseChatWithRetry({
-            client: serviceClient,
-            userId: auth.userId,
-            requestId,
-            prompt: message,
-            context: {
-              chat_context: compactChatContext,
-              thread: threadForPrompt,
-              loop_state: "iterating",
-              preferences: contextPack.preferences,
-              memory_snapshot: contextPack.memorySnapshot,
-              selected_memories: contextPack.selectedMemories,
-            },
-            scopeHint: "chat_generation",
-            modelOverrides,
-          });
-        } catch {
-          generationResponse = null;
-        }
-
-        if (
-          generationResponse?.candidate_recipe_set || generationResponse?.recipe
-        ) {
-          assistantChatResponse = generationResponse;
-        } else {
-          assistantChatResponse = {
-            ...assistantChatResponse,
-            trigger_recipe: false,
-            response_context: {
-              ...(assistantChatResponse.response_context ?? {}),
-              mode: "ideation",
-            },
-          };
-        }
-      }
-      const effectivePreferences = await applyModelPreferenceUpdates({
+      const orchestrated = await orchestrateChatTurn({
         client,
         serviceClient,
         userId: auth.userId,
         requestId,
-        currentPreferences: contextPack.preferences,
-        preferenceUpdates: assistantChatResponse.response_context
-          ?.preference_updates,
-        latestUserMessage: message,
-        userMessages: threadMessages
-          .filter((entry) =>
-            entry.role === "user"
-          )
-          .map((entry) => entry.content),
+        message,
+        existingCandidate,
+        sessionContext,
+        contextPack,
+        threadForPrompt,
+        modelOverrides,
       });
-
-      const modelCandidateSet = normalizeCandidateRecipeSet(
-        assistantChatResponse.candidate_recipe_set ?? null,
-      );
-      let nextCandidateSet: CandidateRecipeSet | null = modelCandidateSet;
-
-      if (!nextCandidateSet && assistantChatResponse.recipe) {
-        nextCandidateSet = mergeRecipeIntoCandidate(
-          existingCandidate,
-          assistantChatResponse.recipe,
-        );
-      }
-      if (!nextCandidateSet) {
-        nextCandidateSet = existingCandidate;
-      }
-
-      if (existingCandidate && nextCandidateSet) {
-        nextCandidateSet = {
-          ...nextCandidateSet,
-          candidate_id: existingCandidate.candidate_id,
-          revision: Math.max(
-            existingCandidate.revision + 1,
-            nextCandidateSet.revision,
-          ),
-          active_component_id: nextCandidateSet.active_component_id &&
-              nextCandidateSet.components.some((component) =>
-                component.component_id === nextCandidateSet?.active_component_id
-              )
-            ? nextCandidateSet.active_component_id
-            : nextCandidateSet.components[0]?.component_id ??
-              existingCandidate.active_component_id,
-        };
-      }
-
-      const nextLoopState: ChatLoopState = nextCandidateSet
-        ? "candidate_presented"
-        : "ideation";
-      const nextContext: ChatSessionContext = {
-        preferences: effectivePreferences,
-        memory_snapshot: contextPack.memorySnapshot,
-        selected_memory_ids: contextPack.selectedMemoryIds,
-        loop_state: nextLoopState,
-        candidate_recipe_set: nextCandidateSet,
-        candidate_revision: nextCandidateSet?.revision ?? 0,
-        active_component_id: nextCandidateSet?.active_component_id ?? null,
-      };
 
       await updateChatSessionLoopContext({
         client,
         chatId,
-        context: nextContext,
+        context: orchestrated.nextContext,
       });
 
       const { error: assistantMessageError } = await client.from(
@@ -5730,16 +6063,17 @@ Deno.serve(async (request) => {
         chat_id: chatId,
         role: "assistant",
         content: JSON.stringify({
-          assistant_reply: assistantChatResponse.assistant_reply,
-          trigger_recipe: assistantChatResponse.trigger_recipe ??
-            Boolean(nextCandidateSet),
-          candidate_recipe_set: nextCandidateSet,
-          recipe: assistantChatResponse.recipe,
-          response_context: assistantChatResponse.response_context,
+          assistant_reply: orchestrated.assistantChatResponse.assistant_reply,
+          trigger_recipe: orchestrated.assistantChatResponse.trigger_recipe ??
+            Boolean(orchestrated.nextCandidateSet),
+          candidate_recipe_set: orchestrated.nextCandidateSet,
+          recipe: orchestrated.assistantChatResponse.recipe,
+          response_context: orchestrated.responseContext,
         }),
         metadata: {
           format: "assistant_chat_envelope_v2",
-          loop_state: nextLoopState,
+          loop_state: orchestrated.nextLoopState,
+          intent: orchestrated.responseContext?.intent ?? null,
         },
       });
 
@@ -5755,17 +6089,19 @@ Deno.serve(async (request) => {
       const interactionContext: Record<string, JsonValue> = {
         prompt: message,
         chat_id: chatId,
-        assistant_reply: assistantChatResponse.assistant_reply,
+        assistant_reply: orchestrated.assistantChatResponse.assistant_reply,
         thread_size: threadMessages.length,
-        preferences: effectivePreferences,
+        preferences: orchestrated.effectivePreferences,
         selected_memory_ids: contextPack.selectedMemoryIds,
-        loop_state: nextLoopState,
+        loop_state: orchestrated.nextLoopState,
+        response_context: (orchestrated.responseContext ??
+          {}) as unknown as JsonValue,
       };
-      if (nextCandidateSet) {
+      if (orchestrated.nextCandidateSet) {
         interactionContext.candidate_recipe_set =
-          nextCandidateSet as unknown as JsonValue;
-      } else if (assistantChatResponse.recipe) {
-        interactionContext.assistant_recipe = assistantChatResponse
+          orchestrated.nextCandidateSet as unknown as JsonValue;
+      } else if (orchestrated.assistantChatResponse.recipe) {
+        interactionContext.assistant_recipe = orchestrated.assistantChatResponse
           .recipe as unknown as JsonValue;
       }
 
@@ -5778,26 +6114,28 @@ Deno.serve(async (request) => {
       });
 
       const messages = await fetchChatMessages(client, chatId);
-      const justGenerated = !existingCandidate && Boolean(nextCandidateSet);
 
       return respond(
         200,
         buildChatLoopResponse({
           chatId,
           messages,
-          context: nextContext,
-          assistantReply: assistantChatResponse.assistant_reply,
+          context: orchestrated.nextContext,
+          assistantReply: orchestrated.assistantChatResponse.assistant_reply,
+          responseContext: orchestrated.responseContext,
           memoryContextIds: contextPack.selectedMemoryIds,
           createdAt: chatSession.created_at,
           updatedAt: new Date().toISOString(),
-          uiHints: justGenerated
+          uiHints: orchestrated.justGenerated
             ? {
               show_generation_animation: true,
-              focus_component_id: nextCandidateSet?.active_component_id,
+              focus_component_id: orchestrated.nextCandidateSet
+                ?.active_component_id,
             }
-            : nextCandidateSet
+            : orchestrated.nextCandidateSet
             ? {
-              focus_component_id: nextCandidateSet.active_component_id,
+              focus_component_id:
+                orchestrated.nextCandidateSet.active_component_id,
             }
             : undefined,
         }),
@@ -6182,17 +6520,6 @@ Deno.serve(async (request) => {
           ],
         },
       });
-    }
-
-    if (
-      segments.length === 3 && segments[0] === "chat" &&
-      segments[2] === "generate" && method === "POST"
-    ) {
-      throw new ApiError(
-        404,
-        "route_not_found",
-        "Use chat loop endpoints: POST /chat, POST /chat/{id}/messages, and POST /chat/{id}/commit",
-      );
     }
 
     throw new ApiError(

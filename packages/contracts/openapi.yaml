@@ -695,9 +695,26 @@ paths:
                     loop_state: "ideation"
                     assistant_reply:
                       text: "Do you want this to be creamy or tomato-forward?"
+                    response_context:
+                      intent: "in_scope_ideation"
+                      mode: "ideation"
                     messages: []
                     candidate_recipe_set: null
                     memory_context_ids: ["f2f3a1f0-1111-2222-3333-444455556666"]
+                    context_version: 2
+                outOfScope:
+                  summary: Out-of-scope ask is refused and redirected to cooking
+                  value:
+                    id: "e3fa8890-1111-2222-3333-444455556666"
+                    loop_state: "ideation"
+                    assistant_reply:
+                      text: "I can’t help with that here. I can help with recipes or cooking techniques."
+                    response_context:
+                      intent: "out_of_scope"
+                      mode: "ideation"
+                    messages: []
+                    candidate_recipe_set: null
+                    memory_context_ids: []
                     context_version: 2
         default:
           $ref: '#/components/responses/ErrorResponse'
@@ -756,6 +773,9 @@ paths:
                     loop_state: "candidate_presented"
                     assistant_reply:
                       text: "Here are two options to start from."
+                    response_context:
+                      intent: "in_scope_generate"
+                      mode: "generation"
                     candidate_recipe_set:
                       candidate_id: "8f32d780-1111-2222-3333-444455556666"
                       revision: 1
@@ -790,6 +810,9 @@ paths:
                     loop_state: "candidate_presented"
                     assistant_reply:
                       text: "Updated with a lighter breading and shorter timing."
+                    response_context:
+                      intent: "in_scope_generate"
+                      mode: "iteration"
                     candidate_recipe_set:
                       candidate_id: "8f32d780-1111-2222-3333-444455556666"
                       revision: 2
@@ -807,7 +830,25 @@ paths:
                     memory_context_ids: []
                     context_version: 2
         default:
-          $ref: '#/components/responses/ErrorResponse'
+          description: Error envelope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              examples:
+                generationMissingCandidate:
+                  summary: Trigger said generate but no candidate was returned
+                  value:
+                    code: "chat_generation_missing_candidate"
+                    message: "Generation trigger did not produce a candidate recipe set"
+                    request_id: "7b8d4f00-1111-2222-3333-444455556666"
+                invalidJson:
+                  summary: Model returned invalid JSON in generation scope
+                  value:
+                    code: "llm_invalid_json"
+                    message: "LLM output is not valid JSON"
+                    details: "{ \"assistant_reply\": { \"text\": \"...\" }"
+                    request_id: "1cb9f9dd-1111-2222-3333-444455556666"
   /chat/{id}/candidate:
     patch:
       summary: Mutate ephemeral candidate recipe set state for a chat session
@@ -1623,6 +1664,25 @@ components:
     ChatLoopState:
       type: string
       enum: [ideation, candidate_presented, iterating]
+    ChatResponseContext:
+      type: object
+      properties:
+        mode:
+          type: string
+        intent:
+          type: string
+          enum: [in_scope_ideation, in_scope_generate, out_of_scope]
+        changed_sections:
+          type: array
+          items:
+            type: string
+        personalization_notes:
+          type: array
+          items:
+            type: string
+        preference_updates:
+          type: object
+          additionalProperties: true
     CandidateRecipeComponent:
       type: object
       required: [component_id, role, title, recipe]
@@ -1806,6 +1866,10 @@ components:
         candidate_recipe_set:
           oneOf:
             - $ref: '#/components/schemas/CandidateRecipeSet'
+            - type: 'null'
+        response_context:
+          oneOf:
+            - $ref: '#/components/schemas/ChatResponseContext'
             - type: 'null'
         memory_context_ids:
           type: array

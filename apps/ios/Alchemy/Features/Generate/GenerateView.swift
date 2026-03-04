@@ -1,5 +1,6 @@
 import SwiftUI
 import Lottie
+import UIKit
 
 struct GenerateView: View {
     @Environment(APIClient.self) private var api
@@ -8,6 +9,7 @@ struct GenerateView: View {
 
     @FocusState private var isInputFocused: Bool
     @State private var showResetConfirmation = false
+    @State private var isCandidateChatExpanded = false
     @State private var messageContentHeight: CGFloat = 0
     @State private var messageViewportHeight: CGFloat = 0
 
@@ -24,27 +26,23 @@ struct GenerateView: View {
         self.onGoToCookbook = onGoToCookbook
     }
 
-    private var panelExpanded: Bool {
-        vm.uiState == .ideation || !vm.hasCandidate
-    }
-
-    private var chatWindowTopGap: CGFloat {
-        vm.hasCandidate ? 18 : 92
-    }
-
-    private var composerBottomInset: CGFloat {
-        keyboard.height > 0 ? keyboard.height + 12 : Sizing.tabBarHeight + 72
-    }
-
-    private var chatDockReservedHeight: CGFloat {
-        let composerHeight: CGFloat = 56
-        let iteratingHeight: CGFloat = vm.uiState == .iterating ? 44 : 0
-        let dockSpacing = Spacing.sm + Spacing.xs
-        return composerHeight + iteratingHeight + dockSpacing + composerBottomInset
-    }
-
     private var messageListIsScrollable: Bool {
         messageContentHeight > (messageViewportHeight + 1)
+    }
+
+    private var showsChatPanel: Bool {
+        switch vm.presentationMode {
+        case .ideationExpanded:
+            return true
+        case .candidatePresented, .iterating:
+            return isCandidateChatExpanded || isInputFocused
+        case .generationMinimized:
+            return false
+        }
+    }
+
+    private var bottomDockPadding: CGFloat {
+        keyboard.isVisible ? 8 : (Sizing.tabBarHeight + 26)
     }
 
     var body: some View {
@@ -52,32 +50,39 @@ struct GenerateView: View {
             ZStack {
                 AlchemyColors.deepDark.ignoresSafeArea()
 
-                VStack(spacing: 0) {
-                    generateHeader
-                        .padding(.bottom, chatWindowTopGap)
+                recipeBackdrop
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                    ZStack(alignment: .top) {
-                        recipeBackdrop
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                if vm.hasCandidate && vm.presentationMode != .generationMinimized {
+                    VStack(spacing: Spacing.sm2) {
+                        candidateTabs
+                        candidateActions
+                    }
+                    .padding(.horizontal, Spacing.md)
+                    .padding(.top, Spacing.sm2)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                }
 
-                        if vm.hasCandidate {
-                            VStack(spacing: Spacing.sm2) {
-                                candidateTabs
-                                candidateActions
-                            }
-                            .padding(.horizontal, Spacing.md)
-                            .padding(.top, Spacing.sm2)
-                        }
-
+                if showsChatPanel {
                     chatPanel
                         .padding(.horizontal, Spacing.xs)
                         .zIndex(5)
-                    }
+                }
+
+                if vm.presentationMode == .generationMinimized {
+                    generationMinimizedCenter
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                        .transition(.opacity)
                 }
             }
             .toolbar(.hidden, for: .navigationBar)
+            .safeAreaInset(edge: .top, spacing: 0) {
+                generateHeader
+            }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                bottomDock
+            }
         }
-        .ignoresSafeArea(.keyboard, edges: .bottom)
         .confirmationDialog(
             "Start over?",
             isPresented: $showResetConfirmation,
@@ -104,6 +109,22 @@ struct GenerateView: View {
             Button("Go to Cookbook") {
                 let recipeIds = vm.takeCommittedRecipeIds()
                 onGoToCookbook(recipeIds)
+            }
+        }
+        .onChange(of: vm.presentationMode) { _, mode in
+            if mode == .generationMinimized {
+                dismissKeyboard()
+                isInputFocused = false
+                isCandidateChatExpanded = false
+            }
+        }
+        .onChange(of: isInputFocused) { _, focused in
+            if focused, vm.hasCandidate {
+                isCandidateChatExpanded = true
+            } else if !focused && vm.presentationMode == .candidatePresented {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    isCandidateChatExpanded = false
+                }
             }
         }
     }
@@ -141,7 +162,7 @@ struct GenerateView: View {
         } else if vm.shouldShowRecipeSkeleton {
             subtleRecipeSkeleton
                 .padding(.horizontal, Spacing.md)
-                .padding(.top, vm.hasCandidate ? 82 : Spacing.lg2)
+                .padding(.top, vm.hasCandidate ? Spacing.md : Spacing.lg)
                 .padding(.bottom, Sizing.tabBarHeight + 24)
                 .allowsHitTesting(false)
                 .transition(.opacity)
@@ -250,43 +271,22 @@ struct GenerateView: View {
     // MARK: - Chat Panel
 
     private var chatPanel: some View {
-        ZStack(alignment: .bottom) {
-            if panelExpanded {
-                messageTimeline
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                    .padding(.top, Spacing.lg + 4)
-                    .padding(.bottom, chatDockReservedHeight)
-            } else {
-                messageTimeline
-                    .frame(maxWidth: .infinity, maxHeight: 170, alignment: .top)
-                    .padding(.top, Spacing.md)
-                    .padding(.bottom, chatDockReservedHeight)
-            }
-
-            VStack(spacing: Spacing.xs) {
-                if vm.uiState == .iterating {
-                    iteratingShell
-                        .padding(.horizontal, Spacing.md)
-                }
-
-                chatComposer
-                    .padding(.horizontal, Spacing.md)
-            }
-            .padding(.bottom, composerBottomInset)
-            .padding(.top, Spacing.sm)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+        messageTimeline
+            .frame(
+                maxWidth: .infinity,
+                maxHeight: vm.presentationMode == .ideationExpanded ? .infinity : 260,
+                alignment: .top
+            )
+            .padding(.top, vm.presentationMode == .ideationExpanded ? Spacing.lg2 : Spacing.md)
         .chatLiquidPanelBackground(
             UnevenRoundedRectangle(
-                topLeadingRadius: 26,
+                topLeadingRadius: 22,
                 bottomLeadingRadius: 0,
                 bottomTrailingRadius: 0,
-                topTrailingRadius: 26
+                topTrailingRadius: 22
             )
         )
-        .ignoresSafeArea(.container, edges: .bottom)
-        .animation(.spring(response: 0.38, dampingFraction: 0.86), value: panelExpanded)
-        .animation(.spring(response: 0.35, dampingFraction: 0.88), value: vm.uiState)
+        .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 
     private var messageTimeline: some View {
@@ -340,8 +340,8 @@ struct GenerateView: View {
                         )
                 }
             )
-            .scrollDisabled(!messageListIsScrollable)
             .scrollDismissesKeyboard(.interactively)
+            .scrollBounceBehavior(.always, axes: .vertical)
             .overlay(alignment: .top) {
                 if messageListIsScrollable {
                     messageTopFade
@@ -349,11 +349,16 @@ struct GenerateView: View {
             }
             .onPreferenceChange(GenerateMessageContentHeightKey.self) { messageContentHeight = $0 }
             .onPreferenceChange(GenerateMessageViewportHeightKey.self) { messageViewportHeight = $0 }
-            .onChange(of: vm.messages.count) { _, _ in
-                if let lastId = vm.messages.last?.id {
-                    withAnimation(.easeOut(duration: 0.2)) {
-                        proxy.scrollTo(lastId, anchor: .bottom)
-                    }
+            .onChange(of: vm.messages.last?.id) { _, lastId in
+                guard let lastId else { return }
+                withAnimation(.easeOut(duration: 0.2)) {
+                    proxy.scrollTo(lastId, anchor: .bottom)
+                }
+            }
+            .onChange(of: vm.isSendingMessage) { _, sending in
+                guard sending else { return }
+                withAnimation(.easeOut(duration: 0.2)) {
+                    proxy.scrollTo("thinking", anchor: .bottom)
                 }
             }
         }
@@ -386,36 +391,72 @@ struct GenerateView: View {
         .allowsHitTesting(false)
     }
 
+    private var bottomDock: some View {
+        VStack(spacing: vm.presentationMode == .iterating ? Spacing.sm : Spacing.md) {
+            switch vm.presentationMode {
+            case .generationMinimized:
+                compactGenerationStatus
+                    .padding(.horizontal, Spacing.md)
+            case .iterating:
+                iteratingShell
+                    .padding(.horizontal, Spacing.md)
+                chatComposer
+                    .padding(.horizontal, Spacing.md)
+            case .candidatePresented:
+                chatComposer
+                    .padding(.horizontal, Spacing.md)
+            case .ideationExpanded:
+                chatComposer
+                    .padding(.horizontal, Spacing.md)
+            }
+        }
+        .padding(.top, keyboard.isVisible ? Spacing.xs : Spacing.sm2)
+        .padding(.bottom, bottomDockPadding)
+        .animation(.spring(response: 0.36, dampingFraction: 0.87), value: vm.presentationMode)
+    }
+
+    private var generationMinimizedCenter: some View {
+        VStack(spacing: Spacing.md) {
+            LottieView(animation: .named("alchemy-loading"))
+                .playbackMode(.playing(.toProgress(1, loopMode: .loop)))
+                .frame(width: 120, height: 120)
+
+            Text("generating recipe...")
+                .font(AlchemyFont.bodyBold)
+                .foregroundStyle(AlchemyColors.textPrimary)
+        }
+    }
+
+    private var compactGenerationStatus: some View {
+        Text(vm.typingDescriptor)
+            .font(AlchemyFont.chatBody)
+            .foregroundStyle(AlchemyColors.textPrimary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, Spacing.md)
+            .padding(.vertical, Spacing.sm2)
+            .chatLiquidSurface(role: .userBubble, focused: false, cornerRadius: Radius.xl)
+    }
+
     private var introMessage: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(vm.welcomePromptText)
                 .font(AlchemyFont.chatBody)
                 .foregroundStyle(AlchemyColors.textPrimary.opacity(0.98))
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.leading, Spacing.sm2)
-                .padding(.vertical, 2)
                 .shadow(color: Color.black.opacity(0.32), radius: 2, x: 0, y: 1)
 
             Text(Date.now, style: .time)
                 .font(AlchemyFont.chatTimestamp)
                 .foregroundStyle(AlchemyColors.textTertiary)
-                .padding(.leading, Spacing.sm2)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.leading, 32)
-        .padding(.trailing, 32)
+        .padding(.horizontal, Spacing.lg)
     }
 
     private func chatBubble(_ message: GenerateMessage) -> some View {
         let isUser = message.role == "user"
-        let timestampLeadingInset = isUser ? 0.0 : Spacing.sm2
-        let timestampTrailingInset = isUser ? Spacing.md : 0.0
-
-        return VStack(alignment: isUser ? .trailing : .leading, spacing: 4) {
-            HStack {
-                if isUser { Spacer(minLength: 60) }
-
-                if isUser {
+        return Group {
+            if isUser {
+                VStack(alignment: .trailing, spacing: 4) {
                     Text(message.content)
                         .font(AlchemyFont.chatBody)
                         .foregroundStyle(AlchemyColors.textPrimary)
@@ -426,25 +467,29 @@ struct GenerateView: View {
                             focused: false,
                             cornerRadius: Radius.lg
                         )
-                } else {
+
+                    Text(message.timestamp, style: .time)
+                        .font(AlchemyFont.chatTimestamp)
+                        .foregroundStyle(AlchemyColors.textTertiary)
+                        .padding(.trailing, Spacing.sm)
+                }
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .padding(.horizontal, Spacing.md)
+            } else {
+                VStack(alignment: .leading, spacing: 4) {
                     Text(message.content)
                         .font(AlchemyFont.chatBody)
                         .foregroundStyle(AlchemyColors.textPrimary.opacity(0.98))
-                        .padding(.horizontal, Spacing.sm2)
-                        .padding(.vertical, 2)
                         .shadow(color: Color.black.opacity(0.32), radius: 2, x: 0, y: 1)
+
+                    Text(message.timestamp, style: .time)
+                        .font(AlchemyFont.chatTimestamp)
+                        .foregroundStyle(AlchemyColors.textTertiary)
                 }
-
-                if !isUser { Spacer(minLength: 60) }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, Spacing.lg)
             }
-
-            Text(message.timestamp, style: .time)
-                .font(AlchemyFont.chatTimestamp)
-                .foregroundStyle(AlchemyColors.textTertiary)
-                .padding(.leading, timestampLeadingInset)
-                .padding(.trailing, timestampTrailingInset)
         }
-        .padding(.horizontal, Spacing.md)
     }
 
     private var suggestionChips: some View {
@@ -519,15 +564,15 @@ struct GenerateView: View {
             .lineLimit(1...6)
             .focused($isInputFocused)
             .padding(.leading, Spacing.md)
-            .padding(.trailing, 50)
-            .padding(.vertical, 12)
+            .padding(.trailing, 46)
+            .padding(.vertical, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
 
             Button {
                 Task { await vm.sendMessage(api: api) }
             } label: {
                 Image(systemName: "paperplane.fill")
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(
                         LinearGradient(
                             colors: [
@@ -538,13 +583,13 @@ struct GenerateView: View {
                             endPoint: .bottom
                         )
                     )
-                    .frame(width: 26, height: 26)
+                    .frame(width: 22, height: 22)
             }
             .disabled(sendDisabled)
             .opacity(sendDisabled ? 0.5 : 1)
-            .padding(.trailing, 12)
+            .padding(.trailing, 14)
         }
-        .frame(minHeight: 52, alignment: .center)
+        .frame(minHeight: 50, alignment: .center)
         .chatLiquidSurface(role: .composer, focused: isInputFocused, cornerRadius: Radius.xl)
         .animation(.easeInOut(duration: 0.18), value: vm.input.count)
         .animation(.easeInOut(duration: 0.2), value: isInputFocused)
@@ -640,7 +685,7 @@ struct GenerateView: View {
                 Color.clear.frame(height: 320)
             }
             .padding(.horizontal, Spacing.md)
-            .padding(.top, 110)
+            .padding(.top, 24)
         }
         .scrollDismissesKeyboard(.interactively)
     }
@@ -650,17 +695,26 @@ struct GenerateView: View {
             ? String(format: "%.0f", amount)
             : String(format: "%.1f", amount)
     }
+
+    private func dismissKeyboard() {
+        UIApplication.shared.sendAction(
+            #selector(UIResponder.resignFirstResponder),
+            to: nil,
+            from: nil,
+            for: nil
+        )
+    }
 }
 
 private struct GenerateMessageContentHeightKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
+    static let defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = nextValue()
     }
 }
 
 private struct GenerateMessageViewportHeightKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
+    static let defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = nextValue()
     }

@@ -12,7 +12,8 @@ final class RecipeDetailViewModel {
         error = nil
 
         do {
-            async let recipeTask = api.getRecipe(recipeId)
+            let projection = (try? await api.getPreferences().recipeProjection) ?? .fallback
+            async let recipeTask = api.getRecipe(recipeId, projection: projection)
             async let historyTask = api.getRecipeHistory(recipeId)
 
             recipe = try await recipeTask

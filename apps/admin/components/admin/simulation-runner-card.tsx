@@ -345,6 +345,23 @@ const getTokenUsageFromStep = (step: SimStep | undefined): TokenUsageSummary | n
   return normalizeTokenUsage(step.result["token_usage"]);
 };
 
+const getStepTimingFromStep = (
+  step: SimStep | undefined
+): { llm_ms: number; api_ms: number; db_ms: number } | null => {
+  if (!step || !isRecord(step.result)) {
+    return null;
+  }
+  const timing = step.result["timing"];
+  if (!isRecord(timing)) {
+    return null;
+  }
+  return {
+    llm_ms: Math.max(0, asNumber(timing["llm_ms"]) ?? 0),
+    api_ms: Math.max(0, asNumber(timing["api_ms"]) ?? 0),
+    db_ms: Math.max(0, asNumber(timing["db_ms"]) ?? 0)
+  };
+};
+
 const getRunTokenTotals = (
   result: SimResult | null
 ): { input_tokens: number; output_tokens: number; total_tokens: number; cost_usd: number } => {
@@ -694,12 +711,8 @@ function StepList({ steps }: { steps: SimStep[] }): React.JSX.Element {
       {steps.map((step, index) => {
         const tokenUsage = getTokenUsageFromStep(step);
         const tokenTotal = tokenUsage ? Math.max(0, tokenUsage.total_tokens) : 0;
-        const tokenInput = tokenUsage ? Math.max(0, tokenUsage.input_tokens) : 0;
-        const tokenOutput = tokenUsage ? Math.max(0, tokenUsage.output_tokens) : 0;
-        const classifyStats = tokenUsage?.scope_stats["classify"];
-        const stepLabel = classifyStats && classifyStats.llm_call_count > 0
-          ? `${step.name} + classify`
-          : step.name;
+        const hasLlmTokens = Boolean(tokenUsage && tokenUsage.llm_call_count > 0);
+        const timing = getStepTimingFromStep(step);
         return (
           <div
             key={`${step.name}-${index}`}
@@ -726,7 +739,7 @@ function StepList({ steps }: { steps: SimStep[] }): React.JSX.Element {
                 step.status === "ok" ? "text-emerald-900" : step.status === "failed" ? "text-red-900" : "text-amber-900"
               )}
             >
-              {stepLabel}
+              {step.name}
             </span>
 
             {step.error && (
@@ -734,13 +747,12 @@ function StepList({ steps }: { steps: SimStep[] }): React.JSX.Element {
             )}
 
             <span className="flex-none font-mono text-muted-foreground">
-              {tokenTotal.toLocaleString()} tok
-              {tokenUsage ? ` (${tokenInput.toLocaleString()}/${tokenOutput.toLocaleString()})` : ""}
+              {hasLlmTokens ? `${tokenTotal.toLocaleString()} tok` : "— tok"}
             </span>
-            {classifyStats && classifyStats.llm_call_count > 0 && (
+            {timing && (timing.llm_ms > 0 || timing.api_ms > 0 || timing.db_ms > 0) && (
               <span className="flex-none font-mono text-[11px] text-muted-foreground">
-                classify {Math.max(0, classifyStats.total_tokens).toLocaleString()} tok{" "}
-                {Math.max(0, classifyStats.latency_ms).toLocaleString()}ms
+                llm {timing.llm_ms.toLocaleString()}ms · api {timing.api_ms.toLocaleString()}ms · db{" "}
+                {timing.db_ms.toLocaleString()}ms
               </span>
             )}
             <span className="flex-none font-mono text-muted-foreground">
@@ -850,7 +862,6 @@ function RunLane({
           <span className="font-mono text-[10px] text-muted-foreground">{result.request_id || "pending"}</span>
           <span className="font-mono text-[10px] text-muted-foreground">
             {tokenTotals.total_tokens.toLocaleString()} tok
-            {` (${tokenTotals.input_tokens.toLocaleString()}/${tokenTotals.output_tokens.toLocaleString()})`}
           </span>
           <span className="ml-auto font-mono text-[10px] text-muted-foreground">{totalMs.toLocaleString()}ms</span>
         </div>
@@ -937,9 +948,9 @@ function ComparisonTable({ a, b }: { a: SimResult; b: SimResult }): React.JSX.El
               const delta = stepA && stepB ? stepB.latency_ms - stepA.latency_ms : null;
               const usageA = getTokenUsageFromStep(stepA);
               const usageB = getTokenUsageFromStep(stepB);
-              const tokensA = usageA ? Math.max(0, usageA.total_tokens) : 0;
-              const tokensB = usageB ? Math.max(0, usageB.total_tokens) : 0;
-              const tokenStepDelta = tokensB - tokensA;
+              const tokensA = usageA && usageA.llm_call_count > 0 ? Math.max(0, usageA.total_tokens) : null;
+              const tokensB = usageB && usageB.llm_call_count > 0 ? Math.max(0, usageB.total_tokens) : null;
+              const tokenStepDelta = tokensA !== null && tokensB !== null ? tokensB - tokensA : null;
 
               return (
                 <tr key={stepName} className="border-b last:border-0">
@@ -961,26 +972,20 @@ function ComparisonTable({ a, b }: { a: SimResult; b: SimResult }): React.JSX.El
                     )}
                   </td>
               <td className="px-3 py-1.5 text-center font-mono">
-                {tokensA.toLocaleString()}
-                {usageA ? (
-                  <span className="ml-1 text-[10px] text-muted-foreground">
-                    ({usageA.input_tokens.toLocaleString()}/{usageA.output_tokens.toLocaleString()})
-                  </span>
-                ) : null}
+                {tokensA !== null ? tokensA.toLocaleString() : "—"}
               </td>
               <td className="px-3 py-1.5 text-center font-mono">
-                {tokensB.toLocaleString()}
-                {usageB ? (
-                  <span className="ml-1 text-[10px] text-muted-foreground">
-                    ({usageB.input_tokens.toLocaleString()}/{usageB.output_tokens.toLocaleString()})
-                  </span>
-                ) : null}
+                {tokensB !== null ? tokensB.toLocaleString() : "—"}
               </td>
                   <td className="px-3 py-1.5 text-right font-mono">
-                    <span className={tokenStepDelta < 0 ? "text-emerald-600" : tokenStepDelta > 0 ? "text-red-600" : "text-muted-foreground"}>
-                      {tokenStepDelta > 0 ? "+" : ""}
-                      {tokenStepDelta.toLocaleString()}
-                    </span>
+                    {tokenStepDelta !== null ? (
+                      <span className={tokenStepDelta < 0 ? "text-emerald-600" : tokenStepDelta > 0 ? "text-red-600" : "text-muted-foreground"}>
+                        {tokenStepDelta > 0 ? "+" : ""}
+                        {tokenStepDelta.toLocaleString()}
+                      </span>
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
                   </td>
                 </tr>
               );
@@ -999,15 +1004,9 @@ function ComparisonTable({ a, b }: { a: SimResult; b: SimResult }): React.JSX.El
               </td>
               <td className="px-3 py-1.5 text-center font-mono">
                 {tokenTotalsA.total_tokens.toLocaleString()}
-                <span className="ml-1 text-[10px] text-muted-foreground">
-                  ({tokenTotalsA.input_tokens.toLocaleString()}/{tokenTotalsA.output_tokens.toLocaleString()})
-                </span>
               </td>
               <td className="px-3 py-1.5 text-center font-mono">
                 {tokenTotalsB.total_tokens.toLocaleString()}
-                <span className="ml-1 text-[10px] text-muted-foreground">
-                  ({tokenTotalsB.input_tokens.toLocaleString()}/{tokenTotalsB.output_tokens.toLocaleString()})
-                </span>
               </td>
               <td className="px-3 py-1.5 text-right font-mono">
                 <span className={tokenDelta < 0 ? "text-emerald-600" : tokenDelta > 0 ? "text-red-600" : "text-muted-foreground"}>
@@ -1041,10 +1040,15 @@ export function SimulationRunnerCard({ registryModels }: { registryModels: Regis
     return out;
   };
 
-  const runLane = async (variant: "A" | "B"): Promise<void> => {
+  const runLane = async (
+    variant: "A" | "B",
+    options?: { seed?: number; runGroupId?: string }
+  ): Promise<void> => {
     const setRunning = variant === "A" ? setRunningA : setRunningB;
     const setResult = variant === "A" ? setResultA : setResultB;
     const overrides = variant === "A" ? overridesA : overridesB;
+    const seed = options?.seed ?? Math.max(1, Math.floor(Date.now() % 2_147_483_647));
+    const runGroupId = options?.runGroupId ?? crypto.randomUUID();
 
     setRunning(true);
     setResult(emptyResult());
@@ -1055,6 +1059,8 @@ export function SimulationRunnerCard({ registryModels }: { registryModels: Regis
       body: JSON.stringify({
         scenario: "default_api_ux",
         variant,
+        seed,
+        run_group_id: runGroupId,
         model_overrides: buildOverridePayload(overrides)
       })
     });
@@ -1120,7 +1126,12 @@ export function SimulationRunnerCard({ registryModels }: { registryModels: Regis
       return;
     }
 
-    void Promise.all([runLane("A"), runLane("B")]);
+    const seed = Math.max(1, Math.floor(Date.now() % 2_147_483_647));
+    const runGroupId = crypto.randomUUID();
+    void Promise.all([
+      runLane("A", { seed, runGroupId }),
+      runLane("B", { seed, runGroupId })
+    ]);
   };
 
   return (
@@ -1131,7 +1142,7 @@ export function SimulationRunnerCard({ registryModels }: { registryModels: Regis
             <CardTitle className="text-base">Simulation Runner — Single or A/B Concurrent</CardTitle>
             <CardDescription>
               Runs against live <code className="rounded bg-muted px-1 text-xs">/v1</code> with full real-time trace.
-              Every run is fresh data and every step is latency-timed.
+              Every run uses fresh seeded prompts, and concurrent A/B lanes share the same seed for fair comparison.
             </CardDescription>
           </div>
           <Button

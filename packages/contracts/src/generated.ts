@@ -1150,7 +1150,15 @@ export interface paths {
                         "application/json": components["schemas"]["ChatSession"];
                     };
                 };
-                default: components["responses"]["ErrorResponse"];
+                /** @description Error envelope */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorEnvelope"];
+                    };
+                };
             };
         };
         delete?: never;
@@ -1670,6 +1678,16 @@ export interface components {
         };
         /** @enum {string} */
         ChatLoopState: "ideation" | "candidate_presented" | "iterating";
+        ChatResponseContext: {
+            mode?: string;
+            /** @enum {string} */
+            intent?: "in_scope_ideation" | "in_scope_generate" | "out_of_scope";
+            changed_sections?: string[];
+            personalization_notes?: string[];
+            preference_updates?: {
+                [key: string]: unknown;
+            };
+        };
         CandidateRecipeComponent: {
             component_id: string;
             /** @enum {string} */
@@ -1760,6 +1778,7 @@ export interface components {
             loop_state: components["schemas"]["ChatLoopState"];
             assistant_reply: components["schemas"]["AssistantReply"] | null;
             candidate_recipe_set?: components["schemas"]["CandidateRecipeSet"] | null;
+            response_context?: components["schemas"]["ChatResponseContext"] | null;
             memory_context_ids: string[];
             context_version: number;
             ui_hints?: {

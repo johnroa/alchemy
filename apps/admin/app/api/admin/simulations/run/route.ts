@@ -7,6 +7,8 @@ type SimulationVariant = "single" | "A" | "B";
 type Body = {
   scenario?: string;
   variant?: SimulationVariant;
+  seed?: number;
+  run_group_id?: string;
   model_overrides?: Record<string, ModelOverride>;
 };
 
@@ -154,6 +156,73 @@ const normalizeApiBase = (raw: string | undefined): string => {
   const withProtocol = /^https?:\/\//i.test(value) ? value : `https://${value}`;
   const withoutTrailing = withProtocol.replace(/\/+$/, "");
   return withoutTrailing.endsWith("/v1") ? withoutTrailing : `${withoutTrailing}/v1`;
+};
+
+const normalizeSeed = (value: unknown): number => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return Math.floor(Date.now() % 2_147_483_647);
+  }
+  return Math.max(1, Math.min(2_147_483_647, Math.floor(numeric)));
+};
+
+const seededRandom = (seed: number): (() => number) => {
+  let state = seed >>> 0;
+  return () => {
+    state = (state * 1664525 + 1013904223) >>> 0;
+    return state / 0x100000000;
+  };
+};
+
+const pickSeeded = <T>(rng: () => number, values: readonly [T, ...T[]]): T =>
+  values[Math.floor(rng() * values.length) % values.length]!;
+
+const buildScenarioPrompts = (scenario: string, seed: number): {
+  start: string;
+  refine: string;
+  trigger: string;
+  iterate: string;
+} => {
+  const rng = seededRandom(seed);
+  const proteins: readonly [string, ...string[]] = [
+    "chicken",
+    "salmon",
+    "tofu",
+    "shrimp",
+    "turkey",
+  ];
+  const spiceLevels: readonly [string, ...string[]] = ["mild", "medium", "spicy"];
+  const sides: readonly [string, ...string[]] = ["broccoli", "green beans", "zucchini", "asparagus"];
+  const maxMinutes: readonly [number, ...number[]] = [30, 35, 40, 45];
+  const diners: readonly [number, ...number[]] = [2, 3, 4];
+
+  const protein = pickSeeded(rng, proteins);
+  const spice = pickSeeded(rng, spiceLevels);
+  const side = pickSeeded(rng, sides);
+  const minutes = pickSeeded(rng, maxMinutes);
+  const servingCount = pickSeeded(rng, diners);
+
+  if (scenario === "quick_weeknight") {
+    return {
+      start:
+        `I need a quick weeknight dinner for ${servingCount}. Keep it high-protein and practical.`,
+      refine:
+        `Let's do ${spice} ${protein} with a ${side} side. I want simple prep.`,
+      trigger: "Great, that sounds right. Can you write the full recipe now?",
+      iterate:
+        `Tweak it so total time stays under ${minutes} minutes and keep it dairy-free.`,
+    };
+  }
+
+  return {
+    start:
+      `I want a high-protein dinner for ${servingCount}. Keep it realistic for a busy night.`,
+    refine:
+      `Let's do ${spice} ${protein} with one ${side} side. Keep it straightforward.`,
+    trigger: "That sounds good. Please give me the full recipe now.",
+    iterate:
+      `Please tweak it to stay under ${minutes} minutes and avoid dairy.`,
+  };
 };
 
 const extractRequestId = (
@@ -429,6 +498,8 @@ const getSimToken = async (supabaseUrl: string, serviceKey: string): Promise<str
 const runSimulation = async (params: {
   scenario: string;
   variant: SimulationVariant;
+  seed: number;
+  runGroupId: string;
   modelOverrides: Record<string, ModelOverride>;
   emit?: (event: SimTraceEvent) => Promise<void>;
 }): Promise<SimResult> => {
@@ -557,6 +628,26 @@ const runSimulation = async (params: {
       scope_stats: scopeStatsObj
     };
   };
+  const sumLlmLatencyMs = (usage: TokenUsageSummary | null): number => {
+    if (!usage) {
+      return 0;
+    }
+    return Object.values(usage.scope_stats).reduce((sum, scope) => {
+      return sum + Math.max(0, Number(scope.latency_ms || 0));
+    }, 0);
+  };
+  const loadTokenUsageWithTiming = async (
+    apiRequestId: string | null
+  ): Promise<{ tokenUsage: TokenUsageSummary | null; dbMs: number; llmMs: number }> => {
+    const dbStartedAt = Date.now();
+    const tokenUsage = await loadTokenUsage(apiRequestId);
+    const dbMs = Date.now() - dbStartedAt;
+    return {
+      tokenUsage,
+      dbMs,
+      llmMs: sumLlmLatencyMs(tokenUsage)
+    };
+  };
 
   const runStep = async <T extends Record<string, unknown>>(
     name: string,
@@ -631,6 +722,8 @@ const runSimulation = async (params: {
       event_payload: {
         scenario: params.scenario,
         variant: params.variant,
+        seed: params.seed,
+        run_group_id: params.runGroupId,
         trigger: "admin_ui",
         model_overrides: Object.keys(params.modelOverrides).length > 0 ? params.modelOverrides : undefined
       }
@@ -644,14 +737,10 @@ const runSimulation = async (params: {
       variant: params.variant
     });
 
-    const prompts = {
-      start: "I want a quick high-protein dinner for two. Keep it simple and weeknight-friendly.",
-      refine: "Let's make it spicy chicken with one vegetable side. Keep prep practical.",
-      trigger: "That sounds exactly right. Let's do this one.",
-      iterate: "Tweak it: keep total time under 45 minutes and make it dairy-free."
-    } as const;
+    const prompts = buildScenarioPrompts(params.scenario, params.seed);
 
     const chat = await runStep("chat_start", async () => {
+      const apiStartedAt = Date.now();
       const api = await requestJson<ChatApiResponse>({
         apiBase,
         token,
@@ -660,8 +749,9 @@ const runSimulation = async (params: {
         body: { message: prompts.start },
         modelOverrides: params.modelOverrides
       });
+      const apiMs = Date.now() - apiStartedAt;
       const response = api.data;
-      const tokenUsage = await loadTokenUsage(api.request_id);
+      const { tokenUsage, dbMs, llmMs } = await loadTokenUsageWithTiming(api.request_id);
 
       assertCondition(typeof response.id === "string" && response.id.length > 0, "Chat session id missing");
 
@@ -670,6 +760,7 @@ const runSimulation = async (params: {
         user_prompt: prompts.start,
         api_request_id: api.request_id,
         token_usage: tokenUsage,
+        timing: { api_ms: apiMs, db_ms: dbMs, llm_ms: llmMs },
         loop_state: response.loop_state ?? "unknown",
         assistant_reply: extractAssistantText(response),
         message_count: Array.isArray(response.messages) ? response.messages.length : 0,
@@ -678,6 +769,7 @@ const runSimulation = async (params: {
     });
 
     const refine = await runStep("chat_refine", async () => {
+      const apiStartedAt = Date.now();
       const api = await requestJson<ChatApiResponse>({
         apiBase,
         token,
@@ -686,13 +778,15 @@ const runSimulation = async (params: {
         body: { message: prompts.refine },
         modelOverrides: params.modelOverrides
       });
+      const apiMs = Date.now() - apiStartedAt;
       const response = api.data;
-      const tokenUsage = await loadTokenUsage(api.request_id);
+      const { tokenUsage, dbMs, llmMs } = await loadTokenUsageWithTiming(api.request_id);
 
       return {
         user_prompt: prompts.refine,
         api_request_id: api.request_id,
         token_usage: tokenUsage,
+        timing: { api_ms: apiMs, db_ms: dbMs, llm_ms: llmMs },
         loop_state: response.loop_state ?? "unknown",
         assistant_reply: extractAssistantText(response),
         message_count: Array.isArray(response.messages) ? response.messages.length : 0,
@@ -730,12 +824,14 @@ const runSimulation = async (params: {
             cost_usd: 0,
             scopes: [],
             scope_stats: {}
-          }
+          },
+          timing: { api_ms: 0, db_ms: 0, llm_ms: 0 }
         };
       }
 
       const generationPrompt = prompts.trigger;
 
+      const apiStartedAt = Date.now();
       const api = await requestJson<ChatApiResponse>({
         apiBase,
         token,
@@ -744,8 +840,9 @@ const runSimulation = async (params: {
         body: { message: generationPrompt },
         modelOverrides: params.modelOverrides
       });
+      const apiMs = Date.now() - apiStartedAt;
       const response = api.data;
-      const tokenUsage = await loadTokenUsage(api.request_id);
+      const { tokenUsage, dbMs, llmMs } = await loadTokenUsageWithTiming(api.request_id);
 
       const components = summarizeComponents(response.candidate_recipe_set);
       if (components.length > 0) {
@@ -754,6 +851,7 @@ const runSimulation = async (params: {
           generation_source: "chat_generation_trigger",
           api_request_id: api.request_id,
           token_usage: tokenUsage,
+          timing: { api_ms: apiMs, db_ms: dbMs, llm_ms: llmMs },
           loop_state: response.loop_state ?? "unknown",
           candidate_id: response.candidate_recipe_set?.candidate_id ?? "",
           revision: response.candidate_recipe_set?.revision ?? null,
@@ -774,6 +872,7 @@ const runSimulation = async (params: {
     });
 
     const iterated = await runStep("chat_iterate_candidate", async () => {
+      const apiStartedAt = Date.now();
       const api = await requestJson<ChatApiResponse>({
         apiBase,
         token,
@@ -782,8 +881,9 @@ const runSimulation = async (params: {
         body: { message: prompts.iterate },
         modelOverrides: params.modelOverrides
       });
+      const apiMs = Date.now() - apiStartedAt;
       const response = api.data;
-      const tokenUsage = await loadTokenUsage(api.request_id);
+      const { tokenUsage, dbMs, llmMs } = await loadTokenUsageWithTiming(api.request_id);
 
       const components = summarizeComponents(response.candidate_recipe_set);
       assertCondition(components.length > 0, "Iteration response lost candidate recipe set");
@@ -793,6 +893,7 @@ const runSimulation = async (params: {
         tweak_prompt: prompts.iterate,
         api_request_id: api.request_id,
         token_usage: tokenUsage,
+        timing: { api_ms: apiMs, db_ms: dbMs, llm_ms: llmMs },
         loop_state: response.loop_state ?? "unknown",
         assistant_reply: extractAssistantText(response),
         message_count: Array.isArray(response.messages) ? response.messages.length : 0,
@@ -816,10 +917,12 @@ const runSimulation = async (params: {
           skipped: true,
           reason: "No active component id provided in candidate set",
           api_request_id: null,
-          token_usage: null
+          token_usage: null,
+          timing: { api_ms: 0, db_ms: 0, llm_ms: 0 }
         };
       }
 
+      const apiStartedAt = Date.now();
       const api = await requestJson<ChatApiResponse>({
         apiBase,
         token,
@@ -831,12 +934,14 @@ const runSimulation = async (params: {
         },
         modelOverrides: params.modelOverrides
       });
+      const apiMs = Date.now() - apiStartedAt;
       const response = api.data;
-      const tokenUsage = await loadTokenUsage(api.request_id);
+      const { tokenUsage, dbMs, llmMs } = await loadTokenUsageWithTiming(api.request_id);
 
       return {
         api_request_id: api.request_id,
         token_usage: tokenUsage,
+        timing: { api_ms: apiMs, db_ms: dbMs, llm_ms: llmMs },
         loop_state: response.loop_state ?? "unknown",
         active_component_id: response.candidate_recipe_set?.active_component_id ?? null,
         candidate_summary: summarizeComponents(response.candidate_recipe_set),
@@ -845,6 +950,7 @@ const runSimulation = async (params: {
     });
 
     const committed = await runStep("commit_candidate_set", async () => {
+      const apiStartedAt = Date.now();
       const api = await requestJson<ChatApiResponse>({
         apiBase,
         token,
@@ -853,8 +959,9 @@ const runSimulation = async (params: {
         body: {},
         modelOverrides: params.modelOverrides
       });
+      const apiMs = Date.now() - apiStartedAt;
       const response = api.data;
-      const tokenUsage = await loadTokenUsage(api.request_id);
+      const { tokenUsage, dbMs, llmMs } = await loadTokenUsageWithTiming(api.request_id);
 
       const recipes = Array.isArray(response.commit?.recipes) ? response.commit?.recipes : [];
       assertCondition(recipes.length > 0, "Commit did not return persisted recipe ids");
@@ -862,6 +969,7 @@ const runSimulation = async (params: {
       return {
         api_request_id: api.request_id,
         token_usage: tokenUsage,
+        timing: { api_ms: apiMs, db_ms: dbMs, llm_ms: llmMs },
         loop_state: response.loop_state ?? "unknown",
         committed_count: Number(response.commit?.committed_count ?? recipes.length),
         recipes: recipes.map((recipe) => ({
@@ -883,6 +991,7 @@ const runSimulation = async (params: {
     const fetchedRecipe = await runStep("fetch_committed_recipe", async () => {
       assertCondition(primaryRecipeId.length > 0, "No primary recipe id available after commit");
 
+      const apiStartedAt = Date.now();
       const api = await requestJson<RecipeApiResponse>({
         apiBase,
         token,
@@ -890,12 +999,14 @@ const runSimulation = async (params: {
         method: "GET",
         modelOverrides: params.modelOverrides
       });
+      const apiMs = Date.now() - apiStartedAt;
       const recipe = api.data;
-      const tokenUsage = await loadTokenUsage(api.request_id);
+      const { tokenUsage, dbMs, llmMs } = await loadTokenUsageWithTiming(api.request_id);
 
       return {
         api_request_id: api.request_id,
         token_usage: tokenUsage,
+        timing: { api_ms: apiMs, db_ms: dbMs, llm_ms: llmMs },
         recipe_id: primaryRecipeId,
         title: recipe.title ?? "",
         ingredient_count: Array.isArray(recipe.ingredients) ? recipe.ingredients.length : 0,
@@ -905,6 +1016,7 @@ const runSimulation = async (params: {
     });
 
     await runStep("fetch_cookbook", async () => {
+      const apiStartedAt = Date.now();
       const api = await requestJson<CookbookApiResponse>({
         apiBase,
         token,
@@ -912,8 +1024,9 @@ const runSimulation = async (params: {
         method: "GET",
         modelOverrides: params.modelOverrides
       });
+      const apiMs = Date.now() - apiStartedAt;
       const response = api.data;
-      const tokenUsage = await loadTokenUsage(api.request_id);
+      const { tokenUsage, dbMs, llmMs } = await loadTokenUsageWithTiming(api.request_id);
 
       const items = Array.isArray(response.items) ? response.items : [];
       const containsCommitted = items.some((item) => {
@@ -924,6 +1037,7 @@ const runSimulation = async (params: {
       return {
         api_request_id: api.request_id,
         token_usage: tokenUsage,
+        timing: { api_ms: apiMs, db_ms: dbMs, llm_ms: llmMs },
         item_count: items.length,
         contains_primary_recipe: containsCommitted
       };
@@ -944,6 +1058,9 @@ const runSimulation = async (params: {
       event_payload: {
         scenario: params.scenario,
         variant: params.variant,
+        seed: params.seed,
+        run_group_id: params.runGroupId,
+        prompts,
         checks,
         steps
       }
@@ -988,6 +1105,8 @@ const runSimulation = async (params: {
       event_payload: {
         scenario: params.scenario,
         variant: params.variant,
+        seed: params.seed,
+        run_group_id: params.runGroupId,
         error: message,
         steps
       }
@@ -1011,10 +1130,14 @@ export async function POST(request: Request): Promise<Response> {
 
   const scenario = (body.scenario ?? "default_api_ux").trim() || "default_api_ux";
   const variant: SimulationVariant = body.variant ?? "single";
+  const seed = normalizeSeed(body.seed);
+  const runGroupId = typeof body.run_group_id === "string" && body.run_group_id.trim().length > 0
+    ? body.run_group_id.trim()
+    : crypto.randomUUID();
   const modelOverrides = body.model_overrides ?? {};
 
   if (!stream) {
-    const result = await runSimulation({ scenario, variant, modelOverrides });
+    const result = await runSimulation({ scenario, variant, seed, runGroupId, modelOverrides });
     return NextResponse.json(result, { status: result.ok ? 200 : 500 });
   }
 
@@ -1031,6 +1154,8 @@ export async function POST(request: Request): Promise<Response> {
       const result = await runSimulation({
         scenario,
         variant,
+        seed,
+        runGroupId,
         modelOverrides,
         emit: async (event) => {
           await writeEvent(event);

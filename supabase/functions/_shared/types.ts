@@ -104,6 +104,7 @@ export type RecipeAssistantEnvelope = {
   assistant_reply: AssistantReply;
   response_context?: {
     mode?: string;
+    intent?: "in_scope_ideation" | "in_scope_generate" | "out_of_scope";
     changed_sections?: string[];
     personalization_notes?: string[];
     preference_updates?: Record<string, JsonValue>;
@@ -117,6 +118,7 @@ export type ChatAssistantEnvelope = {
   candidate_recipe_set?: CandidateRecipeSet;
   response_context?: {
     mode?: string;
+    intent?: "in_scope_ideation" | "in_scope_generate" | "out_of_scope";
     changed_sections?: string[];
     personalization_notes?: string[];
     preference_updates?: Record<string, JsonValue>;

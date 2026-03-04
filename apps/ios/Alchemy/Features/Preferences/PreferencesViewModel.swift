@@ -78,6 +78,9 @@ final class PreferencesViewModel {
         }
     }
     var maxDifficulty: Double = 3
+    var recipeUnits: RecipeUnits = .source
+    var recipeGroupBy: RecipeGroupBy = .flat
+    var inlineMeasurements = true
 
     var cookbookInsight = PreferencesViewModel.fallbackInsight
     private var presentationPreferences: [String: JSONValue] = [:]
@@ -194,6 +197,7 @@ final class PreferencesViewModel {
 
     private func apply(profile: PreferenceProfile) {
         presentationPreferences = profile.presentationPreferences ?? [:]
+        let projection = profile.recipeProjection
         freeForm = profile.freeForm ?? ""
         equipment = rawValue(for: RawPreferenceKeys.equipment) ?? profile.equipment.joined(separator: ", ")
         dietaryPreferences = rawValue(for: RawPreferenceKeys.dietaryPreferences) ?? profile.dietaryPreferences.joined(separator: ", ")
@@ -203,6 +207,9 @@ final class PreferencesViewModel {
         aversions = rawValue(for: RawPreferenceKeys.aversions) ?? profile.aversions.joined(separator: ", ")
         cookingFor = profile.cookingFor ?? ""
         maxDifficulty = Double(profile.maxDifficulty)
+        recipeUnits = projection.units
+        recipeGroupBy = projection.groupBy
+        inlineMeasurements = projection.inlineMeasurements
     }
 
     private func rawValue(for key: String) -> String? {
@@ -221,6 +228,9 @@ final class PreferencesViewModel {
         setRawPreference(in: &merged, key: RawPreferenceKeys.equipment, value: equipment)
         setRawPreference(in: &merged, key: RawPreferenceKeys.cuisines, value: cuisines)
         setRawPreference(in: &merged, key: RawPreferenceKeys.aversions, value: aversions)
+        merged[PresentationPreferenceKey.recipeUnits] = .string(recipeUnits.rawValue)
+        merged[PresentationPreferenceKey.recipeGroupBy] = .string(recipeGroupBy.rawValue)
+        merged[PresentationPreferenceKey.recipeInlineMeasurements] = .bool(inlineMeasurements)
 
         return merged.isEmpty ? nil : merged
     }
