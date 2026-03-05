@@ -13,6 +13,10 @@ const DEFAULT_MODELS = [
   { provider: "anthropic", model: "claude-opus-4-6",     display_name: "Claude Opus 4.6",  input_cost_per_1m_tokens: 15.00, output_cost_per_1m_tokens: 75.00, context_window_tokens: 200000,  max_output_tokens: 32000,  notes: "Most capable Claude model" },
   { provider: "anthropic", model: "claude-sonnet-4-6",   display_name: "Claude Sonnet 4.6",input_cost_per_1m_tokens: 3.00,  output_cost_per_1m_tokens: 15.00, context_window_tokens: 200000,  max_output_tokens: 64000,  notes: "Balanced Claude Sonnet" },
   { provider: "anthropic", model: "claude-haiku-4-5",    display_name: "Claude Haiku 4.5", input_cost_per_1m_tokens: 0.80,  output_cost_per_1m_tokens: 4.00,  context_window_tokens: 200000,  max_output_tokens: 16000,  notes: "Fast Claude Haiku" },
+  { provider: "google",    model: "gemini-2.5-flash",       display_name: "Gemini 2.5 Flash",       input_cost_per_1m_tokens: 0.30, output_cost_per_1m_tokens: 2.50,  context_window_tokens: 1048576, max_output_tokens: 65536, notes: "Stable Gemini 2.5 Flash model" },
+  { provider: "google",    model: "gemini-2.5-flash-lite",  display_name: "Gemini 2.5 Flash-Lite",  input_cost_per_1m_tokens: 0.10, output_cost_per_1m_tokens: 0.40,  context_window_tokens: 1048576, max_output_tokens: 65536, notes: "Stable Gemini 2.5 Flash-Lite model" },
+  { provider: "google",    model: "gemini-2.5-pro",         display_name: "Gemini 2.5 Pro",         input_cost_per_1m_tokens: 1.25, output_cost_per_1m_tokens: 10.00, context_window_tokens: 1048576, max_output_tokens: 65536, notes: "Stable Gemini 2.5 Pro model" },
+  { provider: "google",    model: "gemini-2.5-flash-image", display_name: "Gemini 2.5 Flash Image", input_cost_per_1m_tokens: 0.30, output_cost_per_1m_tokens: 30.00, context_window_tokens: 65536,   max_output_tokens: 32768, notes: "Gemini 2.5 image generation model" },
 ];
 
 const REMOVED_OPENAI_MODELS = ["gpt-4o", "gpt-4o-mini", "o3", "o4-mini"] as const;

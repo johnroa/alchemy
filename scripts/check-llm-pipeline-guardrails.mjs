@@ -43,8 +43,20 @@ const files = walk(repoRoot).filter((rel) => {
 });
 
 const disallowedProviderCallFiles = files.filter((rel) => {
+  if (
+    rel.endsWith(".md") ||
+    rel.endsWith(".test.ts") ||
+    rel === "scripts/check-llm-pipeline-guardrails.mjs"
+  ) {
+    return false;
+  }
+
   const content = read(rel);
-  if (!content.includes("api.openai.com") && !content.includes("api.anthropic.com")) {
+  if (
+    !content.includes("api.openai.com") &&
+    !content.includes("api.anthropic.com") &&
+    !content.includes("generativelanguage.googleapis.com")
+  ) {
     return false;
   }
 

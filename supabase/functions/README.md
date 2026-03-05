@@ -12,8 +12,10 @@ supabase functions deploy v1 --project-ref <PROJECT_REF>
 - `SUPABASE_ANON_KEY`
 - `SUPABASE_SERVICE_ROLE_KEY`
 - `OPENAI_API_KEY`
+- `GEMINI_API_KEY`
 - Optional: `OPENAI_RESPONSES_ENDPOINT` (defaults to OpenAI Responses API)
 - Optional: `OPENAI_IMAGES_ENDPOINT` (defaults to OpenAI image generations API)
+- Optional (route config): `endpoint` / `image_endpoint` in `llm_model_routes.config` for Gemini-compatible overrides
 
 ## API host
 

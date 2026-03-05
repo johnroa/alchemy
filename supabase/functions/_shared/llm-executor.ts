@@ -6,6 +6,7 @@ import {
   type LlmRetryPolicy,
 } from "./llm-scope-registry.ts";
 import { callAnthropicJson } from "./llm-adapters/anthropic.ts";
+import { callGoogleImage, callGoogleJson } from "./llm-adapters/google.ts";
 import { callOpenAiImage, callOpenAiJson } from "./llm-adapters/openai.ts";
 import type { GatewayConfig, JsonValue } from "./types.ts";
 
@@ -146,6 +147,15 @@ export const executeWithConfig = async <T>(params: {
     });
   }
 
+  if (params.provider === "google") {
+    return await callGoogleJson<T>({
+      model: params.model,
+      modelConfig: params.modelConfig,
+      systemPrompt: params.systemPrompt,
+      userInput: params.userInput,
+    });
+  }
+
   throw new ApiError(
     500,
     "llm_provider_not_supported",
@@ -218,19 +228,26 @@ export const executeImageScope = async (params: {
   modelOverride?: { provider: string; model: string };
 }): Promise<{ imageUrl: string; config: GatewayConfig }> => {
   const config = await getActiveConfig(params.client, "image", params.modelOverride);
-  if (config.provider !== "openai") {
+  let imageUrl: string;
+  if (config.provider === "openai") {
+    imageUrl = await callOpenAiImage({
+      model: config.model,
+      modelConfig: config.modelConfig,
+      prompt: params.prompt,
+    });
+  } else if (config.provider === "google") {
+    imageUrl = await callGoogleImage({
+      model: config.model,
+      modelConfig: config.modelConfig,
+      prompt: params.prompt,
+    });
+  } else {
     throw new ApiError(
       500,
       "image_provider_not_supported",
       `Image provider adapter not configured: ${config.provider}`,
     );
   }
-
-  const imageUrl = await callOpenAiImage({
-    model: config.model,
-    modelConfig: config.modelConfig,
-    prompt: params.prompt,
-  });
 
   return { imageUrl, config };
 };
@@ -241,17 +258,25 @@ export const executeImageWithConfig = async (params: {
   modelConfig: Record<string, JsonValue>;
   prompt: string;
 }): Promise<string> => {
-  if (params.provider !== "openai") {
-    throw new ApiError(
-      500,
-      "image_provider_not_supported",
-      `Image provider adapter not configured: ${params.provider}`,
-    );
+  if (params.provider === "openai") {
+    return await callOpenAiImage({
+      model: params.model,
+      modelConfig: params.modelConfig,
+      prompt: params.prompt,
+    });
   }
 
-  return await callOpenAiImage({
-    model: params.model,
-    modelConfig: params.modelConfig,
-    prompt: params.prompt,
-  });
+  if (params.provider === "google") {
+    return await callGoogleImage({
+      model: params.model,
+      modelConfig: params.modelConfig,
+      prompt: params.prompt,
+    });
+  }
+
+  throw new ApiError(
+    500,
+    "image_provider_not_supported",
+    `Image provider adapter not configured: ${params.provider}`,
+  );
 };

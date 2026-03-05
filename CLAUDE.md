@@ -29,7 +29,7 @@ packages/shared/      Shared utilities
 - Add LLM call: define a new scope in `llm-scope-registry.ts`, seed route/prompt/rule in sequential migration, add gateway wrapper through executor, wire callsite, add tests, update docs.
 - Edit LLM call: use Admin API/UI for prompts/rules/routes; if contract shape changes, update validators/tests and public OpenAPI examples as needed.
 - Remove LLM call: remove callsite/wrapper/scope and add migration deactivating corresponding scope rows.
-- Direct provider endpoints (`api.openai.com`, `api.anthropic.com`) are allowed only in `supabase/functions/_shared/llm-adapters/*`.
+- Direct provider endpoints (`api.openai.com`, `api.anthropic.com`, `generativelanguage.googleapis.com`) are allowed only in `supabase/functions/_shared/llm-adapters/*`.
 
 ## Mobile Stack (`apps/mobile/`)
 - **Expo Router** — file-based routing
