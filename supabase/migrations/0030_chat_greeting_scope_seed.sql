@@ -67,7 +67,14 @@ values (
   'chat_greeting',
   1,
   'alchemy_chat_greeting_rule_v1',
-  'Output must be a single JSON object with one key "text" containing the greeting string. No other keys. No markdown. Keep the greeting under 100 characters. Do not include recipes, suggestions, or instructions — just a greeting.',
+  '{
+    "strict_json_only": true,
+    "response_contract": "chat_greeting_v1",
+    "required_keys": ["text"],
+    "max_characters": 100,
+    "forbid_extra_keys": true,
+    "forbid_markdown": true
+  }'::jsonb,
   true
 )
 on conflict (scope, version) do update
