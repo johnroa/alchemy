@@ -1385,6 +1385,8 @@ Return strict JSON only.`;
   delete runtimeModelConfig.ingredient_budget;
   delete runtimeModelConfig.max_ingredients;
   delete runtimeModelConfig.max_steps;
+  runtimeModelConfig.max_output_tokens = 8192;
+  runtimeModelConfig.max_tokens = 8192;
   const configuredTimeoutMs = Number(runtimeModelConfig.timeout_ms);
   if (!Number.isFinite(configuredTimeoutMs) || configuredTimeoutMs < 5_000) {
     runtimeModelConfig.timeout_ms = 60_000;
@@ -1556,6 +1558,27 @@ Return strict JSON only.`;
     };
   }
 
+  const recoveredFromChatEnvelope = normalizeChatEnvelope(strictRepaired) ??
+    normalizeChatEnvelope(repaired) ??
+    normalizeChatEnvelope(result);
+  if (recoveredFromChatEnvelope?.assistant_reply) {
+    const recoveredRecipe = recoveredFromChatEnvelope.recipe ??
+      recoveredFromChatEnvelope.candidate_recipe_set?.components.find((
+        component,
+      ) => component.role === "main")?.recipe ??
+      recoveredFromChatEnvelope.candidate_recipe_set?.components[0]?.recipe;
+    if (recoveredRecipe) {
+      return {
+        recipe: recoveredRecipe,
+        assistant_reply: recoveredFromChatEnvelope.assistant_reply,
+        response_context: {
+          mode: "generation",
+          intent: "in_scope_generate",
+        },
+      };
+    }
+  }
+
   throw new ApiError(
     422,
     "recipe_schema_invalid",
@@ -1584,6 +1607,8 @@ const generateChatConversationPayload = async (
   delete runtimeModelConfig.ingredient_budget;
   delete runtimeModelConfig.max_ingredients;
   delete runtimeModelConfig.max_steps;
+  runtimeModelConfig.max_output_tokens = 8192;
+  runtimeModelConfig.max_tokens = 8192;
   const configuredTimeoutMs = Number(runtimeModelConfig.timeout_ms);
   if (!Number.isFinite(configuredTimeoutMs) || configuredTimeoutMs < 5_000) {
     runtimeModelConfig.timeout_ms = 60_000;
@@ -2021,43 +2046,56 @@ export const llmGateway = {
         error instanceof ApiError &&
         recoverableChatErrors.has(error.code)
       ) {
-        if (scope === "chat_generation" || scope === "chat_iteration") {
-          try {
-            const recipeFallback = await generateRecipePayload(
-              params.client,
-              "generate",
-              {
-                userPrompt: params.prompt,
-                context: params.context,
-              },
-              params.modelOverrides,
-              accum,
-            );
-            await logLlmEvent(
-              params.client,
-              params.userId,
-              params.requestId,
-              scope,
-              Date.now() - startedAt,
-              "degraded",
-              {
-                error_code: error.code,
-                fallback: "generate_scope_recipe_fallback",
-              },
-              accum,
-            );
-            return {
-              assistant_reply: recipeFallback.assistant_reply,
-              recipe: recipeFallback.recipe,
-              trigger_recipe: true,
-              response_context: {
-                mode: scope === "chat_iteration" ? "iteration" : "generation",
-                intent: "in_scope_generate",
-              },
-            };
-          } catch {
-            // Fall through to ideation-safe response.
-          }
+        try {
+          const recipeFallback = await generateRecipePayload(
+            params.client,
+            "generate",
+            {
+              userPrompt: params.prompt,
+              context: params.context,
+            },
+            params.modelOverrides,
+            accum,
+          );
+          await logLlmEvent(
+            params.client,
+            params.userId,
+            params.requestId,
+            scope,
+            Date.now() - startedAt,
+            "degraded",
+            {
+              error_code: error.code,
+              fallback: "generate_scope_recipe_fallback",
+            },
+            accum,
+          );
+          return {
+            assistant_reply: recipeFallback.assistant_reply,
+            recipe: recipeFallback.recipe,
+            trigger_recipe: true,
+            response_context: {
+              mode: scope === "chat_iteration" ? "iteration" : "generation",
+              intent: "in_scope_generate",
+            },
+          };
+        } catch (recipeFallbackError) {
+          await logLlmEvent(
+            params.client,
+            params.userId,
+            params.requestId,
+            scope,
+            Date.now() - startedAt,
+            "degraded",
+            {
+              error_code: error.code,
+              fallback: "generate_scope_recipe_fallback_failed",
+              fallback_error_code: recipeFallbackError instanceof ApiError
+                ? recipeFallbackError.code
+                : "unknown_error",
+            },
+            accum,
+          );
         }
         await logLlmEvent(
           params.client,
