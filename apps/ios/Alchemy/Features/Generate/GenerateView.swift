@@ -62,6 +62,10 @@ struct GenerateView: View {
         }
     }
 
+    private var recipeTopInset: CGFloat {
+        vm.hasCandidate && vm.presentationMode != .generationMinimized ? 108 : 24
+    }
+
     private var userBubbleMaxWidth: CGFloat {
         UIScreen.main.bounds.width * 0.8
     }
@@ -207,6 +211,8 @@ struct GenerateView: View {
         if let recipe = vm.activeRecipe {
             recipeScrollView(recipe)
                 .opacity(vm.uiState == .iterating ? 0.5 : 1)
+                .animation(.easeInOut(duration: 0.3), value: vm.uiState == .iterating)
+                .transition(.opacity.animation(.easeIn(duration: 0.3)))
         } else if vm.shouldShowRecipeSkeleton {
             subtleRecipeSkeleton
                 .padding(.horizontal, Spacing.md)
@@ -779,7 +785,7 @@ struct GenerateView: View {
                 Color.clear.frame(height: 320)
             }
             .padding(.horizontal, Spacing.md)
-            .padding(.top, 24)
+            .padding(.top, recipeTopInset)
         }
         .scrollDismissesKeyboard(.interactively)
     }

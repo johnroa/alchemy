@@ -34,12 +34,12 @@ export const errorResponse = (requestId: string, error: unknown): Response => {
     return jsonResponse(error.status, payload);
   }
 
-  const details =
-    error instanceof Error
-      ? { name: error.name, message: error.message }
-      : typeof error === "string"
-        ? { message: error }
-        : undefined;
+  let details: JsonValue | undefined;
+  if (error instanceof Error) {
+    details = { name: error.name, message: error.message };
+  } else if (typeof error === "string") {
+    details = { message: error };
+  }
 
   const payload: ErrorEnvelope = {
     code: "internal_error",

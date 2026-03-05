@@ -1,5 +1,5 @@
-import { ArrowDownRight, ArrowUpRight } from "lucide-react";
 import { EntityTypeIcon } from "@/components/admin/entity-type-icon";
+import { DeltaBadge, deltaFromWindow } from "@/components/admin/delta-badge";
 import { IngredientsRegistryExplorer } from "@/components/admin/ingredients-registry-explorer";
 import { PageHeader } from "@/components/admin/page-header";
 import { Badge } from "@/components/ui/badge";
@@ -16,63 +16,6 @@ const toDecimal = (value: number | null, digits = 2): string => {
 };
 
 const toShortInteger = (value: number): string => value.toLocaleString();
-
-type Delta = {
-  absolute: number;
-  percent: number | null;
-};
-
-const deltaFromWindow = (current: number, previous: number): Delta => {
-  const absolute = current - previous;
-  if (previous === 0) {
-    return { absolute, percent: null };
-  }
-  return { absolute, percent: (absolute / previous) * 100 };
-};
-
-const deltaTone = (delta: Delta): "up" | "down" | "flat" => {
-  if (delta.absolute > 0) return "up";
-  if (delta.absolute < 0) return "down";
-  return "flat";
-};
-
-function DeltaBadge({
-  delta,
-  positiveIsGood = true
-}: {
-  delta: Delta;
-  positiveIsGood?: boolean;
-}): React.JSX.Element {
-  const tone = deltaTone(delta);
-  const effectiveTone =
-    tone === "flat"
-      ? "flat"
-      : positiveIsGood
-        ? tone
-        : tone === "up"
-          ? "down"
-          : "up";
-
-  const Icon = effectiveTone === "up" ? ArrowUpRight : effectiveTone === "down" ? ArrowDownRight : null;
-  const deltaAbsoluteLabel = `${delta.absolute >= 0 ? "+" : ""}${delta.absolute.toLocaleString()}`;
-  const deltaPercentLabel =
-    delta.percent == null ? (delta.absolute === 0 ? "0%" : "new") : `${delta.percent >= 0 ? "+" : ""}${delta.percent.toFixed(1)}%`;
-
-  return (
-    <span
-      className={cn(
-        "inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-medium",
-        effectiveTone === "up" && "border-emerald-300 bg-emerald-50 text-emerald-700",
-        effectiveTone === "down" && "border-red-300 bg-red-50 text-red-700",
-        effectiveTone === "flat" && "border-zinc-300 bg-zinc-50 text-zinc-600"
-      )}
-    >
-      {Icon ? <Icon className="h-3 w-3" /> : null}
-      <span>{deltaAbsoluteLabel}</span>
-      <span className="text-[10px] opacity-80">({deltaPercentLabel})</span>
-    </span>
-  );
-}
 
 export default async function IngredientsPage(): Promise<React.JSX.Element> {
   const data = await getIngredientsData();
@@ -133,7 +76,7 @@ export default async function IngredientsPage(): Promise<React.JSX.Element> {
       <PageHeader
         title="Ingredients"
         description="Canonical ingredient registry, enrichment metadata, ontology links, and unresolved normalization rows."
-        icon={<EntityTypeIcon entityType="ingredient" className="h-6 w-6 text-emerald-600" />}
+        icon={<EntityTypeIcon entityType="ingredient" className="h-6 w-6" />}
       />
 
       <section className="space-y-3">
@@ -266,7 +209,11 @@ export default async function IngredientsPage(): Promise<React.JSX.Element> {
                       <TableCell className="text-xs">
                         {alias.canonical_name ? (
                           <span className="inline-flex items-center gap-1.5">
-                            <EntityTypeIcon entityType="ingredient" className="h-3.5 w-3.5 text-emerald-600" />
+                            <EntityTypeIcon
+                              entityType="ingredient"
+                              canonicalName={alias.canonical_name}
+                              className="h-3.5 w-3.5"
+                            />
                             {alias.canonical_name}
                           </span>
                         ) : "—"}
@@ -316,7 +263,11 @@ export default async function IngredientsPage(): Promise<React.JSX.Element> {
                     <TableRow key={row.id}>
                       <TableCell>
                         <p className="inline-flex items-center gap-1.5 text-sm font-medium">
-                          <EntityTypeIcon entityType="ingredient" className="h-3.5 w-3.5 text-emerald-600" />
+                          <EntityTypeIcon
+                            entityType="ingredient"
+                            canonicalName={row.source_name}
+                            className="h-3.5 w-3.5"
+                          />
                           {row.source_name}
                         </p>
                         <p className="font-mono text-[11px] text-muted-foreground">{row.recipe_version_id.slice(0, 8)}…</p>

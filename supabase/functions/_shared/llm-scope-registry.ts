@@ -64,8 +64,8 @@ export const LLM_SCOPE_REGISTRY = {
     output_contract: "chat_generation_v1",
     mode: "generation",
     retry_policy: {
-      max_attempts: 2,
-      retryable_codes: STRICT_JSON_RETRYABLE_CODES,
+      max_attempts: 1,
+      retryable_codes: [],
     },
     fallback_policy: "none",
     telemetry_tags: { task: "chat_generation", criticality: "high" },
@@ -74,8 +74,8 @@ export const LLM_SCOPE_REGISTRY = {
     output_contract: "chat_iteration_v1",
     mode: "iteration",
     retry_policy: {
-      max_attempts: 2,
-      retryable_codes: STRICT_JSON_RETRYABLE_CODES,
+      max_attempts: 1,
+      retryable_codes: [],
     },
     fallback_policy: "none",
     telemetry_tags: { task: "chat_iteration", criticality: "high" },

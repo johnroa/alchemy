@@ -73,50 +73,96 @@ const run = async () => {
   const chat = await step("chat_start", async () => {
     const res = await request("/chat", {
       method: "POST",
-      body: JSON.stringify({ message: "chicken parm" })
+      body: JSON.stringify({ message: "I want dinner ideas." })
     });
     assert(typeof res.id === "string", "chat id missing");
-    return { chat_id: res.id, message_count: Array.isArray(res.messages) ? res.messages.length : 0 };
+    return {
+      chat_id: res.id,
+      message_count: Array.isArray(res.messages) ? res.messages.length : 0,
+      loop_state: res.loop_state,
+      intent: res.response_context?.intent ?? null
+    };
   });
 
   await step("chat_refine", async () => {
     const res = await request(`/chat/${chat.chat_id}/messages`, {
       method: "POST",
-      body: JSON.stringify({ message: "what can i add to make it spicy?" })
+      body: JSON.stringify({
+        message: "Give me a pescatarian gluten-free dinner with mushrooms and lemon."
+      })
     });
     assert(Array.isArray(res.messages), "messages missing after tweak");
-    return { message_count: res.messages.length };
-  });
-
-  await step("chat_attachment_request", async () => {
-    const res = await request(`/chat/${chat.chat_id}/messages`, {
-      method: "POST",
-      body: JSON.stringify({ message: "add a side and appetizer and attach them" })
-    });
-    assert(Array.isArray(res.messages), "messages missing after attachment request");
-    return { message_count: res.messages.length };
-  });
-
-  const generated = await step("generate_recipe", async () => {
-    const res = await request(`/chat/${chat.chat_id}/generate`, { method: "POST" });
-    assert(res.recipe?.id, "generated recipe id missing");
     return {
-      recipe_id: res.recipe.id,
-      attachment_count: Array.isArray(res.recipe.attachments) ? res.recipe.attachments.length : 0,
-      image_status: res.recipe.image_status
+      message_count: res.messages.length,
+      loop_state: res.loop_state,
+      intent: res.response_context?.intent ?? null,
+      candidate_count: Array.isArray(res.candidate_recipe_set?.components)
+        ? res.candidate_recipe_set.components.length
+        : 0
     };
   });
 
-  await step("save_recipe", async () => {
-    const res = await request(`/recipes/${generated.recipe_id}/save`, { method: "POST" });
-    assert(res.saved === true, "recipe save failed");
-    return res;
+  const generated = await step("chat_generate_trigger", async () => {
+    const res = await request(`/chat/${chat.chat_id}/messages`, {
+      method: "POST",
+      body: JSON.stringify({ message: "Generate the recipe now with a side." })
+    });
+    assert(Array.isArray(res.messages), "messages missing after attachment request");
+    const candidateCount = Array.isArray(res.candidate_recipe_set?.components)
+      ? res.candidate_recipe_set.components.length
+      : 0;
+    assert(candidateCount > 0, "candidate recipe set missing after trigger");
+    return {
+      message_count: res.messages.length,
+      candidate_count: candidateCount,
+      loop_state: res.loop_state,
+      active_component_id: res.candidate_recipe_set?.active_component_id ?? null
+    };
   });
 
-  await step("fetch_recipe_history", async () => {
-    const res = await request(`/recipes/${generated.recipe_id}/history`);
-    assert(Array.isArray(res.versions), "history missing versions");
-    return { version_count: res.versions.length, chat_message_count: Array.isArray(res.chat_messages) ? res.chat_messages.length : 0 };
+  await step("chat_iterate_candidate", async () => {
+    const res = await request(`/chat/${chat.chat_id}/messages`, {
+      method: "POST",
+      body: JSON.stringify({ message: "Make it spicier and quicker." })
+    });
+    const candidateCount = Array.isArray(res.candidate_recipe_set?.components)
+      ? res.candidate_recipe_set.components.length
+      : 0;
+    assert(candidateCount > 0, "iteration lost candidate");
+    return {
+      loop_state: res.loop_state,
+      candidate_count: candidateCount,
+      active_component_id: res.candidate_recipe_set?.active_component_id ?? null
+    };
+  });
+
+  const committed = await step("commit_candidate_set", async () => {
+    const res = await request(`/chat/${chat.chat_id}/commit`, {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    const recipes = Array.isArray(res.commit?.recipes) ? res.commit.recipes : [];
+    assert(recipes.length > 0, "commit returned zero recipes");
+    return {
+      committed_count: Number(res.commit?.committed_count ?? recipes.length),
+      recipe_ids: recipes.map((item) => item.recipe_id),
+      loop_state: res.loop_state,
+      candidate_recipe_set: res.candidate_recipe_set ?? null
+    };
+  });
+
+  await step("fetch_committed_recipe", async () => {
+    const recipeId = Array.isArray(committed.recipe_ids) ? committed.recipe_ids[0] : null;
+    assert(typeof recipeId === "string" && recipeId.length > 0, "missing committed recipe id");
+    const res = await request(
+      `/recipes/${recipeId}?units=metric&group_by=component&inline_measurements=true`
+    );
+    assert(typeof res.title === "string" && res.title.length > 0, "recipe title missing");
+    return {
+      recipe_id: recipeId,
+      ingredient_count: Array.isArray(res.ingredients) ? res.ingredients.length : 0,
+      step_count: Array.isArray(res.steps) ? res.steps.length : 0
+    };
   });
 
   await step("fetch_cookbook", async () => {
@@ -129,6 +175,20 @@ const run = async () => {
     const res = await request("/changelog");
     assert(Array.isArray(res.items), "changelog items missing");
     return { item_count: res.items.length };
+  });
+
+  await step("chat_out_of_scope_guard", async () => {
+    const res = await request(`/chat/${chat.chat_id}/messages`, {
+      method: "POST",
+      body: JSON.stringify({ message: "Explain derivatives trading strategy." })
+    });
+    assert(res.response_context?.intent === "out_of_scope", "intent was not out_of_scope");
+    assert(res.loop_state === "ideation", "loop_state should remain ideation for out_of_scope");
+    return {
+      intent: res.response_context?.intent ?? null,
+      loop_state: res.loop_state,
+      has_candidate: !!res.candidate_recipe_set
+    };
   });
 
   report.completed_at = new Date().toISOString();

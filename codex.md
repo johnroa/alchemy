@@ -292,6 +292,25 @@ Not for:
 - Preferences: edit profile + presentation toggles.
 - Settings: memory reset, export, account.
 
+## Code Comments (Required)
+Write detailed inline comments in all code you produce or modify. This codebase is maintained by multiple AI agents across sessions — comments are the primary way context survives between them.
+
+### What to comment
+- **Why, not what**: explain the reasoning behind non-obvious decisions, edge cases handled, and constraints that shaped the implementation.
+- **Data flow**: at the top of functions/modules with complex orchestration, summarize the flow (inputs → transforms → outputs) and key invariants.
+- **Contract boundaries**: document what callers can expect (preconditions, postconditions, error behavior) at public function/component interfaces.
+- **Gotchas and coupling**: flag hidden dependencies, ordering requirements, or places where a change here requires a coordinated change elsewhere.
+- **Magic values**: explain thresholds, timeouts, retry counts, opacity values, padding constants — any literal that isn't self-evident.
+- **Migration/DB context**: in migration SQL, explain what the migration enables and any rollback considerations.
+- **Swift/iOS specifics**: in SwiftUI views and modifiers, annotate animation parameters, gesture thresholds, and layout assumptions that affect visual behavior.
+
+### What NOT to comment
+- Trivial restatements of the code (`// increment counter` on `counter += 1`).
+- Auto-generated boilerplate or import lists.
+- Comments that will immediately go stale (avoid referencing specific dates or ticket numbers in inline comments — put those in commit messages or CHANGELOG instead).
+
+The goal: a future agent reading any file for the first time should be able to understand the design intent and constraints without needing to reverse-engineer them from the code alone.
+
 ## If blocked
 If information is missing:
 - State what is missing.

@@ -53,6 +53,11 @@ extension JSONValue {
         guard case .bool(let value) = self else { return nil }
         return value
     }
+
+    var objectValue: [String: JSONValue]? {
+        guard case .object(let value) = self else { return nil }
+        return value
+    }
 }
 
 // MARK: - Recipe Models
@@ -341,10 +346,11 @@ struct ChatMessageItem: Codable, Identifiable {
     let id: String
     let role: String
     let content: String
+    let metadata: [String: JSONValue]?
     var createdAt: String?
 
     enum CodingKeys: String, CodingKey {
-        case id, role, content
+        case id, role, content, metadata
         case createdAt = "created_at"
     }
 }

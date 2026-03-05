@@ -15,7 +15,6 @@ const SIM_SCOPES = [
   "chat_ideation",
   "chat_generation",
   "chat_iteration",
-  "classify",
   "ingredient_alias_normalize",
   "ingredient_phrase_split",
   "ingredient_enrich",

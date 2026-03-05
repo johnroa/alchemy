@@ -130,5 +130,17 @@ pnpm --filter @alchemy/admin exec opennextjs-cloudflare deploy
 curl https://api.cookwithalchemy.com/v1/healthz
 ```
 
+## Code Comments (Required)
+Write detailed inline comments in all code you touch. This codebase is maintained by multiple AI agents across sessions — comments are the primary way context survives between them. Specifically:
+- **Why, not what**: explain the reasoning behind non-obvious decisions, edge cases handled, and constraints that shaped the implementation.
+- **Data flow**: at the top of functions/modules with complex orchestration, summarize the flow (inputs → transforms → outputs) and key invariants.
+- **Contract boundaries**: document what callers can expect (preconditions, postconditions, error behavior) at public function/component interfaces.
+- **Gotchas and coupling**: flag hidden dependencies, ordering requirements, or places where a change here requires a coordinated change elsewhere.
+- **Magic values**: explain thresholds, timeouts, retry counts, opacity values, padding constants — any literal that isn't self-evident.
+- **Migration/DB context**: in migration SQL, explain what the migration enables and any rollback considerations.
+- **Swift/iOS specifics**: in SwiftUI views and modifiers, annotate animation parameters, gesture thresholds, and layout assumptions that affect visual behavior.
+
+Do not add trivial comments that restate the code. Focus on information that would save a future agent 5+ minutes of investigation.
+
 ## When Blocked
 State what is missing, give the smallest set of options, default to the simplest option that preserves API-first correctness and premium UI feel.

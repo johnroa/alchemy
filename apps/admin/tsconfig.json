@@ -18,6 +18,9 @@
     "paths": {
       "@/*": [
         "./*"
+      ],
+      "@alchemy/shared/*": [
+        "../../packages/shared/src/*"
       ]
     },
     "noEmit": true,

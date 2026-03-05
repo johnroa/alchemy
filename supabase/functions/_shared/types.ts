@@ -1,4 +1,5 @@
-import type { GatewayScope } from "./llm-scope-registry.ts";
+import type { GatewayScope as GatewayScopeType } from "./llm-scope-registry.ts";
+export type { GatewayScope } from "./llm-scope-registry.ts";
 
 export type JsonValue =
   | string

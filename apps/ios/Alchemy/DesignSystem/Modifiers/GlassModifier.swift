@@ -58,10 +58,10 @@ enum ChatGlassSurfaceRole {
     var baseOpacity: Double {
         switch self {
         case .panel: return 0.18
-        case .composer: return 0.11
+        case .composer: return 0.08
         case .assistantBubble: return 0.14
-        case .userBubble: return 0.07
-        case .chip: return 0.13
+        case .userBubble: return 0.045
+        case .chip: return 0.11
         case .shell: return 0.14
         }
     }
@@ -114,15 +114,15 @@ private struct ChatLiquidSurfaceModifier: ViewModifier {
         let isUserBubble = role == .userBubble
         let isBubble = isAssistantBubble || isUserBubble
         let isComposer = role == .composer
-        let materialOpacity = isUserBubble ? 0.72 : (isAssistantBubble ? 0.94 : (isComposer ? 0.9 : 0.8))
-        let darkFillOpacity = isUserBubble ? 0.01 : (isAssistantBubble ? 0.04 : (isComposer ? 0.015 : 0.1))
-        let driftOpacity = isUserBubble ? 0.065 : (isAssistantBubble ? 0.16 : (isComposer ? 0.07 : 0.24))
-        let coolBloomOpacity = isUserBubble ? 0.055 : (isAssistantBubble ? 0.11 : (isComposer ? 0.045 : 0.17))
-        let warmBloomOpacity = isUserBubble ? 0.02 : (isAssistantBubble ? 0.05 : (isComposer ? 0.02 : 0.11))
-        let tintBloomOpacity = isUserBubble ? 0.05 : (isAssistantBubble ? 0.12 : (isComposer ? 0.055 : 0.2))
-        let strokeWidth = isUserBubble ? 0.5 : (isAssistantBubble ? 0.62 : (isComposer ? (focused ? 0.66 : 0.56) : (focused ? 0.86 : 0.74)))
-        let glowOpacity = isUserBubble ? 0.045 : (isAssistantBubble ? 0.08 : (isComposer ? 0.055 : 0.16))
-        let shadowOpacity = isUserBubble ? 0.015 : (isAssistantBubble ? 0.03 : (isComposer ? 0.018 : 0.06))
+        let materialOpacity = isUserBubble ? 0.58 : (isAssistantBubble ? 0.94 : (isComposer ? 0.72 : 0.8))
+        let darkFillOpacity = isUserBubble ? 0.008 : (isAssistantBubble ? 0.04 : (isComposer ? 0.004 : 0.1))
+        let driftOpacity = isUserBubble ? 0.04 : (isAssistantBubble ? 0.16 : (isComposer ? 0.028 : 0.24))
+        let coolBloomOpacity = isUserBubble ? 0.03 : (isAssistantBubble ? 0.11 : (isComposer ? 0.022 : 0.17))
+        let warmBloomOpacity = isUserBubble ? 0.012 : (isAssistantBubble ? 0.05 : (isComposer ? 0.008 : 0.11))
+        let tintBloomOpacity = isUserBubble ? 0.03 : (isAssistantBubble ? 0.12 : (isComposer ? 0.022 : 0.2))
+        let strokeWidth = isUserBubble ? 0.45 : (isAssistantBubble ? 0.62 : (isComposer ? (focused ? 0.52 : 0.46) : (focused ? 0.86 : 0.74)))
+        let glowOpacity = isUserBubble ? 0.03 : (isAssistantBubble ? 0.08 : (isComposer ? 0.025 : 0.16))
+        let shadowOpacity = isUserBubble ? 0.01 : (isAssistantBubble ? 0.03 : (isComposer ? 0.008 : 0.06))
 
         return TimelineView(.periodic(from: .now, by: isAnimated ? (1.0 / 20.0) : 60.0)) { timeline in
             let time = timeline.date.timeIntervalSinceReferenceDate + animationSeed
@@ -136,13 +136,13 @@ private struct ChatLiquidSurfaceModifier: ViewModifier {
                 hue: 0.58 + (0.014 * Double(colorDrift)),
                 saturation: isUserBubble ? 0.48 : (isComposer ? 0.56 : 0.68),
                 brightness: isUserBubble ? 0.54 : (isComposer ? 0.52 : 0.44),
-                opacity: isUserBubble ? 0.02 : (isComposer ? (0.038 + (focused ? 0.008 : 0)) : (0.08 + (focused ? 0.015 : 0)))
+                opacity: isUserBubble ? 0.02 : (isComposer ? (0.024 + (focused ? 0.006 : 0)) : (0.08 + (focused ? 0.015 : 0)))
             )
             let deepMagenta = Color(
                 hue: 0.89 + (0.022 * Double(sin(time * 0.051 + 1.2))),
                 saturation: isUserBubble ? 0.34 : (isComposer ? 0.4 : 0.56),
                 brightness: isUserBubble ? 0.46 : (isComposer ? 0.44 : 0.38),
-                opacity: isUserBubble ? 0.016 : (isComposer ? 0.028 : 0.06)
+                opacity: isUserBubble ? 0.016 : (isComposer ? 0.016 : 0.06)
             )
             let deepShadow = Color(hex: 0x0B1424).opacity(isUserBubble ? 0.04 : (isComposer ? 0.045 : 0.1))
 
@@ -288,7 +288,7 @@ private struct ChatLiquidPanelBackgroundModifier<S: Shape>: ViewModifier {
 
         TimelineView(.periodic(from: .now, by: animate ? (1.0 / 24.0) : 60.0)) { timeline in
             let time = timeline.date.timeIntervalSinceReferenceDate
-            let cycle: Float = 20.0
+            let cycle: Float = 54.0
             let normalizedTime = (Float(time) + animationSeed) / cycle
             let keyframe = floor(normalizedTime)
             let nextKeyframe = keyframe + 1
@@ -361,7 +361,7 @@ private struct ChatLiquidPanelBackgroundModifier<S: Shape>: ViewModifier {
                 )
                 .hueRotation(.degrees(hueRotation))
                 .saturation(saturation)
-                .opacity(0.34)
+                .opacity(0.22)
 
                 shape
                     .fill(
@@ -389,7 +389,7 @@ private struct ChatLiquidPanelBackgroundModifier<S: Shape>: ViewModifier {
                         )
                     )
                     .blendMode(.plusLighter)
-                    .opacity(0.08)
+                    .opacity(0.045)
                 shape
                     .fill(
                         RadialGradient(
@@ -403,7 +403,7 @@ private struct ChatLiquidPanelBackgroundModifier<S: Shape>: ViewModifier {
                         )
                     )
                     .blendMode(.plusLighter)
-                    .opacity(0.06)
+                    .opacity(0.032)
 
                 shape.fill(
                     LinearGradient(
@@ -427,7 +427,7 @@ private struct ChatLiquidPanelBackgroundModifier<S: Shape>: ViewModifier {
                         )
                     )
                     .blendMode(.screen)
-                    .opacity(0.16)
+                    .opacity(0.1)
 
                 shape
                     .fill(
@@ -453,14 +453,14 @@ private struct ChatLiquidPanelBackgroundModifier<S: Shape>: ViewModifier {
                     .scaleEffect(x: 1.9, y: 1)
                     .offset(x: 102 * CGFloat(blend * 2 - 1))
                     .blur(radius: 16)
-                    .opacity(animate ? 0.042 : 0.02)
+                    .opacity(animate ? 0.028 : 0.015)
                     .mask(shape)
 
-                shape.stroke(ChatGlassPalette.strokeSoft.opacity(0.72), lineWidth: 0.72)
+                shape.stroke(ChatGlassPalette.strokeSoft.opacity(0.34), lineWidth: 0.55)
                 shape
                     .stroke(Color.white.opacity(0.06), lineWidth: 1.3)
                     .blur(radius: 6)
-                    .opacity(0.16)
+                    .opacity(0.08)
             }
             .shadow(color: .black.opacity(0.06), radius: 8, x: 0, y: 4)
         }

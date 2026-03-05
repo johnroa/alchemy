@@ -10,7 +10,7 @@ apps/admin/           Next.js 15 admin dashboard (Cloudflare Workers via OpenNex
 infra/cloudflare/     Cloudflare Worker API gateway (TypeScript)
 supabase/             Auth, Postgres, Edge Functions (LLM gateway)
 packages/contracts/   OpenAPI schema + generated TypeScript types
-packages/shared/      Shared utilities
+packages/shared/      Shared utilities (ingredient icon resolution, food icon catalogs, common types)
 ```
 
 ## Deployment

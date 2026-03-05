@@ -269,6 +269,42 @@ const classifyScope = async (
   };
 };
 
+const LEGACY_MODEL_CONFIG_KEYS = [
+  "token_budget",
+  "ingredient_budget",
+  "max_ingredients",
+  "max_steps",
+] as const;
+
+const cleanLegacyModelConfig = (
+  modelConfig: Record<string, JsonValue>,
+): Record<string, JsonValue> => {
+  const cleaned: Record<string, JsonValue> = { ...modelConfig };
+  for (const key of LEGACY_MODEL_CONFIG_KEYS) {
+    delete cleaned[key];
+  }
+  return cleaned;
+};
+
+const numericToDisplayFraction = (value: number): string => {
+  if (!Number.isFinite(value) || value <= 0) return "1";
+  const whole = Math.floor(value);
+  const frac = value - whole;
+  const fractionMap: Array<[number, string]> = [
+    [0, ""], [1 / 8, "1/8"], [1 / 6, "1/6"], [1 / 4, "1/4"], [1 / 3, "1/3"],
+    [3 / 8, "3/8"], [1 / 2, "1/2"], [5 / 8, "5/8"], [2 / 3, "2/3"],
+    [3 / 4, "3/4"], [5 / 6, "5/6"], [7 / 8, "7/8"],
+  ];
+  let closest = fractionMap[0];
+  let minDist = Infinity;
+  for (const entry of fractionMap) {
+    const dist = Math.abs(frac - entry[0]);
+    if (dist < minDist) { minDist = dist; closest = entry; }
+  }
+  if (!closest[1]) return whole > 0 ? String(whole) : "1";
+  return whole > 0 ? `${whole} ${closest[1]}` : closest[1];
+};
+
 const normalizeRecipeShape = (candidate: unknown): RecipePayload | null => {
   if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
     return null;
@@ -315,7 +351,7 @@ const normalizeRecipeShape = (candidate: unknown): RecipePayload | null => {
       return direct;
     }
 
-    const mixedFraction = raw.match(/^(\d+)\s+(\d+)\/(\d+)$/);
+    const mixedFraction = raw.match(/^(\d+)\s+(\d+)\/(\d+)/);
     if (mixedFraction) {
       const whole = Number(mixedFraction[1]);
       const numerator = Number(mixedFraction[2]);
@@ -328,7 +364,7 @@ const normalizeRecipeShape = (candidate: unknown): RecipePayload | null => {
       }
     }
 
-    const fraction = raw.match(/^(\d+)\/(\d+)$/);
+    const fraction = raw.match(/^(\d+)\/(\d+)/);
     if (fraction) {
       const numerator = Number(fraction[1]);
       const denominator = Number(fraction[2]);
@@ -531,7 +567,7 @@ const normalizeRecipeShape = (candidate: unknown): RecipePayload | null => {
         display_amount: typeof ingredient.display_amount === "string" &&
             ingredient.display_amount.trim().length > 0
           ? ingredient.display_amount.trim()
-          : undefined,
+          : numericToDisplayFraction(amount ?? fallbackAmount ?? 1),
         preparation: typeof ingredient.preparation === "string" &&
             ingredient.preparation.trim().length > 0
           ? ingredient.preparation.trim()
@@ -1376,21 +1412,7 @@ Return strict JSON only.`;
     required_keys: ["assistant_reply", "recipe", "response_context"],
     optional_keys: ["response_context"],
   };
-  const runtimeModelConfig: Record<string, JsonValue> = {
-    ...config.modelConfig,
-  };
-  delete runtimeModelConfig.max_output_tokens;
-  delete runtimeModelConfig.max_tokens;
-  delete runtimeModelConfig.token_budget;
-  delete runtimeModelConfig.ingredient_budget;
-  delete runtimeModelConfig.max_ingredients;
-  delete runtimeModelConfig.max_steps;
-  runtimeModelConfig.max_output_tokens = 8192;
-  runtimeModelConfig.max_tokens = 8192;
-  const configuredTimeoutMs = Number(runtimeModelConfig.timeout_ms);
-  if (!Number.isFinite(configuredTimeoutMs) || configuredTimeoutMs < 5_000) {
-    runtimeModelConfig.timeout_ms = 60_000;
-  }
+  const runtimeModelConfig = cleanLegacyModelConfig(config.modelConfig);
   if (!Number.isFinite(Number(runtimeModelConfig.temperature))) {
     runtimeModelConfig.temperature = 0.35;
   }
@@ -1596,23 +1618,9 @@ const generateChatConversationPayload = async (
   const runtimeOverride = overrides?.[scope];
   const config = await getActiveConfig(client, scope, runtimeOverride);
 
-  const runtimeModelConfig: Record<string, JsonValue> = {
-    ...config.modelConfig,
-  };
+  const runtimeModelConfig = cleanLegacyModelConfig(config.modelConfig);
   const runtimeProvider = config.provider;
   const runtimeModel = config.model;
-  delete runtimeModelConfig.max_output_tokens;
-  delete runtimeModelConfig.max_tokens;
-  delete runtimeModelConfig.token_budget;
-  delete runtimeModelConfig.ingredient_budget;
-  delete runtimeModelConfig.max_ingredients;
-  delete runtimeModelConfig.max_steps;
-  runtimeModelConfig.max_output_tokens = 8192;
-  runtimeModelConfig.max_tokens = 8192;
-  const configuredTimeoutMs = Number(runtimeModelConfig.timeout_ms);
-  if (!Number.isFinite(configuredTimeoutMs) || configuredTimeoutMs < 5_000) {
-    runtimeModelConfig.timeout_ms = 60_000;
-  }
 
   if (!Number.isFinite(Number(runtimeModelConfig.temperature))) {
     runtimeModelConfig.temperature = scope === "chat_ideation" ? 0.3 : 0.35;

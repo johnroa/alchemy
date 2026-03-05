@@ -39,7 +39,7 @@ enum Sizing {
     /// Standard top header row height
     static let headerRowHeight: CGFloat = 52
     /// Standard header top inset from safe area
-    static let headerTopInset: CGFloat = 20
+    static let headerTopInset: CGFloat = 24
     /// Recipe card aspect ratio
     static let recipeCardAspect: CGFloat = 0.78
 }

@@ -1,5 +1,6 @@
 import Link from "next/link";
-import { AlertCircle, ArrowDownRight, ArrowUpRight, BookOpen, ImageIcon, Network } from "lucide-react";
+import { AlertCircle, BookOpen, ImageIcon, Network } from "lucide-react";
+import { DeltaBadge, deltaFromWindow } from "@/components/admin/delta-badge";
 import { EntityTypeIcon } from "@/components/admin/entity-type-icon";
 import { PageHeader } from "@/components/admin/page-header";
 import { RevertVersionDialog } from "@/components/admin/revert-version-dialog";
@@ -132,23 +133,14 @@ const isInWindow = (value: string, start: number, end: number): boolean => {
   return timestamp >= start && timestamp < end;
 };
 
-const windowDelta = (current: number, previous: number): { current: number; previous: number; absolute: number; percent: number | null } => {
-  const absolute = current - previous;
-  if (previous === 0) {
-    return { current, previous, absolute, percent: null };
-  }
-  return {
-    current,
-    previous,
-    absolute,
-    percent: (absolute / previous) * 100
-  };
-};
+const windowDelta = deltaFromWindow;
 
 const shortId = (value: string): string => {
   if (value.length < 14) return value;
   return `${value.slice(0, 8)}…${value.slice(-4)}`;
 };
+
+const toPercent = (value: number): string => `${value.toFixed(1)}%`;
 
 const imageStatusBadgeClass = (status: string): string => {
   if (status === "ready") return "border-emerald-300 bg-emerald-50 text-emerald-700";
@@ -221,6 +213,7 @@ export default async function RecipesPage({
     : 0;
   const chatBackedRate = totals.recipes > 0 ? (totals.chatBacked / totals.recipes) * 100 : 0;
   const readyImageRate = shownRecipeCount > 0 ? (readyImageCount / shownRecipeCount) * 100 : 0;
+  const failedImageRate = shownRecipeCount > 0 ? (failedImageCount / shownRecipeCount) * 100 : 0;
 
   const now = Date.now();
   const currentWindowStart = now - 24 * 60 * 60 * 1000;
@@ -233,6 +226,57 @@ export default async function RecipesPage({
     sortedRows.filter((row) => isInWindow(row.updated_at, currentWindowStart, now)).length,
     sortedRows.filter((row) => isInWindow(row.updated_at, previousWindowStart, currentWindowStart)).length
   );
+  const failedRecipesDelta = windowDelta(
+    sortedRows.filter((row) => row.image_status === "failed" && isInWindow(row.updated_at, currentWindowStart, now)).length,
+    sortedRows.filter((row) => row.image_status === "failed" && isInWindow(row.updated_at, previousWindowStart, currentWindowStart)).length
+  );
+
+  const metricCards: Array<{
+    label: string;
+    value: string;
+    hint: string;
+    progress: number;
+    warning?: boolean;
+  }> = [
+    {
+      label: "Recipes",
+      value: shownRecipeCount.toLocaleString(),
+      hint: `${totals.recipes.toLocaleString()} total indexed`,
+      progress: totals.recipes > 0 ? shownRecipeCount / totals.recipes : 0
+    },
+    {
+      label: "Avg Versions",
+      value: avgVersionsPerRecipe.toFixed(2),
+      hint: `${totals.versions.toLocaleString()} versions total`,
+      progress: Math.min(1, avgVersionsPerRecipe / 4)
+    },
+    {
+      label: "Chat-backed",
+      value: toPercent(chatBackedRate),
+      hint: `${totals.chatBacked.toLocaleString()} recipes linked to chats`,
+      progress: chatBackedRate / 100
+    },
+    {
+      label: "Ready Image Rate",
+      value: toPercent(readyImageRate),
+      hint: `${readyImageCount} ready · ${pendingImageCount} pending · ${failedImageCount} failed`,
+      progress: readyImageRate / 100,
+      warning: readyImageRate < 70
+    },
+    {
+      label: "Attachment Density",
+      value: attachmentDensity.toFixed(2),
+      hint: `${totals.attachments.toLocaleString()} linked recipes`,
+      progress: Math.min(1, attachmentDensity)
+    },
+    {
+      label: "Failed Image Rate",
+      value: toPercent(failedImageRate),
+      hint: `${failedImageCount} failed image states`,
+      progress: failedImageRate / 100,
+      warning: failedImageRate > 0
+    }
+  ];
 
   return (
     <div className="space-y-6">
@@ -240,87 +284,83 @@ export default async function RecipesPage({
         <PageHeader
           title="Recipes Console"
           description="Inventory, version lineage, prompt trail, attachment graph, and changelog."
-          icon={<EntityTypeIcon entityType="recipe" className="h-6 w-6 text-blue-600" />}
+          icon={<EntityTypeIcon entityType="recipe" className="h-6 w-6" />}
         />
         <Badge variant="outline" className="font-mono text-xs">
           Showing {shownRecipeCount} / {totals.recipes}
         </Badge>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-6">
-        <Card className="border-blue-200 bg-blue-50">
-          <CardHeader className="pb-2">
-            <CardDescription className="inline-flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-muted-foreground">
-              <EntityTypeIcon entityType="recipe" className="h-3.5 w-3.5 text-blue-600" />
-              Recipes
-            </CardDescription>
-            <CardTitle className="text-3xl tabular-nums">{shownRecipeCount.toLocaleString()}</CardTitle>
-          </CardHeader>
-          <CardContent className="pt-0 text-xs text-muted-foreground">
-            {totals.recipes.toLocaleString()} total indexed
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription className="text-[11px] uppercase tracking-wider text-muted-foreground">Avg Versions</CardDescription>
-            <CardTitle className="text-3xl tabular-nums">{avgVersionsPerRecipe.toFixed(2)}</CardTitle>
-          </CardHeader>
-          <CardContent className="pt-0 text-xs text-muted-foreground">
-            {totals.versions.toLocaleString()} versions total
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription className="text-[11px] uppercase tracking-wider text-muted-foreground">Chat-backed</CardDescription>
-            <CardTitle className="text-3xl tabular-nums">{chatBackedRate.toFixed(1)}%</CardTitle>
-          </CardHeader>
-          <CardContent className="pt-0 text-xs text-muted-foreground">
-            {totals.chatBacked.toLocaleString()} recipes linked to chats
-          </CardContent>
-        </Card>
-        <Card className={cn(readyImageRate >= 70 ? "border-emerald-200 bg-emerald-50" : "border-zinc-200")}>
-          <CardHeader className="pb-2">
-            <CardDescription className="text-[11px] uppercase tracking-wider text-muted-foreground">Ready Image Rate</CardDescription>
-            <CardTitle className="text-3xl tabular-nums">{readyImageRate.toFixed(1)}%</CardTitle>
-          </CardHeader>
-          <CardContent className="pt-0 text-xs text-muted-foreground">
-            {readyImageCount} ready · {pendingImageCount} pending · {failedImageCount} failed
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription className="text-[11px] uppercase tracking-wider text-muted-foreground">Attachment Density</CardDescription>
-            <CardTitle className="text-3xl tabular-nums">{attachmentDensity.toFixed(2)}</CardTitle>
-          </CardHeader>
-          <CardContent className="pt-0 text-xs text-muted-foreground">
-            {totals.attachments.toLocaleString()} linked recipes
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="space-y-1 pb-2">
-            <CardDescription className="text-[11px] uppercase tracking-wider text-muted-foreground">24h New / Updated</CardDescription>
-            <CardTitle className="text-xl tabular-nums">
-              {newRecipesDelta.current} / {updatedRecipesDelta.current}
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-1 pt-0 text-xs text-muted-foreground">
-            <div className="flex items-center gap-1">
-              {newRecipesDelta.absolute >= 0 ? <ArrowUpRight className="h-3 w-3 text-emerald-600" /> : <ArrowDownRight className="h-3 w-3 text-red-600" />}
-              <span>
-                New: {newRecipesDelta.absolute >= 0 ? "+" : ""}{newRecipesDelta.absolute}
-                {newRecipesDelta.percent == null ? " (new)" : ` (${newRecipesDelta.percent >= 0 ? "+" : ""}${newRecipesDelta.percent.toFixed(1)}%)`}
-              </span>
-            </div>
-            <div className="flex items-center gap-1">
-              {updatedRecipesDelta.absolute >= 0 ? <ArrowUpRight className="h-3 w-3 text-emerald-600" /> : <ArrowDownRight className="h-3 w-3 text-red-600" />}
-              <span>
-                Updated: {updatedRecipesDelta.absolute >= 0 ? "+" : ""}{updatedRecipesDelta.absolute}
-                {updatedRecipesDelta.percent == null ? " (new)" : ` (${updatedRecipesDelta.percent >= 0 ? "+" : ""}${updatedRecipesDelta.percent.toFixed(1)}%)`}
-              </span>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+      <section className="space-y-3">
+        <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground/70">Coverage Snapshot</p>
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          {metricCards.map((metric) => (
+            <Card
+              key={metric.label}
+              className={cn(
+                "transition-colors",
+                metric.warning
+                  ? "border-amber-200 bg-amber-50"
+                  : metric.progress >= 0.7
+                    ? "border-emerald-200 bg-emerald-50"
+                    : "border-zinc-200"
+              )}
+            >
+              <CardHeader className="pb-2">
+                <CardDescription className="text-[11px] uppercase tracking-wider text-muted-foreground/80">{metric.label}</CardDescription>
+                <CardTitle className="text-3xl tabular-nums">{metric.value}</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2 pt-0">
+                <p className="text-xs text-muted-foreground">{metric.hint}</p>
+                <div className="h-1.5 w-full overflow-hidden rounded-full bg-zinc-200/80">
+                  <div
+                    className={cn(
+                      "h-full rounded-full transition-all",
+                      metric.warning ? "bg-amber-500" : metric.progress >= 0.7 ? "bg-emerald-500" : "bg-zinc-500"
+                    )}
+                    style={{ width: `${Math.max(0, Math.min(100, metric.progress * 100))}%` }}
+                  />
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      </section>
+
+      <section className="space-y-3">
+        <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground/70">
+          Velocity (Last 24h vs Prior 24h)
+        </p>
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>New Recipes</CardDescription>
+              <CardTitle className="text-2xl tabular-nums">{newRecipesDelta.current}</CardTitle>
+            </CardHeader>
+            <CardContent className="pt-0">
+              <DeltaBadge delta={newRecipesDelta} />
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Updated Recipes</CardDescription>
+              <CardTitle className="text-2xl tabular-nums">{updatedRecipesDelta.current}</CardTitle>
+            </CardHeader>
+            <CardContent className="pt-0">
+              <DeltaBadge delta={updatedRecipesDelta} />
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Failed Image Changes</CardDescription>
+              <CardTitle className="text-2xl tabular-nums">{failedRecipesDelta.current}</CardTitle>
+            </CardHeader>
+            <CardContent className="pt-0">
+              <DeltaBadge delta={failedRecipesDelta} positiveIsGood={false} />
+            </CardContent>
+          </Card>
+        </div>
+      </section>
 
       {unresolvedOwners > 0 && (
         <Alert className="border-amber-300 bg-amber-50">
@@ -333,7 +373,7 @@ export default async function RecipesPage({
       )}
 
       {/* Two-column split layout */}
-      <div className="grid gap-6 lg:grid-cols-[320px_1fr] items-start">
+      <div className="grid items-start gap-6 lg:grid-cols-[minmax(420px,38%)_minmax(0,1fr)] 2xl:grid-cols-[minmax(460px,40%)_minmax(0,1fr)]">
         {/* Recipe List — sticky scrollable */}
         <Card className="sticky top-0">
           <CardHeader className="space-y-3 pb-2">
@@ -414,7 +454,7 @@ export default async function RecipesPage({
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
                         <p className="inline-flex max-w-full items-center gap-1.5 truncate text-sm font-semibold">
-                          <EntityTypeIcon entityType="recipe" className="h-3.5 w-3.5 flex-none text-blue-600" />
+                          <EntityTypeIcon entityType="recipe" className="h-3.5 w-3.5 flex-none" />
                           <span className="truncate">{row.title}</span>
                         </p>
                         <p className="truncate text-xs text-muted-foreground">
@@ -462,7 +502,7 @@ export default async function RecipesPage({
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
                       <CardTitle className="inline-flex items-center gap-2 text-base">
-                        <EntityTypeIcon entityType="recipe" className="h-4 w-4 text-blue-600" />
+                        <EntityTypeIcon entityType="recipe" className="h-4 w-4" />
                         {detail.recipe.title}
                       </CardTitle>
                       <CardDescription>
@@ -702,7 +742,7 @@ export default async function RecipesPage({
                                   </TableCell>
                                   <TableCell>
                                     <p className="inline-flex items-center gap-1.5 text-sm">
-                                      <EntityTypeIcon entityType="recipe" className="h-3.5 w-3.5 text-blue-600" />
+                                      <EntityTypeIcon entityType="recipe" className="h-3.5 w-3.5" />
                                       {attachment.child_recipe_title ?? "Untitled"}
                                     </p>
                                     <p className="font-mono text-[10px] text-muted-foreground">
@@ -770,7 +810,11 @@ export default async function RecipesPage({
                                 <TableCell className="text-xs">
                                   {row.canonical_name ? (
                                     <span className="inline-flex items-center gap-1.5">
-                                      <EntityTypeIcon entityType="ingredient" className="h-3.5 w-3.5 text-emerald-600" />
+                                      <EntityTypeIcon
+                                        entityType="ingredient"
+                                        canonicalName={row.canonical_name}
+                                        className="h-3.5 w-3.5"
+                                      />
                                       {row.canonical_name}
                                     </span>
                                   ) : (

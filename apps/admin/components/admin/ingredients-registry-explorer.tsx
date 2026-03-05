@@ -318,7 +318,7 @@ export function IngredientsRegistryExplorer({
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
               <CardTitle className="flex items-center gap-2 text-base">
-                <EntityTypeIcon entityType="ingredient" className="h-4 w-4 text-emerald-600" />
+                <EntityTypeIcon entityType="ingredient" className="h-4 w-4" />
                 Canonical Ingredient Registry
               </CardTitle>
               <CardDescription>Search, filter, sort, and inspect ingredient enrichment coverage.</CardDescription>
@@ -434,7 +434,13 @@ export function IngredientsRegistryExplorer({
                     >
                       <TableCell>
                         <p className="inline-flex items-center gap-1.5 text-sm font-medium">
-                          <EntityTypeIcon entityType="ingredient" className="h-3.5 w-3.5 text-emerald-600" />
+                          <EntityTypeIcon
+                            entityType="ingredient"
+                            canonicalName={ingredient.canonical_name}
+                            normalizedKey={ingredient.normalized_key}
+                            metadata={ingredient.metadata}
+                            className="h-3.5 w-3.5"
+                          />
                           {ingredient.canonical_name}
                         </p>
                         <p className="font-mono text-[10px] text-muted-foreground">{ingredient.normalized_key}</p>
@@ -508,7 +514,7 @@ export function IngredientsRegistryExplorer({
       <Card className="xl:sticky xl:top-4">
         <CardHeader className="pb-3">
           <CardTitle className="flex items-center gap-2 text-base">
-            <EntityTypeIcon entityType="ingredient" className="h-4 w-4 text-emerald-600" />
+            <EntityTypeIcon entityType="ingredient" className="h-4 w-4" />
             Ingredient Detail
           </CardTitle>
           <CardDescription>
@@ -530,7 +536,13 @@ export function IngredientsRegistryExplorer({
                 <div className="flex items-start justify-between gap-2">
                   <div>
                     <p className="inline-flex items-center gap-1.5 text-sm font-semibold">
-                      <EntityTypeIcon entityType="ingredient" className="h-4 w-4 text-emerald-600" />
+                      <EntityTypeIcon
+                        entityType="ingredient"
+                        canonicalName={activeDetail.ingredient.canonical_name}
+                        normalizedKey={activeDetail.ingredient.normalized_key}
+                        metadata={activeDetail.ingredient.metadata}
+                        className="h-4 w-4"
+                      />
                       {activeDetail.ingredient.canonical_name}
                     </p>
                     <p className="font-mono text-[11px] text-muted-foreground">{activeDetail.ingredient.normalized_key}</p>
@@ -665,12 +677,12 @@ export function IngredientsRegistryExplorer({
                             <TableCell>
                               {usage.recipe_id ? (
                                 <Link href={`/recipes?recipe=${usage.recipe_id}`} className="inline-flex items-center gap-1.5 text-xs font-medium underline-offset-2 hover:underline">
-                                  <EntityTypeIcon entityType="recipe" className="h-3.5 w-3.5 text-blue-600" />
+                                  <EntityTypeIcon entityType="recipe" className="h-3.5 w-3.5" />
                                   {usage.recipe_title}
                                 </Link>
                               ) : (
                                 <p className="inline-flex items-center gap-1.5 text-xs font-medium">
-                                  <EntityTypeIcon entityType="recipe" className="h-3.5 w-3.5 text-blue-600" />
+                                  <EntityTypeIcon entityType="recipe" className="h-3.5 w-3.5" />
                                   {usage.recipe_title}
                                 </p>
                               )}

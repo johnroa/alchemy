@@ -5766,15 +5766,37 @@ const converseChatWithRetry = async (params: {
   scopeHint?: "chat_ideation" | "chat_generation" | "chat_iteration";
   modelOverrides?: ModelOverrideMap;
 }): Promise<Awaited<ReturnType<typeof llmGateway.converseChat>>> => {
-  return await llmGateway.converseChat({
-    client: params.client,
-    userId: params.userId,
-    requestId: params.requestId,
-    prompt: params.prompt,
-    context: params.context,
-    scopeHint: params.scopeHint,
-    modelOverrides: params.modelOverrides,
-  });
+  const callGateway = () =>
+    llmGateway.converseChat({
+      client: params.client,
+      userId: params.userId,
+      requestId: params.requestId,
+      prompt: params.prompt,
+      context: params.context,
+      scopeHint: params.scopeHint,
+      modelOverrides: params.modelOverrides,
+    });
+
+  try {
+    return await callGateway();
+  } catch (firstError) {
+    const isRetryable =
+      firstError instanceof ApiError &&
+      (firstError.statusCode === 422 ||
+        firstError.code === "chat_schema_invalid" ||
+        firstError.code === "llm_invalid_json" ||
+        firstError.code === "llm_json_truncated" ||
+        firstError.code === "llm_empty_output");
+    if (!isRetryable) {
+      throw firstError;
+    }
+    console.warn("converseChatWithRetry: retrying after schema error", {
+      request_id: params.requestId,
+      scope_hint: params.scopeHint,
+      error_code: firstError instanceof ApiError ? firstError.code : "unknown",
+    });
+    return await callGateway();
+  }
 };
 
 const sanitizePreferenceStringList = (values: unknown): string[] => {
@@ -5961,6 +5983,20 @@ const orchestrateChatTurn = async (params: {
           request_id: params.requestId,
           error: error instanceof Error ? error.message : String(error),
         });
+        // Propagate trigger_recipe so the client knows generation was intended
+        // but failed — it can show a "generation failed, tap to retry" state.
+        assistantChatResponse = {
+          ...assistantChatResponse,
+          trigger_recipe: true,
+          response_context: {
+            ...(assistantChatResponse.response_context ?? {}),
+            mode: "generation",
+            intent:
+              normalizeChatIntent(
+                assistantChatResponse.response_context?.intent,
+              ) ?? "in_scope_generate",
+          },
+        };
       }
     }
 

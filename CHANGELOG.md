@@ -1,5 +1,86 @@
 # Changelog
 
+## [Unreleased] — 2026-03-05
+
+### Admin Console — Semantic Ingredient Icons
+
+Ingredient icons across admin pages now resolve to food-specific SVG icons based on canonical name, normalized key, and enrichment metadata.
+
+#### New Shared Package Exports (`packages/shared/`)
+- `resolveIngredientIconKey` — maps ingredient context to one of 35+ icon categories (seafood, poultry, herb, grain, etc.)
+- `resolveIngredientSemanticIconId` — fuzzy-matches ingredient names against a 230-entry semantic index for exact food icons
+- `SHADCN_FOOD_ICON_CATALOG` / `INGREDIENT_SEMANTIC_ICON_INDEX` — icon and index catalogs
+
+#### New Admin Components
+- `ShadcnFoodIcon` — renders SVG food icons from generated sprite components
+- `DeltaBadge` — shared velocity badge (up/down/flat with absolute + percent labels); used on Recipes and Ingredients pages
+- `deltaFromWindow(current, previous)` — shared delta computation helper
+- `EntityTypeIcon` — expanded: resolves semantic food icons for ingredients, falls back to category-based icons, then generic
+
+#### Updated Pages
+- **Recipes** (`/recipes`) — data-driven coverage snapshot cards with progress bars, velocity section with DeltaBadge, failed image rate metric, wider split-panel layout
+- **Ingredients** (`/ingredients`) — semantic food icons in alias table and page header
+- **Graph** (`/graph`) — overflow-x fix, page no longer breaks layout on wide graphs
+
+### Admin Console — Graph Visualizer Improvements
+
+- Removed hover state tracking (cleaner interaction model — click to select)
+- Camera control tracking: auto-fit only fires once after simulation settles; user interactions (drag, zoom, click) disable auto-fit
+- Fullscreen uses native `requestFullscreen()` on the canvas surface instead of manual CSS positioning
+- Memoized `forceGraphData` to prevent unnecessary re-renders
+- Overflow fixes (`min-w-0`) throughout the graph layout
+
+### Admin Console — Simulation Runner Enhancements
+
+- `chat_generation_trigger` step: inverted logic to correctly handle the case where refine already produced candidates vs needing a fresh trigger API call
+- New `candidate_set_active_component` step: switches active tab to the second component to verify multi-tab operations
+- Snapshot comparison in `chat_iterate_candidate` now uses the post-active-component snapshot
+
+### LLM Gateway — Recipe Normalization Improvements
+
+- `numericToDisplayFraction` — new helper that converts numeric amounts back to display fractions (e.g., `1.5` → `"1 1/2"`); used as fallback when `display_amount` is missing from LLM output
+- Fraction regex relaxed: `^(\d+)\/(\d+)$` → `^(\d+)\/(\d+)` to match fractions followed by trailing text
+- Removed hardcoded `max_output_tokens` / `max_tokens` overrides and timeout floor from runtime model config — these are now fully DB-driven via route config
+- Legacy constraint fields (`token_budget`, `ingredient_budget`, `max_ingredients`, `max_steps`) cleaned up via shared `cleanLegacyModelConfig` helper
+
+### LLM Scope Registry — Retry Policy Changes
+
+- `chat_generation` and `chat_iteration` scopes: retry reduced from 2 attempts to 1, retryable codes cleared
+- Retry logic moved to `converseChatWithRetry` in `v1/index.ts` — retries on schema validation errors (422, `chat_schema_invalid`, `llm_invalid_json`, `llm_json_truncated`, `llm_empty_output`) with a single retry
+
+### Chat Orchestration — Generation Failure Resilience
+
+- When generation fails in `orchestrateChatTurn`, the response now includes `trigger_recipe: true` and `response_context.mode: "generation"` so the client knows generation was intended but failed — enables "generation failed, tap to retry" UX
+
+### API UX Simulation Script
+
+Complete rewrite of `scripts/simulate-api-ux.mjs` to match the current chat-driven candidate loop:
+
+- `chat_start` — opens with an ideation message ("I want dinner ideas")
+- `chat_refine` — sends a specific recipe request with constraints
+- `chat_generate_trigger` — triggers generation ("Generate the recipe now with a side")
+- `chat_iterate_candidate` — iterates on the candidate ("Make it spicier and quicker")
+- `commit_candidate_set` — commits the candidate via `POST /chat/{id}/commit`
+- `fetch_committed_recipe` — reads the committed recipe with unit/grouping params
+- `fetch_cookbook` — verifies recipe appears in cookbook
+- `chat_out_of_scope_guard` — verifies out-of-scope message stays in ideation
+
+### iOS App — Visual Polish
+
+- Glass modifier: reduced opacity/intensity for user bubbles and composer surfaces (more subtle, less frosted)
+- Panel background: slower animation cycle (54s vs 20s), reduced gradient/bloom/stroke intensity
+- Header top inset increased from 20pt to 24pt
+- Recipe canvas: dynamic top inset (108pt when candidate active, 24pt otherwise)
+- Generation animation dismissal now uses `withAnimation(.easeInOut)` for smooth fade
+- Tab bar visibility: consolidated into single `updateTabVisibility` helper, removed redundant `onChange(of: keyboard.isVisible)` handler
+
+### iOS App — Data Model
+
+- `ChatMessageItem` now includes optional `metadata: [String: JSONValue]?` field
+- `JSONValue` gains `objectValue` computed property for dictionary access
+
+---
+
 ## [Unreleased] — 2026-03-03
 
 ### Admin Console — Full Overhaul

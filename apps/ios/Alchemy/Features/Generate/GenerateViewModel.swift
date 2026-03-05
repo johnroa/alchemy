@@ -515,7 +515,9 @@ final class GenerateViewModel {
         generationAnimationTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(1200))
             guard let self else { return }
-            self.isGenerationAnimationActive = false
+            withAnimation(.easeInOut(duration: 0.35)) {
+                self.isGenerationAnimationActive = false
+            }
         }
     }
 

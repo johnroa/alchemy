@@ -8,3 +8,19 @@ export type ErrorEnvelope = {
 };
 
 export const API_BASE_PATH = "/v1";
+
+export {
+  resolveIngredientIconKey,
+  type IngredientIconInput,
+  type IngredientIconKey
+} from "./ingredient-icon-key";
+export { resolveIngredientSemanticIconId } from "./ingredient-semantic-icon";
+
+export {
+  SHADCN_FOOD_ICON_CATALOG,
+  type ShadcnFoodIconCatalogEntry
+} from "./shadcn-food-icon-catalog";
+export {
+  INGREDIENT_SEMANTIC_ICON_INDEX,
+  type IngredientSemanticIconEntry
+} from "./ingredient-semantic-icon-index";

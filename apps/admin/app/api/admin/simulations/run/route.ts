@@ -832,74 +832,142 @@ const runSimulation = async (params: {
     });
 
     const ensuredCandidate = await runStep("chat_generation_trigger", async () => {
-      if (refine.candidate_count > 0) {
+      if (refine.candidate_count === 0) {
+        const apiStartedAt = Date.now();
+        const api = await requestJson<ChatApiResponse>({
+          apiBase,
+          token,
+          path: `/chat/${chat.chat_id}/messages`,
+          method: "POST",
+          body: { message: prompts.trigger },
+          modelOverrides: params.modelOverrides,
+          retryAttempts: 1
+        });
+        const apiMs = Date.now() - apiStartedAt;
+        const response = api.data;
+        const { tokenUsage, usageQueryMs, llmMs } = await loadTokenUsageWithTiming(api.request_id);
+
+        const candidateCount = Array.isArray(response.candidate_recipe_set?.components)
+          ? response.candidate_recipe_set.components.length
+          : 0;
+        assertCondition(
+          candidateCount > 0,
+          `chat_generation_trigger did not produce candidate tabs (loop_state=${response.loop_state ?? "unknown"})`
+        );
+
         return {
-          generation_prompt: prompts.refine,
-          generation_source: "chat_refine",
-          loop_state: refine.loop_state,
-          candidate_id: "",
-          revision: null,
-          active_component_id: null,
-          candidate_count: refine.candidate_count,
-          candidate_summary: refine.candidate_summary,
-          candidate_snapshot: refine.candidate_snapshot ?? null,
-          assistant_reply: "",
-          thread_tail: [],
-          reused_candidate_from_step: "chat_refine",
-          api_request_id: null,
-          token_usage: {
-            request_id: null,
-            llm_call_count: 0,
-            input_tokens: 0,
-            output_tokens: 0,
-            total_tokens: 0,
-            cost_usd: 0,
-            scopes: [],
-            scope_stats: {}
-          },
-          timing: { api_ms: 0, usage_query_ms: 0, llm_ms: 0, server_ms: 0 }
+          generation_prompt: prompts.trigger,
+          generation_source: "chat_generation_trigger",
+          loop_state: response.loop_state ?? "unknown",
+          candidate_id: response.candidate_recipe_set?.candidate_id ?? "",
+          revision:
+            typeof response.candidate_recipe_set?.revision === "number"
+              ? response.candidate_recipe_set.revision
+              : null,
+          active_component_id: response.candidate_recipe_set?.active_component_id ?? null,
+          candidate_count: candidateCount,
+          candidate_summary: summarizeComponents(response.candidate_recipe_set),
+          candidate_snapshot: projectCandidateForTrace(response.candidate_recipe_set),
+          assistant_reply: extractAssistantText(response),
+          thread_tail: Array.isArray(response.messages) ? response.messages.slice(-6) : [],
+          reused_candidate_from_step: null,
+          api_request_id: api.request_id,
+          token_usage: tokenUsage,
+          timing: { api_ms: apiMs, usage_query_ms: usageQueryMs, llm_ms: llmMs, server_ms: api.server_ms }
         };
       }
 
-      const generationPrompt = prompts.trigger;
+      return {
+        generation_prompt: prompts.trigger,
+        generation_source: "chat_refine",
+        loop_state: refine.loop_state,
+        candidate_id:
+          typeof refine.candidate_snapshot?.["candidate_id"] === "string"
+            ? (refine.candidate_snapshot["candidate_id"] as string)
+            : "",
+        revision:
+          typeof refine.candidate_snapshot?.["revision"] === "number"
+            ? (refine.candidate_snapshot["revision"] as number)
+            : null,
+        active_component_id:
+          typeof refine.candidate_snapshot?.["active_component_id"] === "string"
+            ? (refine.candidate_snapshot["active_component_id"] as string)
+            : null,
+        candidate_count: refine.candidate_count,
+        candidate_summary: refine.candidate_summary,
+        candidate_snapshot: refine.candidate_snapshot ?? null,
+        assistant_reply: refine.assistant_reply,
+        thread_tail: refine.thread_tail,
+        reused_candidate_from_step: "chat_refine",
+        api_request_id: null,
+        token_usage: {
+          request_id: null,
+          llm_call_count: 0,
+          input_tokens: 0,
+          output_tokens: 0,
+          total_tokens: 0,
+          cost_usd: 0,
+          scopes: [],
+          scope_stats: {}
+        },
+        timing: { api_ms: 0, usage_query_ms: 0, llm_ms: 0, server_ms: 0 }
+      };
+    });
+
+    const activeComponentSync = await runStep("candidate_set_active_component", async () => {
+      const candidateSummary = Array.isArray(ensuredCandidate.candidate_summary)
+        ? ensuredCandidate.candidate_summary
+        : [];
+      const secondComponent = candidateSummary[1];
+      const targetComponentId =
+        secondComponent && typeof secondComponent["component_id"] === "string"
+          ? (secondComponent["component_id"] as string).trim()
+          : "";
+
+      if (!targetComponentId) {
+        return {
+          skipped: true,
+          reason: "candidate has fewer than 2 components",
+          candidate_snapshot: ensuredCandidate.candidate_snapshot ?? null
+        };
+      }
+
       const apiStartedAt = Date.now();
       const api = await requestJson<ChatApiResponse>({
         apiBase,
         token,
-        path: `/chat/${chat.chat_id}/messages`,
-        method: "POST",
-        body: { message: generationPrompt },
+        path: `/chat/${chat.chat_id}/candidate`,
+        method: "PATCH",
+        body: { action: "set_active_component", component_id: targetComponentId },
         modelOverrides: params.modelOverrides,
         retryAttempts: 1
       });
       const apiMs = Date.now() - apiStartedAt;
       const response = api.data;
-      const { tokenUsage, usageQueryMs, llmMs } = await loadTokenUsageWithTiming(api.request_id);
-
-      const components = summarizeComponents(response.candidate_recipe_set);
-      const loopState = response.loop_state ?? "unknown";
-      const assistantReply = extractAssistantText(response);
-      if (components.length === 0) {
-        throw new Error(
-          `Generation trigger did not produce a candidate recipe set (loop_state=${loopState})`
-        );
-      }
+      const activeComponentId = response.candidate_recipe_set?.active_component_id ?? null;
+      assertCondition(
+        activeComponentId === targetComponentId,
+        `set_active_component failed (expected ${targetComponentId}, got ${String(activeComponentId)})`
+      );
 
       return {
-        generation_prompt: generationPrompt,
-        generation_source: "chat_generation_trigger",
+        skipped: false,
+        target_component_id: targetComponentId,
+        active_component_id: activeComponentId,
         api_request_id: api.request_id,
-        token_usage: tokenUsage,
-        timing: { api_ms: apiMs, usage_query_ms: usageQueryMs, llm_ms: llmMs, server_ms: api.server_ms },
-        loop_state: loopState,
-        candidate_id: response.candidate_recipe_set?.candidate_id ?? "",
-        revision: response.candidate_recipe_set?.revision ?? null,
-        active_component_id: response.candidate_recipe_set?.active_component_id ?? null,
-        candidate_count: components.length,
-        candidate_summary: components,
-        candidate_snapshot: projectCandidateForTrace(response.candidate_recipe_set),
-        assistant_reply: assistantReply,
-        thread_tail: Array.isArray(response.messages) ? response.messages.slice(-6) : []
+        token_usage: {
+          request_id: api.request_id,
+          llm_call_count: 0,
+          input_tokens: 0,
+          output_tokens: 0,
+          total_tokens: 0,
+          cost_usd: 0,
+          scopes: [],
+          scope_stats: {}
+        },
+        timing: { api_ms: apiMs, usage_query_ms: 0, llm_ms: 0, server_ms: api.server_ms },
+        candidate_summary: summarizeComponents(response.candidate_recipe_set),
+        candidate_snapshot: projectCandidateForTrace(response.candidate_recipe_set)
       };
     });
 
@@ -935,8 +1003,8 @@ const runSimulation = async (params: {
         active_component_id: response.candidate_recipe_set?.active_component_id ?? ensuredCandidate.active_component_id,
         candidate_summary: components,
         candidate_snapshot_before:
-          typeof ensuredCandidate.candidate_snapshot === "object" && ensuredCandidate.candidate_snapshot !== null
-            ? ensuredCandidate.candidate_snapshot
+          typeof activeComponentSync.candidate_snapshot === "object" && activeComponentSync.candidate_snapshot !== null
+            ? activeComponentSync.candidate_snapshot
             : null,
         candidate_snapshot: projectCandidateForTrace(response.candidate_recipe_set),
         thread_tail: Array.isArray(response.messages) ? response.messages.slice(-6) : []

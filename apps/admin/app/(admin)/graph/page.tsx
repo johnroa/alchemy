@@ -33,7 +33,7 @@ export default async function GraphPage({
   const activeQueueJobs = graph.metadata_queue.pending + graph.metadata_queue.processing;
 
   return (
-    <div className="space-y-6">
+    <div className="min-w-0 space-y-6 overflow-x-hidden">
       <PageHeader
         title="Graph Inspector"
         description="Visual and tabular inspection for recipe, ingredient, category, and keyword graph links."

@@ -182,7 +182,7 @@ Next.js 15 App Router. All pages under `app/(admin)/`:
 | `/dashboard` | KPI rollup — LLM cost, safety flags, image pipeline, activity feed |
 | `/users` | User roster with live search, status, and reset-memory action |
 | `/moderation` | Safety flag review |
-| `/recipes` | Split-panel recipe audit — list + version timeline + prompt trace |
+| `/recipes` | Split-panel recipe audit — coverage snapshot cards, velocity deltas, version timeline + prompt trace |
 | `/provider-model` | Model Assignments — LLM model routing per scope |
 | `/models` | Model registry — available providers/models with pricing and context window |
 | `/prompts` | Prompt management per scope — active/inactive versions, inline editing |
@@ -192,7 +192,8 @@ Next.js 15 App Router. All pages under `app/(admin)/`:
 | `/simulations` | Seeded simulation runner — single or concurrent A/B with full trace, latency segments, and token deltas |
 | `/request-trace` | Gateway event log — clickable rows, payload details, error highlighting |
 | `/changelog` | Changelog event audit with action/scope distribution charts |
-| `/graph` | Entity relationship graph with confidence-ranked edges |
+| `/ingredients` | Canonical ingredient registry with semantic food icons, enrichment metadata, and ontology links |
+| `/graph` | Entity relationship graph — force-directed canvas with type filters, fullscreen, and confidence-ranked edges |
 | `/version-causality` | Recipe version causality chains |
 
 ---
@@ -346,8 +347,7 @@ The migration chain is out of order relative to remote history. Fix by:
 | `0007_onboarding_scope_defaults` | Onboarding scope route/prompt/rule |
 | `0008_remove_explore` | Removed explore tab scope |
 | `0009_immediate_recipe_generation` | Prompt v6 — always generate, no questions |
-| `0010_chat_scope_defaults` | New `chat` scope — ideation before generate |
-| `0010_model_registry` | `llm_model_registry` table — provider/model pricing + availability |
+| `0010_chat_scope_defaults` | New `chat` scope — ideation before generate; `llm_model_registry` table |
 | `0011_seed_model_registry` | Seed 9 models (GPT-4.1, GPT-4o, o3, o4-mini, Claude Opus/Sonnet/Haiku) |
 | `0012_seed_additional_openai_models` | Normalize OpenAI catalog to GPT-5/GPT-4.1/GPT Image and remove 4o/o-series defaults |
 | `0013_backfill_onboarding_prompt_default` | Backfill active onboarding prompt/rule defaults if missing |
@@ -356,6 +356,16 @@ The migration chain is out of order relative to remote history. Fix by:
 | `0016_chat_loop_refactor_dev` | Chat-only candidate loop tables/contracts + commit path |
 | `0017_chat_loop_latency_tuning` | Prompt/model-config tuning for faster chat-generation/iteration turns |
 | `0018_chat_loop_contract_hardening` | Strict intent-aware chat prompt/rule contracts for ideation/generation/iteration |
+| `0020_semantic_ontology_core` | Semantic ontology core for LLM-first enrichment pipeline |
+| `0021_metadata_contract_v2` | Metadata contract V2 indexes and schema-version tracking |
+| `0022_metadata_jobs_v2_pipeline` | Stage-aware metadata jobs for async semantic enrichment |
+| `0023_graph_api_indexes` | Graph API traversal and confidence filter indexes |
+| `0024_chat_loop_quality_reset` | Remove shrink constraints and token budget clamps from active chat scopes |
+| `0025_llm_scope_split_hardening` | Split generic classify helper calls into explicit DB-managed scopes |
+| `0026_chat_loop_prompt_deconstraint_v103` | Chat-loop prompt/rule hard reset: remove residual shrink language and recipe-size caps |
+| `0027_generate_scope_deconstraint_v104` | Generate-scope hardening: remove residual shrink/budget constraints |
+| `0028_chat_ideation_direct_generation_v105` | Chat ideation update: explicit dish/recipe requests move directly to generation |
+| `0029_chat_loop_route_provider_stability_v106` | Pin active core routes to structured-output-capable models for JSON reliability |
 
 ---
 
@@ -495,7 +505,16 @@ Supabase schema/functions are deployed by CI from `main` pushes (not from local 
 
 ## API UX Simulation
 
-End-to-end API simulation (chat start → refine → generation trigger → iterate → commit):
+End-to-end API simulation covering the full chat-driven candidate loop:
+
+1. `chat_start` — open ideation session
+2. `chat_refine` — send specific recipe constraints
+3. `chat_generate_trigger` — trigger candidate generation
+4. `chat_iterate_candidate` — iterate on candidate
+5. `commit_candidate_set` — commit to cookbook
+6. `fetch_committed_recipe` — read committed recipe with unit/grouping params
+7. `fetch_cookbook` — verify cookbook listing
+8. `chat_out_of_scope_guard` — verify out-of-scope stays in ideation
 
 ```bash
 API_URL=https://api.cookwithalchemy.com/v1 \

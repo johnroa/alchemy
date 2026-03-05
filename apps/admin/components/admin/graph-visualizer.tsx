@@ -115,13 +115,12 @@ export function GraphVisualizer({ graph }: { graph: GraphData }): React.JSX.Elem
   const [activeTypes, setActiveTypes] = useState<string[]>(entityTypes);
   const [relationFilter, setRelationFilter] = useState<string>("all");
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
-  const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
-  const viewportRef = useRef<HTMLDivElement | null>(null);
   const surfaceRef = useRef<HTMLDivElement | null>(null);
   const graphRef = useRef<ForceGraphMethods<ForceNode, ForceLink> | undefined>(undefined);
-  const autoFitSignatureRef = useRef<string>("");
+  const autoFitPendingRef = useRef<boolean>(true);
+  const hasUserCameraControlRef = useRef<boolean>(false);
   const [surfaceSize, setSurfaceSize] = useState({ width: 1080, height: 680 });
 
   useEffect(() => {
@@ -141,10 +140,9 @@ export function GraphVisualizer({ graph }: { graph: GraphData }): React.JSX.Elem
     }
 
     const update = (): void => {
-      setSurfaceSize({
-        width: Math.max(360, Math.floor(element.clientWidth)),
-        height: Math.max(440, Math.floor(element.clientHeight))
-      });
+      const width = Math.max(360, Math.floor(element.clientWidth));
+      const height = Math.max(440, Math.floor(element.clientHeight));
+      setSurfaceSize((current) => (current.width === width && current.height === height ? current : { width, height }));
     };
 
     update();
@@ -159,13 +157,7 @@ export function GraphVisualizer({ graph }: { graph: GraphData }): React.JSX.Elem
 
   useEffect(() => {
     const onFullscreenChange = (): void => {
-      const viewport = viewportRef.current;
-      if (!viewport) {
-        setIsFullscreen(false);
-        return;
-      }
-      const current = document.fullscreenElement;
-      setIsFullscreen(Boolean(current && (current === viewport || viewport.contains(current))));
+      setIsFullscreen(document.fullscreenElement === surfaceRef.current);
     };
 
     document.addEventListener("fullscreenchange", onFullscreenChange);
@@ -257,22 +249,23 @@ export function GraphVisualizer({ graph }: { graph: GraphData }): React.JSX.Elem
     linkForce?.distance?.((link: ForceLink) => clamp(90 - Number(link.confidence ?? 0.5) * 34, 52, 98));
     linkForce?.iterations?.(2);
 
-    autoFitSignatureRef.current = "";
+    autoFitPendingRef.current = true;
+    hasUserCameraControlRef.current = false;
     instance.d3ReheatSimulation();
   }, [filtered.links.length, filtered.nodes.length]);
 
   const onEngineStop = useCallback((): void => {
-    if (filtered.nodes.length === 0 || filtered.links.length === 0) {
+    const instance = graphRef.current;
+    if (!instance || filtered.nodes.length === 0 || filtered.links.length === 0) {
       return;
     }
 
-    const signature = `${filtered.nodes.length}:${filtered.links.length}`;
-    if (autoFitSignatureRef.current === signature) {
+    if (!autoFitPendingRef.current || hasUserCameraControlRef.current) {
       return;
     }
 
-    graphRef.current?.zoomToFit(320, 24);
-    autoFitSignatureRef.current = signature;
+    instance.zoomToFit(0, 24);
+    autoFitPendingRef.current = false;
   }, [filtered.links.length, filtered.nodes.length]);
 
   const selectedNode = selectedNodeId ? filtered.nodeById.get(selectedNodeId) ?? null : null;
@@ -288,6 +281,14 @@ export function GraphVisualizer({ graph }: { graph: GraphData }): React.JSX.Elem
     });
   }, [filtered.links, selectedNodeId]);
 
+  const forceGraphData = useMemo(
+    () => ({
+      nodes: filtered.nodes,
+      links: filtered.links
+    }),
+    [filtered.links, filtered.nodes]
+  );
+
   const toggleType = (type: string): void => {
     setActiveTypes((current) => {
       if (current.includes(type)) {
@@ -299,32 +300,40 @@ export function GraphVisualizer({ graph }: { graph: GraphData }): React.JSX.Elem
   };
 
   const toggleFullscreen = async (): Promise<void> => {
-    const viewport = viewportRef.current;
-    if (!viewport) {
+    const surface = surfaceRef.current;
+    if (!surface) {
       return;
     }
 
-    if (document.fullscreenElement) {
-      await document.exitFullscreen();
-      return;
-    }
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+        return;
+      }
 
-    await viewport.requestFullscreen();
+      await surface.requestFullscreen();
+    } catch {
+      // Ignore browser-level fullscreen errors; the control remains usable.
+    }
+  };
+
+  const markUserCamera = (): void => {
+    hasUserCameraControlRef.current = true;
+    autoFitPendingRef.current = false;
   };
 
   const fitGraph = (): void => {
-    graphRef.current?.zoomToFit(350, 26);
+    markUserCamera();
+    graphRef.current?.zoomToFit(250, 26);
   };
 
   const centerGraph = (): void => {
-    graphRef.current?.centerAt(0, 0, 350);
-  };
-
-  const resetZoom = (): void => {
-    graphRef.current?.zoomToFit(320, 24);
+    markUserCamera();
+    graphRef.current?.centerAt(0, 0, 250);
   };
 
   const releasePinnedNodes = (): void => {
+    markUserCamera();
     for (const node of filtered.nodes) {
       delete node.fx;
       delete node.fy;
@@ -337,10 +346,12 @@ export function GraphVisualizer({ graph }: { graph: GraphData }): React.JSX.Elem
     if (!id) {
       return;
     }
+    hasUserCameraControlRef.current = true;
     setSelectedNodeId(id);
   };
 
   const onNodeDragEnd = (node: NodeObject<ForceNode>): void => {
+    markUserCamera();
     delete node.fx;
     delete node.fy;
     graphRef.current?.d3ReheatSimulation();
@@ -352,7 +363,6 @@ export function GraphVisualizer({ graph }: { graph: GraphData }): React.JSX.Elem
       const baseRadius = 2 + Math.sqrt(Math.max(1, degree + 1)) * 0.8;
       const radius = Math.max(2.4, Math.min(8, baseRadius));
       const isSelected = selectedNodeId != null && resolveNodeId(node) === selectedNodeId;
-      const isHovered = hoveredNodeId != null && resolveNodeId(node) === hoveredNodeId;
       const color = typeof node.color === "string" ? node.color : "#334155";
       const x = Number(node.x ?? 0);
       const y = Number(node.y ?? 0);
@@ -362,13 +372,12 @@ export function GraphVisualizer({ graph }: { graph: GraphData }): React.JSX.Elem
       canvasContext.fillStyle = color;
       canvasContext.fill();
 
-      canvasContext.lineWidth = isSelected ? 2.8 : isHovered ? 1.8 : 1.1;
+      canvasContext.lineWidth = isSelected ? 2.8 : 1.1;
       canvasContext.strokeStyle = isSelected ? "#0f172a" : "#f8fafc";
       canvasContext.stroke();
 
       const shouldDrawLabel =
         isSelected ||
-        isHovered ||
         degree >= 10 ||
         (filtered.nodes.length <= 220 && globalScale >= 1.18) ||
         globalScale >= 1.7;
@@ -399,7 +408,7 @@ export function GraphVisualizer({ graph }: { graph: GraphData }): React.JSX.Elem
       canvasContext.textBaseline = "middle";
       canvasContext.fillText(label, labelX, labelY);
     },
-    [filtered.nodes.length, hoveredNodeId, selectedNodeId]
+    [filtered.nodes.length, selectedNodeId]
   );
 
   const linkColor = useCallback(
@@ -465,16 +474,10 @@ export function GraphVisualizer({ graph }: { graph: GraphData }): React.JSX.Elem
   }, []);
 
   return (
-    <div
-      ref={viewportRef}
-      className={cn(
-        "space-y-3",
-        isFullscreen && "fixed inset-3 z-50 overflow-auto rounded-lg border bg-background p-4 shadow-2xl"
-      )}
-    >
-      <div className="grid gap-3 xl:grid-cols-[1fr_300px]">
-        <div className="space-y-2">
-          <div className="flex flex-wrap items-end gap-3 rounded-md border bg-white p-3">
+    <div className="min-w-0 space-y-3">
+      <div className="grid min-w-0 gap-3 xl:grid-cols-[minmax(0,1fr)_300px]">
+        <div className="min-w-0 space-y-2">
+          <div className="flex min-w-0 flex-wrap items-end gap-3 rounded-md border bg-white p-3">
             <label className="w-32 text-xs font-medium text-muted-foreground">
               Max Nodes
               <Input
@@ -508,7 +511,7 @@ export function GraphVisualizer({ graph }: { graph: GraphData }): React.JSX.Elem
               </select>
             </label>
 
-            <div className="flex flex-wrap gap-1.5">
+            <div className="flex min-w-0 flex-wrap gap-1.5">
               {entityTypes.map((type) => (
                 <Button
                   key={type}
@@ -524,14 +527,14 @@ export function GraphVisualizer({ graph }: { graph: GraphData }): React.JSX.Elem
               ))}
             </div>
 
-            <div className="ml-auto flex flex-wrap gap-1.5">
+            <div className="flex w-full flex-wrap gap-1.5 md:justify-end">
               <Button type="button" variant="outline" size="sm" className="h-7 text-[11px]" onClick={fitGraph}>
                 Fit
               </Button>
               <Button type="button" variant="outline" size="sm" className="h-7 text-[11px]" onClick={centerGraph}>
                 Center
               </Button>
-              <Button type="button" variant="outline" size="sm" className="h-7 text-[11px]" onClick={resetZoom}>
+              <Button type="button" variant="outline" size="sm" className="h-7 text-[11px]" onClick={fitGraph}>
                 Reset Zoom
               </Button>
               <Button type="button" variant="outline" size="sm" className="h-7 text-[11px]" onClick={releasePinnedNodes}>
@@ -546,15 +549,15 @@ export function GraphVisualizer({ graph }: { graph: GraphData }): React.JSX.Elem
           <div
             ref={surfaceRef}
             className={cn(
-              "overflow-hidden rounded-lg border bg-white",
-              isFullscreen ? "h-[calc(100vh-220px)] min-h-[520px]" : "h-[680px]"
+              "h-[680px] overflow-hidden rounded-lg border bg-white fullscreen:h-screen fullscreen:w-screen",
+              isFullscreen && "fullscreen:rounded-none fullscreen:border-0"
             )}
           >
             <ForceGraph2D
               ref={graphRef}
               width={surfaceSize.width}
               height={surfaceSize.height}
-              graphData={{ nodes: filtered.nodes, links: filtered.links }}
+              graphData={forceGraphData}
               nodeId="id"
               linkSource="source"
               linkTarget="target"
@@ -574,8 +577,18 @@ export function GraphVisualizer({ graph }: { graph: GraphData }): React.JSX.Elem
               nodeCanvasObject={nodeCanvasObject}
               nodeCanvasObjectMode={() => "replace"}
               onNodeClick={onNodeClick}
-              onNodeHover={(node) => setHoveredNodeId(node ? resolveNodeId(node) : null)}
+              onNodeHover={(node) => {
+                const canvas = surfaceRef.current?.querySelector("canvas");
+                if (!canvas) {
+                  return;
+                }
+                canvas.style.cursor = node ? "pointer" : "grab";
+              }}
               onNodeDragEnd={onNodeDragEnd}
+              onZoom={() => {
+                hasUserCameraControlRef.current = true;
+                autoFitPendingRef.current = false;
+              }}
               onEngineStop={onEngineStop}
               onBackgroundClick={() => setSelectedNodeId(null)}
               enableNodeDrag
@@ -584,9 +597,12 @@ export function GraphVisualizer({ graph }: { graph: GraphData }): React.JSX.Elem
             />
           </div>
 
-          <div className="flex flex-wrap items-center gap-3 rounded-md border bg-white p-3">
+          <div className="flex items-center gap-3 overflow-x-auto rounded-md border bg-white p-3">
             {graph.relation_types.map((relationType) => (
-              <span key={relationType} className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+              <span
+                key={relationType}
+                className="inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
+              >
                 <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: hashColor(relationType) }} />
                 {relationType}
               </span>
@@ -594,7 +610,7 @@ export function GraphVisualizer({ graph }: { graph: GraphData }): React.JSX.Elem
           </div>
         </div>
 
-        <div className="space-y-3">
+        <div className="min-w-0 space-y-3">
           <div className="rounded-md border bg-white p-3">
             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Filtered Graph</p>
             <p className="mt-1 text-sm tabular-nums">{filtered.nodes.length} nodes</p>
@@ -604,7 +620,7 @@ export function GraphVisualizer({ graph }: { graph: GraphData }): React.JSX.Elem
           <div className="rounded-md border bg-white p-3">
             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Node Detail</p>
             {!selectedNode ? (
-              <p className="mt-2 text-sm text-muted-foreground">Click or hover a node for detail. Drag nodes to pull/pin them.</p>
+              <p className="mt-2 text-sm text-muted-foreground">Click a node for detail. Drag nodes to pull/pin them.</p>
             ) : (
               <div className="mt-2 space-y-2 text-sm">
                 <p className="font-medium">{selectedNode.label}</p>

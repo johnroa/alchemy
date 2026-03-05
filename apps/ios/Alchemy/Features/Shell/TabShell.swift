@@ -128,49 +128,44 @@ struct TabShell: View {
             if tab != .generate {
                 generateComposerFocused = false
             }
+            updateTabVisibility(forKeyboardHeight: keyboard.height, focused: generateComposerFocused)
         }
-        .onChange(of: keyboard.isVisible) { _, isVisible in
-            let shouldHide = isVisible || generateComposerFocused
-            if shouldHide {
-                tabRevealTask?.cancel()
-                tabRevealTask = nil
-                tabBarVisible = false
-                return
-            }
-
-            tabRevealTask?.cancel()
-            tabRevealTask = Task { @MainActor in
-                try? await Task.sleep(for: .milliseconds(70))
-                guard !keyboard.isVisible && !generateComposerFocused else { return }
-                withAnimation(.spring(response: 0.4, dampingFraction: 0.84)) {
-                    tabBarVisible = true
-                }
-            }
+        .onChange(of: keyboard.height) { _, height in
+            updateTabVisibility(forKeyboardHeight: height, focused: generateComposerFocused)
         }
         .onChange(of: generateComposerFocused) { _, focused in
-            if focused {
-                tabRevealTask?.cancel()
-                tabRevealTask = nil
-                tabBarVisible = false
-                return
-            }
-
-            guard !keyboard.isVisible else { return }
-            tabRevealTask?.cancel()
-            tabRevealTask = Task { @MainActor in
-                try? await Task.sleep(for: .milliseconds(70))
-                guard !keyboard.isVisible && !generateComposerFocused else { return }
-                withAnimation(.spring(response: 0.4, dampingFraction: 0.84)) {
-                    tabBarVisible = true
-                }
-            }
+            updateTabVisibility(forKeyboardHeight: keyboard.height, focused: focused)
         }
         .onAppear {
-            tabBarVisible = !(keyboard.isVisible || generateComposerFocused)
+            updateTabVisibility(forKeyboardHeight: keyboard.height, focused: generateComposerFocused)
         }
         .onDisappear {
             tabRevealTask?.cancel()
             tabRevealTask = nil
+        }
+    }
+
+    private func updateTabVisibility(forKeyboardHeight height: CGFloat, focused: Bool) {
+        let shouldHide = focused || height > 4
+        if shouldHide {
+            tabRevealTask?.cancel()
+            tabRevealTask = nil
+            var transaction = Transaction()
+            transaction.animation = nil
+            withTransaction(transaction) {
+                tabBarVisible = false
+            }
+            return
+        }
+
+        guard height < 1 else { return }
+        tabRevealTask?.cancel()
+        tabRevealTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(70))
+            guard keyboard.height < 1 && !generateComposerFocused else { return }
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.84)) {
+                tabBarVisible = true
+            }
         }
     }
 }
