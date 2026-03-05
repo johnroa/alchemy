@@ -790,6 +790,11 @@ struct OkResponse: Codable {
     let ok: Bool
 }
 
+/// Lightweight LLM-generated greeting for the Generate screen welcome bubble.
+struct GreetingResponse: Codable {
+    let text: String
+}
+
 struct AttachmentResponse: Codable {
     let recipe: RecipeView
     let attachmentId: String

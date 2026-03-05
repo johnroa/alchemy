@@ -57,7 +57,7 @@ export default async function MetadataPipelinePage(): Promise<React.JSX.Element>
       )}
 
       <Card>
-        <CardHeader className="flex flex-row items-center justify-between pb-3">
+        <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 pb-3">
           <div>
             <CardTitle className="text-base">Metadata Jobs</CardTitle>
             <CardDescription>Queue state, lock ownership, and retry controls.</CardDescription>

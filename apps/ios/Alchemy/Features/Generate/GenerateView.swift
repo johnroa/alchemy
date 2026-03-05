@@ -13,6 +13,12 @@ struct GenerateView: View {
     @State private var messageContentHeight: CGFloat = 0
     @State private var messageViewportHeight: CGFloat = 0
     @State private var composerHeight: CGFloat = 50
+    /// Current vertical offset of the chat panel. 0 = fully expanded, maxDragRange = minimized.
+    @State private var chatPanelOffset: CGFloat = 0
+    /// Snapshot of chatPanelOffset captured when a drag begins.
+    @State private var chatPanelDragStart: CGFloat = 0
+    /// Whether a drag is in progress (used to capture start position once).
+    @State private var chatPanelIsDragging = false
 
     var onProfileTap: () -> Void = {}
     var onComposerFocusChange: (Bool) -> Void = { _ in }
@@ -30,10 +36,6 @@ struct GenerateView: View {
         self.onGoToCookbook = onGoToCookbook
     }
 
-    private var messageListIsScrollable: Bool {
-        messageContentHeight > (messageViewportHeight + 1)
-    }
-
     private var showsChatPanel: Bool {
         switch vm.presentationMode {
         case .ideationExpanded:
@@ -47,8 +49,14 @@ struct GenerateView: View {
 
     private var chatPanelTopInset: CGFloat { Spacing.xxxl + Spacing.xl + Spacing.md }
 
+    /// Gap between the bottom dock (composer) and the screen bottom.
+    /// When keyboard is up, use a modest inset. Otherwise sit just above the tab bar
+    /// with a small margin (md = 16pt) so it doesn't float too far from the nav.
+    /// The composer sits above whichever is taller: the tab bar or the keyboard.
+    /// Because keyboard.height is animated by KeyboardMonitor, the composer
+    /// smoothly rides up with the keyboard — no jump, no lag.
     private var bottomDockFloatingInset: CGFloat {
-        keyboard.isVisible ? Spacing.xl : (Sizing.tabBarHeight + Spacing.xxxl)
+        max(Sizing.tabBarHeight + Spacing.md, keyboard.height + Spacing.sm)
     }
 
     private var messageListBottomInset: CGFloat {
@@ -111,10 +119,11 @@ struct GenerateView: View {
             .overlay(alignment: .bottom) {
                 bottomDock
                     .padding(.bottom, bottomDockFloatingInset)
-                    .background(Color.clear)
+                    .padding(.top, Spacing.xs)
                     .zIndex(15)
             }
         }
+        .ignoresSafeArea(.keyboard)
         .confirmationDialog(
             "Start over?",
             isPresented: $showResetConfirmation,
@@ -144,6 +153,12 @@ struct GenerateView: View {
             }
         }
         .onChange(of: vm.presentationMode) { _, mode in
+            // Reset chat panel to expanded when mode changes, so the user
+            // always starts in the natural position for each state.
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.86)) {
+                chatPanelOffset = 0
+                chatPanelDragStart = 0
+            }
             if mode == .generationMinimized {
                 dismissKeyboard()
                 isInputFocused = false
@@ -164,6 +179,12 @@ struct GenerateView: View {
         .onAppear {
             isInputFocused = false
             onComposerFocusChange(false)
+            // Fire the LLM greeting call on first appear; the fallback
+            // is already visible so the user sees it instantly, then the
+            // dynamic greeting swaps in once it arrives.
+            if vm.chatId == nil && vm.messages.count <= 1 {
+                Task { await vm.fetchGreeting(api: api) }
+            }
         }
         .onDisappear {
             onComposerFocusChange(false)
@@ -214,9 +235,20 @@ struct GenerateView: View {
                 .animation(.easeInOut(duration: 0.3), value: vm.uiState == .iterating)
                 .transition(.opacity.animation(.easeIn(duration: 0.3)))
         } else if vm.shouldShowRecipeSkeleton {
+            // Active skeleton: pulsing while generation is in flight.
             subtleRecipeSkeleton
                 .padding(.horizontal, Spacing.md)
                 .padding(.top, vm.hasCandidate ? Spacing.md : Spacing.lg)
+                .padding(.bottom, Sizing.tabBarHeight + 24)
+                .allowsHitTesting(false)
+                .transition(.opacity)
+        } else if vm.presentationMode == .ideationExpanded {
+            // "Faith" skeleton: recipe silhouette on the Generate Recipe page.
+            // The chat panel floats above it and covers most of it. As the
+            // user drags the chat panel down, the skeleton is revealed.
+            faithRecipeSkeleton
+                .padding(.horizontal, Spacing.md)
+                .padding(.top, Spacing.lg)
                 .padding(.bottom, Sizing.tabBarHeight + 24)
                 .allowsHitTesting(false)
                 .transition(.opacity)
@@ -247,6 +279,99 @@ struct GenerateView: View {
             Spacer(minLength: 0)
         }
         .opacity(0.42)
+    }
+
+    /// Faint recipe silhouette on the Generate page. The chat panel covers
+    /// most of it; as the user drags the panel down, the skeleton is revealed.
+    /// Opacities are intentionally very low so even the portions behind the
+    /// frosted-glass chat panel don't visually bleed through.
+    private var faithRecipeSkeleton: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
+            let time = timeline.date.timeIntervalSinceReferenceDate
+            // Slow sweep from left to right every ~3 seconds.
+            let phase = CGFloat(fmod(time * 0.35, 1.0))
+
+            VStack(alignment: .leading, spacing: Spacing.lg) {
+                // Title placeholder
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color.white.opacity(0.07))
+                    .frame(width: 200, height: 14)
+
+                // Description lines
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color.white.opacity(0.05))
+                    .frame(maxWidth: .infinity, minHeight: 10, maxHeight: 10)
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color.white.opacity(0.04))
+                    .frame(width: 260, height: 10)
+
+                // Timing / servings row
+                HStack(spacing: Spacing.lg) {
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(Color.white.opacity(0.04))
+                        .frame(width: 80, height: 10)
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(Color.white.opacity(0.04))
+                        .frame(width: 80, height: 10)
+                }
+
+                // Ingredients block
+                RoundedRectangle(cornerRadius: Radius.md)
+                    .fill(Color.white.opacity(0.03))
+                    .frame(height: 120)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: Radius.md)
+                            .stroke(Color.white.opacity(0.04), lineWidth: 0.5)
+                    )
+
+                // Steps block
+                VStack(alignment: .leading, spacing: Spacing.sm) {
+                    ForEach(0..<3, id: \.self) { i in
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(Color.white.opacity(max(0.015, 0.035 - Double(i) * 0.008)))
+                            .frame(maxWidth: .infinity, minHeight: 8, maxHeight: 8)
+                    }
+                }
+
+                Spacer(minLength: 0)
+            }
+            .overlay(
+                // Shimmer sweep — a soft highlight that glides across all bars.
+                LinearGradient(
+                    stops: [
+                        .init(color: .clear, location: 0),
+                        .init(color: Color.white.opacity(0.06), location: 0.45),
+                        .init(color: Color.white.opacity(0.08), location: 0.5),
+                        .init(color: Color.white.opacity(0.06), location: 0.55),
+                        .init(color: .clear, location: 1)
+                    ],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+                .scaleEffect(x: 2)
+                .offset(x: UIScreen.main.bounds.width * (phase * 2 - 1))
+                .blendMode(.plusLighter)
+                .mask(
+                    VStack(alignment: .leading, spacing: Spacing.lg) {
+                        RoundedRectangle(cornerRadius: 8).frame(width: 200, height: 14)
+                        RoundedRectangle(cornerRadius: 6).frame(maxWidth: .infinity, minHeight: 10, maxHeight: 10)
+                        RoundedRectangle(cornerRadius: 6).frame(width: 260, height: 10)
+                        HStack(spacing: Spacing.lg) {
+                            RoundedRectangle(cornerRadius: 6).frame(width: 80, height: 10)
+                            RoundedRectangle(cornerRadius: 6).frame(width: 80, height: 10)
+                        }
+                        RoundedRectangle(cornerRadius: Radius.md).frame(height: 120)
+                        VStack(alignment: .leading, spacing: Spacing.sm) {
+                            ForEach(0..<3, id: \.self) { _ in
+                                RoundedRectangle(cornerRadius: 4).frame(maxWidth: .infinity, minHeight: 8, maxHeight: 8)
+                            }
+                        }
+                        Spacer(minLength: 0)
+                    }
+                )
+                .allowsHitTesting(false)
+            )
+        }
     }
 
     // MARK: - Candidate Tabs
@@ -324,6 +449,14 @@ struct GenerateView: View {
 
     // MARK: - Chat Panel
 
+    /// Height of the pill-shaped drag handle area at the top of the chat panel.
+    private let chatPanelHandleHeight: CGFloat = 28
+
+    /// Maximum drag range, kept in sync via preference key from the panel's
+    /// GeometryReader. Stored as @State so the gesture closure can read it
+    /// without being inside the GeometryReader.
+    @State private var chatPanelMaxDrag: CGFloat = 400
+
     private var chatPanel: some View {
         let panelShape = UnevenRoundedRectangle(
             topLeadingRadius: 16,
@@ -332,31 +465,67 @@ struct GenerateView: View {
             topTrailingRadius: 16
         )
 
+        // GeometryReader ONLY for measuring — the gesture and offset live
+        // outside so drag state changes never trigger relayout inside.
         return GeometryReader { proxy in
-            let panelHeight = max(0, proxy.size.height - chatPanelTopInset)
-            let timelineHeight = vm.presentationMode == .ideationExpanded
-                ? panelHeight
-                : min(260, panelHeight)
+            let fullPanelHeight = max(0, proxy.size.height - chatPanelTopInset)
+            let bottomChrome = composerHeight + bottomDockFloatingInset + Spacing.sm
+            let minPanelHeight = bottomChrome + chatPanelHandleHeight
+            let maxDrag = max(0, fullPanelHeight - minPanelHeight)
 
-            ZStack(alignment: .bottom) {
+            ZStack(alignment: .top) {
                 panelShape
                     .fill(Color.clear)
                     .chatLiquidPanelBackground(panelShape)
-                    .frame(width: proxy.size.width, height: panelHeight)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
 
-                messageTimeline
-                    .frame(
-                        maxWidth: .infinity,
-                        maxHeight: timelineHeight,
-                        alignment: .top
-                    )
-                    .padding(.top, vm.presentationMode == .ideationExpanded ? Spacing.lg : Spacing.md)
-                    .frame(maxWidth: .infinity, maxHeight: panelHeight, alignment: .top)
+                VStack(spacing: 0) {
+                    // Drag handle
+                    RoundedRectangle(cornerRadius: 2.5)
+                        .fill(Color.white.opacity(0.35))
+                        .frame(width: 36, height: 5)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: chatPanelHandleHeight)
+
+                    messageTimeline
+                        .frame(maxWidth: .infinity, alignment: .top)
+                        .padding(.top, Spacing.xs)
+                        .clipped()
+                }
             }
-            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .bottom)
+            .frame(height: fullPanelHeight)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+            .preference(key: GeneratePanelMaxDragKey.self, value: maxDrag)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .onPreferenceChange(GeneratePanelMaxDragKey.self) { chatPanelMaxDrag = $0 }
+        // Offset + gesture live OUTSIDE the GeometryReader — offset is a
+        // pure transform and the gesture writes to @State without triggering
+        // relayout of the panel internals.
+        .offset(y: chatPanelOffset)
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 4)
+                .onChanged { value in
+                    if !chatPanelIsDragging {
+                        chatPanelDragStart = chatPanelOffset
+                        chatPanelIsDragging = true
+                    }
+                    let proposed = chatPanelDragStart + value.translation.height
+                    chatPanelOffset = min(max(0, proposed), chatPanelMaxDrag)
+                }
+                .onEnded { value in
+                    chatPanelIsDragging = false
+                    let velocity = value.predictedEndTranslation.height - value.translation.height
+                    if velocity > 200 {
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.88)) {
+                            chatPanelOffset = chatPanelMaxDrag
+                        }
+                    } else if velocity < -200 {
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.88)) {
+                            chatPanelOffset = 0
+                        }
+                    }
+                }
+        )
         .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 
@@ -413,11 +582,20 @@ struct GenerateView: View {
             )
             .scrollDismissesKeyboard(.interactively)
             .scrollBounceBehavior(.always, axes: .vertical)
-            .overlay(alignment: .top) {
-                if messageListIsScrollable {
-                    messageTopFade
+            // Soft fade at the bottom edge so messages dissolve rather than
+            // being hard-clipped. Top edge is left unmasked so text at rest
+            // is never cut off.
+            .mask(
+                VStack(spacing: 0) {
+                    Color.black
+                    LinearGradient(
+                        colors: [.black, .clear],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    .frame(height: 24)
                 }
-            }
+            )
             .onPreferenceChange(GenerateMessageContentHeightKey.self) { messageContentHeight = $0 }
             .onPreferenceChange(GenerateMessageViewportHeightKey.self) { messageViewportHeight = $0 }
             .onChange(of: vm.messages.last?.id) { _, lastId in
@@ -433,33 +611,6 @@ struct GenerateView: View {
                 }
             }
         }
-    }
-
-    private var messageTopFade: some View {
-        ZStack(alignment: .top) {
-            Rectangle()
-                .fill(.ultraThinMaterial)
-                .opacity(0.32)
-                .mask(
-                    LinearGradient(
-                        colors: [.black.opacity(0.95), .clear],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                )
-
-            LinearGradient(
-                colors: [
-                    Color.black.opacity(0.34),
-                    Color.black.opacity(0.12),
-                    .clear
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-        }
-        .frame(height: 44)
-        .allowsHitTesting(false)
     }
 
     private var bottomDock: some View {
@@ -822,6 +973,13 @@ private struct GenerateMessageViewportHeightKey: PreferenceKey {
 
 private struct GenerateComposerHeightKey: PreferenceKey {
     static let defaultValue: CGFloat = 50
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
+private struct GeneratePanelMaxDragKey: PreferenceKey {
+    static let defaultValue: CGFloat = 400
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = nextValue()
     }

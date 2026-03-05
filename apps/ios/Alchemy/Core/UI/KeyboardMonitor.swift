@@ -6,6 +6,8 @@ import UIKit
 final class KeyboardMonitor: ObservableObject {
     @Published private(set) var height: CGFloat = 0
     @Published private(set) var isVisible = false
+    /// The keyboard's top edge in screen coordinates (or screen bottom when hidden).
+    @Published private(set) var topY: CGFloat = UIScreen.main.bounds.height
 
     private var cancellables = Set<AnyCancellable>()
 
@@ -42,6 +44,8 @@ final class KeyboardMonitor: ObservableObject {
         // react before the keyboard animation completes.
         isVisible = visible
 
+        // The system keyboard uses UIView.AnimationCurve(rawValue: 7) — a
+        // private spring curve. A matched spring gives the smoothest tracking.
         let animation: Animation
         switch Int(curveRaw) {
         case UIView.AnimationCurve.easeIn.rawValue:
@@ -51,7 +55,8 @@ final class KeyboardMonitor: ObservableObject {
         case UIView.AnimationCurve.linear.rawValue:
             animation = .linear(duration: duration)
         default:
-            animation = .easeInOut(duration: duration)
+            // Curve 7: best approximated by a spring with matching duration.
+            animation = .spring(duration: duration, bounce: 0)
         }
 
         if duration <= 0.01 {

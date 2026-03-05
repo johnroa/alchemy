@@ -26,9 +26,8 @@ struct GenerateMessage: Identifiable {
 @MainActor
 final class GenerateViewModel {
     private static let welcomeMessageId = "assistant-welcome"
-    private static let genericWelcomeVariants = [
-        "Hi Chef! What are we cooking today?"
-    ]
+    /// Fallback shown while the LLM greeting is in flight or if it fails.
+    private static let fallbackGreeting = "Hey Chef! What are we cooking?"
     private static let typingDescriptors = [
         "Baking...",
         "Brewing...",
@@ -198,7 +197,7 @@ final class GenerateViewModel {
     }
 
     var welcomePromptText: String {
-        messages.first(where: { $0.id == Self.welcomeMessageId })?.content ?? Self.genericWelcomeVariants[0]
+        messages.first(where: { $0.id == Self.welcomeMessageId })?.content ?? Self.fallbackGreeting
     }
 
     func sendMessage(api: APIClient) async {
@@ -541,19 +540,25 @@ final class GenerateViewModel {
         }
     }
 
+    /// Returns the static fallback; the real greeting arrives asynchronously
+    /// from the LLM via `fetchGreeting(api:)` and replaces this.
     private func makeWelcomeMessage() -> String {
-        var options = Self.genericWelcomeVariants
+        Self.fallbackGreeting
+    }
 
-        if let previous = lastWelcomeMessageText {
-            options = options.filter { $0 != previous }
+    /// Fires a lightweight LLM call (`chat_greeting` scope) to get a dynamic,
+    /// context-aware welcome message. Updates the welcome bubble in place
+    /// when the response arrives. Safe to call on every session start — if
+    /// it fails the fallback remains visible.
+    func fetchGreeting(api: APIClient) async {
+        do {
+            let greeting = try await api.getGreeting()
+            let text = greeting.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else { return }
+            replaceWelcomeMessage(text: text)
+        } catch {
+            // Non-critical — fallback greeting is already displayed.
         }
-        if options.isEmpty {
-            options = Self.genericWelcomeVariants
-        }
-
-        let selected = options.randomElement() ?? Self.genericWelcomeVariants[0]
-        lastWelcomeMessageText = selected
-        return selected
     }
 
     private func mergeServerMessages(

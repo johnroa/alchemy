@@ -181,7 +181,7 @@ export default async function IngredientsPage(): Promise<React.JSX.Element> {
 
       <div className="grid gap-4 xl:grid-cols-2">
         <Card>
-          <CardHeader className="flex flex-row items-center justify-between pb-3">
+          <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 pb-3">
             <div>
               <CardTitle className="text-base">Aliases</CardTitle>
               <CardDescription>Alias keys linked to canonical ingredient IDs.</CardDescription>
@@ -228,7 +228,7 @@ export default async function IngredientsPage(): Promise<React.JSX.Element> {
         </Card>
 
         <Card>
-          <CardHeader className="flex flex-row items-center justify-between pb-3">
+          <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 pb-3">
             <div>
               <CardTitle className="text-base">Unresolved Rows</CardTitle>
               <CardDescription>Recipe ingredient rows that still need normalization retries.</CardDescription>

@@ -374,7 +374,7 @@ export function LlmConfigPanel(props: {
                 <Input
                   value={editName}
                   onChange={(e) => setEditName(e.target.value)}
-                  className="h-8 max-w-sm text-sm font-medium"
+                  className="h-8 w-full text-sm font-medium sm:max-w-sm"
                   placeholder="Version name"
                 />
               ) : (
@@ -442,7 +442,7 @@ export function LlmConfigPanel(props: {
             const isEditingThis = editingId === item.id;
             return (
               <div key={item.id} className="rounded-md border">
-                <div className="flex items-center justify-between gap-3 px-3 py-2">
+                <div className="flex flex-wrap items-center justify-between gap-3 px-3 py-2">
                   {isEditingThis ? (
                     <Input
                       value={editName}
@@ -514,7 +514,7 @@ export function LlmConfigPanel(props: {
       {showCreateForm ? (
         <Card>
           <CardHeader className="pb-3">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <CardTitle className="flex items-center gap-2 text-sm">
                 <Plus className="h-4 w-4" />
                 New {isPrompts ? "Prompt" : "Rule"} Version for{" "}
@@ -540,7 +540,7 @@ export function LlmConfigPanel(props: {
               className={cn("font-mono text-xs", isPrompts ? "min-h-[200px]" : "min-h-[140px]")}
               placeholder={isPrompts ? "Write the full system prompt template…" : '{"allowed_domains": ["recipe"]}'}
             />
-            <div className="flex justify-end gap-2">
+            <div className="flex flex-wrap justify-end gap-2">
               <Button variant="outline" onClick={() => setShowCreateForm(false)}>Cancel</Button>
               <Button
                 onClick={() => isPrompts ? void createPrompt() : void createRule()}
@@ -766,7 +766,7 @@ function ModelsPanel({
   return (
     <div className="space-y-4">
       <Card>
-        <CardHeader className="flex flex-row items-center justify-between pb-3">
+        <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 pb-3">
           <div>
             <CardTitle className="text-base">Model Registry</CardTitle>
             <CardDescription>All available providers and models with per-token pricing. Used for routing dropdowns and cost tracking.</CardDescription>
@@ -821,7 +821,7 @@ function ModelsPanel({
       {showAddForm && (
         <Card>
           <CardHeader className="pb-3">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <CardTitle className="text-sm">Add Model to Registry</CardTitle>
               <button onClick={() => setShowAddForm(false)} className="rounded p-1 text-muted-foreground hover:bg-zinc-100">
                 <X className="h-4 w-4" />
@@ -829,7 +829,7 @@ function ModelsPanel({
             </div>
           </CardHeader>
           <CardContent className="space-y-3">
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               <div className="space-y-1">
                 <label className="text-xs font-medium text-muted-foreground">Provider</label>
                 <Input value={newProvider} onChange={(e) => setNewProvider(e.target.value)} placeholder="openai" className="h-8 text-sm" />
@@ -843,7 +843,7 @@ function ModelsPanel({
                 <Input value={newDisplayName} onChange={(e) => setNewDisplayName(e.target.value)} placeholder="GPT-5 Mini" className="h-8 text-sm" />
               </div>
             </div>
-            <div className="grid grid-cols-4 gap-3">
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <div className="space-y-1">
                 <label className="text-xs font-medium text-muted-foreground">Input $/1M tokens</label>
                 <Input value={newInputCost} onChange={(e) => setNewInputCost(e.target.value)} type="number" step="0.01" className="h-8 text-sm" />
@@ -862,7 +862,7 @@ function ModelsPanel({
               </div>
             </div>
             <Input value={newNotes} onChange={(e) => setNewNotes(e.target.value)} placeholder="Notes (optional)" className="h-8 text-sm" />
-            <div className="flex justify-end gap-2">
+            <div className="flex flex-wrap justify-end gap-2">
               <Button variant="outline" size="sm" onClick={() => setShowAddForm(false)}>Cancel</Button>
               <Button size="sm" disabled={adding} onClick={() => void handleAdd()}>
                 {adding ? "Adding…" : "Add Model"}

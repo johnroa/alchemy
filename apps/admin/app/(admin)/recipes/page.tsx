@@ -280,16 +280,16 @@ export default async function RecipesPage({
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <PageHeader
-          title="Recipes Console"
-          description="Inventory, version lineage, prompt trail, attachment graph, and changelog."
-          icon={<EntityTypeIcon entityType="recipe" className="h-6 w-6" />}
-        />
-        <Badge variant="outline" className="font-mono text-xs">
-          Showing {shownRecipeCount} / {totals.recipes}
-        </Badge>
-      </div>
+      <PageHeader
+        title="Recipes Console"
+        description="Inventory, version lineage, prompt trail, attachment graph, and changelog."
+        icon={<EntityTypeIcon entityType="recipe" className="h-6 w-6" />}
+        actions={
+          <Badge variant="outline" className="font-mono text-xs">
+            Showing {shownRecipeCount} / {totals.recipes}
+          </Badge>
+        }
+      />
 
       <section className="space-y-3">
         <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground/70">Coverage Snapshot</p>
@@ -375,9 +375,9 @@ export default async function RecipesPage({
       {/* Two-column split layout */}
       <div className="grid items-start gap-6 lg:grid-cols-[minmax(420px,38%)_minmax(0,1fr)] 2xl:grid-cols-[minmax(460px,40%)_minmax(0,1fr)]">
         {/* Recipe List — sticky scrollable */}
-        <Card className="sticky top-0">
+        <Card className="lg:sticky lg:top-4">
           <CardHeader className="space-y-3 pb-2">
-            <form action="/recipes" method="get" className="flex gap-2">
+            <form action="/recipes" method="get" className="flex flex-wrap gap-2">
               <Input
                 name="q"
                 defaultValue={q}
@@ -437,7 +437,7 @@ export default async function RecipesPage({
               </div>
             </div>
           </CardHeader>
-          <div className="overflow-y-auto" style={{ maxHeight: "calc(100vh - 260px)" }}>
+          <div className="overflow-y-auto" style={{ maxHeight: "calc(100dvh - 260px)" }}>
             {sortedRows.length === 0 ? (
               <p className="px-4 py-8 text-center text-sm text-muted-foreground">No recipes match.</p>
             ) : (
@@ -469,11 +469,11 @@ export default async function RecipesPage({
                         {row.image_status}
                       </Badge>
                     </div>
-                    <div className="mt-1.5 flex gap-3 text-[10px] text-muted-foreground">
+                    <div className="mt-1.5 flex flex-wrap gap-2 text-[10px] text-muted-foreground">
                       <span>{row.version_count} versions</span>
                       <span>{row.save_count} saves</span>
                       <span>{row.attachment_count} links</span>
-                      <span className="ml-auto">{new Date(row.updated_at).toLocaleDateString()}</span>
+                      <span className="sm:ml-auto">{new Date(row.updated_at).toLocaleDateString()}</span>
                     </div>
                   </div>
                 </Link>
@@ -554,27 +554,29 @@ export default async function RecipesPage({
 
               {/* Tabs */}
               <Tabs defaultValue="timeline" className="w-full">
-                <TabsList className="grid w-full grid-cols-5">
-                  <TabsTrigger value="timeline">Timeline</TabsTrigger>
-                  <TabsTrigger value="prompts">
-                    Chat Thread
-                    {detail.chat_messages.length > 0 && (
-                      <Badge variant="secondary" className="ml-1.5 text-[10px]">
-                        {detail.chat_messages.length}
-                      </Badge>
-                    )}
-                  </TabsTrigger>
-                  <TabsTrigger value="causality">Revision Map</TabsTrigger>
-                  <TabsTrigger value="canonical">Canonical Ingredients</TabsTrigger>
-                  <TabsTrigger value="changes">
-                    Changelog
-                    {detail.changelog.length > 0 && (
-                      <Badge variant="secondary" className="ml-1.5 text-[10px]">
-                        {detail.changelog.length}
-                      </Badge>
-                    )}
-                  </TabsTrigger>
-                </TabsList>
+                <div className="overflow-x-auto">
+                  <TabsList className="h-auto min-w-full justify-start gap-1">
+                    <TabsTrigger value="timeline">Timeline</TabsTrigger>
+                    <TabsTrigger value="prompts">
+                      Chat Thread
+                      {detail.chat_messages.length > 0 && (
+                        <Badge variant="secondary" className="ml-1.5 text-[10px]">
+                          {detail.chat_messages.length}
+                        </Badge>
+                      )}
+                    </TabsTrigger>
+                    <TabsTrigger value="causality">Revision Map</TabsTrigger>
+                    <TabsTrigger value="canonical">Canonical Ingredients</TabsTrigger>
+                    <TabsTrigger value="changes">
+                      Changelog
+                      {detail.changelog.length > 0 && (
+                        <Badge variant="secondary" className="ml-1.5 text-[10px]">
+                          {detail.changelog.length}
+                        </Badge>
+                      )}
+                    </TabsTrigger>
+                  </TabsList>
+                </div>
 
                 {/* Timeline */}
                 <TabsContent value="timeline">
@@ -765,7 +767,7 @@ export default async function RecipesPage({
                 {/* Canonical Ingredients */}
                 <TabsContent value="canonical">
                   <Card>
-                    <CardHeader className="flex flex-row items-center justify-between pb-3">
+                    <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 pb-3">
                       <div>
                         <CardTitle className="text-sm">Canonical Ingredient Rows</CardTitle>
                         <CardDescription>

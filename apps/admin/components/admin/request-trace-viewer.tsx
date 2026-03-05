@@ -164,7 +164,7 @@ function TraceDetail({ requestId, trace }: { requestId: string; trace: TracePayl
                       {info.error_code ?? info.error ?? event.safety_state}
                     </span>
                   )}
-                  <span className="ml-auto text-[10px] text-muted-foreground">
+                  <span className="text-[10px] text-muted-foreground sm:ml-auto">
                     {event.latency_ms != null ? `${event.latency_ms.toLocaleString()}ms` : ""}
                   </span>
                   {expanded ? (
@@ -254,7 +254,7 @@ export function RequestTraceViewer({
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="flex gap-2">
+          <div className="flex flex-col gap-2 sm:flex-row">
             <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
               <Input
@@ -265,7 +265,7 @@ export function RequestTraceViewer({
                 className="pl-9 font-mono text-sm"
               />
             </div>
-            <Button onClick={() => void loadTrace(requestId)} disabled={loading || !requestId.trim()}>
+            <Button onClick={() => void loadTrace(requestId)} disabled={loading || !requestId.trim()} className="sm:w-auto">
               {loading ? "Loading…" : "Inspect"}
             </Button>
           </div>
@@ -306,7 +306,7 @@ export function RequestTraceViewer({
 
       {/* Events table — clickable rows */}
       <Card>
-        <CardHeader className="flex flex-row items-center justify-between pb-3">
+        <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 pb-3">
           <div>
             <CardTitle className="flex items-center gap-2 text-base">
               <Radar className="h-4 w-4 text-muted-foreground" />
@@ -316,7 +316,7 @@ export function RequestTraceViewer({
               Click any row to inspect. Expand to see error details and payload.
             </p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <Badge variant="outline" className="font-mono text-xs">
               {events.filter((e) => isError(e)).length} errors
             </Badge>
@@ -341,7 +341,7 @@ export function RequestTraceViewer({
                     error ? "border-red-200 bg-red-50" : "border-border"
                   )}
                 >
-                  <div className="flex items-center gap-3 px-3 py-2">
+                  <div className="flex flex-wrap items-center gap-2 px-3 py-2 sm:gap-3">
                     {/* Expand toggle */}
                     <button
                       onClick={() => toggleEvent(event.id)}
@@ -350,7 +350,7 @@ export function RequestTraceViewer({
                       {expanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
                     </button>
 
-                    <span className="w-32 flex-none text-xs text-muted-foreground">
+                    <span className="w-full text-xs text-muted-foreground sm:w-32 sm:flex-none">
                       {new Date(event.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
                     </span>
 
@@ -376,7 +376,7 @@ export function RequestTraceViewer({
                     )}
 
                     {event.latency_ms != null && (
-                      <span className="ml-auto flex-none font-mono text-xs text-muted-foreground">
+                      <span className="font-mono text-xs text-muted-foreground sm:ml-auto sm:flex-none">
                         {event.latency_ms.toLocaleString()}ms
                       </span>
                     )}

@@ -478,7 +478,7 @@ export function GraphVisualizer({ graph }: { graph: GraphData }): React.JSX.Elem
       <div className="grid min-w-0 gap-3 xl:grid-cols-[minmax(0,1fr)_300px]">
         <div className="min-w-0 space-y-2">
           <div className="flex min-w-0 flex-wrap items-end gap-3 rounded-md border bg-white p-3">
-            <label className="w-32 text-xs font-medium text-muted-foreground">
+            <label className="w-full text-xs font-medium text-muted-foreground sm:w-32">
               Max Nodes
               <Input
                 type="number"
@@ -495,7 +495,7 @@ export function GraphVisualizer({ graph }: { graph: GraphData }): React.JSX.Elem
               />
             </label>
 
-            <label className="w-44 text-xs font-medium text-muted-foreground">
+            <label className="w-full text-xs font-medium text-muted-foreground sm:w-44">
               Relation Filter
               <select
                 className="mt-1 h-8 w-full rounded-md border border-input bg-background px-2 text-sm"
@@ -549,7 +549,7 @@ export function GraphVisualizer({ graph }: { graph: GraphData }): React.JSX.Elem
           <div
             ref={surfaceRef}
             className={cn(
-              "h-[680px] overflow-hidden rounded-lg border bg-white fullscreen:h-screen fullscreen:w-screen",
+              "h-[420px] overflow-hidden rounded-lg border bg-white sm:h-[560px] xl:h-[680px] fullscreen:h-screen fullscreen:w-screen",
               isFullscreen && "fullscreen:rounded-none fullscreen:border-0"
             )}
           >

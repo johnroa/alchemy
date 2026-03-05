@@ -15,7 +15,7 @@ export default async function UsersPage(): Promise<React.JSX.Element> {
       />
 
       <Card>
-        <CardHeader className="flex flex-row items-center justify-between pb-3">
+        <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 pb-3">
           <div>
             <CardTitle className="flex items-center gap-2 text-base">
               <Users className="h-4 w-4 text-muted-foreground" />

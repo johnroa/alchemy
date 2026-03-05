@@ -117,7 +117,7 @@ export default async function ImagePipelinePage(): Promise<React.JSX.Element> {
 
       {/* Job Queue */}
       <Card>
-        <CardHeader className="flex flex-row items-center justify-between pb-3">
+        <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 pb-3">
           <div>
             <CardTitle className="text-base">Job Queue</CardTitle>
             <CardDescription className="mt-0.5">Per-recipe image generation retries and terminal errors.</CardDescription>

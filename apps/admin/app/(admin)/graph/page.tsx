@@ -1,11 +1,10 @@
 import Link from "next/link";
-import { Network } from "lucide-react";
+import { GraphTablesPanel } from "@/components/admin/graph-tables-panel";
 import { GraphVisualizer } from "@/components/admin/graph-visualizer";
 import { PageHeader } from "@/components/admin/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { getGraphData } from "@/lib/admin-data";
 
@@ -85,7 +84,7 @@ export default async function GraphPage({
 
       {graph.context_recipe_id ? (
         <Card>
-          <CardContent className="flex items-center justify-between py-3">
+          <CardContent className="flex flex-wrap items-center justify-between gap-2 py-3">
             <p className="text-sm">
               Focused on recipe context <span className="font-mono text-xs">{graph.context_recipe_id}</span>
             </p>
@@ -116,113 +115,8 @@ export default async function GraphPage({
           </Card>
         </TabsContent>
 
-        <TabsContent value="tables" className="space-y-4">
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between pb-3">
-              <div>
-                <CardTitle className="flex items-center gap-2 text-base">
-                  <Network className="h-4 w-4 text-muted-foreground" />
-                  Entity Catalog
-                </CardTitle>
-                <CardDescription>Latest entities for exact-value debugging.</CardDescription>
-              </div>
-              <div className="flex flex-wrap gap-1.5">
-                {Array.from(entityTypeSet).map((type) => (
-                  <Badge key={type} variant="outline" className={entityTypeColors[type] ?? "text-xs"}>
-                    {type}
-                  </Badge>
-                ))}
-              </div>
-            </CardHeader>
-            <CardContent className="pt-0">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Label</TableHead>
-                    <TableHead>Type</TableHead>
-                    <TableHead>ID</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {graph.entities.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={3} className="py-8 text-center text-muted-foreground">
-                        No graph entities yet.
-                      </TableCell>
-                    </TableRow>
-                  ) : (
-                    graph.entities.slice(0, 50).map((entity) => (
-                      <TableRow key={entity.id}>
-                        <TableCell className="font-medium">{entity.label}</TableCell>
-                        <TableCell>
-                          <Badge variant="outline" className={entityTypeColors[entity.entity_type] ?? "text-xs"}>
-                            {entity.entity_type}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="font-mono text-xs text-muted-foreground">{entity.id}</TableCell>
-                      </TableRow>
-                    ))
-                  )}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between pb-3">
-              <div>
-                <CardTitle className="text-base">Edge Snapshot</CardTitle>
-                <CardDescription>
-                  Top {Math.min(graph.edges.length, 100)} edges with relation types.
-                </CardDescription>
-              </div>
-              <Badge variant="outline" className="font-mono text-xs">{graph.edges.length} edges</Badge>
-            </CardHeader>
-            <CardContent className="pt-0">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>From</TableHead>
-                    <TableHead>To</TableHead>
-                    <TableHead>Relation</TableHead>
-                    <TableHead>Source</TableHead>
-                    <TableHead>Confidence</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {graph.edges.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={5} className="py-8 text-center text-muted-foreground">
-                        No edges yet.
-                      </TableCell>
-                    </TableRow>
-                  ) : (
-                    graph.edges.slice(0, 100).map((edge) => (
-                      <TableRow key={edge.id}>
-                        <TableCell className="font-medium text-sm">{edge.from_label}</TableCell>
-                        <TableCell className="font-medium text-sm">{edge.to_label}</TableCell>
-                        <TableCell>
-                          <Badge variant="outline" className="text-[10px]">{edge.relation_type}</Badge>
-                        </TableCell>
-                        <TableCell className="text-xs text-muted-foreground">{edge.source}</TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-2">
-                            <div className="h-1.5 w-20 overflow-hidden rounded-full bg-zinc-100">
-                              <div
-                                className="h-full rounded-full bg-primary"
-                                style={{ width: `${edge.confidence * 100}%` }}
-                              />
-                            </div>
-                            <span className="text-xs tabular-nums text-muted-foreground">{edge.confidence.toFixed(2)}</span>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    ))
-                  )}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
+        <TabsContent value="tables">
+          <GraphTablesPanel graph={graph} entityTypeColors={entityTypeColors} />
         </TabsContent>
       </Tabs>
     </div>

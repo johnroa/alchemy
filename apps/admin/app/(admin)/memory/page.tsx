@@ -83,7 +83,7 @@ export default async function MemoryPage(): Promise<React.JSX.Element> {
       </div>
 
       <Card>
-        <CardHeader className="flex flex-row items-center justify-between pb-3">
+        <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 pb-3">
           <div>
             <CardTitle className="text-base">Memory Extraction Queue</CardTitle>
             <CardDescription>Async per-turn memory jobs with retry controls.</CardDescription>
@@ -170,7 +170,7 @@ export default async function MemoryPage(): Promise<React.JSX.Element> {
 
       {/* Memory Records — the actual content */}
       <Card>
-        <CardHeader className="flex flex-row items-center justify-between pb-3">
+        <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 pb-3">
           <div>
             <CardTitle className="text-base">Memory Records</CardTitle>
             <CardDescription className="mt-0.5">
@@ -259,7 +259,7 @@ export default async function MemoryPage(): Promise<React.JSX.Element> {
 
       {/* Snapshots */}
       <Card>
-        <CardHeader className="flex flex-row items-center justify-between pb-3">
+        <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 pb-3">
           <div>
             <CardTitle className="text-base">Memory Snapshots</CardTitle>
             <CardDescription className="mt-0.5">Compact context packs injected into chat flows per user.</CardDescription>

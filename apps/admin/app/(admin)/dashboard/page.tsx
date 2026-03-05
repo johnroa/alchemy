@@ -44,14 +44,11 @@ export default async function DashboardPage(): Promise<React.JSX.Element> {
 
   return (
     <div className="space-y-8">
-      {/* Header with system status */}
-      <div className="flex items-start justify-between gap-4">
-        <PageHeader
-          title="Dashboard"
-          description="LLM performance, image pipeline health, memory telemetry, and safety events."
-        />
-        <div className="flex-none pt-1">
-          {systemStatus === "healthy" ? (
+      <PageHeader
+        title="Dashboard"
+        description="LLM performance, image pipeline health, memory telemetry, and safety events."
+        actions={
+          systemStatus === "healthy" ? (
             <Badge className="gap-1.5 border-emerald-300 bg-emerald-50 text-emerald-700">
               <CheckCircle2 className="h-3 w-3" />
               All systems healthy
@@ -66,9 +63,9 @@ export default async function DashboardPage(): Promise<React.JSX.Element> {
               <XCircle className="h-3 w-3" />
               Issues detected
             </Badge>
-          )}
-        </div>
-      </div>
+          )
+        }
+      />
 
       {/* LLM Performance */}
       <section className="space-y-3">
@@ -268,7 +265,7 @@ export default async function DashboardPage(): Promise<React.JSX.Element> {
 
       {/* Safety Events */}
       <Card>
-        <CardHeader className="flex flex-row items-center justify-between pb-3">
+        <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 pb-3">
           <CardTitle className="flex items-center gap-2 text-base">
             <ShieldAlert className="h-4 w-4 text-muted-foreground" />
             Recent Safety / Rate-limit Events

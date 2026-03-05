@@ -1,8 +1,10 @@
 openapi: 3.1.0
 info:
   title: Alchemy API
-  version: 1.1.2
-  description: API contract for Alchemy mobile and admin workflows.
+  version: 1.2.0
+  description: |
+    API contract for Alchemy — an AI-driven recipe creation and management platform.
+    Covers the user-facing v1 API at api.cookwithalchemy.com and the admin API at admin.cookwithalchemy.com.
 servers:
   - url: https://api.cookwithalchemy.com/v1
 security:

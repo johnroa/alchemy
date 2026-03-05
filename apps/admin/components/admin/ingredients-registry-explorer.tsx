@@ -328,7 +328,7 @@ export function IngredientsRegistryExplorer({
             </Badge>
           </div>
 
-          <div className="grid gap-2 md:grid-cols-[1fr_180px_200px_130px]">
+          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_180px_200px_130px]">
             <div className="relative">
               <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
               <Input
@@ -479,7 +479,7 @@ export function IngredientsRegistryExplorer({
             </TableBody>
           </Table>
 
-          <div className="flex items-center justify-between gap-2 border-t pt-3">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-3">
             <p className="text-xs text-muted-foreground">
               Showing {filteredIngredients.length === 0 ? 0 : startIndex + 1}–
               {Math.min(startIndex + itemsPerPage, filteredIngredients.length)} of {filteredIngredients.length}
@@ -562,13 +562,15 @@ export function IngredientsRegistryExplorer({
               </div>
 
               <Tabs defaultValue="metadata" className="w-full">
-                <TabsList className="grid w-full grid-cols-5">
-                  <TabsTrigger value="metadata">Metadata</TabsTrigger>
-                  <TabsTrigger value="ontology">Ontology</TabsTrigger>
-                  <TabsTrigger value="pairs">Pairs</TabsTrigger>
-                  <TabsTrigger value="usage">Usage</TabsTrigger>
-                  <TabsTrigger value="aliases">Aliases</TabsTrigger>
-                </TabsList>
+                <div className="overflow-x-auto">
+                  <TabsList className="h-auto min-w-full justify-start gap-1">
+                    <TabsTrigger value="metadata">Metadata</TabsTrigger>
+                    <TabsTrigger value="ontology">Ontology</TabsTrigger>
+                    <TabsTrigger value="pairs">Pairs</TabsTrigger>
+                    <TabsTrigger value="usage">Usage</TabsTrigger>
+                    <TabsTrigger value="aliases">Aliases</TabsTrigger>
+                  </TabsList>
+                </div>
 
                 <TabsContent value="metadata" className="space-y-3">
                   <div className="grid gap-2">

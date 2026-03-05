@@ -106,7 +106,7 @@ export default async function ModelUsagePage(): Promise<React.JSX.Element> {
               <div className="space-y-4">
                 {data.byAction.map((row) => (
                   <div key={row.scope} className="space-y-1.5">
-                    <div className="flex items-center justify-between gap-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2 sm:gap-3">
                       <div className="min-w-0">
                         <p className="truncate text-sm font-medium">{row.label}</p>
                         <p className="text-xs text-muted-foreground">
@@ -136,7 +136,7 @@ export default async function ModelUsagePage(): Promise<React.JSX.Element> {
 
       <Card>
         <CardHeader className="pb-3">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
               <CardTitle className="text-base">Usage by Model</CardTitle>
               <CardDescription>

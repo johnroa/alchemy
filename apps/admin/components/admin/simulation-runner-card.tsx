@@ -10,6 +10,7 @@ import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 
 type ModelOverride = { provider: string; model: string };
+type SimComplexity = "basic" | "medium" | "high";
 
 const SIM_SCOPES = [
   "chat_ideation",
@@ -141,6 +142,14 @@ const emptyResult = (): SimResult => ({
 const formatTime = (iso: string): string => {
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? iso : d.toLocaleTimeString();
+};
+
+const formatSeconds = (ms: number): string => {
+  return `${(Math.max(0, ms) / 1000).toFixed(1)}s`;
+};
+
+const formatSignedSeconds = (ms: number): string => {
+  return `${ms > 0 ? "+" : ""}${(ms / 1000).toFixed(1)}s`;
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> => {
@@ -685,14 +694,14 @@ function OverridePanel({
       {open && (
         <div className="space-y-2 border-t px-3 pb-3 pt-2">
           {SIM_SCOPES.map((scope) => (
-            <div key={scope} className="flex items-center gap-3">
-              <span className="w-24 flex-none font-mono text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            <div key={scope} className="grid w-full gap-1.5 sm:grid-cols-[minmax(10rem,13rem)_minmax(0,1fr)] sm:items-center sm:gap-3">
+              <span className="min-w-0 break-all font-mono text-[9px] font-semibold uppercase tracking-wider text-muted-foreground">
                 {scope}
               </span>
               <select
                 value={selectedValue(scope)}
                 onChange={(e) => handleChange(scope, e.target.value)}
-                className="flex-1 rounded-md border bg-background px-2 py-1 font-mono text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                className="w-full min-w-0 rounded-md border bg-background px-2 py-1 font-mono text-[11px] text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
               >
                 <option value="">- DB default -</option>
                 {availableModels.map((model) => (
@@ -729,7 +738,7 @@ function StepList({ steps }: { steps: SimStep[] }): React.JSX.Element {
           <div
             key={`${step.name}-${index}`}
             className={cn(
-              "flex items-center gap-2 rounded border px-2.5 py-1.5 text-xs",
+              "flex flex-wrap items-center gap-2 rounded border px-2.5 py-1.5 text-xs",
               step.status === "ok"
                 ? "border-emerald-200 bg-emerald-50"
                 : step.status === "failed"
@@ -754,21 +763,19 @@ function StepList({ steps }: { steps: SimStep[] }): React.JSX.Element {
               {step.name}
             </span>
 
-            {step.error && (
-              <span className="max-w-[180px] truncate text-red-600">{step.error}</span>
-            )}
+            {step.error && <span className="w-full truncate text-red-600 sm:max-w-[180px]">{step.error}</span>}
 
             <span className="flex-none font-mono text-muted-foreground">
               {hasLlmTokens ? `${tokenTotal.toLocaleString()} tok` : "— tok"}
             </span>
             {timing && (timing.llm_ms > 0 || timing.api_ms > 0 || timing.usage_query_ms > 0 || timing.server_ms > 0) && (
-              <span className="flex-none font-mono text-[11px] text-muted-foreground">
-                llm {timing.llm_ms.toLocaleString()}ms · server {timing.server_ms.toLocaleString()}ms · api{" "}
-                {timing.api_ms.toLocaleString()}ms · usage-query {timing.usage_query_ms.toLocaleString()}ms
+              <span className="flex-none font-mono text-[10px] text-muted-foreground">
+                llm {formatSeconds(timing.llm_ms)} · srv {formatSeconds(timing.server_ms)} · api{" "}
+                {formatSeconds(timing.api_ms)} · uq {formatSeconds(timing.usage_query_ms)}
               </span>
             )}
             <span className="flex-none font-mono text-muted-foreground">
-              {step.status === "running" ? "..." : `${step.latency_ms.toLocaleString()}ms`}
+              {step.status === "running" ? "..." : formatSeconds(step.latency_ms)}
             </span>
           </div>
         );
@@ -799,7 +806,7 @@ function TraceTimeline({ trace }: { trace: SimTraceEvent[] }): React.JSX.Element
               <span className="font-mono text-[10px] text-muted-foreground">{event.step}</span>
             )}
             {"latency_ms" in event && (
-              <span className="font-mono text-[10px] text-muted-foreground">{event.latency_ms.toLocaleString()}ms</span>
+              <span className="font-mono text-[10px] text-muted-foreground">{formatSeconds(event.latency_ms)}</span>
             )}
           </div>
 
@@ -845,7 +852,7 @@ function RunLane({
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <Badge variant="outline" className="font-mono text-xs">
           Run {label}
         </Badge>
@@ -858,7 +865,7 @@ function RunLane({
       <OverridePanel overrides={overrides} registryModels={registryModels} onChange={onOverridesChange} />
 
       {result && (
-        <div className="flex items-center gap-2 text-xs">
+        <div className="flex flex-wrap items-center gap-2 text-xs">
           <Badge
             variant="outline"
             className={
@@ -875,7 +882,7 @@ function RunLane({
           <span className="font-mono text-[10px] text-muted-foreground">
             {tokenTotals.total_tokens.toLocaleString()} tok
           </span>
-          <span className="ml-auto font-mono text-[10px] text-muted-foreground">{totalMs.toLocaleString()}ms</span>
+          <span className="font-mono text-[9px] text-muted-foreground sm:ml-auto">{formatSeconds(totalMs)}</span>
         </div>
       )}
 
@@ -896,7 +903,7 @@ function RunLane({
       </div>
 
       <div className="space-y-2">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Full Trace</p>
           <Button
             type="button"
@@ -945,9 +952,9 @@ function ComparisonTable({ a, b }: { a: SimResult; b: SimResult }): React.JSX.El
           <thead>
             <tr className="border-b bg-zinc-50">
               <th className="px-3 py-2 text-left font-medium text-muted-foreground">Step</th>
-              <th className="px-3 py-2 text-center font-medium text-muted-foreground">Run A Latency</th>
-              <th className="px-3 py-2 text-center font-medium text-muted-foreground">Run B Latency</th>
-              <th className="px-3 py-2 text-right font-medium text-muted-foreground">Latency Δ</th>
+              <th className="px-3 py-2 text-center font-medium text-muted-foreground">Run A (s)</th>
+              <th className="px-3 py-2 text-center font-medium text-muted-foreground">Run B (s)</th>
+              <th className="px-3 py-2 text-right font-medium text-muted-foreground">Δ (s)</th>
               <th className="px-3 py-2 text-center font-medium text-muted-foreground">Run A Tokens</th>
               <th className="px-3 py-2 text-center font-medium text-muted-foreground">Run B Tokens</th>
               <th className="px-3 py-2 text-right font-medium text-muted-foreground">Token Δ</th>
@@ -968,16 +975,15 @@ function ComparisonTable({ a, b }: { a: SimResult; b: SimResult }): React.JSX.El
                 <tr key={stepName} className="border-b last:border-0">
                   <td className="px-3 py-1.5 font-mono font-medium">{stepName}</td>
                   <td className="px-3 py-1.5 text-center font-mono">
-                    {stepA ? `${stepA.latency_ms.toLocaleString()}ms` : "-"}
+                    {stepA ? formatSeconds(stepA.latency_ms) : "-"}
                   </td>
                   <td className="px-3 py-1.5 text-center font-mono">
-                    {stepB ? `${stepB.latency_ms.toLocaleString()}ms` : "-"}
+                    {stepB ? formatSeconds(stepB.latency_ms) : "-"}
                   </td>
                   <td className="px-3 py-1.5 text-right font-mono">
                     {delta !== null ? (
                       <span className={delta < 0 ? "text-emerald-600" : delta > 0 ? "text-red-600" : "text-muted-foreground"}>
-                        {delta > 0 ? "+" : ""}
-                        {delta.toLocaleString()}ms
+                        {formatSignedSeconds(delta)}
                       </span>
                     ) : (
                       <span className="text-muted-foreground">-</span>
@@ -1006,12 +1012,11 @@ function ComparisonTable({ a, b }: { a: SimResult; b: SimResult }): React.JSX.El
           <tfoot>
             <tr className="border-t bg-zinc-50 font-semibold">
               <td className="px-3 py-1.5">Overall</td>
-              <td className="px-3 py-1.5 text-center font-mono">{totalA.toLocaleString()}ms</td>
-              <td className="px-3 py-1.5 text-center font-mono">{totalB.toLocaleString()}ms</td>
+              <td className="px-3 py-1.5 text-center font-mono">{formatSeconds(totalA)}</td>
+              <td className="px-3 py-1.5 text-center font-mono">{formatSeconds(totalB)}</td>
               <td className="px-3 py-1.5 text-right font-mono">
                 <span className={totalDelta < 0 ? "text-emerald-600" : totalDelta > 0 ? "text-red-600" : "text-muted-foreground"}>
-                  {totalDelta > 0 ? "+" : ""}
-                  {totalDelta.toLocaleString()}ms
+                  {formatSignedSeconds(totalDelta)}
                 </span>
               </td>
               <td className="px-3 py-1.5 text-center font-mono">
@@ -1041,6 +1046,7 @@ export function SimulationRunnerCard({ registryModels }: { registryModels: Regis
   const [resultB, setResultB] = useState<SimResult | null>(null);
   const [overridesA, setOverridesA] = useState<LaneOverrides>({});
   const [overridesB, setOverridesB] = useState<LaneOverrides>({});
+  const [complexity, setComplexity] = useState<SimComplexity>("medium");
 
   const buildOverridePayload = (overrides: LaneOverrides): Record<string, ModelOverride> => {
     const out: Record<string, ModelOverride> = {};
@@ -1051,6 +1057,23 @@ export function SimulationRunnerCard({ registryModels }: { registryModels: Regis
     }
     return out;
   };
+
+  /**
+   * Step-by-step simulation runner.
+   * Each step is its own short-lived HTTP request (~5-10s),
+   * avoiding Cloudflare Worker wall-clock timeouts that killed the old
+   * single-request streaming approach.
+   */
+  const STEP_SEQUENCE = [
+    "chat_start",
+    "chat_refine",
+    "chat_generation_trigger",
+    "candidate_set_active_component",
+    "chat_iterate_candidate",
+    "commit_candidate_set",
+    "fetch_committed_recipe",
+    "fetch_cookbook"
+  ] as const;
 
   const runLane = async (
     variant: "A" | "B",
@@ -1063,14 +1086,18 @@ export function SimulationRunnerCard({ registryModels }: { registryModels: Regis
     const runGroupId = options?.runGroupId ?? crypto.randomUUID();
 
     setRunning(true);
-    setResult(emptyResult());
+    let current = emptyResult();
+    setResult(current);
 
     try {
-      const response = await fetch("/api/admin/simulations/run?stream=1", {
+      /* ---- Init: acquire sim token + build prompts ---- */
+      const initRes = await fetch("/api/admin/simulations/run", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
+          action: "init",
           scenario: "default_api_ux",
+          complexity,
           variant,
           seed,
           run_group_id: runGroupId,
@@ -1078,73 +1105,149 @@ export function SimulationRunnerCard({ registryModels }: { registryModels: Regis
         })
       });
 
-      if (!response.ok || !response.body) {
-        const fallback = (await response.text().catch(() => "Simulation request failed")) || "Simulation request failed";
-        const failed = { ...emptyResult(), ok: false, error: fallback };
-        setResult(failed);
-        toast.error(`Run ${variant} failed`);
+      if (!initRes.ok) {
+        const text = await initRes.text().catch(() => "Init failed");
+        current = { ...current, ok: false, error: text };
+        setResult(current);
+        toast.error(`Run ${variant} init failed`);
         return;
       }
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let current = emptyResult();
-      let finalPayload: SimResult | null = null;
+      const initData = await initRes.json() as {
+        request_id: string;
+        token: string;
+        api_base: string;
+        prompts: { start: string; refine: string; trigger: string; iterate: string };
+        actor_id: string | null;
+      };
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) {
-          break;
-        }
+      current = { ...current, request_id: initData.request_id };
 
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
+      /* Emit run_started trace event locally */
+      current = applyTraceEvent(current, {
+        type: "run_started",
+        request_id: initData.request_id,
+        at: new Date().toISOString(),
+        scenario: "default_api_ux",
+        variant
+      });
+      setResult({ ...current });
 
-        for (const line of lines) {
-          const event = parseStreamEvent(line);
-          if (!event) {
-            continue;
-          }
+      /* ---- Execute steps sequentially, each as its own HTTP request ---- */
+      const context: Record<string, unknown> = {};
+      let allOk = true;
 
-          if (event.type === "result") {
-            finalPayload = event.payload;
-            current = event.payload;
-            setResult({ ...current, steps: [...current.steps], trace: [...current.trace] });
-            continue;
-          }
+      for (const stepName of STEP_SEQUENCE) {
+        /* Emit step_started so the UI shows the spinner */
+        current = applyTraceEvent(current, {
+          type: "step_started",
+          request_id: initData.request_id,
+          step: stepName,
+          at: new Date().toISOString()
+        });
+        setResult({ ...current });
 
-          current = applyTraceEvent(current, event);
-          setResult({ ...current, steps: [...current.steps], trace: [...current.trace] });
-        }
-      }
+        const stepRes = await fetch("/api/admin/simulations/run", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            action: "step",
+            step_name: stepName,
+            token: initData.token,
+            api_base: initData.api_base,
+            prompts: initData.prompts,
+            model_overrides: buildOverridePayload(overrides),
+            request_id: initData.request_id,
+            context
+          })
+        });
 
-      const trailingEvent = parseStreamEvent(buffer);
-      if (trailingEvent) {
-        if (trailingEvent.type === "result") {
-          finalPayload = trailingEvent.payload;
-          current = trailingEvent.payload;
-          setResult({ ...current, steps: [...current.steps], trace: [...current.trace] });
+        const stepData = await stepRes.json() as {
+          step: SimStep;
+          context_updates: Record<string, unknown>;
+        };
+
+        /* Merge context updates for downstream steps */
+        Object.assign(context, stepData.context_updates);
+
+        if (stepData.step.status === "ok") {
+          current = applyTraceEvent(current, {
+            type: "step_completed",
+            request_id: initData.request_id,
+            step: stepName,
+            latency_ms: stepData.step.latency_ms,
+            at: new Date().toISOString(),
+            result: stepData.step.result ?? {}
+          });
         } else {
-          current = applyTraceEvent(current, trailingEvent);
-          setResult({ ...current, steps: [...current.steps], trace: [...current.trace] });
+          allOk = false;
+          current = applyTraceEvent(current, {
+            type: "step_failed",
+            request_id: initData.request_id,
+            step: stepName,
+            latency_ms: stepData.step.latency_ms,
+            at: new Date().toISOString(),
+            error: stepData.step.error ?? "Step failed"
+          });
         }
+        setResult({ ...current });
+
+        /* Stop on first failure */
+        if (!allOk) break;
       }
 
-      if (!finalPayload) {
-        finalPayload = current;
-      }
+      /* ---- Complete: log final event server-side ---- */
+      const totalMs = current.steps.reduce((sum, s) => sum + s.latency_ms, 0);
+      const checks: SimChecks = {
+        zero_failed_steps: allOk,
+        steps_executed: current.steps.length,
+        total_latency_ms: totalMs,
+        timestamp: new Date().toISOString()
+      };
+      current = { ...current, ok: allOk, checks };
 
-      if (finalPayload.ok) {
-        toast.success(`Run ${variant} complete · ${finalPayload.request_id}`);
+      /* Best-effort completion event — don't block on it */
+      fetch("/api/admin/simulations/run", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action: "complete",
+          request_id: initData.request_id,
+          actor_id: initData.actor_id,
+          scenario: "default_api_ux",
+          complexity,
+          variant,
+          seed,
+          run_group_id: runGroupId,
+          prompts: initData.prompts,
+          steps: current.steps,
+          ok: allOk,
+          error: allOk ? undefined : current.error
+        })
+      }).catch(() => { /* best-effort */ });
+
+      /* Emit final trace event */
+      if (allOk) {
+        current = applyTraceEvent(current, {
+          type: "run_completed",
+          request_id: initData.request_id,
+          at: new Date().toISOString(),
+          checks
+        });
+        toast.success(`Run ${variant} complete · ${initData.request_id}`);
       } else {
-        toast.error(finalPayload.error ?? `Run ${variant} failed`);
+        current = applyTraceEvent(current, {
+          type: "run_failed",
+          request_id: initData.request_id,
+          at: new Date().toISOString(),
+          error: current.error ?? "One or more steps failed"
+        });
+        toast.error(current.error ?? `Run ${variant} failed`);
       }
+      setResult({ ...current });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      const failed = { ...emptyResult(), ok: false, error: message };
-      setResult(failed);
+      setResult({ ...emptyResult(), ok: false, error: message });
       toast.error(`Run ${variant} failed`);
     } finally {
       setRunning(false);
@@ -1175,16 +1278,30 @@ export function SimulationRunnerCard({ registryModels }: { registryModels: Regis
               Every run uses fresh seeded prompts, and concurrent A/B lanes share the same seed for fair comparison.
             </CardDescription>
           </div>
-          <Button
-            size="sm"
-            variant="default"
-            onClick={runConcurrentAB}
-            disabled={runningA || runningB}
-            className="h-8 gap-1.5 text-xs"
-          >
-            {runningA || runningB ? <Loader2 className="h-3 w-3 animate-spin" /> : <Timer className="h-3 w-3" />}
-            Run A/B Concurrent
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+              Complexity
+              <select
+                value={complexity}
+                onChange={(event) => setComplexity(event.target.value as SimComplexity)}
+                className="h-8 rounded-md border bg-background px-2 py-1 font-mono text-[11px] text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+              >
+                <option value="basic">Basic</option>
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
+              </select>
+            </label>
+            <Button
+              size="sm"
+              variant="default"
+              onClick={runConcurrentAB}
+              disabled={runningA || runningB}
+              className="h-8 gap-1.5 text-xs"
+            >
+              {runningA || runningB ? <Loader2 className="h-3 w-3 animate-spin" /> : <Timer className="h-3 w-3" />}
+              Run A/B Concurrent
+            </Button>
+          </div>
         </div>
       </CardHeader>
 

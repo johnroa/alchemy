@@ -113,6 +113,12 @@ final class APIClient {
 
     // MARK: - Chat
 
+    /// Fetches a dynamic, LLM-generated welcome greeting for the Generate screen.
+    /// Non-critical — callers should handle failure gracefully with a fallback.
+    func getGreeting() async throws -> GreetingResponse {
+        try await request(path: "/chat/greeting")
+    }
+
     func createChat(message: String) async throws -> ChatSession {
         try await request("POST", path: "/chat", body: ["message": message])
     }

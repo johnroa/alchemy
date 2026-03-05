@@ -50,6 +50,16 @@ export const LLM_SCOPE_REGISTRY = {
     fallback_policy: "none",
     telemetry_tags: { task: "chat_legacy", criticality: "low" },
   },
+  chat_greeting: {
+    output_contract: "chat_greeting_v1",
+    mode: "ideation",
+    retry_policy: {
+      max_attempts: 1,
+      retryable_codes: [],
+    },
+    fallback_policy: "none",
+    telemetry_tags: { task: "chat_greeting", criticality: "low" },
+  },
   chat_ideation: {
     output_contract: "chat_ideation_v1",
     mode: "ideation",

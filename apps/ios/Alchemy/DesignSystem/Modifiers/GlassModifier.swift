@@ -334,11 +334,11 @@ private struct ChatLiquidPanelBackgroundModifier<S: Shape>: ViewModifier {
 
             ZStack {
                 shape
-                    .fill(.ultraThinMaterial)
-                    .opacity(0.48)
+                    .fill(.thinMaterial)
+                    .opacity(0.85)
 
                 shape
-                    .fill(Color(hex: 0x080F1C).opacity(0.1))
+                    .fill(Color(hex: 0x080F1C).opacity(0.18))
 
                 shape.fill(
                     MeshGradient(

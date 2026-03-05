@@ -1591,8 +1591,7 @@ const resolveCanonicalRecipeIngredientsAsync = async (params: {
         shouldPersistEnrichment(component.confidence)
       ) ?? null;
 
-      const normalizedStatus = row.normalized_status === "normalized" &&
-          best?.ingredient_id
+      const normalizedStatus = best?.ingredient_id
         ? "normalized"
         : "needs_retry";
       if (best?.ingredient_id) {
@@ -7875,6 +7874,45 @@ Deno.serve(async (request) => {
       });
 
       return respond(200, graph);
+    }
+
+    // ---------- GET /chat/greeting ----------
+    // Returns a dynamic, LLM-generated greeting for the Generate Recipe screen.
+    // Non-critical — always returns a usable text string, even on LLM failure.
+    if (
+      segments.length === 2 && segments[0] === "chat" &&
+      segments[1] === "greeting" && method === "GET"
+    ) {
+      const userName = auth.fullName;
+
+      // Determine time-of-day bucket from the server's current hour (UTC).
+      const hour = new Date().getUTCHours();
+      const timeOfDay = hour < 12 ? "morning" : hour < 17 ? "afternoon" : "evening";
+
+      // Fetch the user's most recent committed recipe title (best-effort).
+      const { data: recentRecipe } = await client
+        .from("recipes")
+        .select("title")
+        .eq("user_id", auth.userId)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      const lastRecipeTitle: string | null =
+        recentRecipe && typeof recentRecipe.title === "string"
+          ? recentRecipe.title
+          : null;
+
+      const greeting = await llmGateway.generateGreeting({
+        client: createServiceClient(),
+        userId: auth.userId,
+        requestId,
+        userName,
+        timeOfDay,
+        lastRecipeTitle,
+      });
+
+      return respond(200, greeting);
     }
 
     if (segments.length === 1 && segments[0] === "chat" && method === "POST") {
