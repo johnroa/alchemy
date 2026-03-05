@@ -127,7 +127,7 @@ export const LLM_SCOPE_REGISTRY = {
       max_attempts: 2,
       retryable_codes: [...STRICT_JSON_RETRYABLE_CODES, ...STANDARD_RETRYABLE_CODES],
     },
-    fallback_policy: "deterministic_only",
+    fallback_policy: "none",
     telemetry_tags: { task: "ingredient_alias_normalize", criticality: "medium" },
   },
   ingredient_phrase_split: {
@@ -137,8 +137,18 @@ export const LLM_SCOPE_REGISTRY = {
       max_attempts: 2,
       retryable_codes: [...STRICT_JSON_RETRYABLE_CODES, ...STANDARD_RETRYABLE_CODES],
     },
-    fallback_policy: "deterministic_only",
+    fallback_policy: "none",
     telemetry_tags: { task: "ingredient_phrase_split", criticality: "medium" },
+  },
+  ingredient_line_parse: {
+    output_contract: "ingredient_line_parse_v1",
+    mode: "classification",
+    retry_policy: {
+      max_attempts: 2,
+      retryable_codes: [...STRICT_JSON_RETRYABLE_CODES, ...STANDARD_RETRYABLE_CODES],
+    },
+    fallback_policy: "none",
+    telemetry_tags: { task: "ingredient_line_parse", criticality: "medium" },
   },
   ingredient_enrich: {
     output_contract: "ingredient_enrich_v1",
@@ -147,7 +157,7 @@ export const LLM_SCOPE_REGISTRY = {
       max_attempts: 2,
       retryable_codes: [...STRICT_JSON_RETRYABLE_CODES, ...STANDARD_RETRYABLE_CODES],
     },
-    fallback_policy: "deterministic_only",
+    fallback_policy: "none",
     telemetry_tags: { task: "ingredient_enrich", criticality: "medium" },
   },
   recipe_metadata_enrich: {
@@ -157,7 +167,7 @@ export const LLM_SCOPE_REGISTRY = {
       max_attempts: 2,
       retryable_codes: [...STRICT_JSON_RETRYABLE_CODES, ...STANDARD_RETRYABLE_CODES],
     },
-    fallback_policy: "deterministic_only",
+    fallback_policy: "none",
     telemetry_tags: { task: "recipe_metadata_enrich", criticality: "medium" },
   },
   ingredient_relation_infer: {
@@ -167,7 +177,7 @@ export const LLM_SCOPE_REGISTRY = {
       max_attempts: 2,
       retryable_codes: [...STRICT_JSON_RETRYABLE_CODES, ...STANDARD_RETRYABLE_CODES],
     },
-    fallback_policy: "deterministic_only",
+    fallback_policy: "none",
     telemetry_tags: { task: "ingredient_relation_infer", criticality: "medium" },
   },
   preference_normalize: {

@@ -30,7 +30,10 @@ import {
   type UnitKind,
   type UnitPreference,
 } from "./recipe-standardization.ts";
-import { applyIngredientDietCompatibilityGuard } from "./ingredient-enrichment-guards.ts";
+import {
+  applySemanticDietIncompatibilityRules,
+  type SemanticDietIncompatibilityRule,
+} from "./semantic-diet-compatibility.ts";
 import { sanitizeModelPreferencePatch } from "./preference-auto-update.ts";
 
 type PreferenceContext = {
@@ -1020,6 +1023,21 @@ type CanonicalRecipeIngredientRow = {
   metadata: Record<string, JsonValue>;
 };
 
+type RecipeIngredientMentionRow = {
+  id: string;
+  recipe_ingredient_id: string;
+  recipe_version_id: string;
+  ingredient_id: string | null;
+  mention_index: number;
+  mention_role: "primary" | "optional" | "alternative" | "garnish" | "unspecified";
+  alternative_group_key: string | null;
+  confidence: number;
+  source: string;
+  metadata: Record<string, JsonValue>;
+  created_at: string;
+  updated_at: string;
+};
+
 const defaultRecipeViewOptions: RecipeViewOptions = {
   units: "source",
   groupBy: "flat",
@@ -1078,6 +1096,96 @@ const parseCsvParam = (value: string | null): string[] => {
   return value.split(",")
     .map((entry) => entry.trim().toLocaleLowerCase())
     .filter((entry) => entry.length > 0);
+};
+
+const loadSemanticDietIncompatibilityRules = async (
+  client: SupabaseClient,
+): Promise<SemanticDietIncompatibilityRule[]> => {
+  const { data, error } = await client
+    .from("semantic_diet_incompatibility_rules")
+    .select("source_term_type,source_term_key,blocked_diet_tag,reason,is_active")
+    .eq("is_active", true);
+
+  if (error) {
+    if (isSchemaMissingError(error) || isRlsError(error)) {
+      return [];
+    }
+    throw new ApiError(
+      500,
+      "semantic_diet_rules_fetch_failed",
+      "Could not fetch semantic diet incompatibility rules",
+      error.message,
+    );
+  }
+
+  return (data ?? []).map((row) => ({
+    source_term_type: String(row.source_term_type ?? ""),
+    source_term_key: String(row.source_term_key ?? ""),
+    blocked_diet_tag: String(row.blocked_diet_tag ?? ""),
+    reason: typeof row.reason === "string" ? row.reason : null,
+    is_active: Boolean(row.is_active),
+  })).filter((row) =>
+    row.source_term_type.length > 0 &&
+    row.source_term_key.length > 0 &&
+    row.blocked_diet_tag.length > 0
+  );
+};
+
+const fetchRecipeIngredientMentions = async (
+  client: SupabaseClient,
+  recipeVersionId: string,
+): Promise<RecipeIngredientMentionRow[]> => {
+  const result = await client
+    .from("recipe_ingredient_mentions")
+    .select(
+      "id,recipe_ingredient_id,recipe_version_id,ingredient_id,mention_index,mention_role,alternative_group_key,confidence,source,metadata,created_at,updated_at",
+    )
+    .eq("recipe_version_id", recipeVersionId)
+    .order("mention_index", { ascending: true });
+
+  if (result.error) {
+    if (isSchemaMissingError(result.error) || isRlsError(result.error)) {
+      return [];
+    }
+    throw new ApiError(
+      500,
+      "recipe_ingredient_mentions_fetch_failed",
+      "Could not fetch recipe ingredient mentions",
+      result.error.message,
+    );
+  }
+
+  const allowedRoles = new Set([
+    "primary",
+    "optional",
+    "alternative",
+    "garnish",
+    "unspecified",
+  ]);
+
+  return (result.data ?? []).map((row) => ({
+    id: String(row.id ?? ""),
+    recipe_ingredient_id: String(row.recipe_ingredient_id ?? ""),
+    recipe_version_id: String(row.recipe_version_id ?? ""),
+    ingredient_id: row.ingredient_id ? String(row.ingredient_id) : null,
+    mention_index: Number(row.mention_index ?? 0),
+    mention_role: allowedRoles.has(String(row.mention_role ?? "unspecified"))
+      ? String(
+        row.mention_role,
+      ) as RecipeIngredientMentionRow["mention_role"]
+      : "unspecified",
+    alternative_group_key: row.alternative_group_key
+      ? String(row.alternative_group_key)
+      : null,
+    confidence: clampConfidence(row.confidence, 0.5),
+    source: row.source ? String(row.source) : "llm",
+    metadata: row.metadata && typeof row.metadata === "object" &&
+        !Array.isArray(row.metadata)
+      ? row.metadata as Record<string, JsonValue>
+      : {},
+    created_at: String(row.created_at ?? ""),
+    updated_at: String(row.updated_at ?? ""),
+  })).filter((row) => row.id.length > 0 && row.recipe_ingredient_id.length > 0);
 };
 
 const fetchCanonicalIngredientRows = async (
@@ -1274,9 +1382,21 @@ const resolveAliasCanonicalIdentity = async (params: {
   }>();
   for (const alias of params.unresolvedAliases) {
     const suggestion = suggestedByAlias.get(alias.alias_key);
+    if (!suggestion) {
+      continue;
+    }
+    const suggestedCanonicalName = typeof suggestion?.canonical_name === "string"
+      ? suggestion.canonical_name.trim()
+      : "";
+    if (suggestedCanonicalName.length === 0) {
+      continue;
+    }
+    const numericConfidence = Number(suggestion.confidence);
+    if (!Number.isFinite(numericConfidence)) {
+      continue;
+    }
     const identity = deriveCanonicalIngredientIdentity(
-      suggestion?.canonical_name ?? alias.fallback_canonical_name,
-      alias.source_name,
+      suggestedCanonicalName,
     );
     if (!identity.canonicalKey) {
       continue;
@@ -1285,9 +1405,7 @@ const resolveAliasCanonicalIdentity = async (params: {
     resolved.set(alias.alias_key, {
       canonical_key: identity.canonicalKey,
       canonical_name: identity.canonicalName,
-      confidence: Number.isFinite(Number(suggestion?.confidence))
-        ? Math.max(0, Math.min(1, Number(suggestion?.confidence)))
-        : 0.8,
+      confidence: Math.max(0, Math.min(1, numericConfidence)),
     });
   }
 
@@ -1376,6 +1494,18 @@ type ResolvedIngredientComponent = {
   canonical_key: string;
   confidence: number;
   ingredient_id: string | null;
+  mention_index: number;
+  mention_role: "primary" | "optional" | "alternative" | "garnish" | "unspecified";
+  alternative_group_key: string | null;
+};
+
+type ParsedIngredientQualifier = {
+  term_type: string;
+  term_key: string;
+  label: string;
+  relation_type: string;
+  target: "line" | number;
+  confidence: number;
 };
 
 const resolveCanonicalRecipeIngredientsAsync = async (params: {
@@ -1410,16 +1540,15 @@ const resolveCanonicalRecipeIngredientsAsync = async (params: {
   });
 
   let rejectedCount = 0;
-  let dietGuardRemovalCount = 0;
   try {
-    const splitItems = await llmGateway.splitIngredientPhrases({
+    const lineParses = await llmGateway.parseIngredientLines({
       client: params.serviceClient,
       userId: params.userId,
       requestId: params.requestId,
       sourceNames: unresolvedRows.map((row) => row.source_name),
     });
-    const splitBySource = new Map(
-      splitItems.map((item) => [item.source_name.toLocaleLowerCase(), item]),
+    const parseBySource = new Map(
+      lineParses.map((item) => [item.source_name.toLocaleLowerCase(), item]),
     );
 
     const unresolvedAliases: Array<{
@@ -1428,18 +1557,28 @@ const resolveCanonicalRecipeIngredientsAsync = async (params: {
       fallback_canonical_name: string;
     }> = [];
     const rowComponents = new Map<string, ResolvedIngredientComponent[]>();
+    const rowQualifiers = new Map<string, ParsedIngredientQualifier[]>();
+    const rowLineConfidence = new Map<string, number>();
 
     for (const row of unresolvedRows) {
-      const split = splitBySource.get(row.source_name.toLocaleLowerCase());
-      const candidates = split?.items?.length
-        ? split.items
-        : [{ name: row.source_name, confidence: 0.5 }];
+      const parsed = parseBySource.get(row.source_name.toLocaleLowerCase());
+      const mentions = parsed?.mentions?.length
+        ? parsed.mentions
+        : [];
+      const qualifiers = parsed?.qualifiers?.length
+        ? parsed.qualifiers
+        : [];
+      rowLineConfidence.set(row.id, clampConfidence(parsed?.line_confidence, 0.5));
+      if (mentions.length === 0) {
+        rejectedCount += 1;
+      }
 
       const components: ResolvedIngredientComponent[] = [];
-      for (const candidate of candidates) {
-        const confidence = clampConfidence(candidate.confidence, 0.5);
+      for (let mentionIndex = 0; mentionIndex < mentions.length; mentionIndex += 1) {
+        const mention = mentions[mentionIndex]!;
+        const confidence = clampConfidence(mention.confidence, 0.5);
         const identity = deriveCanonicalIngredientIdentity(
-          candidate.name,
+          mention.name,
           row.source_name,
         );
         if (!identity.canonicalKey) {
@@ -1451,12 +1590,17 @@ const resolveCanonicalRecipeIngredientsAsync = async (params: {
           canonical_key: identity.canonicalKey,
           confidence,
           ingredient_id: null,
+          mention_index: mentionIndex,
+          mention_role: mention.role,
+          alternative_group_key: mention.alternative_group_key
+            ? normalizeTermKey(mention.alternative_group_key)
+            : null,
         });
 
         if (confidence >= ENRICHMENT_TRACK_CONFIDENCE) {
           unresolvedAliases.push({
             alias_key: identity.canonicalKey,
-            source_name: candidate.name,
+            source_name: mention.name,
             fallback_canonical_name: identity.canonicalName,
           });
         } else {
@@ -1464,6 +1608,22 @@ const resolveCanonicalRecipeIngredientsAsync = async (params: {
         }
       }
       rowComponents.set(row.id, components);
+      rowQualifiers.set(
+        row.id,
+        qualifiers.map((qualifier) => ({
+          term_type: normalizeTermKey(qualifier.term_type),
+          term_key: normalizeTermKey(qualifier.term_key || qualifier.label),
+          label: qualifier.label.trim(),
+          relation_type: qualifier.relation_type.trim().toLocaleLowerCase(),
+          target: qualifier.target,
+          confidence: clampConfidence(qualifier.confidence, 0.5),
+        })).filter((qualifier) =>
+          qualifier.term_type.length > 0 &&
+          qualifier.term_key.length > 0 &&
+          qualifier.label.length > 0 &&
+          qualifier.relation_type.length > 0
+        ),
+      );
     }
 
     const uniqueAliases = Array.from(
@@ -1574,6 +1734,20 @@ const resolveCanonicalRecipeIngredientsAsync = async (params: {
     }
 
     let resolvedCount = 0;
+    const unresolvedRowIds = unresolvedRows.map((row) => row.id);
+    type MentionWriteRow = {
+      recipe_ingredient_id: string;
+      recipe_version_id: string;
+      ingredient_id: string | null;
+      mention_index: number;
+      mention_role: string;
+      alternative_group_key: string | null;
+      confidence: number;
+      source: string;
+      metadata: Record<string, JsonValue>;
+    };
+    const mentionsToPersist: MentionWriteRow[] = [];
+
     for (const row of unresolvedRows) {
       const components = rowComponents.get(row.id) ?? [];
       const withIds = components.map((component) => {
@@ -1585,8 +1759,12 @@ const resolveCanonicalRecipeIngredientsAsync = async (params: {
           ingredient_id: ingredientId,
         };
       });
+      const persistableWithIds = withIds.filter((component) =>
+        shouldPersistEnrichment(component.confidence)
+      );
+      rejectedCount += withIds.length - persistableWithIds.length;
 
-      const best = withIds.find((component) =>
+      const best = persistableWithIds.find((component) =>
         component.ingredient_id !== null &&
         shouldPersistEnrichment(component.confidence)
       ) ?? null;
@@ -1603,11 +1781,15 @@ const resolveCanonicalRecipeIngredientsAsync = async (params: {
         alias_key: row.metadata?.alias_key ??
           normalizeIngredientKey(row.source_name),
         needs_ingredient_resolution: !best?.ingredient_id,
-        components: withIds.map((component) => ({
+        ingredient_line_confidence: rowLineConfidence.get(row.id) ?? 0.5,
+        components: persistableWithIds.map((component) => ({
           canonical_name: component.canonical_name,
           canonical_key: component.canonical_key,
           ingredient_id: component.ingredient_id,
           confidence: component.confidence,
+          mention_index: component.mention_index,
+          mention_role: component.mention_role,
+          alternative_group_key: component.alternative_group_key,
         })),
       };
 
@@ -1629,6 +1811,247 @@ const resolveCanonicalRecipeIngredientsAsync = async (params: {
           rowUpdateError.message,
         );
       }
+
+      for (const component of persistableWithIds) {
+        mentionsToPersist.push({
+          recipe_ingredient_id: row.id,
+          recipe_version_id: params.recipeVersionId,
+          ingredient_id: component.ingredient_id,
+          mention_index: component.mention_index,
+          mention_role: component.mention_role,
+          alternative_group_key: component.alternative_group_key,
+          confidence: component.confidence,
+          source: "llm",
+          metadata: {
+            canonical_name: component.canonical_name,
+            canonical_key: component.canonical_key,
+          },
+        });
+      }
+    }
+
+    if (unresolvedRowIds.length > 0) {
+      const { error: clearMentionsError } = await params.serviceClient
+        .from("recipe_ingredient_mentions")
+        .delete()
+        .in("recipe_ingredient_id", unresolvedRowIds);
+      if (
+        clearMentionsError && !isSchemaMissingError(clearMentionsError) &&
+        !isRlsError(clearMentionsError)
+      ) {
+        throw new ApiError(
+          500,
+          "recipe_ingredient_mentions_clear_failed",
+          "Could not clear recipe ingredient mentions",
+          clearMentionsError.message,
+        );
+      }
+    }
+
+    let mentionRowsWritten: Array<{
+      id: string;
+      recipe_ingredient_id: string;
+      mention_index: number;
+    }> = [];
+    if (mentionsToPersist.length > 0) {
+      const { data: mentionData, error: mentionUpsertError } = await params
+        .serviceClient
+        .from("recipe_ingredient_mentions")
+        .upsert(mentionsToPersist, {
+          onConflict: "recipe_ingredient_id,mention_index",
+          ignoreDuplicates: false,
+        })
+        .select("id,recipe_ingredient_id,mention_index");
+      if (
+        mentionUpsertError && !isSchemaMissingError(mentionUpsertError) &&
+        !isRlsError(mentionUpsertError)
+      ) {
+        throw new ApiError(
+          500,
+          "recipe_ingredient_mentions_upsert_failed",
+          "Could not persist recipe ingredient mentions",
+          mentionUpsertError.message,
+        );
+      }
+      mentionRowsWritten = (mentionData ?? [])
+        .map((row) => ({
+          id: String(row.id ?? ""),
+          recipe_ingredient_id: String(row.recipe_ingredient_id ?? ""),
+          mention_index: Number(row.mention_index ?? 0),
+        }))
+        .filter((row) => row.id.length > 0 && row.recipe_ingredient_id.length > 0);
+    }
+
+    const mentionIdByRowAndIndex = new Map<string, string>();
+    for (const mention of mentionRowsWritten) {
+      mentionIdByRowAndIndex.set(
+        `${mention.recipe_ingredient_id}:${mention.mention_index}`,
+        mention.id,
+      );
+    }
+
+    if (unresolvedRowIds.length > 0) {
+      const { error: clearQualifierLinksError } = await params.serviceClient
+        .from("recipe_ingredient_ontology_links")
+        .delete()
+        .in("recipe_ingredient_id", unresolvedRowIds);
+      if (
+        clearQualifierLinksError && !isSchemaMissingError(clearQualifierLinksError) &&
+        !isRlsError(clearQualifierLinksError)
+      ) {
+        throw new ApiError(
+          500,
+          "recipe_ingredient_qualifier_links_clear_failed",
+          "Could not clear recipe ingredient qualifier links",
+          clearQualifierLinksError.message,
+        );
+      }
+    }
+
+    type QualifierUpsert = {
+      recipe_ingredient_id: string;
+      mention_id: string | null;
+      term_type: string;
+      term_key: string;
+      label: string;
+      relation_type: string;
+      confidence: number;
+      metadata: Record<string, JsonValue>;
+    };
+    const qualifierUpserts: QualifierUpsert[] = [];
+    for (const row of unresolvedRows) {
+      const qualifiers = rowQualifiers.get(row.id) ?? [];
+      for (const qualifier of qualifiers) {
+        if (!shouldPersistEnrichment(qualifier.confidence)) {
+          rejectedCount += 1;
+          continue;
+        }
+
+        const mentionId = typeof qualifier.target === "number"
+          ? mentionIdByRowAndIndex.get(`${row.id}:${qualifier.target}`) ?? null
+          : null;
+        qualifierUpserts.push({
+          recipe_ingredient_id: row.id,
+          mention_id: mentionId,
+          term_type: qualifier.term_type,
+          term_key: qualifier.term_key,
+          label: qualifier.label,
+          relation_type: qualifier.relation_type,
+          confidence: qualifier.confidence,
+          metadata: {
+            target: qualifier.target,
+          },
+        });
+      }
+    }
+
+    if (qualifierUpserts.length > 0) {
+      const termRows = Array.from(
+        new Map(
+          qualifierUpserts.map((item) => [
+            `${item.term_type}:${item.term_key}`,
+            {
+              term_type: item.term_type,
+              term_key: item.term_key,
+              label: item.label,
+              source: "llm",
+              metadata: {},
+              updated_at: new Date().toISOString(),
+            },
+          ]),
+        ).values(),
+      );
+      const { error: termUpsertError } = await params.serviceClient
+        .from("ontology_terms")
+        .upsert(termRows, { onConflict: "term_type,term_key" });
+      if (
+        termUpsertError && !isSchemaMissingError(termUpsertError) &&
+        !isRlsError(termUpsertError)
+      ) {
+        throw new ApiError(
+          500,
+          "recipe_ingredient_qualifier_terms_upsert_failed",
+          "Could not persist ingredient qualifier ontology terms",
+          termUpsertError.message,
+        );
+      }
+
+      const { data: termRowsWithIds, error: termFetchError } = await params
+        .serviceClient
+        .from("ontology_terms")
+        .select("id,term_type,term_key")
+        .or(
+          termRows.map((row) =>
+            `and(term_type.eq.${row.term_type},term_key.eq.${row.term_key})`
+          ).join(","),
+        );
+      if (
+        termFetchError && !isSchemaMissingError(termFetchError) &&
+        !isRlsError(termFetchError)
+      ) {
+        throw new ApiError(
+          500,
+          "recipe_ingredient_qualifier_terms_fetch_failed",
+          "Could not resolve ingredient qualifier ontology term ids",
+          termFetchError.message,
+        );
+      }
+
+      const termIdByKey = new Map(
+        (termRowsWithIds ?? []).map((row) => [
+          `${row.term_type}:${row.term_key}`,
+          String(row.id),
+        ]),
+      );
+
+      const qualifierLinkRows = Array.from(
+        new Map(
+          qualifierUpserts.map((item) => {
+            const termId = termIdByKey.get(`${item.term_type}:${item.term_key}`);
+            if (!termId) return null;
+            const key = `${item.recipe_ingredient_id}:${item.mention_id ?? "line"}:${termId}:${item.relation_type}:llm`;
+            return [key, {
+              recipe_ingredient_id: item.recipe_ingredient_id,
+              mention_id: item.mention_id,
+              ontology_term_id: termId,
+              relation_type: item.relation_type,
+              source: "llm",
+              confidence: item.confidence,
+              metadata: item.metadata,
+              updated_at: new Date().toISOString(),
+            }];
+          }).filter((entry): entry is [string, {
+            recipe_ingredient_id: string;
+            mention_id: string | null;
+            ontology_term_id: string;
+            relation_type: string;
+            source: string;
+            confidence: number;
+            metadata: Record<string, JsonValue>;
+            updated_at: string;
+          }] => entry !== null),
+        ).values(),
+      );
+
+      if (qualifierLinkRows.length > 0) {
+        const { error: qualifierLinkError } = await params.serviceClient
+          .from("recipe_ingredient_ontology_links")
+          .upsert(qualifierLinkRows, {
+            onConflict:
+              "recipe_ingredient_id,mention_id,ontology_term_id,relation_type,source",
+          });
+        if (
+          qualifierLinkError && !isSchemaMissingError(qualifierLinkError) &&
+          !isRlsError(qualifierLinkError)
+        ) {
+          throw new ApiError(
+            500,
+            "recipe_ingredient_qualifier_links_upsert_failed",
+            "Could not persist ingredient qualifier links",
+            qualifierLinkError.message,
+          );
+        }
+      }
     }
 
     await completeEnrichmentRun({
@@ -1638,6 +2061,8 @@ const resolveCanonicalRecipeIngredientsAsync = async (params: {
       outputPayload: {
         resolved_count: resolvedCount,
         rejected_count: rejectedCount,
+        mention_count: mentionsToPersist.length,
+        qualifier_count: qualifierUpserts.length,
       },
       confidenceSummary: {
         persist_threshold: ENRICHMENT_PERSIST_CONFIDENCE,
@@ -1890,6 +2315,7 @@ const upsertIngredientEnrichment = async (params: {
   recipeVersionId: string;
   canonicalRows: CanonicalRecipeIngredientRow[];
   canonicalIngredientNameById: Map<string, string>;
+  dietIncompatibilityRules: SemanticDietIncompatibilityRule[];
 }): Promise<{
   rejectedCount: number;
 }> => {
@@ -1974,10 +2400,15 @@ const upsertIngredientEnrichment = async (params: {
           !Array.isArray(row.metadata)
           ? row.metadata as Record<string, JsonValue>
           : {};
-      const guarded = applyIngredientDietCompatibilityGuard({
-        canonicalName: candidate.canonical_name,
+
+      const guarded = applySemanticDietIncompatibilityRules({
         metadata: candidate.metadata,
-        ontologyTermKeys: candidate.ontology_terms.map((term) => term.term_key),
+        rules: params.dietIncompatibilityRules,
+        ontologyTerms: candidate.ontology_terms.map((term) => ({
+          term_type: String(term.term_type ?? ""),
+          term_key: String(term.term_key ?? ""),
+          label: String(term.label ?? ""),
+        })),
       });
       dietGuardRemovalCount += guarded.removedDietTags.length;
       const nextMetadata: Record<string, JsonValue> = {
@@ -2150,7 +2581,7 @@ const upsertIngredientEnrichment = async (params: {
       status: "ready",
       outputPayload: {
         ingredient_count: ingredientItems.length,
-        diet_guard_removed_tags: dietGuardRemovalCount,
+        semantic_diet_rule_removed_tags: dietGuardRemovalCount,
       },
       confidenceSummary: {
         persist_threshold: ENRICHMENT_PERSIST_CONFIDENCE,
@@ -2379,6 +2810,7 @@ const upsertMetadataGraph = async (params: {
   recipeVersionId: string;
   payload: RecipePayload;
   canonicalRows: CanonicalRecipeIngredientRow[];
+  mentionRows: RecipeIngredientMentionRow[];
   canonicalIngredientNameById: Map<string, string>;
   recipeMetadataPatch?: Record<string, JsonValue>;
   ingredientRelations?: Array<{
@@ -2400,29 +2832,78 @@ const upsertMetadataGraph = async (params: {
     metadata_schema_version: 2,
   };
 
+  const canonicalRowById = new Map(
+    params.canonicalRows.map((row) => [row.id, row]),
+  );
   const ingredientNameSet = new Set<string>();
-  for (const row of params.canonicalRows) {
-    const baseName = row.ingredient_id
-      ? params.canonicalIngredientNameById.get(row.ingredient_id) ??
-        row.source_name
-      : row.source_name;
-    const trimmed = baseName.trim();
-    if (trimmed.length > 0) {
-      ingredientNameSet.add(trimmed);
-    }
+  const ingredientRoleAssignments: Array<{
+    canonical_name: string;
+    mention_role: RecipeIngredientMentionRow["mention_role"];
+    confidence: number;
+    alternative_group_key: string | null;
+  }> = [];
 
-    const components = Array.isArray(row.metadata?.components)
-      ? row.metadata.components
-      : [];
-    for (const component of components) {
-      if (
-        !component || typeof component !== "object" || Array.isArray(component)
-      ) {
-        continue;
+  for (const mention of params.mentionRows) {
+    const canonicalName = mention.ingredient_id
+      ? params.canonicalIngredientNameById.get(mention.ingredient_id) ??
+        String(mention.metadata?.canonical_name ?? "")
+      : String(mention.metadata?.canonical_name ?? "");
+    const value = canonicalName.trim();
+    if (value.length === 0) continue;
+    ingredientNameSet.add(value);
+    ingredientRoleAssignments.push({
+      canonical_name: value,
+      mention_role: mention.mention_role,
+      confidence: clampConfidence(mention.confidence, 0.5),
+      alternative_group_key: mention.alternative_group_key,
+    });
+  }
+
+  if (ingredientNameSet.size === 0) {
+    for (const row of params.canonicalRows) {
+      const trimmed = row.ingredient_id
+        ? (
+          params.canonicalIngredientNameById.get(row.ingredient_id) ?? ""
+        ).trim()
+        : "";
+      if (trimmed.length > 0) {
+        ingredientNameSet.add(trimmed);
       }
-      const name = (component as { canonical_name?: unknown }).canonical_name;
-      if (typeof name === "string" && name.trim().length > 0) {
-        ingredientNameSet.add(name.trim());
+
+      const components = Array.isArray(row.metadata?.components)
+        ? row.metadata.components
+        : [];
+      for (const component of components) {
+        if (
+          !component || typeof component !== "object" || Array.isArray(component)
+        ) {
+          continue;
+        }
+        const name = (component as { canonical_name?: unknown }).canonical_name;
+        if (typeof name === "string" && name.trim().length > 0) {
+          const confidenceRaw = Number(
+            (component as { confidence?: unknown }).confidence,
+          );
+          if (!Number.isFinite(confidenceRaw)) {
+            continue;
+          }
+          ingredientNameSet.add(name.trim());
+          ingredientRoleAssignments.push({
+            canonical_name: name.trim(),
+            mention_role: "unspecified",
+            confidence: Math.max(0, Math.min(1, confidenceRaw)),
+            alternative_group_key: typeof (
+                component as { alternative_group_key?: unknown }
+              ).alternative_group_key === "string"
+              ? normalizeTermKey(
+                String(
+                  (component as { alternative_group_key?: unknown })
+                    .alternative_group_key,
+                ),
+              )
+              : null,
+          });
+        }
       }
     }
   }
@@ -2511,6 +2992,82 @@ const upsertMetadataGraph = async (params: {
     ),
   );
 
+  type RecipeLinkGraphRow = {
+    parent_recipe_id: string;
+    child_recipe_id: string;
+    relation_type_id: string;
+    position: number | null;
+  };
+  let recipeLinkRows: RecipeLinkGraphRow[] = [];
+  const recipeLinkRelationNameById = new Map<string, string>();
+  const relatedRecipeLabelById = new Map<string, string>();
+
+  const recipeLinkResult = await params.serviceClient
+    .from("recipe_links")
+    .select("parent_recipe_id,child_recipe_id,relation_type_id,position")
+    .or(`parent_recipe_id.eq.${params.recipeId},child_recipe_id.eq.${params.recipeId}`);
+  if (
+    recipeLinkResult.error && !isSchemaMissingError(recipeLinkResult.error) &&
+    !isRlsError(recipeLinkResult.error)
+  ) {
+    throw new ApiError(
+      500,
+      "recipe_links_graph_fetch_failed",
+      "Could not fetch recipe links for graph enrichment",
+      recipeLinkResult.error.message,
+    );
+  }
+  recipeLinkRows = (recipeLinkResult.data ?? []) as RecipeLinkGraphRow[];
+
+  const recipeRelationTypeIds = Array.from(
+    new Set(recipeLinkRows.map((row) => row.relation_type_id).filter(Boolean)),
+  );
+  if (recipeRelationTypeIds.length > 0) {
+    const relationTypeResult = await params.serviceClient
+      .from("graph_relation_types")
+      .select("id,name")
+      .in("id", recipeRelationTypeIds);
+    if (relationTypeResult.error) {
+      throw new ApiError(
+        500,
+        "recipe_link_relation_types_fetch_failed",
+        "Could not fetch recipe link relation types",
+        relationTypeResult.error.message,
+      );
+    }
+    for (const row of relationTypeResult.data ?? []) {
+      recipeLinkRelationNameById.set(String(row.id), String(row.name));
+    }
+  }
+
+  const relatedRecipeIds = Array.from(
+    new Set(
+      recipeLinkRows.flatMap((row) => [
+        row.parent_recipe_id,
+        row.child_recipe_id,
+      ]).filter((id) => id && id !== params.recipeId),
+    ),
+  );
+  if (relatedRecipeIds.length > 0) {
+    const relatedRecipesResult = await params.serviceClient
+      .from("recipes")
+      .select("id,title")
+      .in("id", relatedRecipeIds);
+    if (relatedRecipesResult.error) {
+      throw new ApiError(
+        500,
+        "related_recipes_fetch_failed",
+        "Could not fetch related recipes for graph enrichment",
+        relatedRecipesResult.error.message,
+      );
+    }
+    for (const recipe of relatedRecipesResult.data ?? []) {
+      const title = String(recipe.title ?? "").trim();
+      if (!title) continue;
+      relatedRecipeLabelById.set(String(recipe.id), title);
+    }
+  }
+
   const entityPayload: Array<
     { entity_type: string; label: string; metadata: Record<string, JsonValue> }
   > = [
@@ -2576,6 +3133,11 @@ const upsertMetadataGraph = async (params: {
       label,
       metadata: {},
     })),
+    ...Array.from(relatedRecipeLabelById.entries()).map(([id, label]) => ({
+      entity_type: "recipe",
+      label,
+      metadata: { recipe_id: id },
+    })),
   ];
 
   const uniqueEntityPayload = Array.from(
@@ -2632,6 +3194,9 @@ const upsertMetadataGraph = async (params: {
     params.serviceClient,
     [
       "contains_ingredient",
+      "primary_ingredient",
+      "optional_ingredient",
+      "alternative_ingredient",
       "has_category",
       "has_keyword",
       "compatible_with_diet",
@@ -2643,17 +3208,33 @@ const upsertMetadataGraph = async (params: {
       "has_spice_level",
       "has_difficulty",
       "co_occurs_with",
+      "alternative_to",
       "complements",
       "substitutes_for",
       "same_family_as",
       "derived_from",
       "conflicts_with",
+      "pairs_with",
+      "is_side_of",
+      "is_appetizer_of",
+      "is_dessert_of",
+      "is_drink_of",
+      "variant_of",
+      "similar_to",
     ],
   );
 
   const containsIngredientRelation = relationTypeByName.get(
     "contains_ingredient",
   );
+  const primaryIngredientRelation = relationTypeByName.get("primary_ingredient");
+  const optionalIngredientRelation = relationTypeByName.get(
+    "optional_ingredient",
+  );
+  const alternativeIngredientRelation = relationTypeByName.get(
+    "alternative_ingredient",
+  );
+  const alternativeToRelation = relationTypeByName.get("alternative_to");
   const hasCategoryRelation = relationTypeByName.get("has_category");
   const hasKeywordRelation = relationTypeByName.get("has_keyword");
   const dietRelation = relationTypeByName.get("compatible_with_diet");
@@ -2701,6 +3282,101 @@ const upsertMetadataGraph = async (params: {
         confidence: 1,
         metadata: {},
       });
+    }
+  }
+
+  if (
+    primaryIngredientRelation || optionalIngredientRelation ||
+    alternativeIngredientRelation
+  ) {
+    for (const assignment of ingredientRoleAssignments) {
+      const ingredientEntityId = entityByKey.get(
+        `ingredient:${assignment.canonical_name.toLowerCase()}`,
+      );
+      if (!ingredientEntityId) continue;
+
+      const relationTypeId = assignment.mention_role === "primary"
+        ? primaryIngredientRelation
+        : assignment.mention_role === "optional" ||
+            assignment.mention_role === "garnish"
+        ? optionalIngredientRelation
+        : assignment.mention_role === "alternative"
+        ? alternativeIngredientRelation
+        : null;
+      if (!relationTypeId) continue;
+
+      edgePayload.push({
+        from_entity_id: recipeEntityId,
+        to_entity_id: ingredientEntityId,
+        relation_type_id: relationTypeId,
+        source: "ingredient_mentions",
+        confidence: clampConfidence(assignment.confidence, 0.9),
+        metadata: {
+          mention_role: assignment.mention_role,
+          alternative_group_key: assignment.alternative_group_key,
+        },
+      });
+    }
+  }
+
+  if (alternativeToRelation) {
+    const byGroup = new Map<string, Array<{
+      canonical_name: string;
+      confidence: number;
+    }>>();
+    for (const assignment of ingredientRoleAssignments) {
+      if (
+        assignment.mention_role !== "alternative" ||
+        !assignment.alternative_group_key
+      ) {
+        continue;
+      }
+      const current = byGroup.get(assignment.alternative_group_key) ?? [];
+      current.push({
+        canonical_name: assignment.canonical_name,
+        confidence: assignment.confidence,
+      });
+      byGroup.set(assignment.alternative_group_key, current);
+    }
+
+    for (const [groupKey, candidates] of byGroup.entries()) {
+      const deduped = Array.from(
+        new Map(
+          candidates.map((candidate) => [
+            candidate.canonical_name.toLowerCase(),
+            candidate,
+          ]),
+        ).values(),
+      );
+      for (let i = 0; i < deduped.length; i += 1) {
+        for (let j = i + 1; j < deduped.length; j += 1) {
+          const left = deduped[i]!;
+          const right = deduped[j]!;
+          const leftEntity = entityByKey.get(
+            `ingredient:${left.canonical_name.toLowerCase()}`,
+          );
+          const rightEntity = entityByKey.get(
+            `ingredient:${right.canonical_name.toLowerCase()}`,
+          );
+          if (!leftEntity || !rightEntity) continue;
+
+          edgePayload.push({
+            from_entity_id: leftEntity,
+            to_entity_id: rightEntity,
+            relation_type_id: alternativeToRelation,
+            source: "ingredient_mentions",
+            confidence: Math.min(
+              clampConfidence(left.confidence, 0.9),
+              clampConfidence(right.confidence, 0.9),
+            ),
+            metadata: {
+              alternative_group_key: groupKey,
+              recipe_id: params.recipeId,
+              recipe_version_id: params.recipeVersionId,
+            },
+          });
+        }
+      }
     }
   }
 
@@ -2888,6 +3564,61 @@ const upsertMetadataGraph = async (params: {
         metadata: {},
       });
     }
+  }
+
+  const recipeLabelById = new Map<string, string>([[params.recipeId, recipeLabel]]);
+  for (const [id, label] of relatedRecipeLabelById.entries()) {
+    recipeLabelById.set(id, label);
+  }
+  const recipeEntityIdByRecipeId = new Map<string, string>();
+  for (const [id, label] of recipeLabelById.entries()) {
+    const entityId = entityByKey.get(`recipe:${label.toLowerCase()}`);
+    if (entityId) {
+      recipeEntityIdByRecipeId.set(id, entityId);
+    }
+  }
+
+  for (const link of recipeLinkRows) {
+    const rawRelationName = recipeLinkRelationNameById.get(link.relation_type_id);
+    if (!rawRelationName) continue;
+    const relationName = rawRelationName === "is_a_side_of"
+      ? "is_side_of"
+      : rawRelationName;
+    const relationTypeId = relationTypeByName.get(relationName);
+    if (!relationTypeId) continue;
+
+    const directionalFromChildToParent = /^is_.*_of$/.test(relationName);
+    const fromRecipeId = directionalFromChildToParent
+      ? link.child_recipe_id
+      : link.parent_recipe_id;
+    const toRecipeId = directionalFromChildToParent
+      ? link.parent_recipe_id
+      : link.child_recipe_id;
+    const fromEntityId = recipeEntityIdByRecipeId.get(fromRecipeId);
+    const toEntityId = recipeEntityIdByRecipeId.get(toRecipeId);
+    if (!fromEntityId || !toEntityId) continue;
+
+    edgePayload.push({
+      from_entity_id: fromEntityId,
+      to_entity_id: toEntityId,
+      relation_type_id: relationTypeId,
+      source: "recipe_links",
+      confidence: 1,
+      metadata: {
+        recipe_link_position: link.position ?? null,
+        recipe_id: params.recipeId,
+        recipe_version_id: params.recipeVersionId,
+      },
+    });
+    edgeEvidence.push({
+      from_entity_id: fromEntityId,
+      to_entity_id: toEntityId,
+      relation_type_id: relationTypeId,
+      source: "recipe_links",
+      evidence_type: "recipe_link",
+      evidence_ref: "recipe_links",
+      excerpt: null,
+    });
   }
 
   for (const relation of params.ingredientRelations ?? []) {
@@ -3183,6 +3914,9 @@ const processMetadataJobs = async (params: {
   }
 
   const jobs = dueJobs ?? [];
+  const dietIncompatibilityRules = await loadSemanticDietIncompatibilityRules(
+    params.serviceClient,
+  );
   let claimed = 0;
   let processed = 0;
   let ready = 0;
@@ -3293,15 +4027,29 @@ const processMetadataJobs = async (params: {
         params.serviceClient,
         ingredientIds,
       );
+      const mentionRows = await fetchRecipeIngredientMentions(
+        params.serviceClient,
+        job.recipe_version_id,
+      );
       const ingredientNames = Array.from(
         new Set(
-          canonicalRows.map((row) => {
-            if (row.ingredient_id) {
-              return canonicalIngredientNameById.get(row.ingredient_id) ??
-                row.source_name;
-            }
-            return row.source_name;
-          }).map((value) => value.trim()).filter((value) => value.length > 0),
+          (
+            mentionRows.length > 0
+              ? mentionRows.map((mention) => {
+                if (mention.ingredient_id) {
+                  return canonicalIngredientNameById.get(mention.ingredient_id) ??
+                    String(mention.metadata?.canonical_name ?? "");
+                }
+                return String(mention.metadata?.canonical_name ?? "");
+              })
+              : canonicalRows.map((row) => {
+                if (row.ingredient_id) {
+                  return canonicalIngredientNameById.get(row.ingredient_id) ??
+                    row.source_name;
+                }
+                return row.source_name;
+              })
+          ).map((value) => value.trim()).filter((value) => value.length > 0),
         ),
       );
 
@@ -3323,6 +4071,7 @@ const processMetadataJobs = async (params: {
         recipeVersionId: job.recipe_version_id,
         canonicalRows,
         canonicalIngredientNameById,
+        dietIncompatibilityRules,
       });
 
       await updateMetadataJobState({
@@ -3428,6 +4177,7 @@ const processMetadataJobs = async (params: {
         recipeVersionId: job.recipe_version_id,
         payload,
         canonicalRows,
+        mentionRows,
         canonicalIngredientNameById,
         recipeMetadataPatch: recipeEnrichment.metadataPatch,
         ingredientRelations: ingredientRelationInference.relations,
@@ -5449,7 +6199,7 @@ const mapCandidateRoleToRelation = (role: CandidateRecipeRole): string => {
     case "dessert":
       return "is_dessert_of";
     case "drink":
-      return "pairs_with";
+      return "is_drink_of";
     case "main":
     default:
       return "pairs_with";
@@ -5460,10 +6210,17 @@ const mapRelationTypeToCandidateRole = (
   relationType: string | null | undefined,
 ): CandidateRecipeRole => {
   const normalized = relationType?.trim().toLowerCase() ?? "";
-  if (normalized.includes("side")) return "side";
-  if (normalized.includes("appetizer")) return "appetizer";
-  if (normalized.includes("dessert")) return "dessert";
-  if (normalized.includes("drink") || normalized.includes("beverage")) {
+  if (normalized === "is_side_of" || normalized === "side") return "side";
+  if (normalized === "is_appetizer_of" || normalized === "appetizer") {
+    return "appetizer";
+  }
+  if (normalized === "is_dessert_of" || normalized === "dessert") {
+    return "dessert";
+  }
+  if (
+    normalized === "is_drink_of" || normalized === "drink" ||
+    normalized === "beverage"
+  ) {
     return "drink";
   }
   return "main";
@@ -5781,7 +6538,7 @@ const converseChatWithRetry = async (params: {
   } catch (firstError) {
     const isRetryable =
       firstError instanceof ApiError &&
-      (firstError.statusCode === 422 ||
+      (firstError.status === 422 ||
         firstError.code === "chat_schema_invalid" ||
         firstError.code === "llm_invalid_json" ||
         firstError.code === "llm_json_truncated" ||
@@ -7083,6 +7840,196 @@ Deno.serve(async (request) => {
       });
 
       return respond(200, { ok: true, job: retried });
+    }
+
+    if (
+      segments.length === 2 && segments[0] === "metadata-jobs" &&
+      segments[1] === "recompute-scope" && method === "POST"
+    ) {
+      const body = await requireJsonBody<{
+        recipe_ids?: string[];
+        recipe_version_ids?: string[];
+        leaked_only?: boolean;
+        current_versions_only?: boolean;
+        limit?: number;
+      }>(request);
+
+      const limit = Number.isFinite(Number(body.limit))
+        ? Math.max(1, Math.min(500, Number(body.limit)))
+        : 500;
+      const leakedOnly = body.leaked_only === true;
+      const currentVersionsOnly = body.current_versions_only !== false;
+
+      const requestedRecipeVersionIds = new Set<string>();
+      for (const value of Array.isArray(body.recipe_version_ids)
+        ? body.recipe_version_ids
+        : []) {
+        if (typeof value !== "string" || value.trim().length === 0) continue;
+        requestedRecipeVersionIds.add(parseUuid(value));
+      }
+
+      const requestedRecipeIds = Array.from(
+        new Set(
+          (Array.isArray(body.recipe_ids) ? body.recipe_ids : [])
+            .filter((value): value is string =>
+              typeof value === "string" && value.trim().length > 0
+            )
+            .map((value) => parseUuid(value)),
+        ),
+      );
+
+      if (requestedRecipeIds.length > 0) {
+        if (currentVersionsOnly) {
+          const { data: recipes, error: recipeError } = await serviceClient
+            .from("recipes")
+            .select("id,current_version_id")
+            .in("id", requestedRecipeIds);
+          if (recipeError) {
+            throw new ApiError(
+              500,
+              "metadata_recompute_scope_recipe_fetch_failed",
+              "Could not fetch requested recipes for recompute scope",
+              recipeError.message,
+            );
+          }
+          for (const recipe of recipes ?? []) {
+            if (recipe.current_version_id) {
+              requestedRecipeVersionIds.add(String(recipe.current_version_id));
+            }
+          }
+        } else {
+          const { data: versions, error: versionsError } = await serviceClient
+            .from("recipe_versions")
+            .select("id")
+            .in("recipe_id", requestedRecipeIds);
+          if (versionsError) {
+            throw new ApiError(
+              500,
+              "metadata_recompute_scope_versions_fetch_failed",
+              "Could not fetch recipe versions for recompute scope",
+              versionsError.message,
+            );
+          }
+          for (const version of versions ?? []) {
+            requestedRecipeVersionIds.add(String(version.id));
+          }
+        }
+      }
+
+      let leakedVersionIds = new Set<string>();
+      if (leakedOnly) {
+        const { data: leakedRows, error: leakedError } = await serviceClient
+          .from("recipe_ingredients")
+          .select("recipe_version_id")
+          .eq("normalized_status", "needs_retry")
+          .not("ingredient_id", "is", null);
+        if (leakedError) {
+          throw new ApiError(
+            500,
+            "metadata_recompute_scope_leaked_fetch_failed",
+            "Could not fetch leaked ingredient rows for recompute scope",
+            leakedError.message,
+          );
+        }
+        leakedVersionIds = new Set(
+          (leakedRows ?? []).map((row) => String(row.recipe_version_id)),
+        );
+      }
+
+      let currentVersionIds = new Set<string>();
+      if (currentVersionsOnly) {
+        const { data: currentRows, error: currentRowsError } = await serviceClient
+          .from("recipes")
+          .select("current_version_id")
+          .not("current_version_id", "is", null);
+        if (currentRowsError) {
+          throw new ApiError(
+            500,
+            "metadata_recompute_scope_current_versions_fetch_failed",
+            "Could not fetch current versions for recompute scope",
+            currentRowsError.message,
+          );
+        }
+        currentVersionIds = new Set(
+          (currentRows ?? []).map((row) => String(row.current_version_id)),
+        );
+      }
+
+      let targetVersionIds = Array.from(requestedRecipeVersionIds);
+      if (leakedOnly) {
+        targetVersionIds = targetVersionIds.length > 0
+          ? targetVersionIds.filter((id) => leakedVersionIds.has(id))
+          : Array.from(leakedVersionIds);
+      }
+      if (currentVersionsOnly) {
+        targetVersionIds = targetVersionIds.length > 0
+          ? targetVersionIds.filter((id) => currentVersionIds.has(id))
+          : Array.from(currentVersionIds);
+      }
+
+      if (targetVersionIds.length === 0) {
+        return respond(200, {
+          ok: true,
+          enqueued: 0,
+          recipe_version_ids: [],
+          note: "No matching recipe versions for requested scope",
+        });
+      }
+      targetVersionIds = targetVersionIds.slice(0, limit);
+
+      const { data: targetVersions, error: targetVersionsError } =
+        await serviceClient
+          .from("recipe_versions")
+          .select("id,recipe_id")
+          .in("id", targetVersionIds);
+      if (targetVersionsError) {
+        throw new ApiError(
+          500,
+          "metadata_recompute_scope_targets_fetch_failed",
+          "Could not resolve recompute scope targets",
+          targetVersionsError.message,
+        );
+      }
+
+      let enqueued = 0;
+      for (const version of targetVersions ?? []) {
+        await enqueueRecipeMetadataJob({
+          serviceClient,
+          recipeId: String(version.recipe_id),
+          recipeVersionId: String(version.id),
+        });
+        enqueued += 1;
+      }
+
+      if (enqueued > 0) {
+        scheduleMetadataQueueDrain({
+          serviceClient,
+          actorUserId: auth.userId,
+          requestId,
+          limit: Math.min(50, Math.max(5, enqueued)),
+        });
+      }
+
+      await logChangelog({
+        serviceClient,
+        actorUserId: auth.userId,
+        scope: "metadata",
+        entityType: "metadata_job",
+        action: "manual_recompute_scope",
+        requestId,
+        afterJson: {
+          enqueued,
+          leaked_only: leakedOnly,
+          current_versions_only: currentVersionsOnly,
+          recipe_version_ids: (targetVersions ?? []).map((row) => row.id),
+        },
+      });
+
+      return respond(200, {
+        ok: true,
+        enqueued,
+        recipe_version_ids: (targetVersions ?? []).map((row) => row.id),
+      });
     }
 
     if (

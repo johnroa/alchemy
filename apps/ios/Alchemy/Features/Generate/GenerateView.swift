@@ -50,14 +50,26 @@ struct GenerateView: View {
     private var chatPanelTopInset: CGFloat { Spacing.xxxl + Spacing.xl + Spacing.md }
 
     /// Gap between the bottom dock (composer) and the screen bottom.
-    /// When keyboard is up, use a modest inset. Otherwise sit just above the tab bar
-    /// with a small margin (md = 16pt) so it doesn't float too far from the nav.
-    /// The composer sits above whichever is taller: the tab bar or the keyboard.
-    /// Because keyboard.height is animated by KeyboardMonitor, the composer
-    /// smoothly rides up with the keyboard — no jump, no lag.
+    /// The outer ZStack ignores all safe areas, so its bottom edge is
+    /// the actual screen bottom. We need to account for:
+    ///   - Keyboard down: tab bar height + home indicator safe area
+    ///   - Keyboard up:   raw keyboard frame height + small margin
     private var bottomDockFloatingInset: CGFloat {
-        max(Sizing.tabBarHeight + Spacing.md, keyboard.height + Spacing.sm)
+        let safeBottom = Self.screenSafeAreaBottom
+        let tabResting = Sizing.tabBarHeight + safeBottom + Spacing.sm
+        // keyboard.height is raw (includes safe area), but ZStack .bottom
+        // alignment is at the safe area edge, so subtract it.
+        let aboveKeyboard = keyboard.height - safeBottom + 6
+        return max(tabResting, aboveKeyboard)
     }
+
+    private static let screenSafeAreaBottom: CGFloat = {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap { $0.windows }
+            .first(where: \.isKeyWindow)?
+            .safeAreaInsets.bottom ?? 34
+    }()
 
     private var messageListBottomInset: CGFloat {
         let dockHeight = composerHeight + Spacing.md +
@@ -110,7 +122,6 @@ struct GenerateView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
                         .transition(.opacity)
                 }
-
             }
             .toolbar(.hidden, for: .navigationBar)
             .safeAreaInset(edge: .top, spacing: 0) {
@@ -119,6 +130,7 @@ struct GenerateView: View {
             .overlay(alignment: .bottom) {
                 bottomDock
                     .padding(.bottom, bottomDockFloatingInset)
+                    .padding(.horizontal, Spacing.md)
                     .padding(.top, Spacing.xs)
                     .zIndex(15)
             }
@@ -220,11 +232,22 @@ struct GenerateView: View {
     // MARK: - Background Content
 
     private var ambientGradientBackdrop: some View {
-        Rectangle()
-            .fill(Color.clear)
-            .chatLiquidPanelBackground(Rectangle())
-            .opacity(0.42)
-            .ignoresSafeArea()
+        VStack {
+            Spacer()
+            Rectangle()
+                .fill(Color.clear)
+                .chatLiquidPanelBackground(Rectangle())
+                .opacity(0.32)
+                .frame(height: 120)
+                .mask(
+                    LinearGradient(
+                        colors: [.clear, .black],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+        }
+        .ignoresSafeArea()
     }
 
     @ViewBuilder
@@ -618,21 +641,15 @@ struct GenerateView: View {
             switch vm.presentationMode {
             case .generationMinimized:
                 compactGenerationStatus
-                    .padding(.horizontal, Spacing.md)
             case .iterating:
                 iteratingShell
-                    .padding(.horizontal, Spacing.md)
                 chatComposer
-                    .padding(.horizontal, Spacing.md)
             case .candidatePresented:
                 chatComposer
-                    .padding(.horizontal, Spacing.md)
             case .ideationExpanded:
                 chatComposer
-                    .padding(.horizontal, Spacing.md)
             }
         }
-        .padding(.top, Spacing.xs)
         .animation(.easeInOut(duration: 0.2), value: vm.presentationMode)
     }
 

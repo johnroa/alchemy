@@ -68,6 +68,51 @@ const ingredientIconMap: Record<IngredientIconKey, IngredientIcon> = {
   generic: { icon: UtensilsCrossed, toneClass: "text-emerald-600" }
 };
 
+const isIngredientIconKey = (value: string): value is IngredientIconKey =>
+  Object.prototype.hasOwnProperty.call(ingredientIconMap, value);
+
+const asObject = (value: unknown): Record<string, unknown> | null => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+};
+
+const readString = (obj: Record<string, unknown> | null, key: string): string | null => {
+  if (!obj) return null;
+  const raw = obj[key];
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : null;
+};
+
+const resolveIngredientIconFromMetadata = (
+  metadata: Record<string, unknown> | null | undefined
+): IngredientIcon | null => {
+  const meta = asObject(metadata ?? null);
+  if (!meta) {
+    return null;
+  }
+
+  const explicitIconId = readString(meta, "shadcn_icon_id") ??
+    readString(meta, "semantic_icon_id") ??
+    readString(meta, "icon_id");
+  if (explicitIconId && isShadcnFoodIconId(explicitIconId)) {
+    return {
+      shadcnIconId: explicitIconId,
+      toneClass: "text-emerald-600"
+    };
+  }
+
+  const explicitIconKey = (readString(meta, "icon_key") ??
+    readString(meta, "semantic_icon_key"))?.toLocaleLowerCase();
+  if (explicitIconKey && isIngredientIconKey(explicitIconKey)) {
+    return ingredientIconMap[explicitIconKey];
+  }
+
+  return null;
+};
+
 export function EntityTypeIcon({
   entityType,
   canonicalName,
@@ -97,14 +142,28 @@ export function EntityTypeIcon({
       normalizedKey: normalizedKey ?? null,
       metadata: metadata ?? null
     };
+    const metadataIcon = resolveIngredientIconFromMetadata(metadata);
+    if (metadataIcon) {
+      if (metadataIcon.shadcnIconId) {
+        return (
+          <ShadcnFoodIcon
+            iconId={metadataIcon.shadcnIconId}
+            className={cn("h-4 w-4", metadataIcon.toneClass, className)}
+          />
+        );
+      }
+
+      const Icon = metadataIcon.icon ?? UtensilsCrossed;
+      return <Icon aria-hidden className={cn("h-4 w-4", metadataIcon.toneClass, className)} />;
+    }
 
     const semanticIconId = resolveIngredientSemanticIconId(iconInput);
     if (semanticIconId && isShadcnFoodIconId(semanticIconId)) {
       return <ShadcnFoodIcon iconId={semanticIconId} className={cn("h-4 w-4", className)} />;
     }
 
-    const key = resolveIngredientIconKey(iconInput);
-    const ingredientIcon = ingredientIconMap[key] ?? ingredientIconMap.generic;
+    const heuristicKey = resolveIngredientIconKey(iconInput);
+    const ingredientIcon = ingredientIconMap[heuristicKey];
     if (ingredientIcon.shadcnIconId) {
       return (
         <ShadcnFoodIcon

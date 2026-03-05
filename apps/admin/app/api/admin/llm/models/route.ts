@@ -74,7 +74,20 @@ export async function PATCH(request: Request): Promise<NextResponse> {
   }
 
   const update: Partial<ModelRow> & { updated_at?: string } = { updated_at: new Date().toISOString() };
-  if (body.display_name !== undefined) update.display_name = body.display_name;
+  if (body.display_name !== undefined) {
+    const displayName = body.display_name.trim();
+    if (!displayName) {
+      return NextResponse.json({ error: "display_name cannot be empty" }, { status: 400 });
+    }
+    update.display_name = displayName;
+  }
+  if (body.model !== undefined) {
+    const model = body.model.trim();
+    if (!model) {
+      return NextResponse.json({ error: "model cannot be empty" }, { status: 400 });
+    }
+    update.model = model;
+  }
   if (body.input_cost_per_1m_tokens !== undefined) update.input_cost_per_1m_tokens = Number(body.input_cost_per_1m_tokens);
   if (body.output_cost_per_1m_tokens !== undefined) update.output_cost_per_1m_tokens = Number(body.output_cost_per_1m_tokens);
   if (body.context_window_tokens !== undefined) update.context_window_tokens = body.context_window_tokens;

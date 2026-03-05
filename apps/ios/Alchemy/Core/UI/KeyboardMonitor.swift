@@ -34,6 +34,7 @@ final class KeyboardMonitor: ObservableObject {
         let curveRaw = (userInfo[UIResponder.keyboardAnimationCurveUserInfoKey] as? UInt) ?? UInt(UIView.AnimationCurve.easeInOut.rawValue)
 
         let keyboardHeight = Self.keyboardHeight(from: endFrame)
+        let keyboardTopY = endFrame.origin.y
         let visible = keyboardHeight > 8
 
         if abs(height - keyboardHeight) < 0.5 && isVisible == visible {
@@ -44,46 +45,42 @@ final class KeyboardMonitor: ObservableObject {
         // react before the keyboard animation completes.
         isVisible = visible
 
-        // The system keyboard uses UIView.AnimationCurve(rawValue: 7) — a
-        // private spring curve. A matched spring gives the smoothest tracking.
-        let animation: Animation
-        switch Int(curveRaw) {
-        case UIView.AnimationCurve.easeIn.rawValue:
-            animation = .easeIn(duration: duration)
-        case UIView.AnimationCurve.easeOut.rawValue:
-            animation = .easeOut(duration: duration)
-        case UIView.AnimationCurve.linear.rawValue:
-            animation = .linear(duration: duration)
-        default:
-            // Curve 7: best approximated by a spring with matching duration.
-            animation = .spring(duration: duration, bounce: 0)
-        }
-
         if duration <= 0.01 {
             height = keyboardHeight
+            topY = keyboardTopY
             #if DEBUG
             print("[KeyboardMonitor] immediate height=\(keyboardHeight) visible=\(visible) endFrame=\(NSCoder.string(for: endFrame))")
             #endif
             return
         }
 
-        withAnimation(animation) {
-            height = keyboardHeight
+        // Use UIViewPropertyAnimator with the EXACT keyboard animation curve.
+        // This creates a Core Animation transaction that SwiftUI inherits,
+        // so any SwiftUI view reading `height` animates in perfect sync with
+        // the system keyboard — no approximation, no lag.
+        let curve = UIView.AnimationCurve(rawValue: Int(curveRaw)) ?? .easeInOut
+        let animator = UIViewPropertyAnimator(duration: duration, curve: curve) {
+            self.height = keyboardHeight
+            self.topY = keyboardTopY
         }
+        animator.startAnimation()
+
         #if DEBUG
-        print("[KeyboardMonitor] animated height=\(keyboardHeight) visible=\(visible) endFrame=\(NSCoder.string(for: endFrame))")
+        print("[KeyboardMonitor] animated height=\(keyboardHeight) visible=\(visible) curve=\(curveRaw) endFrame=\(NSCoder.string(for: endFrame))")
         #endif
     }
 
+    /// Raw keyboard intersection height — NOT adjusted for safe area.
+    /// Callers positioned from the actual screen bottom (past safe area)
+    /// need the full value; those inside the safe area should subtract
+    /// `safeAreaBottom` themselves.
     private static func keyboardHeight(from endFrame: CGRect) -> CGFloat {
         let windowBounds = keyWindow()?.bounds ?? UIScreen.main.bounds
         let intersection = windowBounds.intersection(endFrame)
         if intersection.isNull || intersection.height <= 0 {
             return 0
         }
-
-        let adjusted = intersection.height - bottomSafeInset()
-        return max(0, adjusted)
+        return intersection.height
     }
 
     private static func keyWindow() -> UIWindow? {
@@ -93,7 +90,4 @@ final class KeyboardMonitor: ObservableObject {
             .first(where: \.isKeyWindow)
     }
 
-    private static func bottomSafeInset() -> CGFloat {
-        keyWindow()?.safeAreaInsets.bottom ?? 0
-    }
 }

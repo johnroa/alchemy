@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Check, ChevronDown, ChevronUp, Pencil, Plus, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -744,21 +744,37 @@ function ModelsPanel({
     onModelsChange(payload.models);
   };
 
-  const handleSaveCosts = async (m: RegistryModel, inputCost: string, outputCost: string): Promise<void> => {
+  const handleSaveModel = async (
+    m: RegistryModel,
+    displayName: string,
+    modelId: string,
+    inputCost: string,
+    outputCost: string
+  ): Promise<void> => {
+    if (!displayName.trim() || !modelId.trim()) {
+      toast.error("Display name and model ID are required");
+      return;
+    }
     const res = await fetch("/api/admin/llm/models", {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         id: m.id,
+        display_name: displayName.trim(),
+        model: modelId.trim(),
         input_cost_per_1m_tokens: Number(inputCost),
         output_cost_per_1m_tokens: Number(outputCost)
       })
     });
-    if (!res.ok) { toast.error("Failed to update costs"); return; }
+    if (!res.ok) {
+      const payload = (await res.json().catch(() => null)) as { error?: string } | null;
+      toast.error(payload?.error ?? "Failed to update model");
+      return;
+    }
     const payload = (await res.json()) as { models: RegistryModel[] };
     onModelsChange(payload.models);
     setEditingId(null);
-    toast.success("Costs updated");
+    toast.success("Model updated");
   };
 
   const providers = Array.from(new Set(models.map((m) => m.provider))).sort();
@@ -804,7 +820,7 @@ function ModelsPanel({
                           isEditing={editingId === m.id}
                           onEdit={() => setEditingId(m.id)}
                           onCancelEdit={() => setEditingId(null)}
-                          onSaveCosts={handleSaveCosts}
+                          onSaveModel={handleSaveModel}
                           onToggleAvailable={() => void handleToggleAvailable(m)}
                           onDelete={() => void handleDelete(m.id, m.display_name)}
                         />
@@ -880,7 +896,7 @@ function ModelRow({
   isEditing,
   onEdit,
   onCancelEdit,
-  onSaveCosts,
+  onSaveModel,
   onToggleAvailable,
   onDelete
 }: {
@@ -888,19 +904,47 @@ function ModelRow({
   isEditing: boolean;
   onEdit: () => void;
   onCancelEdit: () => void;
-  onSaveCosts: (m: RegistryModel, inputCost: string, outputCost: string) => Promise<void>;
+  onSaveModel: (
+    m: RegistryModel,
+    displayName: string,
+    modelId: string,
+    inputCost: string,
+    outputCost: string
+  ) => Promise<void>;
   onToggleAvailable: () => void;
   onDelete: () => void;
 }): React.JSX.Element {
+  const [displayName, setDisplayName] = useState(model.display_name);
+  const [modelId, setModelId] = useState(model.model);
   const [inputCost, setInputCost] = useState(String(model.input_cost_per_1m_tokens));
   const [outputCost, setOutputCost] = useState(String(model.output_cost_per_1m_tokens));
   const [saving, setSaving] = useState(false);
 
+  useEffect(() => {
+    if (!isEditing) return;
+    setDisplayName(model.display_name);
+    setModelId(model.model);
+    setInputCost(String(model.input_cost_per_1m_tokens));
+    setOutputCost(String(model.output_cost_per_1m_tokens));
+  }, [isEditing, model.display_name, model.model, model.input_cost_per_1m_tokens, model.output_cost_per_1m_tokens]);
+
   if (isEditing) {
     return (
       <TableRow>
-        <TableCell className="font-medium text-sm">{model.display_name}</TableCell>
-        <TableCell className="font-mono text-xs text-muted-foreground">{model.model}</TableCell>
+        <TableCell className="font-medium text-sm">
+          <Input
+            value={displayName}
+            onChange={(e) => setDisplayName(e.target.value)}
+            className="h-7 text-xs"
+          />
+        </TableCell>
+        <TableCell className="font-mono text-xs text-muted-foreground">
+          <Input
+            value={modelId}
+            onChange={(e) => setModelId(e.target.value)}
+            className="h-7 font-mono text-xs"
+          />
+        </TableCell>
         <TableCell className="text-right">
           <Input
             value={inputCost}
@@ -929,7 +973,7 @@ function ModelRow({
             <Button variant="outline" size="sm" className="h-7 text-xs" onClick={onCancelEdit}>Cancel</Button>
             <Button size="sm" className="h-7 text-xs" disabled={saving} onClick={async () => {
               setSaving(true);
-              await onSaveCosts(model, inputCost, outputCost);
+              await onSaveModel(model, displayName, modelId, inputCost, outputCost);
               setSaving(false);
             }}>
               {saving ? "…" : "Save"}

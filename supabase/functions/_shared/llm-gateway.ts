@@ -50,6 +50,43 @@ type IngredientPhraseSplit = {
   }>;
 };
 
+type IngredientLineMention = {
+  name: string;
+  role: "primary" | "optional" | "alternative" | "garnish" | "unspecified";
+  alternative_group_key: string | null;
+  confidence: number;
+};
+
+type IngredientLineQualifier = {
+  term_type:
+    | "preparation"
+    | "state"
+    | "quality"
+    | "size"
+    | "purpose"
+    | "temperature"
+    | "treatment";
+  term_key: string;
+  label: string;
+  relation_type:
+    | "prepared_as"
+    | "has_state"
+    | "has_quality"
+    | "has_size"
+    | "has_purpose"
+    | "has_temperature"
+    | "has_treatment";
+  target: "line" | number;
+  confidence: number;
+};
+
+type IngredientLineParse = {
+  source_name: string;
+  line_confidence: number;
+  mentions: IngredientLineMention[];
+  qualifiers: IngredientLineQualifier[];
+};
+
 type OntologySuggestion = {
   term_type: string;
   term_key: string;
@@ -528,8 +565,6 @@ const normalizeRecipeShape = (candidate: unknown): RecipePayload | null => {
           name,
           amount: 1,
           unit: "unit",
-          preparation: undefined,
-          category: undefined,
         };
       }
 
@@ -560,22 +595,26 @@ const normalizeRecipeShape = (candidate: unknown): RecipePayload | null => {
         return null;
       }
 
+      const displayAmount = typeof ingredient.display_amount === "string" &&
+          ingredient.display_amount.trim().length > 0
+        ? ingredient.display_amount.trim()
+        : numericToDisplayFraction(amount ?? fallbackAmount ?? 1);
+      const preparation = typeof ingredient.preparation === "string" &&
+          ingredient.preparation.trim().length > 0
+        ? ingredient.preparation.trim()
+        : null;
+      const category = typeof ingredient.category === "string" &&
+          ingredient.category.trim().length > 0
+        ? ingredient.category.trim()
+        : null;
+
       return {
         name,
         amount: amount ?? fallbackAmount ?? 1,
         unit: unit || fallbackUnit || "unit",
-        display_amount: typeof ingredient.display_amount === "string" &&
-            ingredient.display_amount.trim().length > 0
-          ? ingredient.display_amount.trim()
-          : numericToDisplayFraction(amount ?? fallbackAmount ?? 1),
-        preparation: typeof ingredient.preparation === "string" &&
-            ingredient.preparation.trim().length > 0
-          ? ingredient.preparation.trim()
-          : undefined,
-        category: typeof ingredient.category === "string" &&
-            ingredient.category.trim().length > 0
-          ? ingredient.category.trim()
-          : undefined,
+        ...(displayAmount ? { display_amount: displayAmount } : {}),
+        ...(preparation ? { preparation } : {}),
+        ...(category ? { category } : {}),
       };
     })
     .filter((ingredient): ingredient is RecipePayload["ingredients"][number] =>
@@ -2264,14 +2303,6 @@ export const llmGateway = {
       dedupedAliases.map((alias) => alias.alias_key),
     );
 
-    const deterministicFallback = dedupedAliases.map((alias) => ({
-      alias_key: alias.alias_key,
-      canonical_name: alias.fallback_canonical_name.length > 0
-        ? alias.fallback_canonical_name
-        : alias.source_name,
-      confidence: 0.5,
-    }));
-
     const startedAt = Date.now();
     const accum: TokenAccum = { input: 0, output: 0, costUsd: 0 };
     try {
@@ -2318,7 +2349,7 @@ export const llmGateway = {
             const numericConfidence = Number(rawConfidence);
             const confidence = Number.isFinite(numericConfidence)
               ? Math.max(0, Math.min(1, numericConfidence))
-              : 0.7;
+              : 0;
 
             return {
               alias_key,
@@ -2337,12 +2368,6 @@ export const llmGateway = {
           continue;
         }
         mergedByAlias.set(item.alias_key, item);
-      }
-      for (const fallback of deterministicFallback) {
-        if (mergedByAlias.has(fallback.alias_key)) {
-          continue;
-        }
-        mergedByAlias.set(fallback.alias_key, fallback);
       }
 
       const output = Array.from(mergedByAlias.values());
@@ -2380,7 +2405,313 @@ export const llmGateway = {
         },
         accum,
       );
-      return deterministicFallback;
+      throw error;
+    }
+  },
+
+  async parseIngredientLines(params: {
+    client: SupabaseClient;
+    userId: string;
+    requestId: string;
+    sourceNames: string[];
+  }): Promise<IngredientLineParse[]> {
+    const cleaned = params.sourceNames
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0);
+    if (cleaned.length === 0) {
+      return [];
+    }
+
+    const deduped: string[] = [];
+    const seen = new Set<string>();
+    for (const value of cleaned) {
+      const key = value.toLocaleLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      deduped.push(value);
+    }
+
+    const normalizeTermKey = (value: string): string =>
+      value
+        .trim()
+        .toLocaleLowerCase()
+        .normalize("NFKD")
+        .replace(/[^a-z0-9\\s:_-]/g, " ")
+        .replace(/\\s+/g, "_")
+        .replace(/^_+|_+$/g, "");
+
+    const allowedRoles = new Set([
+      "primary",
+      "optional",
+      "alternative",
+      "garnish",
+      "unspecified",
+    ]);
+    const allowedQualifierTypes = new Set([
+      "preparation",
+      "state",
+      "quality",
+      "size",
+      "purpose",
+      "temperature",
+      "treatment",
+    ]);
+    const allowedQualifierRelations = new Set([
+      "prepared_as",
+      "has_state",
+      "has_quality",
+      "has_size",
+      "has_purpose",
+      "has_temperature",
+      "has_treatment",
+    ]);
+
+    const defaultRelationByType: Record<string, IngredientLineQualifier["relation_type"]> = {
+      preparation: "prepared_as",
+      state: "has_state",
+      quality: "has_quality",
+      size: "has_size",
+      purpose: "has_purpose",
+      temperature: "has_temperature",
+      treatment: "has_treatment",
+    };
+
+    const startedAt = Date.now();
+    const accum: TokenAccum = { input: 0, output: 0, costUsd: 0 };
+    try {
+      const { result, inputTokens, outputTokens, config } = await executeScope<
+        { items?: unknown }
+      >({
+        client: params.client,
+        scope: "ingredient_line_parse",
+        userInput: {
+          task: "parse_ingredient_lines",
+          source_names: deduped,
+        },
+      });
+      addTokens(accum, inputTokens, outputTokens, config);
+
+      const rawItems = Array.isArray(result.items) ? result.items : [];
+      const bySource = new Map<string, IngredientLineParse>();
+      for (const rawItem of rawItems) {
+        if (!rawItem || typeof rawItem !== "object" || Array.isArray(rawItem)) {
+          continue;
+        }
+        const sourceName = (rawItem as { source_name?: unknown }).source_name;
+        if (typeof sourceName !== "string" || sourceName.trim().length === 0) {
+          continue;
+        }
+        const sourceKey = sourceName.trim().toLocaleLowerCase();
+        if (!seen.has(sourceKey)) {
+          continue;
+        }
+
+        const lineConfidenceRaw = Number(
+          (rawItem as { line_confidence?: unknown }).line_confidence,
+        );
+        const lineConfidence = Number.isFinite(lineConfidenceRaw)
+          ? Math.max(0, Math.min(1, lineConfidenceRaw))
+          : 0;
+
+        const rawMentions = Array.isArray((rawItem as { mentions?: unknown }).mentions)
+          ? ((rawItem as { mentions?: unknown }).mentions as unknown[])
+          : [];
+        const normalizedMentions = rawMentions
+          .map((mention): IngredientLineMention | null => {
+            if (typeof mention === "string") {
+              const trimmed = mention.trim();
+              if (trimmed.length === 0) return null;
+              return {
+                name: trimmed,
+                role: "unspecified",
+                alternative_group_key: null,
+                confidence: 0,
+              };
+            }
+            if (!mention || typeof mention !== "object" || Array.isArray(mention)) {
+              return null;
+            }
+            const name = (mention as { name?: unknown }).name;
+            if (typeof name !== "string" || name.trim().length === 0) {
+              return null;
+            }
+            const roleRaw = String(
+              (mention as { role?: unknown }).role ?? "unspecified",
+            ).trim().toLocaleLowerCase();
+            const role = allowedRoles.has(roleRaw)
+              ? roleRaw as IngredientLineMention["role"]
+              : "unspecified";
+            const groupRaw =
+              (mention as { alternative_group_key?: unknown })
+                .alternative_group_key;
+            const alternative_group_key =
+              typeof groupRaw === "string" && groupRaw.trim().length > 0
+                ? normalizeTermKey(groupRaw)
+                : null;
+            const confidenceRaw = Number(
+              (mention as { confidence?: unknown }).confidence,
+            );
+            const confidence = Number.isFinite(confidenceRaw)
+              ? Math.max(0, Math.min(1, confidenceRaw))
+              : 0;
+            return {
+              name: name.trim(),
+              role,
+              alternative_group_key,
+              confidence,
+            };
+          })
+          .filter((entry): entry is IngredientLineMention => entry !== null);
+
+        const dedupedMentions: IngredientLineMention[] = [];
+        const seenMention = new Set<string>();
+        for (const mention of normalizedMentions) {
+          const dedupeKey = `${mention.name.toLocaleLowerCase()}:${
+            mention.alternative_group_key ?? ""
+          }`;
+          if (seenMention.has(dedupeKey)) continue;
+          seenMention.add(dedupeKey);
+          dedupedMentions.push(mention);
+        }
+
+        const rawQualifiers = Array.isArray(
+          (rawItem as { qualifiers?: unknown }).qualifiers,
+        )
+          ? ((rawItem as { qualifiers?: unknown }).qualifiers as unknown[])
+          : [];
+        const normalizedQualifiers = rawQualifiers
+          .map((qualifier): IngredientLineQualifier | null => {
+            if (
+              !qualifier || typeof qualifier !== "object" ||
+              Array.isArray(qualifier)
+            ) {
+              return null;
+            }
+
+            const termTypeRaw = String(
+              (qualifier as { term_type?: unknown }).term_type ?? "",
+            )
+              .trim()
+              .toLocaleLowerCase();
+            if (!allowedQualifierTypes.has(termTypeRaw)) {
+              return null;
+            }
+            const term_type = termTypeRaw as IngredientLineQualifier["term_type"];
+            const label = String((qualifier as { label?: unknown }).label ?? "")
+              .trim();
+            if (label.length === 0) {
+              return null;
+            }
+            const term_key_raw = String(
+              (qualifier as { term_key?: unknown }).term_key ?? label,
+            );
+            const term_key = normalizeTermKey(term_key_raw);
+            if (term_key.length === 0) {
+              return null;
+            }
+
+            const relationRaw = String(
+              (qualifier as { relation_type?: unknown }).relation_type ??
+                defaultRelationByType[termTypeRaw] ?? "has_state",
+            )
+              .trim()
+              .toLocaleLowerCase();
+            const relation_type = allowedQualifierRelations.has(relationRaw)
+              ? relationRaw as IngredientLineQualifier["relation_type"]
+              : defaultRelationByType[termTypeRaw];
+
+            const targetRaw = (qualifier as { target?: unknown }).target;
+            let target: IngredientLineQualifier["target"] = "line";
+            if (Number.isInteger(Number(targetRaw))) {
+              target = Math.max(0, Number(targetRaw));
+            } else if (typeof targetRaw === "string") {
+              const trimmedTarget = targetRaw.trim().toLocaleLowerCase();
+              if (trimmedTarget === "line") {
+                target = "line";
+              } else if (Number.isInteger(Number(trimmedTarget))) {
+                target = Math.max(0, Number(trimmedTarget));
+              }
+            }
+
+            const confidenceRaw = Number(
+              (qualifier as { confidence?: unknown }).confidence,
+            );
+            const confidence = Number.isFinite(confidenceRaw)
+              ? Math.max(0, Math.min(1, confidenceRaw))
+              : 0;
+
+            return {
+              term_type,
+              term_key,
+              label,
+              relation_type,
+              target,
+              confidence,
+            };
+          })
+          .filter((entry): entry is IngredientLineQualifier => entry !== null);
+
+        const dedupedQualifiers: IngredientLineQualifier[] = [];
+        const seenQualifier = new Set<string>();
+        for (const qualifier of normalizedQualifiers) {
+          const dedupeKey = `${qualifier.term_type}:${qualifier.term_key}:${
+            qualifier.relation_type
+          }:${String(qualifier.target)}`;
+          if (seenQualifier.has(dedupeKey)) continue;
+          seenQualifier.add(dedupeKey);
+          dedupedQualifiers.push(qualifier);
+        }
+
+        if (dedupedMentions.length === 0) {
+          continue;
+        }
+
+        bySource.set(sourceKey, {
+          source_name: sourceName.trim(),
+          line_confidence: lineConfidence,
+          mentions: dedupedMentions.slice(0, 6),
+          qualifiers: dedupedQualifiers.slice(0, 10),
+        });
+      }
+
+      const output = deduped
+        .map((sourceName) => bySource.get(sourceName.toLocaleLowerCase()))
+        .filter((entry): entry is IngredientLineParse => entry !== undefined);
+
+      await logLlmEvent(
+        params.client,
+        params.userId,
+        params.requestId,
+        "ingredient_line_parse",
+        Date.now() - startedAt,
+        "ok",
+        {
+          task: "parse_ingredient_lines",
+          input_count: deduped.length,
+          output_count: output.length,
+        },
+        accum,
+      );
+      return output;
+    } catch (error) {
+      const errorCode = error instanceof ApiError
+        ? error.code
+        : "unknown_error";
+      await logLlmEvent(
+        params.client,
+        params.userId,
+        params.requestId,
+        "ingredient_line_parse",
+        Date.now() - startedAt,
+        "error",
+        {
+          task: "parse_ingredient_lines",
+          input_count: deduped.length,
+          error_code: errorCode,
+        },
+        accum,
+      );
+      throw error;
     }
   },
 
@@ -2405,11 +2736,6 @@ export const llmGateway = {
       seen.add(key);
       deduped.push(value);
     }
-
-    const fallback = deduped.map((source_name) => ({
-      source_name,
-      items: [{ name: source_name, confidence: 0.5 }],
-    }));
 
     const startedAt = Date.now();
     const accum: TokenAccum = { input: 0, output: 0, costUsd: 0 };
@@ -2446,7 +2772,7 @@ export const llmGateway = {
             if (typeof part === "string") {
               const trimmed = part.trim();
               if (!trimmed) return null;
-              return { name: trimmed, confidence: 0.7 };
+              return { name: trimmed, confidence: 0 };
             }
             if (!part || typeof part !== "object" || Array.isArray(part)) {
               return null;
@@ -2461,7 +2787,7 @@ export const llmGateway = {
               name: name.trim(),
               confidence: Number.isFinite(numeric)
                 ? Math.max(0, Math.min(1, numeric))
-                : 0.7,
+                : 0,
             };
           })
           .filter((item): item is { name: string; confidence: number } =>
@@ -2487,9 +2813,9 @@ export const llmGateway = {
         });
       }
 
-      const output = fallback.map((entry) =>
-        bySource.get(entry.source_name.toLocaleLowerCase()) ?? entry
-      );
+      const output = deduped
+        .map((sourceName) => bySource.get(sourceName.toLocaleLowerCase()))
+        .filter((entry): entry is IngredientPhraseSplit => entry !== undefined);
 
       await logLlmEvent(
         params.client,
@@ -2524,7 +2850,7 @@ export const llmGateway = {
         },
         accum,
       );
-      return fallback;
+      throw error;
     }
   },
 
@@ -2606,7 +2932,7 @@ export const llmGateway = {
           const numeric = Number(confidenceRaw);
           const confidence = Number.isFinite(numeric)
             ? Math.max(0, Math.min(1, numeric))
-            : 0.5;
+            : 0;
           const metadata = metadataRaw && typeof metadataRaw === "object" &&
               !Array.isArray(metadataRaw)
             ? metadataRaw as Record<string, JsonValue>
@@ -2640,7 +2966,7 @@ export const llmGateway = {
                   relation_type: relationType.trim(),
                   confidence: Number.isFinite(termNumeric)
                     ? Math.max(0, Math.min(1, termNumeric))
-                    : confidence,
+                    : 0,
                 };
               })
               .filter((entry): entry is OntologySuggestion => entry !== null)
@@ -2690,7 +3016,7 @@ export const llmGateway = {
         },
         accum,
       );
-      return [];
+      throw error;
     }
   },
 
@@ -2725,7 +3051,7 @@ export const llmGateway = {
       const rawConfidence = Number(result.confidence);
       const confidence = Number.isFinite(rawConfidence)
         ? Math.max(0, Math.min(1, rawConfidence))
-        : 0.5;
+        : 0;
 
       await logLlmEvent(
         params.client,
@@ -2759,7 +3085,7 @@ export const llmGateway = {
         },
         accum,
       );
-      return { confidence: 0, metadata: {} };
+      throw error;
     }
   },
 
@@ -2859,7 +3185,7 @@ export const llmGateway = {
             relation_type: relationKey,
             confidence: Number.isFinite(numeric)
               ? Math.max(0, Math.min(1, numeric))
-              : 0.5,
+              : 0,
           };
           if (
             typeof rationaleRaw === "string" && rationaleRaw.trim().length > 0
@@ -2903,7 +3229,7 @@ export const llmGateway = {
         },
         accum,
       );
-      return [];
+      throw error;
     }
   },
 
