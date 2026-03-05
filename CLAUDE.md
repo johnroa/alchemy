@@ -130,6 +130,50 @@ pnpm --filter @alchemy/admin exec opennextjs-cloudflare deploy
 curl https://api.cookwithalchemy.com/v1/healthz
 ```
 
+## API Contract & Spec Workflow (Required)
+
+The OpenAPI spec is the single source of truth for all API contracts. When you change any API endpoint behavior, you MUST keep the spec, generated types, admin API docs page, and changelog in sync.
+
+### Files in the chain
+```
+packages/contracts/openapi.yaml          ← source of truth (edit this)
+packages/contracts/openapi.json          ← generated (do not edit)
+packages/contracts/src/generated.ts      ← generated (do not edit)
+apps/admin/lib/openapi-spec.json         ← copy for admin API docs page (do not edit)
+apps/admin/lib/admin-routes.ts           ← hardcoded admin route list (edit when adding/removing admin routes)
+```
+
+### When to update
+- **Adding/removing/changing a public API endpoint** (request/response shape, new path, removed path)
+- **Adding/removing an admin API route** (also update `apps/admin/lib/admin-routes.ts`)
+- **Changing authentication, error codes, or shared schemas**
+
+### Step-by-step
+1. **Edit the spec**: `packages/contracts/openapi.yaml`
+2. **Bump the version**: increment `info.version` using semver — patch for fixes, minor for new endpoints, major for breaking changes
+3. **Regenerate derived files**:
+   ```bash
+   pnpm --filter @alchemy/contracts generate        # openapi.yaml → src/generated.ts
+   pnpm --filter @alchemy/contracts generate:json    # openapi.yaml → openapi.json
+   cp packages/contracts/openapi.json apps/admin/lib/openapi-spec.json
+   ```
+4. **Update admin routes** (if admin API routes changed): edit `apps/admin/lib/admin-routes.ts`
+5. **Update CHANGELOG.md**: add entry under `[Unreleased]` describing the API change
+6. **Deploy affected services**: if the gateway contract changed, deploy the gateway; if admin routes changed, deploy admin
+7. **Commit all generated files together** with the source change
+
+### Version format
+`info.version` in `openapi.yaml` uses semver: `MAJOR.MINOR.PATCH`
+- **PATCH** (1.2.0 → 1.2.1): fix a schema description, add an optional field to an existing response
+- **MINOR** (1.2.1 → 1.3.0): add a new endpoint, add a new required response field
+- **MAJOR** (1.3.0 → 2.0.0): remove an endpoint, rename a field, change a required field type
+
+### Do NOT
+- Edit `openapi.json`, `generated.ts`, or `openapi-spec.json` directly — they are generated
+- Skip the version bump — the admin API docs page displays the version
+- Forget to copy `openapi.json` → `apps/admin/lib/openapi-spec.json` (the admin page reads this copy)
+- Add an admin API route without adding it to `apps/admin/lib/admin-routes.ts`
+
 ## Code Comments (Required)
 Write detailed inline comments in all code you touch. This codebase is maintained by multiple AI agents across sessions — comments are the primary way context survives between them. Specifically:
 - **Why, not what**: explain the reasoning behind non-obvious decisions, edge cases handled, and constraints that shaped the implementation.

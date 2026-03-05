@@ -1,301 +1,137 @@
-# Alchemy Codex
+# Alchemy — Codex Instructions
 
-## App
-Alchemy: AI Recipes for Chefs
+## Project
+Alchemy is an iOS-first, API-driven recipe app. Users set dietary/skill/equipment preferences, generate recipes via LLM, iteratively tweak them, and organize favorites. An admin UI manages users, LLM config, and rules.
 
-An iOS-first, API-driven app for creating, exploring, and managing recipes using an LLM. Users set preferences (dietary, skill, equipment, cuisines, aversions), generate recipes, iteratively tweak them, and save and organize favorites. The LLM keeps recipes tidy, learns preferences over time, and suggests complementary dishes. An admin UI manages users, LLM behavior, and rules.
+## Monorepo Structure
+```
+apps/mobile/          Expo 52 React Native (iOS-first)
+apps/admin/           Next.js 15 admin dashboard
+infra/cloudflare/     Cloudflare Worker API gateway (TypeScript)
+supabase/             Auth, Postgres, Edge Functions (LLM gateway)
+packages/contracts/   OpenAPI schema + generated TypeScript types
+packages/shared/      Shared utilities
+```
 
-## Primary Objective
-Ship a premium-feeling iOS app with excellent UX, fast iteration, and a clean API-first architecture. No Apple-native platform dependencies required.
-
-## Non-negotiables
-- UI must feel premium: fast, crisp, coherent, and consistent.
-- App is fully API-driven. No business logic hidden in the client beyond UI/UX orchestration.
-- Strict TypeScript. Avoid `any`.
-- Minimal diffs. Do not refactor unrelated code.
+## Non-Negotiables
+- Strict TypeScript. No `any`.
+- Minimal diffs. Do not touch unrelated code.
 - Do not add dependencies unless explicitly asked.
-- Every user-facing screen has loading, empty, and error states.
-- Offline behavior must be intentional (read-only cache is fine, but no silent data loss).
-- Avoid LLM spaghetti: all model calls go through a single server API.
-- All LLM calls must go through the LLM pipeline (`supabase/functions/_shared/llm-scope-registry.ts` + `llm-executor.ts` + `llm-adapters/*`); no direct provider calls outside adapters.
+- All LLM calls must go through the LLM pipeline (`supabase/functions/_shared/llm-scope-registry.ts` + `llm-executor.ts` + `llm-adapters/*`) via `supabase/functions/v1/` — never from the client.
+- Supabase deploy is GitHub CI only; do not run local `supabase db push` / `supabase functions deploy`.
+- Never hit the DB directly for production changes. Use sequential, append-only migrations.
+- Change LLM prompts/rules/routes via API/Admin UI (`/api/admin/llm/prompts`, `/api/admin/llm/rules`, `/api/admin/llm/routes`), never direct DB edits.
+- The client is API-driven. No business logic beyond UI/UX orchestration.
+- Every user-facing screen needs loading, empty, and error states.
+- No silent data loss. Offline reads from cache are fine.
 
-## Deployment + DB Governance (Required)
+## LLM Pipeline Workflow
+- Add LLM call: define a new scope in `llm-scope-registry.ts`, seed route/prompt/rule in sequential migration, add gateway wrapper through executor, wire callsite, add tests, update docs.
+- Edit LLM call: use Admin API/UI for prompts/rules/routes; if contract shape changes, update validators/tests and public OpenAPI examples as needed.
+- Remove LLM call: remove callsite/wrapper/scope and add migration deactivating corresponding scope rows.
+- Direct provider endpoints (`api.openai.com`, `api.anthropic.com`) are allowed only in `supabase/functions/_shared/llm-adapters/*`.
+
+## Mobile Stack (`apps/mobile/`)
+- **Expo Router** — file-based routing
+- **TanStack Query v5** — all server state, caching, retries
+- **Zustand v5** — UI-only state (toggles, ephemeral chat input); never server data
+- **React Native Reanimated 3 + Gesture Handler** — animations and gestures
+- **Supabase JS** — auth session via `lib/auth.tsx` and `lib/supabase.ts`
+- **Custom design system** — `components/alchemy/primitives.tsx` + `theme.ts`
+- API calls go through `lib/api.ts` → Cloudflare Worker
+
+### Mobile Conventions
+Query keys:
+```ts
+['me']
+['preferences']
+['recipes', 'feed', filters]
+['recipes', id]
+['collections']
+['collections', id]
+['search', query, filters]
+```
+
+Zustand (`lib/ui-store.ts`) is for: measurement display mode, servings scaling, ephemeral chat text, temporary filter state. Not for recipes or preferences.
+
+Route structure:
+```
+/sign-in, /register, /onboarding       auth/setup flows
+/(tabs)/generate                        prompt-to-recipe
+/(tabs)/my-cookbook                     saved recipes + collections
+/preferences, /settings                 user config
+```
+
+UI standards:
+- Touch targets ≥ 44×44
+- Skeleton loaders for primary content
+- Pull-to-refresh where appropriate
+- Subtle haptics for key actions (save, generate, tweak)
+- Keyboard avoidance on all inputs
+- Dark mode supported
+
+## Admin Stack (`apps/admin/`)
+- **Next.js 15** (App Router)
+- **Tailwind CSS + shadcn/ui** (Radix UI + CVA + tailwind-merge)
+- **Lucide React** icons
+- **Sonner** for toasts
+- Deployed via OpenNext on Cloudflare
+
+Admin route structure: `app/(admin)/` — dashboard, moderation, provider-model, changelog, image-pipeline, memory, request-trace, simulations, version-causality.
+
+## API Gateway (`infra/cloudflare/api-gateway/`)
+- Cloudflare Worker, TypeScript
+- Routes requests to Supabase edge functions
+- Auth validation at the gateway level
+- Contract types from `packages/contracts/src/generated.ts`
+
+## Backend (`supabase/`)
+- **Auth**: Supabase Auth (token-based; client uses `lib/auth.tsx`)
+- **DB**: Postgres — users, preferences, recipes, recipe_versions, collections, memories, events
+- **Edge Functions** (`functions/v1/`): LLM gateway, structured output, prompt templates
+- LLM config (models, prompts, rules) lives in DB and is loaded at runtime — editable via admin UI
+
+## Security
+- No secrets in client code
+- Tokens in platform secure storage only
+- LLM prompts not logged client-side
+
+## Deployment
+
+All commands run from repo root. Always deploy after making changes — never tell the user to run commands.
+
+### Deployment policy (required)
 - No local Supabase deploy path in this project.
-- Deploy channels are:
-  - GitHub CI for Supabase schema/functions (`.github/workflows/supabase-deploy.yml`)
-  - Direct Cloudflare deploys for API/Admin workers
-- Never hit the DB directly for production updates.
-- Schema/data changes must be append-only, sequential migrations in `supabase/migrations/`.
-- LLM prompt/rule/route changes must be made through API/Admin UI only:
-  - `/api/admin/llm/prompts`
-  - `/api/admin/llm/rules`
-  - `/api/admin/llm/routes`
-- Do not edit LLM prompt/rule rows directly in DB.
+- Supabase schema/functions deploy via GitHub CI workflow: `.github/workflows/supabase-deploy.yml`.
+- Cloudflare deploys are direct from this repo.
 
-## LLM Pipeline Agent Workflow
-- Add call: add scope registry entry, seed route/prompt/rule via sequential migration, add gateway wrapper using executor, wire callsite, add tests, update docs.
-- Edit call: change prompt/rule/model via Admin API/UI; update contract validators/tests when response shape changes.
-- Remove call: remove callsite/wrapper/scope and add migration deactivating corresponding scope config rows.
+### One-time auth
+```bash
+npx wrangler login
+```
 
-## Product Pillars
-- Creation: generate recipes from preferences and prompts.
-- Iteration: tweak recipes via chat-like edits while maintaining structured output.
-- Organization: save, tag, folders/collections, search.
-- Presentation: toggle measurement formats, scaling, step layout, inline vs separated ingredient lists.
-- Learning: preference memory that improves over time (server-managed).
-- Trust: clear provenance, versioning, and reversible edits.
+### Supabase (GitHub CI only)
+- Push to `main` with changes under `supabase/migrations/**` and/or `supabase/functions/**`.
+- CI runs migration + function deploy.
 
-## Recommended Client Stack (iOS App)
-### Runtime
-- Expo (React Native) + TypeScript
-- Expo Router (navigation)
-- React Native Reanimated + Gesture Handler (premium motion)
-- TanStack Query (server state, caching, pagination, retries)
-- Zustand (small local UI state only: toggles, ephemeral editor state, draft UI)
-- React Hook Form + Zod (preference forms and validation)
+### Push Cloudflare API gateway
+```bash
+npx wrangler deploy --config infra/cloudflare/api-gateway/wrangler.jsonc
+```
 
-### UI Layer (choose one and commit)
-Option A (recommended for premium speed): Tamagui
-- Fast to build polished components and consistent design system.
+### Push Cloudflare admin worker
+```bash
+pnpm --filter @alchemy/admin cf:build
+pnpm --filter @alchemy/admin exec opennextjs-cloudflare deploy
+```
 
-Option B: NativeWind
-- Great for custom layouts; requires more discipline to keep consistent.
-
-Default: Tamagui unless explicitly changed.
-
-### Lists
-- FlashList for large recipe feeds / search results.
-
-### Rich Text / Markdown
-- Render structured recipe content (steps, timers, ingredients, notes) via a controlled renderer.
-- Avoid arbitrary HTML rendering.
-
-### Analytics + Observability (client)
-- Basic event tracking (screen views, recipe generated, tweak applied, save, share).
-- Error reporting (crash + non-fatal) via a single provider once chosen.
-- Do not add vendors until explicitly requested.
-
-## Backend/API Requirements (contract assumptions)
-The iOS app is API-driven and assumes a server that:
-- Handles auth, user profiles, and preference persistence.
-- Orchestrates LLM calls and enforces rules/guardrails.
-- Stores recipes, versions, and edit history.
-- Manages memory and learning (preference refinement) server-side.
-- Provides structured recipe objects and stable schemas.
-- Supports search and collections.
-
-The client must treat the backend as the source of truth.
-
-## Recommended Server Stack (for alignment)
-### API
-- Node.js (TypeScript) with a typed API layer (tRPC or OpenAPI).
-- If choosing OpenAPI: generate client types and keep them in sync.
-
-### Auth
-- Supabase Auth or Clerk (pick one).
-- Token-based auth; refresh handled cleanly.
-
-### Database
-- Postgres (Supabase or managed Postgres).
-- Core tables: users, preferences, recipes, recipe_versions, collections, collection_items, memories, events.
-
-### Storage
-- Object storage for images (recipe photos) and exports (PDF, grocery list, etc.).
-
-### LLM Orchestration
-A single server LLM Gateway service:
-- prompt templates and policies
-- tools / function calling
-- schema enforcement
-- output validation
-- model routing (fast vs quality)
-- cost + latency tracking
-- safety filters and retries
-- provider + model selection managed in admin UI
-- all LLM instructions managed in admin UI and loaded from database at runtime
-
-Never call the LLM directly from the iOS client.
-
-### Search
-- Postgres FTS initially.
-- Upgrade path: Meilisearch or Typesense if needed.
-
-### Admin UI
-- Web app: Next.js + a component library.
-- Protected routes with RBAC.
-- Features:
-  - user management
-  - recipe audit + version diff
-  - prompt/template editor
-  - rule configuration
-  - model routing and cost dashboards
-  - abuse monitoring and rate limits
-
-## Client Architecture (how we build the iOS app)
-### Route structure (Expo Router)
-- /(auth)
-  - sign-in
-  - onboarding
-- /(tabs)
-  - home (feed / explore)
-  - create (prompt-to-recipe)
-  - library (saved / collections)
-  - profile (preferences, settings)
-- /(modals)
-  - recipe/[id] (full screen detail)
-  - recipe-edit/[id] (tweak flow)
-  - preferences-editor
-  - measurement-settings
-  - share/export
-
-### Data model (client)
-- Client models mirror API DTOs.
-- Never invent fields client-side; add via API schema first.
-- Normalize only when necessary; TanStack Query cache is usually enough.
-
-### Query strategy (TanStack Query)
-Use query keys:
-- `['me']`
-- `['preferences']`
-- `['recipes', 'feed', filters]`
-- `['recipes', id]`
-- `['collections']`
-- `['collections', id]`
-- `['search', query, filters]`
-
-Mutations:
-- generate recipe
-- tweak recipe
-- save/unsave
-- add to collection
-- update preferences
-
-Use optimistic updates for save/unsave and collection membership.
-
-### Local state (Zustand)
-Only for:
-- UI toggles (measurement display mode, inline units, servings scaling UI state)
-- ephemeral draft state (current tweak prompt draft, temporary filters)
-
-Not for:
-- server-backed data
-- recipe objects
-- preference canonical state
-
-### Recipe representation in UI
-- Recipes are structured objects, not plain text.
-- Render using a controlled RecipeRenderer:
-  - ingredients (with units, conversions, optional inline toggles)
-  - steps (with timers, notes, technique highlights)
-  - serving size / scaling
-  - suggested pairings (server-provided)
-- Maintain recipe version history:
-  - show last updated
-  - allow revert to prior version (server action)
-
-## UI Standards (premium feel)
-- One coherent design system:
-  - spacing scale
-  - typography scale
-  - radius scale
-  - shadow system
-- Touch targets minimum 44x44.
-- Pull-to-refresh where appropriate.
-- Skeleton loaders for primary content.
-- Subtle haptics for key actions (save, generate, apply tweak).
-- Smooth transitions, consistent animation language (springs).
-- Large, beautiful imagery with layered overlays / liquid-glass surfaces across primary screens.
-- Excellent empty states: helpful suggestions, not dead ends.
-- Keyboard avoidance on all forms and chat inputs.
-- Dark mode supported from day one.
-
-## Security + Privacy Constraints
-- Do not store secrets in the client.
-- Tokens stored securely (platform secure storage).
-- No raw LLM prompts logged client-side unless explicitly enabled.
-- Provide user controls for data deletion and memory reset (server actions).
-
-## Performance Rules
-- Prefer FlashList for feeds and search results.
-- Avoid inline functions in big lists.
-- Memoize renderItem where it matters.
-- Optimize images and enable caching.
-- Keep screens responsive during generation:
-  - streaming UI or staged progress states if supported by API.
-
-## Vibe Coding Workflow
-### Default sequence
-1. Build the full navigation skeleton with placeholder screens.
-2. Implement design system primitives (Button, Text, Card, Input, Sheet, Toast).
-3. Implement the API client + auth session wiring.
-4. Build Explore feed and Recipe Detail with mock DTOs.
-5. Add Generate flow (create prompt -> API -> render result).
-6. Add Tweak flow (chat-like edits -> new version -> diff highlight).
-7. Add Save/Collections/Library.
-8. Add Preferences + measurement presentation settings.
-9. Harden states, offline cache behavior, accessibility.
-
-### Change discipline
-- One feature per change.
-- Limit edits to the files listed.
-- Avoid sweeping refactors.
-
-## Prompt Template (use every time)
-1. Context
-- App: Alchemy (Expo RN, iOS-first, API-driven)
-- UI priority: premium look and feel
-- Current state: what exists and what is missing
-
-2. Task
-- One sentence
-
-3. Files to edit
-- Exact file paths only
-
-4. Requirements
-- Behaviors + UI expectations
-- Include loading/empty/error states
-- Include transitions, haptics, gestures if relevant
-
-5. Constraints
-- Do not refactor unrelated code
-- Do not add dependencies
-- Strict TypeScript
-- Keep diffs minimal
-
-6. Output format
-- Return unified diff OR full file contents per changed file
-- No commentary
-
-## Default Components to Build Early
-- AppShell (safe area, background, base paddings)
-- Typography (Text variants)
-- Button (primary/secondary/ghost, loading)
-- Input (with label, error, helper)
-- Card
-- ListItem
-- Divider
-- Toast
-- Sheet / BottomSheet
-- Modal
-- RecipeRenderer (ingredients + steps + notes)
-- SaveButton (optimistic)
-- SegmentedControl (presentation toggles)
-
-## Core Screens (MVP)
-- Onboarding: set baseline preferences (diet, skill, equipment).
-- Explore: curated feed + categories + search entry.
-- Create: prompt + constraints -> generate.
-- Recipe Detail: render structured recipe, save, share, tweak.
-- Tweak: chat-like edit input, show updated version, optional diff.
-- Library: saved recipes, collections, tags.
-- Preferences: edit profile + presentation toggles.
-- Settings: memory reset, export, account.
+### Quick verify
+```bash
+curl https://api.cookwithalchemy.com/v1/healthz
+```
 
 ## Code Comments (Required)
-Write detailed inline comments in all code you produce or modify. This codebase is maintained by multiple AI agents across sessions — comments are the primary way context survives between them.
-
-### What to comment
+Write detailed inline comments in all code you touch. This codebase is maintained by multiple AI agents across sessions — comments are the primary way context survives between them. Specifically:
 - **Why, not what**: explain the reasoning behind non-obvious decisions, edge cases handled, and constraints that shaped the implementation.
 - **Data flow**: at the top of functions/modules with complex orchestration, summarize the flow (inputs → transforms → outputs) and key invariants.
 - **Contract boundaries**: document what callers can expect (preconditions, postconditions, error behavior) at public function/component interfaces.
@@ -304,31 +140,54 @@ Write detailed inline comments in all code you produce or modify. This codebase 
 - **Migration/DB context**: in migration SQL, explain what the migration enables and any rollback considerations.
 - **Swift/iOS specifics**: in SwiftUI views and modifiers, annotate animation parameters, gesture thresholds, and layout assumptions that affect visual behavior.
 
-### What NOT to comment
-- Trivial restatements of the code (`// increment counter` on `counter += 1`).
-- Auto-generated boilerplate or import lists.
-- Comments that will immediately go stale (avoid referencing specific dates or ticket numbers in inline comments — put those in commit messages or CHANGELOG instead).
+Do not add trivial comments that restate the code. Focus on information that would save a future agent 5+ minutes of investigation.
 
-The goal: a future agent reading any file for the first time should be able to understand the design intent and constraints without needing to reverse-engineer them from the code alone.
+## API Contract & Spec Workflow (Required)
+
+The OpenAPI spec (`packages/contracts/openapi.yaml`) is the source of truth. On any API change:
+
+1. Edit `openapi.yaml`
+2. Bump `info.version` (semver: patch=fix, minor=new endpoint, major=breaking)
+3. Regenerate:
+   ```bash
+   pnpm --filter @alchemy/contracts generate
+   pnpm --filter @alchemy/contracts generate:json
+   cp packages/contracts/openapi.json apps/admin/lib/openapi-spec.json
+   ```
+4. If admin routes changed: edit `apps/admin/lib/admin-routes.ts`
+5. Add CHANGELOG.md entry
+6. Deploy affected services
+7. Commit generated files with the source change
+
+Do NOT edit `openapi.json`, `generated.ts`, or `openapi-spec.json` directly.
 
 ## Admin API Helper (`scripts/admin-api.sh`)
 
-CLI tool for managing LLM config (prompts, rules, routes) and running ad-hoc SQL against the production database via the Supabase Management API. Auto-resolves the Supabase CLI token from macOS keychain.
+Streamlined CLI for managing LLM config and running queries against the Supabase Management API. Auto-resolves the Supabase CLI token from macOS keychain — no manual auth needed.
 
 ```bash
-./scripts/admin-api.sh sql "<query>"                             # Run SQL
-./scripts/admin-api.sh prompt-list [scope]                       # List prompts (>>> = active)
-./scripts/admin-api.sh prompt-create <scope> <ver> <name> <file> # Create & activate prompt
+# Run SQL queries
+./scripts/admin-api.sh sql "SELECT * FROM llm_prompts WHERE is_active = true"
+./scripts/admin-api.sh sql-file /path/to/query.sql
+
+# Prompt management (versioned, append-only)
+./scripts/admin-api.sh prompt-list [scope]                      # List all prompts (>>> = active)
+./scripts/admin-api.sh prompt-create <scope> <ver> <name> <file> # Create & activate prompt from file
 ./scripts/admin-api.sh prompt-activate <scope> <version>         # Activate existing version
-./scripts/admin-api.sh rule-list [scope]                         # List rules
-./scripts/admin-api.sh rule-create <scope> <ver> <name> <file>   # Create & activate rule
+
+# Rule management
+./scripts/admin-api.sh rule-list [scope]
+./scripts/admin-api.sh rule-create <scope> <ver> <name> <file>
+
+# Route inspection
 ./scripts/admin-api.sh route-list                                # Active model routes
+
+# Auth tokens
 ./scripts/admin-api.sh service-key                               # Print service role key
 ./scripts/admin-api.sh sim-token                                 # Get sim user access token
 ```
 
-## If blocked
-If information is missing:
-- State what is missing.
-- Provide the smallest set of options.
-- Default to the simplest option that preserves premium UI and API-first correctness.
+Use this for all LLM prompt/rule/route operations instead of raw curl or the Supabase Management API directly.
+
+## When Blocked
+State what is missing, give the smallest set of options, default to the simplest option that preserves API-first correctness and premium UI feel.

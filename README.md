@@ -476,6 +476,59 @@ curl https://api.cookwithalchemy.com/v1/healthz
 
 ---
 
+## API Contract & Spec Management
+
+The OpenAPI spec is the single source of truth for all API contracts. The admin API docs page at `/api-docs` renders directly from this spec.
+
+### File chain
+
+| File | Role | Edit? |
+|---|---|---|
+| `packages/contracts/openapi.yaml` | Source of truth | Yes |
+| `packages/contracts/openapi.json` | JSON copy for tooling | Generated |
+| `packages/contracts/src/generated.ts` | TypeScript types for gateway + client | Generated |
+| `apps/admin/lib/openapi-spec.json` | Copy bundled into admin app for `/api-docs` | Generated |
+| `apps/admin/lib/admin-routes.ts` | Hardcoded admin route inventory for `/api-docs` | Yes (when routes change) |
+
+### Updating the spec
+
+Any time an API endpoint is added, removed, or changed:
+
+```bash
+# 1. Edit the source
+$EDITOR packages/contracts/openapi.yaml
+
+# 2. Bump info.version (semver)
+#    patch (1.2.0 → 1.2.1): fix schema description, add optional response field
+#    minor (1.2.1 → 1.3.0): add new endpoint, add required response field
+#    major (1.3.0 → 2.0.0): remove endpoint, rename field, change required field type
+
+# 3. Regenerate derived files
+pnpm --filter @alchemy/contracts generate          # → src/generated.ts
+pnpm --filter @alchemy/contracts generate:json      # → openapi.json
+cp packages/contracts/openapi.json apps/admin/lib/openapi-spec.json
+
+# 4. If admin API routes were added/removed, update:
+$EDITOR apps/admin/lib/admin-routes.ts
+
+# 5. Add a CHANGELOG.md entry under [Unreleased]
+
+# 6. Deploy affected services
+npx wrangler deploy --config infra/cloudflare/api-gateway/wrangler.jsonc   # if gateway changed
+pnpm --filter @alchemy/admin cf:build && pnpm --filter @alchemy/admin exec opennextjs-cloudflare deploy  # if admin changed
+
+# 7. Commit everything together (source + generated files)
+```
+
+### Rules
+
+- Never edit generated files directly (`openapi.json`, `generated.ts`, `openapi-spec.json`)
+- Always bump the version — the admin API docs page displays it
+- Always copy `openapi.json` → `apps/admin/lib/openapi-spec.json` after regenerating
+- Always add a CHANGELOG entry when the API contract changes
+
+---
+
 ## Full Setup (fresh environment)
 
 ```bash

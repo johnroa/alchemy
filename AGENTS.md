@@ -62,6 +62,36 @@ curl https://api.cookwithalchemy.com/v1/healthz
 - Remove LLM call: remove callsite + wrapper + scope, add migration that deactivates scope config rows, and update docs/tests.
 - Never place direct provider endpoint calls outside `supabase/functions/_shared/llm-adapters/`.
 
+## API Contract & Spec Workflow (Required)
+
+The OpenAPI spec is the single source of truth for all API contracts. When changing any API endpoint, keep everything in sync:
+
+### Files
+- `packages/contracts/openapi.yaml` — source of truth (edit this)
+- `packages/contracts/openapi.json` — generated, do not edit
+- `packages/contracts/src/generated.ts` — generated, do not edit
+- `apps/admin/lib/openapi-spec.json` — copy for admin API docs page, do not edit
+- `apps/admin/lib/admin-routes.ts` — hardcoded admin route list (edit when adding/removing admin routes)
+
+### Steps (every API change)
+1. Edit `packages/contracts/openapi.yaml`
+2. Bump `info.version` (semver: patch=fix, minor=new endpoint, major=breaking)
+3. Regenerate:
+   ```bash
+   pnpm --filter @alchemy/contracts generate
+   pnpm --filter @alchemy/contracts generate:json
+   cp packages/contracts/openapi.json apps/admin/lib/openapi-spec.json
+   ```
+4. If admin routes changed: edit `apps/admin/lib/admin-routes.ts`
+5. Add CHANGELOG.md entry under `[Unreleased]`
+6. Deploy affected services
+7. Commit all generated files with the source change
+
+### Do NOT
+- Edit generated files directly (`openapi.json`, `generated.ts`, `openapi-spec.json`)
+- Skip the version bump
+- Add an admin route without updating `apps/admin/lib/admin-routes.ts`
+
 ## Admin API Helper (`scripts/admin-api.sh`)
 
 CLI tool for LLM config management and database queries. Auto-resolves Supabase CLI token from macOS keychain.
