@@ -134,7 +134,9 @@ Return one strict JSON object that matches the provided contract.
 Do not use markdown or code fences.`;
   }
 
-  return `You are Alchemy in cooking ideation mode.
+  return `You are Alchemy in recipe chat ideation mode.
+If the user asks for a recipe or names a concrete dish to cook, set intent to "in_scope_generate" and trigger_recipe=true immediately.
+Avoid unnecessary clarifying questions when the request is already actionable.
 Return one strict JSON object that matches the provided contract.
 Do not use markdown or code fences.`;
 };
@@ -733,10 +735,109 @@ const normalizeRecipeShape = (candidate: unknown): RecipePayload | null => {
 };
 
 const normalizeAssistantReply = (candidate: unknown): AssistantReply | null => {
-  if (typeof candidate === "string" && candidate.trim().length > 0) {
-    return {
-      text: candidate.trim(),
-    };
+  const parseJsonRecordFromText = (
+    text: string,
+  ): Record<string, unknown> | null => {
+    const trimmed = text.trim();
+    if (!trimmed) {
+      return null;
+    }
+
+    const fencedMatch = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+    const normalized = fencedMatch?.[1]?.trim() ?? trimmed;
+    if (!normalized) {
+      return null;
+    }
+
+    try {
+      const parsed = JSON.parse(normalized) as unknown;
+      if (
+        parsed && typeof parsed === "object" &&
+        !Array.isArray(parsed)
+      ) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      // fall through
+    }
+    return null;
+  };
+
+  const looksLikeStructuredPayload = (text: string): boolean => {
+    const trimmed = text.trim();
+    if (!trimmed) {
+      return false;
+    }
+    return trimmed.startsWith("{") || trimmed.startsWith("[") ||
+      trimmed.startsWith("```") || trimmed.includes("\"assistant_reply\"") ||
+      trimmed.includes("\"candidate_recipe_set\"");
+  };
+
+  const extractAssistantReplyText = (
+    value: unknown,
+    depth = 0,
+  ): string | null => {
+    if (depth > 4 || value === null || typeof value === "undefined") {
+      return null;
+    }
+
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (!trimmed) {
+        return null;
+      }
+      const parsed = parseJsonRecordFromText(trimmed);
+      if (parsed) {
+        return extractAssistantReplyText(parsed, depth + 1);
+      }
+      return looksLikeStructuredPayload(trimmed) ? null : trimmed;
+    }
+
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return null;
+    }
+
+    const record = value as Record<string, unknown>;
+    const nestedData = record.data && typeof record.data === "object" &&
+        !Array.isArray(record.data)
+      ? (record.data as Record<string, unknown>)
+      : undefined;
+    const nestedResult = record.result && typeof record.result === "object" &&
+        !Array.isArray(record.result)
+      ? (record.result as Record<string, unknown>)
+      : undefined;
+
+    const candidates: unknown[] = [
+      record.assistant_reply,
+      record.assistantReply,
+      record.assistant,
+      record.reply,
+      nestedData?.assistant_reply,
+      nestedData?.assistantReply,
+      nestedData?.assistant,
+      nestedResult?.assistant_reply,
+      nestedResult?.assistantReply,
+      nestedResult?.assistant,
+      record.text,
+    ];
+
+    for (const candidateValue of candidates) {
+      const extracted = extractAssistantReplyText(candidateValue, depth + 1);
+      if (extracted) {
+        return extracted;
+      }
+    }
+
+    return null;
+  };
+
+  const normalizedText = extractAssistantReplyText(candidate);
+  if (normalizedText) {
+    if (typeof candidate === "string") {
+      return { text: normalizedText };
+    }
+  } else if (typeof candidate === "string") {
+    return null;
   }
 
   if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
@@ -744,12 +845,17 @@ const normalizeAssistantReply = (candidate: unknown): AssistantReply | null => {
   }
 
   const reply = candidate as Partial<AssistantReply>;
-  if (typeof reply.text !== "string" || reply.text.trim().length === 0) {
+  if (typeof reply.text !== "string") {
+    return null;
+  }
+
+  const safeText = extractAssistantReplyText(reply.text);
+  if (!safeText) {
     return null;
   }
 
   return {
-    text: reply.text.trim(),
+    text: safeText,
     tone: typeof reply.tone === "string" && reply.tone.trim().length > 0
       ? reply.tone.trim()
       : undefined,
@@ -1065,6 +1171,12 @@ const normalizeRecipeEnvelope = (
       ?.recipe as unknown) ??
     ((payload.result as Record<string, unknown> | undefined)
       ?.recipe as unknown);
+  const candidateRecipeSet = normalizeCandidateRecipeSetFromPayload(payload);
+  const candidateMainRecipe = candidateRecipeSet?.components.find((component) =>
+      component.role === "main"
+    )?.recipe ??
+    candidateRecipeSet?.components[0]?.recipe ??
+    null;
   const nestedAssistantReply = payload.assistant_reply ??
     payload.assistantReply ??
     ((payload.data as Record<string, unknown> | undefined)
@@ -1085,7 +1197,7 @@ const normalizeRecipeEnvelope = (
     ((payload.result as Record<string, unknown> | undefined)
       ?.response_context as unknown);
 
-  const recipe = normalizeRecipeShape(nestedRecipe ?? payload);
+  const recipe = normalizeRecipeShape(nestedRecipe ?? candidateMainRecipe ?? payload);
   if (!recipe) {
     return null;
   }
@@ -1242,17 +1354,56 @@ const generateRecipePayload = async (
   accum?: TokenAccum,
 ): Promise<RecipeAssistantEnvelope> => {
   const config = await getActiveConfig(client, scope, overrides?.[scope]);
+  const runtimePromptTemplate = config.promptTemplate?.trim().length
+    ? config.promptTemplate
+    : `You are Alchemy. Generate complete, cookable recipes from user intent and context.
+Return strict JSON only.`;
+  const runtimeRule = config.rule &&
+      typeof config.rule === "object" &&
+      !Array.isArray(config.rule)
+    ? config.rule
+    : {};
+  const runtimeConstraints = `Runtime requirements:
+- Output one strict JSON object only.
+- Do not emit markdown or code fences.
+- Required top-level keys: assistant_reply, recipe, response_context.
+- assistant_reply.text must be plain assistant text (never JSON).
+- recipe must be complete and practical (ingredients + steps required).
+- Do not enforce artificial ingredient, step, or token budgets.`;
+  const runtimeSystemPrompt = `${runtimePromptTemplate}\n\n${runtimeConstraints}`;
+  const recipeContract = {
+    format: "json_object",
+    required_keys: ["assistant_reply", "recipe", "response_context"],
+    optional_keys: ["response_context"],
+  };
+  const runtimeModelConfig: Record<string, JsonValue> = {
+    ...config.modelConfig,
+  };
+  delete runtimeModelConfig.max_output_tokens;
+  delete runtimeModelConfig.max_tokens;
+  delete runtimeModelConfig.token_budget;
+  delete runtimeModelConfig.ingredient_budget;
+  delete runtimeModelConfig.max_ingredients;
+  delete runtimeModelConfig.max_steps;
+  const configuredTimeoutMs = Number(runtimeModelConfig.timeout_ms);
+  if (!Number.isFinite(configuredTimeoutMs) || configuredTimeoutMs < 5_000) {
+    runtimeModelConfig.timeout_ms = 60_000;
+  }
+  if (!Number.isFinite(Number(runtimeModelConfig.temperature))) {
+    runtimeModelConfig.temperature = 0.35;
+  }
 
   const { result, inputTokens, outputTokens } = await callProvider<
     Record<string, JsonValue>
   >({
     provider: config.provider,
     model: config.model,
-    modelConfig: config.modelConfig,
-    systemPrompt: config.promptTemplate,
+    modelConfig: runtimeModelConfig,
+    systemPrompt: runtimeSystemPrompt,
     userInput: {
       task: "generate_recipe",
-      rule: config.rule,
+      rule: runtimeRule,
+      contract: recipeContract,
       prompt: input.userPrompt,
       context: input.context,
     },
@@ -1300,11 +1451,12 @@ const generateRecipePayload = async (
     await callProvider<Record<string, JsonValue>>({
       provider: config.provider,
       model: config.model,
-      modelConfig: config.modelConfig,
-      systemPrompt: config.promptTemplate,
+      modelConfig: runtimeModelConfig,
+      systemPrompt: runtimeSystemPrompt,
       userInput: {
         task: "repair_recipe_schema",
-        rule: config.rule,
+        rule: runtimeRule,
+        contract: recipeContract,
         prompt: input.userPrompt,
         context: input.context,
         invalid_payload: result,
@@ -1353,12 +1505,13 @@ const generateRecipePayload = async (
     await callProvider<Record<string, JsonValue>>({
       provider: config.provider,
       model: config.model,
-      modelConfig: config.modelConfig,
+      modelConfig: runtimeModelConfig,
       systemPrompt:
-        `${config.promptTemplate}\n\nYou are in strict schema normalization mode. Return one valid JSON object with keys assistant_reply, recipe, and response_context. Do not include markdown or prose.`,
+        `${runtimeSystemPrompt}\n\nYou are in strict schema normalization mode. Return one valid JSON object with keys assistant_reply, recipe, and response_context. Do not include markdown or prose.`,
       userInput: {
         task: "normalize_recipe_envelope",
-        rule: config.rule,
+        rule: runtimeRule,
+        contract: recipeContract,
         prompt: input.userPrompt,
         context: input.context,
         invalid_payload: repaired,
@@ -1425,6 +1578,12 @@ const generateChatConversationPayload = async (
   };
   const runtimeProvider = config.provider;
   const runtimeModel = config.model;
+  delete runtimeModelConfig.max_output_tokens;
+  delete runtimeModelConfig.max_tokens;
+  delete runtimeModelConfig.token_budget;
+  delete runtimeModelConfig.ingredient_budget;
+  delete runtimeModelConfig.max_ingredients;
+  delete runtimeModelConfig.max_steps;
   const configuredTimeoutMs = Number(runtimeModelConfig.timeout_ms);
   if (!Number.isFinite(configuredTimeoutMs) || configuredTimeoutMs < 5_000) {
     runtimeModelConfig.timeout_ms = 60_000;
@@ -1437,7 +1596,9 @@ const generateChatConversationPayload = async (
   const runtimeConstraints = `Runtime requirements:
 - Output one strict JSON object only.
 - Do not emit markdown or code fences.
-- Match the provided contract keys and schema.`;
+- Match the provided contract keys and schema.
+- Do not enforce artificial ingredient, step, or token budgets.
+- Prefer complete and practical recipe outputs over compressed outlines.`;
 
   const runtimePromptTemplate = config.promptTemplate?.trim().length
     ? config.promptTemplate
@@ -1468,6 +1629,7 @@ const generateChatConversationPayload = async (
   const executeCall = async (
     extraSystemPrompt: string | null,
     callConfig: Record<string, JsonValue>,
+    userInputOverride?: Record<string, JsonValue>,
   ): Promise<Record<string, JsonValue>> => {
     const response = await callProvider<Record<string, JsonValue>>({
       provider: runtimeProvider,
@@ -1482,6 +1644,7 @@ const generateChatConversationPayload = async (
         contract,
         prompt: input.userPrompt,
         context: input.context,
+        ...(userInputOverride ?? {}),
       },
     });
     if (accum) {
@@ -1490,9 +1653,103 @@ const generateChatConversationPayload = async (
     return response.result;
   };
 
+  const validateEnvelopeForScope = (
+    envelope: ChatAssistantEnvelope,
+  ): ChatAssistantEnvelope => {
+    if (scope === "chat_ideation") {
+      const intent = envelope.response_context?.intent;
+      if (
+        intent !== "in_scope_ideation" && intent !== "in_scope_generate" &&
+        intent !== "out_of_scope"
+      ) {
+        throw new ApiError(
+          422,
+          "chat_schema_invalid",
+          "Ideation response_context.intent is required",
+        );
+      }
+
+      if (intent === "out_of_scope") {
+        return {
+          assistant_reply: envelope.assistant_reply,
+          trigger_recipe: false,
+          response_context: {
+            ...(envelope.response_context ?? {}),
+            intent: "out_of_scope",
+            mode: "ideation",
+          },
+        };
+      }
+
+      return {
+        assistant_reply: envelope.assistant_reply,
+        trigger_recipe: intent === "in_scope_generate"
+          ? true
+          : (envelope.trigger_recipe ?? false),
+        candidate_recipe_set: envelope.candidate_recipe_set,
+        recipe: envelope.recipe,
+        response_context: {
+          ...(envelope.response_context ?? {}),
+          intent,
+        },
+      };
+    }
+
+    if (!envelope.candidate_recipe_set && !envelope.recipe) {
+      throw new ApiError(
+        422,
+        "chat_schema_invalid",
+        "Generation and iteration must return a candidate_recipe_set",
+      );
+    }
+
+    return {
+      ...envelope,
+      response_context: {
+        ...(envelope.response_context ?? {}),
+        intent: "in_scope_generate",
+      },
+    };
+  };
+
+  const attemptRepair = async (
+    invalidPayload: Record<string, JsonValue>,
+    reason: string,
+  ): Promise<ChatAssistantEnvelope | null> => {
+    const repaired = await executeCall(
+      `CRITICAL: Return ONLY one valid raw JSON object for the chat-loop contract.
+- No markdown/code fences.
+- Ensure assistant_reply.text is plain assistant text (never JSON).
+- Ensure required keys are present for this scope.
+- Preserve user intent and recipe details from invalid_payload.
+repair_reason: ${reason}`,
+      runtimeModelConfig,
+      {
+        task: "repair_chat_schema",
+        scope,
+        reason,
+        rule: runtimeRule,
+        contract,
+        prompt: input.userPrompt,
+        context: input.context,
+        invalid_payload: invalidPayload,
+      },
+    );
+    return normalizeChatEnvelope(repaired);
+  };
+
   const rawResult = await executeCall(null, runtimeModelConfig);
 
-  const envelope = normalizeChatEnvelope(rawResult);
+  let repaired = false;
+  let envelope = normalizeChatEnvelope(rawResult);
+  if (!envelope) {
+    envelope = await attemptRepair(
+      rawResult,
+      "chat_envelope_normalization_failed",
+    );
+    repaired = true;
+  }
+
   if (!envelope) {
     throw new ApiError(
       422,
@@ -1501,60 +1758,21 @@ const generateChatConversationPayload = async (
     );
   }
 
-  if (scope === "chat_ideation") {
-    const intent = envelope.response_context?.intent;
+  try {
+    return validateEnvelopeForScope(envelope);
+  } catch (error) {
     if (
-      intent !== "in_scope_ideation" && intent !== "in_scope_generate" &&
-      intent !== "out_of_scope"
+      !repaired &&
+      error instanceof ApiError &&
+      error.code === "chat_schema_invalid"
     ) {
-      throw new ApiError(
-        422,
-        "chat_schema_invalid",
-        "Ideation response_context.intent is required",
-      );
+      const repairedEnvelope = await attemptRepair(rawResult, error.message);
+      if (repairedEnvelope) {
+        return validateEnvelopeForScope(repairedEnvelope);
+      }
     }
-
-    if (intent === "out_of_scope") {
-      return {
-        assistant_reply: envelope.assistant_reply,
-        trigger_recipe: false,
-        response_context: {
-          ...(envelope.response_context ?? {}),
-          intent: "out_of_scope",
-          mode: "ideation",
-        },
-      };
-    }
-
-    return {
-      assistant_reply: envelope.assistant_reply,
-      trigger_recipe: intent === "in_scope_generate"
-        ? true
-        : (envelope.trigger_recipe ?? false),
-      candidate_recipe_set: envelope.candidate_recipe_set,
-      recipe: envelope.recipe,
-      response_context: {
-        ...(envelope.response_context ?? {}),
-        intent,
-      },
-    };
+    throw error;
   }
-
-  if (!envelope.candidate_recipe_set && !envelope.recipe) {
-    throw new ApiError(
-      422,
-      "chat_schema_invalid",
-      "Generation and iteration must return a candidate_recipe_set",
-    );
-  }
-
-  return {
-    ...envelope,
-    response_context: {
-      ...(envelope.response_context ?? {}),
-      intent: "in_scope_generate",
-    },
-  };
 };
 
 const generateOnboardingInterviewEnvelope = async (
@@ -1793,6 +2011,78 @@ export const llmGateway = {
       const errorCode = error instanceof ApiError
         ? error.code
         : "unknown_error";
+      const recoverableChatErrors = new Set([
+        "llm_invalid_json",
+        "llm_json_truncated",
+        "llm_empty_output",
+        "chat_schema_invalid",
+      ]);
+      if (
+        error instanceof ApiError &&
+        recoverableChatErrors.has(error.code)
+      ) {
+        if (scope === "chat_generation" || scope === "chat_iteration") {
+          try {
+            const recipeFallback = await generateRecipePayload(
+              params.client,
+              "generate",
+              {
+                userPrompt: params.prompt,
+                context: params.context,
+              },
+              params.modelOverrides,
+              accum,
+            );
+            await logLlmEvent(
+              params.client,
+              params.userId,
+              params.requestId,
+              scope,
+              Date.now() - startedAt,
+              "degraded",
+              {
+                error_code: error.code,
+                fallback: "generate_scope_recipe_fallback",
+              },
+              accum,
+            );
+            return {
+              assistant_reply: recipeFallback.assistant_reply,
+              recipe: recipeFallback.recipe,
+              trigger_recipe: true,
+              response_context: {
+                mode: scope === "chat_iteration" ? "iteration" : "generation",
+                intent: "in_scope_generate",
+              },
+            };
+          } catch {
+            // Fall through to ideation-safe response.
+          }
+        }
+        await logLlmEvent(
+          params.client,
+          params.userId,
+          params.requestId,
+          scope,
+          Date.now() - startedAt,
+          "degraded",
+          {
+            error_code: error.code,
+            fallback: "chat_ideation_recovery",
+          },
+          accum,
+        );
+        return {
+          assistant_reply: {
+            text: "I’m here to help with recipes. What are you in the mood for?",
+          },
+          trigger_recipe: false,
+          response_context: {
+            mode: "ideation",
+            intent: "in_scope_ideation",
+          },
+        };
+      }
       await logLlmEvent(
         params.client,
         params.userId,
@@ -2248,7 +2538,7 @@ export const llmGateway = {
 
       const rawItems = Array.isArray(result.items) ? result.items : [];
       const output = rawItems
-        .map((rawItem) => {
+        .map((rawItem): IngredientSemanticEnrichment | null => {
           if (
             !rawItem || typeof rawItem !== "object" || Array.isArray(rawItem)
           ) {
@@ -2523,18 +2813,20 @@ export const llmGateway = {
           }
 
           const numeric = Number(confidenceRaw);
-          return {
+          const normalized: IngredientSemanticRelation = {
             from_canonical_name: from.trim(),
             to_canonical_name: to.trim(),
             relation_type: relationKey,
             confidence: Number.isFinite(numeric)
               ? Math.max(0, Math.min(1, numeric))
               : 0.5,
-            rationale:
-              typeof rationaleRaw === "string" && rationaleRaw.trim().length > 0
-                ? rationaleRaw.trim()
-                : undefined,
           };
+          if (
+            typeof rationaleRaw === "string" && rationaleRaw.trim().length > 0
+          ) {
+            normalized.rationale = rationaleRaw.trim();
+          }
+          return normalized;
         })
         .filter((entry): entry is IngredientSemanticRelation => entry !== null);
 

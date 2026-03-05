@@ -158,6 +158,9 @@ const candidateRoles: CandidateRecipeRole[] = [
   "drink",
 ];
 
+const CHAT_RECOVERY_FALLBACK_TEXT =
+  "I’m here to help with recipes. What are you in the mood for?";
+
 const normalizeCandidateRole = (value: unknown): CandidateRecipeRole => {
   if (
     typeof value === "string" &&
@@ -275,6 +278,14 @@ const extractChatContext = (value: unknown): ChatSessionContext => {
     return {};
   }
   return value as ChatSessionContext;
+};
+
+const toJsonValue = (value: unknown): JsonValue => {
+  const serialized = JSON.stringify(value);
+  if (!serialized) {
+    return null;
+  }
+  return JSON.parse(serialized) as JsonValue;
 };
 
 const deriveLoopState = (
@@ -1403,7 +1414,6 @@ const resolveCanonicalRecipeIngredientsAsync = async (params: {
 
   let rejectedCount = 0;
   let dietGuardRemovalCount = 0;
-  let dietGuardRemovalCount = 0;
   try {
     const splitItems = await llmGateway.splitIngredientPhrases({
       client: params.serviceClient,
@@ -1918,6 +1928,7 @@ const upsertIngredientEnrichment = async (params: {
   });
 
   let rejectedCount = 0;
+  let dietGuardRemovalCount = 0;
   try {
     const enrichment = await llmGateway.enrichIngredients({
       client: params.serviceClient,
@@ -3971,7 +3982,7 @@ const fetchRecipeView = async (
     ingredient_groups: ingredientGroups,
     notes: payload.notes,
     pairings: payload.pairings ?? [],
-    metadata: payload.metadata,
+    metadata: payload.metadata ? toJsonValue(payload.metadata) : undefined,
     emoji: payload.emoji ?? [],
     image_url: recipe.hero_image_url,
     image_status: recipe.image_status,
@@ -4063,6 +4074,14 @@ const persistRecipe = async (params: {
     }
 
     recipeId = recipe.id;
+  }
+
+  if (!recipeId) {
+    throw new ApiError(
+      500,
+      "recipe_insert_failed",
+      "Could not resolve recipe id",
+    );
   }
 
   const { data: version, error: versionError } = await params.client
@@ -4264,10 +4283,11 @@ const buildContextPack = async (params: {
   context: Record<string, JsonValue>;
   selectionMode?: "llm" | "fast";
 }): Promise<ContextPack> => {
+  const memoryFetchLimit = params.selectionMode === "fast" ? 12 : 36;
   const [preferences, memorySnapshot, memories] = await Promise.all([
     getPreferences(params.userClient, params.userId),
     getMemorySnapshot(params.userClient, params.userId),
-    getActiveMemories(params.userClient, params.userId, 36),
+    getActiveMemories(params.userClient, params.userId, memoryFetchLimit),
   ]);
   const preferencesNaturalLanguage = buildNaturalLanguagePreferenceContext(
     preferences,
@@ -4889,6 +4909,102 @@ const fetchChatMessages = async (
   );
 };
 
+const parseJsonRecordFromText = (
+  text: string,
+): Record<string, unknown> | null => {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const fencedMatch = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  const normalized = fencedMatch?.[1]?.trim() ?? trimmed;
+  if (!normalized) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(normalized) as unknown;
+    if (
+      parsed && typeof parsed === "object" &&
+      !Array.isArray(parsed)
+    ) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    // fall through
+  }
+  return null;
+};
+
+const looksLikeStructuredAssistantPayload = (text: string): boolean => {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return false;
+  }
+  return trimmed.startsWith("{") || trimmed.startsWith("[") ||
+    trimmed.startsWith("```") || trimmed.includes("\"assistant_reply\"") ||
+    trimmed.includes("\"candidate_recipe_set\"");
+};
+
+const extractAssistantTextFromUnknown = (
+  value: unknown,
+  depth = 0,
+): string | null => {
+  if (depth > 4 || value === null || typeof value === "undefined") {
+    return null;
+  }
+
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+    const parsed = parseJsonRecordFromText(trimmed);
+    if (parsed) {
+      return extractAssistantTextFromUnknown(parsed, depth + 1);
+    }
+    return looksLikeStructuredAssistantPayload(trimmed) ? null : trimmed;
+  }
+
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  const nestedData = record.data && typeof record.data === "object" &&
+      !Array.isArray(record.data)
+    ? (record.data as Record<string, unknown>)
+    : undefined;
+  const nestedResult = record.result && typeof record.result === "object" &&
+      !Array.isArray(record.result)
+    ? (record.result as Record<string, unknown>)
+    : undefined;
+
+  const candidates: unknown[] = [
+    record.assistant_reply,
+    record.assistantReply,
+    record.assistant,
+    record.reply,
+    nestedData?.assistant_reply,
+    nestedData?.assistantReply,
+    nestedData?.assistant,
+    nestedResult?.assistant_reply,
+    nestedResult?.assistantReply,
+    nestedResult?.assistant,
+    record.text,
+  ];
+
+  for (const candidate of candidates) {
+    const extracted = extractAssistantTextFromUnknown(candidate, depth + 1);
+    if (extracted) {
+      return extracted;
+    }
+  }
+
+  return null;
+};
+
 const parseAssistantChatPayload = (
   message: Pick<ChatMessageView, "content" | "metadata">,
 ): {
@@ -4947,22 +5063,44 @@ const parseAssistantChatPayload = (
       ((candidate.result as Record<string, unknown> | undefined)
         ?.assistant_reply as unknown);
     const assistantReply = (() => {
-      if (
-        typeof replyCandidate === "string" && replyCandidate.trim().length > 0
-      ) {
-        return { text: replyCandidate.trim() } as AssistantReply;
+      const safeText = extractAssistantTextFromUnknown(replyCandidate);
+      if (!safeText) {
+        return null;
       }
 
-      if (
-        replyCandidate &&
-        typeof replyCandidate === "object" &&
-        !Array.isArray(replyCandidate) &&
-        typeof (replyCandidate as { text?: unknown }).text === "string"
-      ) {
-        return (replyCandidate as AssistantReply) ?? null;
-      }
+      const replyObject = replyCandidate &&
+          typeof replyCandidate === "object" && !Array.isArray(replyCandidate)
+        ? (replyCandidate as Record<string, unknown>)
+        : null;
 
-      return null;
+      const tone = replyObject && typeof replyObject.tone === "string" &&
+          replyObject.tone.trim().length > 0
+        ? replyObject.tone.trim()
+        : undefined;
+      const focusSummary = replyObject &&
+          typeof replyObject.focus_summary === "string" &&
+          replyObject.focus_summary.trim().length > 0
+        ? replyObject.focus_summary.trim()
+        : undefined;
+      const emoji = replyObject && Array.isArray(replyObject.emoji)
+        ? replyObject.emoji.filter((entry): entry is string =>
+          typeof entry === "string"
+        )
+        : undefined;
+      const suggestedNextActions = replyObject &&
+          Array.isArray(replyObject.suggested_next_actions)
+        ? replyObject.suggested_next_actions.filter((entry): entry is string =>
+          typeof entry === "string"
+        )
+        : undefined;
+
+      return {
+        text: safeText,
+        tone,
+        focus_summary: focusSummary,
+        emoji,
+        suggested_next_actions: suggestedNextActions,
+      } as AssistantReply;
     })();
     const rawResponseContext = candidate.response_context;
     const responseContext = rawResponseContext &&
@@ -5054,6 +5192,77 @@ const extractLatestAssistantReply = (
   }
 
   return null;
+};
+
+const sanitizeAssistantMessageContent = (
+  message: ChatMessageView,
+  fallbackReplyText?: string | null,
+): string => {
+  const parsed = parseAssistantChatPayload(message);
+  const parsedText = parsed?.assistantReply?.text?.trim();
+  if (parsedText && parsedText.length > 0) {
+    const normalized = extractAssistantTextFromUnknown(parsedText);
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  const fallback = typeof fallbackReplyText === "string"
+      ? fallbackReplyText.trim()
+      : ""
+  ;
+  if (fallback.length > 0) {
+    const normalized = extractAssistantTextFromUnknown(fallback);
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  const trimmed = message.content.trim();
+  if (!trimmed) {
+    return "...";
+  }
+
+  const extractedFromContent = extractAssistantTextFromUnknown(trimmed);
+  if (extractedFromContent) {
+    return extractedFromContent;
+  }
+
+  if (looksLikeStructuredAssistantPayload(trimmed)) {
+    return "...";
+  }
+
+  return message.content;
+};
+
+const sanitizeMessagesForChatResponse = (
+  messages: ChatMessageView[],
+  assistantReply?: AssistantReply | null,
+): ChatMessageView[] => {
+  let latestAssistantIndex = -1;
+  for (let index = 0; index < messages.length; index += 1) {
+    if (messages[index].role === "assistant") {
+      latestAssistantIndex = index;
+    }
+  }
+
+  return messages.map((message, index) => {
+    if (message.role !== "assistant") {
+      return message;
+    }
+
+    const safeContent = sanitizeAssistantMessageContent(
+      message,
+      index === latestAssistantIndex ? assistantReply?.text ?? null : null,
+    );
+    if (safeContent === message.content) {
+      return message;
+    }
+    return {
+      ...message,
+      content: safeContent,
+    };
+  });
 };
 
 const renderChatMessageForPrompt = (message: ChatMessageView): string => {
@@ -5191,6 +5400,7 @@ const buildChatLoopResponse = (params: {
   const loopState = deriveLoopState(params.context, candidateSet);
   const reply = params.assistantReply ??
     extractLatestAssistantReply(params.messages);
+  const safeMessages = sanitizeMessagesForChatResponse(params.messages, reply);
   const responseContext = params.responseContext ??
     (() => {
       for (let index = params.messages.length - 1; index >= 0; index -= 1) {
@@ -5205,7 +5415,7 @@ const buildChatLoopResponse = (params: {
 
   return {
     id: params.chatId,
-    messages: params.messages,
+    messages: safeMessages,
     loop_state: loopState,
     assistant_reply: reply ?? null,
     candidate_recipe_set: candidateSet,
@@ -5694,17 +5904,74 @@ const orchestrateChatTurn = async (params: {
   const isOutOfScope = intent === "out_of_scope";
 
   if (!params.existingCandidate && !isOutOfScope) {
-    const shouldGenerate = intent === "in_scope_generate" ||
+    let shouldGenerate = intent === "in_scope_generate" ||
       assistantChatResponse.trigger_recipe === true;
     if (
       shouldGenerate && !assistantChatResponse.candidate_recipe_set &&
       !assistantChatResponse.recipe
     ) {
-      throw new ApiError(
-        502,
-        "chat_generation_missing_candidate",
-        "Generation trigger did not produce a candidate recipe set",
-      );
+      try {
+        const generationResponse = await converseChatWithRetry({
+          client: params.serviceClient,
+          userId: params.userId,
+          requestId: params.requestId,
+          prompt: params.message,
+          context: {
+            chat_context: compactChatContext,
+            thread: params.threadForPrompt,
+            active_recipe: null,
+            candidate_recipe_set: null,
+            candidate_recipe_set_outline: null,
+            loop_state: "ideation",
+            ideation_response: assistantChatResponse as unknown as JsonValue,
+            preferences: params.contextPack.preferences,
+            preferences_natural_language:
+              params.contextPack.preferencesNaturalLanguage,
+            memory_snapshot: params.contextPack.memorySnapshot,
+            selected_memories: params.contextPack.selectedMemories,
+          },
+          scopeHint: "chat_generation",
+          modelOverrides: params.modelOverrides,
+        });
+        assistantChatResponse = {
+          ...generationResponse,
+          response_context: {
+            ...(generationResponse.response_context ?? {}),
+            mode: generationResponse.response_context?.mode ?? "generation",
+            intent:
+              normalizeChatIntent(generationResponse.response_context?.intent) ??
+                "in_scope_generate",
+          },
+        };
+      } catch (error) {
+        console.error("chat_generation_conversion_failed", {
+          request_id: params.requestId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    if (
+      shouldGenerate && !assistantChatResponse.candidate_recipe_set &&
+      !assistantChatResponse.recipe
+    ) {
+      assistantChatResponse = {
+        ...assistantChatResponse,
+        trigger_recipe: false,
+        candidate_recipe_set: undefined,
+        recipe: undefined,
+        response_context: {
+          ...(assistantChatResponse.response_context ?? {}),
+          mode: "ideation",
+          intent: "in_scope_ideation",
+        },
+        assistant_reply: assistantChatResponse.assistant_reply?.text?.trim()
+          ? assistantChatResponse.assistant_reply
+          : {
+            text:
+              "I hit a snag generating that recipe. Want me to try again now?",
+          },
+      };
     }
   }
 
@@ -5779,7 +6046,7 @@ const orchestrateChatTurn = async (params: {
       mode: assistantChatResponse.response_context.mode,
       intent:
         normalizeChatIntent(assistantChatResponse.response_context.intent) ??
-          (nextCandidateSet ? "in_scope_generate" : "in_scope_ideation"),
+          undefined,
       changed_sections: assistantChatResponse.response_context.changed_sections,
       personalization_notes: assistantChatResponse.response_context
         .personalization_notes,
@@ -6193,7 +6460,9 @@ Deno.serve(async (request) => {
           .map((entry) => ({
             role: entry.role === "assistant" ? "assistant" : "user",
             content: entry.content?.trim() ?? "",
-            created_at: entry.created_at,
+            created_at: typeof entry.created_at === "string"
+              ? entry.created_at
+              : null,
           }))
           .filter((entry) => entry.content.length > 0)
         : [];
@@ -7115,13 +7384,13 @@ Deno.serve(async (request) => {
         requestId,
         prompt: body.prompt?.trim() ?? `create ${relationType} attachment`,
         context: {
-          parent_recipe: {
+          parent_recipe: toJsonValue({
             id: parentRecipe.id,
             title: parentRecipe.title,
             ingredients: parentRecipe.ingredients,
             steps: parentRecipe.steps,
             metadata: parentRecipe.metadata,
-          },
+          }),
         },
       });
 
@@ -7135,13 +7404,13 @@ Deno.serve(async (request) => {
           prompt: body.prompt,
           context: {
             relation_type: relationType,
-            parent_recipe: {
+            parent_recipe: toJsonValue({
               id: parentRecipe.id,
               title: parentRecipe.title,
               ingredients: parentRecipe.ingredients,
               steps: parentRecipe.steps,
               metadata: parentRecipe.metadata,
-            },
+            }),
             preferences: contextPack.preferences,
             preferences_natural_language:
               contextPack.preferencesNaturalLanguage,
@@ -7698,7 +7967,7 @@ Deno.serve(async (request) => {
       };
       const assistantMessageContent = orchestrated.assistantChatResponse
         .assistant_reply?.text?.trim() ||
-        "I’m here to help with recipes. What are you in the mood for?";
+        CHAT_RECOVERY_FALLBACK_TEXT;
       const assistantMetadata: Record<string, JsonValue> = {
         format: "assistant_chat_envelope_v2",
         loop_state: orchestrated.nextLoopState,
@@ -7942,7 +8211,7 @@ Deno.serve(async (request) => {
       };
       const assistantMessageContent = orchestrated.assistantChatResponse
         .assistant_reply?.text?.trim() ||
-        "I’m here to help with recipes. What are you in the mood for?";
+        CHAT_RECOVERY_FALLBACK_TEXT;
       const assistantMetadata: Record<string, JsonValue> = {
         format: "assistant_chat_envelope_v2",
         loop_state: orchestrated.nextLoopState,
