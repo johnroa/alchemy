@@ -158,9 +158,6 @@ const candidateRoles: CandidateRecipeRole[] = [
   "drink",
 ];
 
-const CHAT_RECOVERY_FALLBACK_TEXT =
-  "I’m here to help with recipes. What are you in the mood for?";
-
 const normalizeCandidateRole = (value: unknown): CandidateRecipeRole => {
   if (
     typeof value === "string" &&
@@ -5265,6 +5262,21 @@ const sanitizeMessagesForChatResponse = (
   });
 };
 
+const resolveAssistantMessageContent = (
+  assistantReply: AssistantReply | null | undefined,
+): string => {
+  const normalized = extractAssistantTextFromUnknown(assistantReply);
+  if (normalized && normalized.trim().length > 0) {
+    return normalized.trim();
+  }
+
+  throw new ApiError(
+    502,
+    "chat_assistant_reply_missing",
+    "Assistant reply text was missing from chat payload",
+  );
+};
+
 const renderChatMessageForPrompt = (message: ChatMessageView): string => {
   if (message.role !== "assistant") {
     return message.content;
@@ -5949,32 +5961,6 @@ const orchestrateChatTurn = async (params: {
       }
     }
 
-    if (
-      (
-        intent === "in_scope_generate" ||
-          assistantChatResponse.trigger_recipe === true
-      ) &&
-      !assistantChatResponse.candidate_recipe_set &&
-      !assistantChatResponse.recipe
-    ) {
-      assistantChatResponse = {
-        ...assistantChatResponse,
-        trigger_recipe: false,
-        candidate_recipe_set: undefined,
-        recipe: undefined,
-        response_context: {
-          ...(assistantChatResponse.response_context ?? {}),
-          mode: "ideation",
-          intent: "in_scope_ideation",
-        },
-        assistant_reply: assistantChatResponse.assistant_reply?.text?.trim()
-          ? assistantChatResponse.assistant_reply
-          : {
-            text:
-              "I hit a snag generating that recipe. Want me to try again now?",
-          },
-      };
-    }
   }
 
   if (isOutOfScope) {
@@ -5988,12 +5974,7 @@ const orchestrateChatTurn = async (params: {
         mode: "ideation",
         intent: "out_of_scope",
       },
-      assistant_reply: assistantChatResponse.assistant_reply?.text?.trim()
-        ? assistantChatResponse.assistant_reply
-        : {
-          text:
-            "I can’t help with that here. I can help with recipes, cooking techniques, or meal planning.",
-        },
+      assistant_reply: assistantChatResponse.assistant_reply,
     };
   }
 
@@ -7967,9 +7948,9 @@ Deno.serve(async (request) => {
         recipe: orchestrated.assistantChatResponse.recipe,
         response_context: orchestrated.responseContext,
       };
-      const assistantMessageContent = orchestrated.assistantChatResponse
-        .assistant_reply?.text?.trim() ||
-        CHAT_RECOVERY_FALLBACK_TEXT;
+      const assistantMessageContent = resolveAssistantMessageContent(
+        orchestrated.assistantChatResponse.assistant_reply,
+      );
       const assistantMetadata: Record<string, JsonValue> = {
         format: "assistant_chat_envelope_v2",
         loop_state: orchestrated.nextLoopState,
@@ -8211,9 +8192,9 @@ Deno.serve(async (request) => {
         recipe: orchestrated.assistantChatResponse.recipe,
         response_context: orchestrated.responseContext,
       };
-      const assistantMessageContent = orchestrated.assistantChatResponse
-        .assistant_reply?.text?.trim() ||
-        CHAT_RECOVERY_FALLBACK_TEXT;
+      const assistantMessageContent = resolveAssistantMessageContent(
+        orchestrated.assistantChatResponse.assistant_reply,
+      );
       const assistantMetadata: Record<string, JsonValue> = {
         format: "assistant_chat_envelope_v2",
         loop_state: orchestrated.nextLoopState,

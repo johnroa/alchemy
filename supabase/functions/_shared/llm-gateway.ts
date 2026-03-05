@@ -2106,20 +2106,16 @@ export const llmGateway = {
           "degraded",
           {
             error_code: error.code,
-            fallback: "chat_ideation_recovery",
+            fallback: "chat_ideation_recovery_failed",
           },
           accum,
         );
-        return {
-          assistant_reply: {
-            text: "I’m here to help with recipes. What are you in the mood for?",
-          },
-          trigger_recipe: false,
-          response_context: {
-            mode: "ideation",
-            intent: "in_scope_ideation",
-          },
-        };
+        throw new ApiError(
+          502,
+          "chat_recovery_failed",
+          "Chat generation failed after recovery attempts",
+          `primary=${error.code}`,
+        );
       }
       await logLlmEvent(
         params.client,

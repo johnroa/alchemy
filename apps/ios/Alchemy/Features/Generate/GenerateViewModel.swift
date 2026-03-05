@@ -370,7 +370,10 @@ final class GenerateViewModel {
         let normalizedRole = item.role == "user" ? "user" : "assistant"
         let normalizedContent: String
         if normalizedRole == "assistant" {
-            normalizedContent = normalizeAssistantMessageContent(item.content)
+            normalizedContent = normalizeAssistantMessageContent(
+                item.content,
+                metadata: item.metadata
+            )
         } else {
             normalizedContent = item.content
         }
@@ -555,36 +558,54 @@ final class GenerateViewModel {
         assistantReplyFallback: String?
     ) {
         guard !serverMessages.isEmpty else { return }
-        let mapped = serverMessages.map { item in
+        let latestAssistantIndex = serverMessages.lastIndex { item in
+            item.role != "user"
+        }
+        let whitespace = CharacterSet.whitespacesAndNewlines
+        var mapped: [GenerateMessage] = []
+        mapped.reserveCapacity(serverMessages.count)
+
+        for (index, item) in serverMessages.enumerated() {
             let normalizedRole = item.role == "user" ? "user" : "assistant"
             if normalizedRole == "assistant" {
-                return GenerateMessage(
-                    id: item.id,
-                    role: normalizedRole,
-                    content: normalizeAssistantMessageContent(
-                        item.content,
-                        fallbackAssistantReplyText: assistantReplyFallback
-                    ),
-                    timestamp: {
-                        if let createdAt = item.createdAt,
-                           let parsed = ISO8601DateFormatter().date(from: createdAt) {
-                            return parsed
-                        }
-                        return .now
-                    }(),
-                    isPending: false
+                let fallbackForMessage = (index == latestAssistantIndex) ? assistantReplyFallback : nil
+                let normalized = normalizeAssistantMessageContent(
+                    item.content,
+                    metadata: item.metadata,
+                    fallbackAssistantReplyText: fallbackForMessage
+                ).trimmingCharacters(in: whitespace)
+                guard !normalized.isEmpty else { continue }
+
+                let timestamp: Date
+                if let createdAt = item.createdAt,
+                   let parsed = ISO8601DateFormatter().date(from: createdAt) {
+                    timestamp = parsed
+                } else {
+                    timestamp = .now
+                }
+
+                mapped.append(
+                    GenerateMessage(
+                        id: item.id,
+                        role: normalizedRole,
+                        content: normalized,
+                        timestamp: timestamp,
+                        isPending: false
+                    )
                 )
+                continue
             }
-            return mapMessage(item)
+
+            mapped.append(mapMessage(item))
         }
 
         let pendingLocalMessages = messages.filter(\.isPending)
 
         let welcome = messages.first(where: { $0.id == Self.welcomeMessageId })
-        let serverHasEquivalentWelcome = mapped.contains {
-            $0.role == "assistant"
-                && $0.content.trimmingCharacters(in: .whitespacesAndNewlines)
-                    == welcome?.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        let welcomeText = welcome?.content.trimmingCharacters(in: whitespace) ?? ""
+        let serverHasEquivalentWelcome = !welcomeText.isEmpty && mapped.contains { message in
+            message.role == "assistant"
+                && message.content.trimmingCharacters(in: whitespace) == welcomeText
         }
 
         var merged: [GenerateMessage] = []
@@ -594,11 +615,13 @@ final class GenerateViewModel {
         merged.append(contentsOf: mapped)
 
         // Keep only optimistic messages that have not yet arrived from the server.
-        for pending in pendingLocalMessages where !mapped.contains(where: {
-            $0.role == pending.role &&
-                $0.content.trimmingCharacters(in: .whitespacesAndNewlines)
-                    == pending.content.trimmingCharacters(in: .whitespacesAndNewlines)
-        }) {
+        for pending in pendingLocalMessages {
+            let pendingText = pending.content.trimmingCharacters(in: whitespace)
+            let isRepresented = mapped.contains { message in
+                message.role == pending.role
+                    && message.content.trimmingCharacters(in: whitespace) == pendingText
+            }
+            guard !isRepresented else { continue }
             merged.append(pending)
         }
 
@@ -607,18 +630,19 @@ final class GenerateViewModel {
 
     private func normalizeAssistantMessageContent(
         _ content: String,
+        metadata: [String: JSONValue]? = nil,
         fallbackAssistantReplyText: String? = nil
     ) -> String {
-        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return content }
-        guard trimmed.first == "{" || trimmed.first == "[" else { return content }
-
-        if let data = trimmed.data(using: .utf8),
-           let rawJSON = try? JSONSerialization.jsonObject(with: data),
-           let extracted = extractAssistantText(fromJSONValue: rawJSON)?
+        if let metadata,
+           let extracted = extractAssistantText(fromMetadata: metadata)?
                 .trimmingCharacters(in: .whitespacesAndNewlines),
            !extracted.isEmpty {
             return extracted
+        }
+
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            return trimmed
         }
 
         if let fallbackAssistantReplyText {
@@ -626,7 +650,75 @@ final class GenerateViewModel {
             if !fallback.isEmpty { return fallback }
         }
 
-        return "..."
+        return ""
+    }
+
+    private func extractJSONCandidates(from value: String) -> [String] {
+        var candidates: [String] = []
+
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.first == "{" || trimmed.first == "[" {
+            candidates.append(trimmed)
+        }
+
+        if let fenced = extractFencedJSON(from: value) {
+            candidates.append(fenced)
+        }
+
+        if let objectCandidate = extractDelimitedJSON(from: value, open: "{", close: "}") {
+            candidates.append(objectCandidate)
+        }
+        if let arrayCandidate = extractDelimitedJSON(from: value, open: "[", close: "]") {
+            candidates.append(arrayCandidate)
+        }
+
+        var seen = Set<String>()
+        return candidates.filter { candidate in
+            let normalized = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !normalized.isEmpty else { return false }
+            if seen.contains(normalized) { return false }
+            seen.insert(normalized)
+            return true
+        }
+    }
+
+    private func extractFencedJSON(from value: String) -> String? {
+        guard let openRange = value.range(of: "```") else { return nil }
+        let afterOpen = value[openRange.upperBound...]
+        guard let closeRange = afterOpen.range(of: "```") else { return nil }
+        var inner = String(afterOpen[..<closeRange.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+        if inner.hasPrefix("json") {
+            inner = String(inner.dropFirst(4)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        guard inner.first == "{" || inner.first == "[" else { return nil }
+        return inner
+    }
+
+    private func extractDelimitedJSON(from value: String, open: Character, close: Character) -> String? {
+        guard let start = value.firstIndex(of: open), let end = value.lastIndex(of: close), start < end else {
+            return nil
+        }
+        let slice = value[start...end]
+        let normalized = String(slice).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard normalized.first == open, normalized.last == close else { return nil }
+        return normalized
+    }
+
+    private func extractAssistantText(fromMetadata metadata: [String: JSONValue]) -> String? {
+        guard case .object(let envelope)? = metadata["envelope"] else { return nil }
+
+        if case .object(let assistantReply)? = envelope["assistant_reply"],
+           case .string(let text)? = assistantReply["text"] {
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }
+
+        if case .string(let assistantReplyText)? = envelope["assistant_reply"] {
+            let trimmed = assistantReplyText.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }
+
+        return nil
     }
 
     private func extractAssistantText(fromJSONValue value: Any) -> String? {
