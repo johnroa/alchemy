@@ -5914,8 +5914,11 @@ const orchestrateChatTurn = async (params: {
 
   const intent = getChatIntentFromResponse(assistantChatResponse);
   const isOutOfScope = intent === "out_of_scope";
+  const explicitGenerationIntent = intent === "in_scope_generate" ||
+    assistantChatResponse.trigger_recipe === true ||
+    assistantChatResponse.response_context?.mode === "generation";
 
-  if (!params.existingCandidate && !isOutOfScope) {
+  if (!params.existingCandidate && !isOutOfScope && explicitGenerationIntent) {
     if (
       !assistantChatResponse.candidate_recipe_set &&
       !assistantChatResponse.recipe

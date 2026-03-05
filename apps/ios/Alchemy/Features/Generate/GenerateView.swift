@@ -373,7 +373,6 @@ struct GenerateView: View {
 
                     if vm.isSendingMessage && vm.presentationMode != .iterating {
                         thinkingShell
-                            .padding(.horizontal, Spacing.md)
                             .id("thinking")
                     }
 
@@ -395,6 +394,7 @@ struct GenerateView: View {
                     }
                 )
                 .padding(.bottom, messageListBottomInset)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .background(
                 GeometryReader { geo in
@@ -528,15 +528,18 @@ struct GenerateView: View {
         let isUser = message.role == "user"
         return Group {
             if isUser {
-                VStack(alignment: .trailing, spacing: 4) {
-                    userBubbleLabel(message.content)
-                        .frame(maxWidth: userBubbleMaxWidth, alignment: .leading)
-                        .frame(maxWidth: .infinity, alignment: .trailing)
+                HStack(spacing: 0) {
+                    Spacer(minLength: 0)
+                    VStack(alignment: .trailing, spacing: 4) {
+                        userBubbleLabel(message.content)
+                            .frame(maxWidth: userBubbleMaxWidth, alignment: .leading)
 
-                    Text(message.timestamp, style: .time)
-                        .font(AlchemyFont.chatTimestamp)
-                        .foregroundStyle(AlchemyColors.textTertiary)
-                        .frame(maxWidth: .infinity, alignment: .trailing)
+                        Text(message.timestamp, style: .time)
+                            .font(AlchemyFont.chatTimestamp)
+                            .foregroundStyle(AlchemyColors.textTertiary)
+                            .frame(maxWidth: userBubbleMaxWidth, alignment: .trailing)
+                    }
+                    .frame(maxWidth: userBubbleMaxWidth, alignment: .trailing)
                 }
                 .frame(maxWidth: .infinity, alignment: .trailing)
                 .padding(.horizontal, Spacing.md)
@@ -598,7 +601,8 @@ struct GenerateView: View {
         HStack(spacing: Spacing.sm) {
             LottieView(animation: .named("alchemy-loading"))
                 .playbackMode(.playing(.toProgress(1, loopMode: .loop)))
-                .frame(width: 42, height: 42)
+                .frame(width: 72, height: 72)
+                .scaleEffect(1.1)
             Text(vm.typingDescriptor)
                 .font(AlchemyFont.chatBody)
                 .foregroundStyle(AlchemyColors.textPrimary.opacity(0.98))

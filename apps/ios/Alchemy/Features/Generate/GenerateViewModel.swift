@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 
 enum GenerateLoopUIState: Equatable {
@@ -642,6 +643,9 @@ final class GenerateViewModel {
 
         let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty {
+            if let extracted = extractAssistantTextFromJSONString(trimmed) {
+                return extracted
+            }
             return trimmed
         }
 
@@ -651,6 +655,20 @@ final class GenerateViewModel {
         }
 
         return ""
+    }
+
+    private func extractAssistantTextFromJSONString(_ value: String) -> String? {
+        let candidates = extractJSONCandidates(from: value)
+        for candidate in candidates {
+            guard let data = candidate.data(using: .utf8) else { continue }
+            guard let json = try? JSONSerialization.jsonObject(with: data) else { continue }
+            if let extracted = extractAssistantText(fromJSONValue: json)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+               !extracted.isEmpty {
+                return extracted
+            }
+        }
+        return nil
     }
 
     private func extractJSONCandidates(from value: String) -> [String] {

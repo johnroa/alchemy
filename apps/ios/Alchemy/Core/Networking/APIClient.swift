@@ -35,6 +35,7 @@ final class APIClient {
 
         var urlRequest = URLRequest(url: url)
         urlRequest.httpMethod = method
+        urlRequest.timeoutInterval = 90
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
         // Inject bearer token
