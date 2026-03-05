@@ -4,9 +4,10 @@
 -- and gracefully handles failures.
 
 -- Route: use gpt-4.1-mini for speed and cost (greeting is a trivial task).
-insert into public.llm_model_routes (scope, provider, model, config, is_active)
+insert into public.llm_model_routes (scope, route_name, provider, model, config, is_active)
 values (
   'chat_greeting',
+  'openai_gpt-4.1-mini',
   'openai',
   'gpt-4.1-mini',
   '{"temperature": 0.9, "max_output_tokens": 128, "timeout_ms": 5000}'::jsonb,
@@ -14,6 +15,7 @@ values (
 )
 on conflict (scope) where is_active = true
 do update set
+  route_name = excluded.route_name,
   provider = excluded.provider,
   model = excluded.model,
   config = excluded.config;
