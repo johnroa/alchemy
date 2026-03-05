@@ -2,6 +2,49 @@
 
 ## [Unreleased] — 2026-03-05
 
+### Semantic Graph + Metadata Pipeline Refactor (LLM-first)
+
+- Added ingredient-line decomposition stage using `ingredient_line_parse` scope:
+  - `recipe_ingredient_mentions` persistence (mention role + alternative groups)
+  - `recipe_ingredient_ontology_links` persistence (qualifier ontology links)
+- Reworked canonical ingredient resolution flow to:
+  - split compound lines into mentions
+  - support alternatives (`alternative_group_key`)
+  - persist only confidence-gated (`>= 0.85`) enrichment artifacts
+- Expanded graph relationship wiring:
+  - recipe→ingredient: `primary_ingredient`, `optional_ingredient`, `alternative_ingredient`
+  - ingredient↔ingredient: `alternative_to` edges from alternative groups
+  - recipe↔recipe: attachment-derived directional relations (`is_side_of`, `is_appetizer_of`, `is_dessert_of`, `is_drink_of`, `pairs_with`)
+- Added metadata recompute targeting endpoint:
+  - `POST /v1/metadata-jobs/recompute-scope`
+  - supports `recipe_ids`, `recipe_version_ids`, `leaked_only`, `current_versions_only`, `limit`
+
+### Consistency and Guardrails
+
+- Replaced heuristic diet-compatibility patching with table-driven semantic rules:
+  - new `semantic_diet_incompatibility_rules` table
+  - new compatibility module + tests:
+    - `supabase/functions/v1/semantic-diet-compatibility.ts`
+    - `supabase/functions/v1/semantic-diet-compatibility.test.ts`
+- Removed legacy keyword heuristics:
+  - deleted `ingredient-enrichment-guards.ts` and tests
+- Tightened semantic scope behavior:
+  - alias/line/enrichment inference paths no longer merge deterministic fallback outputs
+  - missing confidence now resolves to `0` (dropped by confidence gate), not optimistic defaults
+
+### Development Reset Console
+
+- Added migration-backed reset framework:
+  - `development_operation_runs`
+  - `admin_dev_food_data_preview(...)`
+  - `admin_dev_food_data_wipe(...)`
+- Added admin endpoints:
+  - `POST /api/admin/development/reset/preview`
+  - `POST /api/admin/development/reset/execute`
+  - `GET /api/admin/development/runs`
+- Added Admin UI page:
+  - `/development` with preset selection, dry-run preview, typed confirmation, execute, and run audit table
+
 ### Admin API Helper (`scripts/admin-api.sh`)
 
 New CLI tool for managing LLM config and running ad-hoc queries against the Supabase Management API. Auto-resolves the Supabase CLI token from macOS keychain.

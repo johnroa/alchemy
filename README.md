@@ -190,6 +190,7 @@ Next.js 15 App Router. All pages under `app/(admin)/`:
 | `/memory` | User memory snapshots + confidence/salience quality signals |
 | `/image-pipeline` | Image job queue with retry controls |
 | `/simulations` | Seeded simulation runner — single or concurrent A/B with full trace, latency segments, and token deltas |
+| `/development` | Destructive development reset console (dry-run preview + typed confirmation + run audit trail) |
 | `/request-trace` | Gateway event log — clickable rows, payload details, error highlighting |
 | `/changelog` | Changelog event audit with action/scope distribution charts |
 | `/ingredients` | Canonical ingredient registry with semantic food icons, enrichment metadata, and ontology links |
@@ -220,6 +221,7 @@ No direct provider calls are allowed outside adapters.
 | `classify` | Async audit + normalization utilities | Used for non-blocking telemetry/helpers; not a blocking gate in the core chat loop. |
 | `ingredient_alias_normalize` | Canonical ingredient identity stage | Normalizes alias keys to canonical ingredient names. |
 | `ingredient_phrase_split` | Canonical ingredient identity stage | Splits compound ingredient phrases into atomic items. |
+| `ingredient_line_parse` | Canonical ingredient identity stage | Parses source ingredient lines into mentions + qualifiers + alternative groups. |
 | `ingredient_enrich` | Metadata pipeline | Enriches ingredient metadata and ontology terms. |
 | `recipe_metadata_enrich` | Metadata pipeline | Enriches recipe-level tags/metadata. |
 | `ingredient_relation_infer` | Metadata pipeline | Infers ingredient graph relations. |
@@ -237,6 +239,22 @@ No direct provider calls are allowed outside adapters.
 - `llm_model_routes` — scope → provider + model mapping (one active per scope)
 - `llm_prompts` — scope + version → system prompt template (one active per scope)
 - `llm_rules` — scope + version → policy rule JSON (one active per scope)
+
+### Development Reset Operations
+
+Development-only destructive resets are executed from Admin UI at `/development` and are backed by migration-defined RPCs:
+
+- `admin_dev_food_data_preview(preset text)` — read-only row impact preview
+- `admin_dev_food_data_wipe(preset text, confirm_text text, reason text, actor_email text)` — single-transaction wipe + audit logs
+
+Presets:
+
+- `recipes_domain_reset`
+- `ingredients_ontology_reset`
+- `graph_reset`
+- `full_food_reset`
+
+Each run is recorded in `development_operation_runs` and logged to `changelog_events`.
 
 ### Changing a model (no migration needed)
 
@@ -367,6 +385,11 @@ The migration chain is out of order relative to remote history. Fix by:
 | `0027_generate_scope_deconstraint_v104` | Generate-scope hardening: remove residual shrink/budget constraints |
 | `0028_chat_ideation_direct_generation_v105` | Chat ideation update: explicit dish/recipe requests move directly to generation |
 | `0029_chat_loop_route_provider_stability_v106` | Pin active core routes to structured-output-capable models for JSON reliability |
+| `0030_chat_greeting_scope_seed` | Add dedicated chat greeting scope seed rows for scoped first-turn behavior |
+| `0031_development_ops_and_line_model` | Add development reset RPCs + operation audit table + ingredient mention decomposition model |
+| `0032_ingredient_line_parse_scope_v2` | Seed and activate `ingredient_line_parse` LLM scope for mention/qualifier parsing |
+| `0033_graph_relation_and_index_hardening` | Add expanded relation seeds and traversal/performance indexes for semantic graph reads |
+| `0034_semantic_constraints_and_consistency_tables` | Add semantic incompatibility rules and confidence/consistency guardrail tables |
 
 ---
 

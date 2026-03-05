@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Alchemy API
-  version: 1.2.0
+  version: 1.3.0
   description: |
     API contract for Alchemy — an AI-driven recipe creation and management platform.
     Covers the user-facing v1 API at api.cookwithalchemy.com and the admin API at admin.cookwithalchemy.com.
@@ -635,6 +635,58 @@ paths:
                   recipe_version_id:
                     type: string
                     format: uuid
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /metadata-jobs/recompute-scope:
+    post:
+      summary: Recompute metadata for a targeted scope (internal authenticated scope)
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                recipe_ids:
+                  type: array
+                  items:
+                    type: string
+                    format: uuid
+                recipe_version_ids:
+                  type: array
+                  items:
+                    type: string
+                    format: uuid
+                leaked_only:
+                  type: boolean
+                  description: Limit scope to leaked rows (`needs_retry` + `ingredient_id IS NOT NULL`).
+                current_versions_only:
+                  type: boolean
+                  description: Restrict scope to current recipe versions.
+                limit:
+                  type: integer
+                  minimum: 1
+                  maximum: 500
+      responses:
+        '200':
+          description: Recompute-scope enqueue status
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, enqueued, recipe_version_ids]
+                properties:
+                  ok:
+                    type: boolean
+                  enqueued:
+                    type: integer
+                  recipe_version_ids:
+                    type: array
+                    items:
+                      type: string
+                      format: uuid
+                  note:
+                    type: string
         default:
           $ref: '#/components/responses/ErrorResponse'
   /memory-jobs/process:

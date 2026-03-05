@@ -5,6 +5,9 @@
  */
 export const ADMIN_ROUTES: Array<{ path: string; method: string }> = [
   { path: "/api/admin/changelog", method: "POST" },
+  { path: "/api/admin/development/reset/execute", method: "POST" },
+  { path: "/api/admin/development/reset/preview", method: "POST" },
+  { path: "/api/admin/development/runs", method: "GET" },
   { path: "/api/admin/image/jobs", method: "GET" },
   { path: "/api/admin/image/jobs", method: "POST" },
   { path: "/api/admin/image/jobs/process", method: "POST" },

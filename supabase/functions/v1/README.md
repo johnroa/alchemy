@@ -36,6 +36,9 @@ Edge function implementing `/v1/*` routes.
 - `POST /v1/image-jobs/process`
 - `POST /v1/metadata-jobs/process`
 - `POST /v1/metadata-jobs/retry`
+- `POST /v1/metadata-jobs/recompute`
+- `POST /v1/metadata-jobs/recompute-scope`
+- `GET /v1/ingredients/{id}/graph`
 
 ## Adaptive LLM controls
 
@@ -57,6 +60,7 @@ Edge function implementing `/v1/*` routes.
 - Metadata/normalization helper scopes are configured via:
   - `ingredient_alias_normalize`
   - `ingredient_phrase_split`
+  - `ingredient_line_parse`
   - `ingredient_enrich`
   - `recipe_metadata_enrich`
   - `ingredient_relation_infer`

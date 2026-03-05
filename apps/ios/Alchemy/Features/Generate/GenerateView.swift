@@ -7,7 +7,7 @@ struct GenerateView: View {
     @EnvironmentObject private var keyboard: KeyboardMonitor
     @Bindable var vm: GenerateViewModel
 
-    @FocusState private var isInputFocused: Bool
+    @State private var isInputFocused: Bool = false
     @State private var showResetConfirmation = false
     @State private var isCandidateChatExpanded = false
     @State private var messageContentHeight: CGFloat = 0
@@ -19,6 +19,7 @@ struct GenerateView: View {
     @State private var chatPanelDragStart: CGFloat = 0
     /// Whether a drag is in progress (used to capture start position once).
     @State private var chatPanelIsDragging = false
+
 
     var onProfileTap: () -> Void = {}
     var onComposerFocusChange: (Bool) -> Void = { _ in }
@@ -91,49 +92,46 @@ struct GenerateView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            ZStack {
-                AlchemyColors.deepDark.ignoresSafeArea()
-                ambientGradientBackdrop
+        ZStack {
+            AlchemyColors.deepDark.ignoresSafeArea()
+            ambientGradientBackdrop
 
-                recipeBackdrop
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            recipeBackdrop
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                if vm.hasCandidate && vm.presentationMode != .generationMinimized {
-                    VStack(spacing: Spacing.sm2) {
-                        candidateTabs
-                        candidateActions
-                    }
-                    .padding(.horizontal, Spacing.md)
-                    .padding(.top, Spacing.sm2)
+            if vm.hasCandidate && vm.presentationMode != .generationMinimized {
+                VStack(spacing: Spacing.sm2) {
+                    candidateTabs
+                    candidateActions
+                }
+                .padding(.horizontal, Spacing.md)
+                .padding(.top, Spacing.sm2)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            }
+
+            if showsChatPanel {
+                chatPanel
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                }
+                    .padding(.horizontal, Spacing.xs)
+                    .ignoresSafeArea(.container, edges: .bottom)
+                    .zIndex(5)
+            }
 
-                if showsChatPanel {
-                    chatPanel
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                        .padding(.horizontal, Spacing.xs)
-                        .ignoresSafeArea(.container, edges: .bottom)
-                        .zIndex(5)
-                }
-
-                if vm.presentationMode == .generationMinimized {
-                    generationMinimizedCenter
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-                        .transition(.opacity)
-                }
+            if vm.presentationMode == .generationMinimized {
+                generationMinimizedCenter
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                    .transition(.opacity)
             }
-            .toolbar(.hidden, for: .navigationBar)
-            .safeAreaInset(edge: .top, spacing: 0) {
-                generateHeader
-            }
-            .overlay(alignment: .bottom) {
-                bottomDock
-                    .padding(.bottom, bottomDockFloatingInset)
-                    .padding(.horizontal, Spacing.md)
-                    .padding(.top, Spacing.xs)
-                    .zIndex(15)
-            }
+        }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            generateHeader
+        }
+        .overlay(alignment: .bottom) {
+            bottomDock
+                .padding(.bottom, bottomDockFloatingInset)
+                .padding(.horizontal, Spacing.md)
+                .padding(.top, Spacing.xs)
+                .zIndex(15)
         }
         .ignoresSafeArea(.keyboard)
         .confirmationDialog(
@@ -812,25 +810,20 @@ struct GenerateView: View {
         let sendDisabled = vm.isSendingMessage || vm.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
 
         return ZStack(alignment: .trailing) {
-            TextField(
-                "",
+            ComposerTextView(
                 text: $vm.input,
-                prompt: Text("I want some ideas for dinner tonight")
-                    .foregroundStyle(Color.white.opacity(0.56)),
-                axis: .vertical
+                isFocused: $isInputFocused,
+                placeholder: "I want some ideas for dinner tonight",
+                font: UIFont.systemFont(ofSize: 16),
+                textColor: UIColor.white,
+                tintColor: UIColor(AlchemyColors.gold),
+                placeholderColor: UIColor.white.withAlphaComponent(0.56),
+                maxLines: 6
             )
-            .font(AlchemyFont.body)
-            .foregroundStyle(AlchemyColors.textPrimary)
-            .tint(AlchemyColors.gold)
-            .lineLimit(1...6)
-            .focused($isInputFocused)
-            .onTapGesture {
-                onComposerFocusChange(true)
-            }
             .padding(.leading, Spacing.md)
             .padding(.trailing, 44)
             .padding(.vertical, 11)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity, minHeight: 22, alignment: .leading)
 
             Button {
                 Task { await vm.sendMessage(api: api) }

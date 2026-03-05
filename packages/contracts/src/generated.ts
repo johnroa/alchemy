@@ -972,6 +972,60 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/metadata-jobs/recompute-scope": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Recompute metadata for a targeted scope (internal authenticated scope) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        recipe_ids?: string[];
+                        recipe_version_ids?: string[];
+                        /** @description Limit scope to leaked rows (`needs_retry` + `ingredient_id IS NOT NULL`). */
+                        leaked_only?: boolean;
+                        /** @description Restrict scope to current recipe versions. */
+                        current_versions_only?: boolean;
+                        limit?: number;
+                    };
+                };
+            };
+            responses: {
+                /** @description Recompute-scope enqueue status */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            ok: boolean;
+                            enqueued: number;
+                            recipe_version_ids: string[];
+                            note?: string;
+                        };
+                    };
+                };
+                default: components["responses"]["ErrorResponse"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/memory-jobs/process": {
         parameters: {
             query?: never;

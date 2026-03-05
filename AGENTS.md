@@ -110,3 +110,16 @@ CLI tool for LLM config management and database queries. Auto-resolves Supabase 
 ```
 
 Use this for all LLM prompt/rule/route operations instead of raw curl.
+
+## Development Reset Workflow (Required)
+
+- Destructive food-domain resets must run through Admin API routes only:
+  - `POST /api/admin/development/reset/preview`
+  - `POST /api/admin/development/reset/execute`
+  - `GET /api/admin/development/runs`
+- Reset operations are backed by migration-defined RPCs:
+  - `admin_dev_food_data_preview(...)`
+  - `admin_dev_food_data_wipe(...)`
+- Never run ad-hoc destructive SQL in production workflows.
+- Always run a dry-run preview before execute.
+- Execute requires exact confirmation text: `WIPE <PRESET UPPERCASE WITH SPACES>`.

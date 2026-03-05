@@ -19,6 +19,7 @@ import {
   ScrollText,
   ShieldAlert,
   Sparkles,
+  Wrench,
   Users
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -30,7 +31,8 @@ const navGroups = [
       { href: "/dashboard", label: "Dashboard", icon: Home },
       { href: "/users", label: "Users", icon: Users },
       { href: "/moderation", label: "Moderation", icon: ShieldAlert },
-      { href: "/simulations", label: "Simulations", icon: Activity }
+      { href: "/simulations", label: "Simulations", icon: Activity },
+      { href: "/development", label: "Development", icon: Wrench }
     ]
   },
   {
