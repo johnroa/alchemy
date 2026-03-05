@@ -45,17 +45,21 @@ struct GenerateView: View {
         }
     }
 
-    private var chatPanelTopInset: CGFloat {
-        Spacing.xxl + Spacing.sm
+    private var chatPanelTopInset: CGFloat { Spacing.xxxl + Spacing.xl + Spacing.md }
+
+    private var bottomDockFloatingInset: CGFloat {
+        keyboard.isVisible ? Spacing.xl : (Sizing.tabBarHeight + Spacing.xxxl)
     }
 
-    private var keyboardActive: Bool {
-        isInputFocused || keyboard.isVisible
-    }
-
-    private var bottomDockReservedHeight: CGFloat {
-        let navSpace: CGFloat = keyboardActive ? 0 : (Sizing.tabBarHeight + 36)
-        return composerHeight + navSpace + Spacing.sm
+    private var messageListBottomInset: CGFloat {
+        let dockHeight = composerHeight + Spacing.md +
+            (vm.presentationMode == .iterating ? (44 + Spacing.sm2) : 0)
+        switch vm.presentationMode {
+        case .generationMinimized:
+            return Sizing.tabBarHeight + Spacing.xl
+        case .ideationExpanded, .candidatePresented, .iterating:
+            return dockHeight + bottomDockFloatingInset + Spacing.lg
+        }
     }
 
     private var userBubbleMaxWidth: CGFloat {
@@ -66,6 +70,7 @@ struct GenerateView: View {
         NavigationStack {
             ZStack {
                 AlchemyColors.deepDark.ignoresSafeArea()
+                ambientGradientBackdrop
 
                 recipeBackdrop
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -84,7 +89,7 @@ struct GenerateView: View {
                     chatPanel
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                         .padding(.horizontal, Spacing.xs)
-                        .padding(.top, chatPanelTopInset)
+                        .ignoresSafeArea(.container, edges: .bottom)
                         .zIndex(5)
                 }
 
@@ -93,15 +98,17 @@ struct GenerateView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
                         .transition(.opacity)
                 }
+
             }
             .toolbar(.hidden, for: .navigationBar)
             .safeAreaInset(edge: .top, spacing: 0) {
                 generateHeader
             }
-            .safeAreaInset(edge: .bottom, spacing: 0) {
+            .overlay(alignment: .bottom) {
                 bottomDock
-                    .padding(.bottom, keyboardActive ? Spacing.xs : (Sizing.tabBarHeight + 30))
-                    .padding(.top, Spacing.sm2)
+                    .padding(.bottom, bottomDockFloatingInset)
+                    .background(Color.clear)
+                    .zIndex(15)
             }
         }
         .confirmationDialog(
@@ -186,6 +193,14 @@ struct GenerateView: View {
     }
 
     // MARK: - Background Content
+
+    private var ambientGradientBackdrop: some View {
+        Rectangle()
+            .fill(Color.clear)
+            .chatLiquidPanelBackground(Rectangle())
+            .opacity(0.42)
+            .ignoresSafeArea()
+    }
 
     @ViewBuilder
     private var recipeBackdrop: some View {
@@ -304,28 +319,45 @@ struct GenerateView: View {
     // MARK: - Chat Panel
 
     private var chatPanel: some View {
-        messageTimeline
-            .frame(
-                maxWidth: .infinity,
-                maxHeight: vm.presentationMode == .ideationExpanded ? .infinity : 260,
-                alignment: .top
-            )
-            .padding(.top, vm.presentationMode == .ideationExpanded ? Spacing.lg : Spacing.md)
-        .chatLiquidPanelBackground(
-            UnevenRoundedRectangle(
-                topLeadingRadius: 18,
-                bottomLeadingRadius: 0,
-                bottomTrailingRadius: 0,
-                topTrailingRadius: 18
-            )
+        let panelShape = UnevenRoundedRectangle(
+            topLeadingRadius: 16,
+            bottomLeadingRadius: 0,
+            bottomTrailingRadius: 0,
+            topTrailingRadius: 16
         )
+
+        return GeometryReader { proxy in
+            let panelHeight = max(0, proxy.size.height - chatPanelTopInset)
+            let timelineHeight = vm.presentationMode == .ideationExpanded
+                ? panelHeight
+                : min(260, panelHeight)
+
+            ZStack(alignment: .bottom) {
+                panelShape
+                    .fill(Color.clear)
+                    .chatLiquidPanelBackground(panelShape)
+                    .frame(width: proxy.size.width, height: panelHeight)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+
+                messageTimeline
+                    .frame(
+                        maxWidth: .infinity,
+                        maxHeight: timelineHeight,
+                        alignment: .top
+                    )
+                    .padding(.top, vm.presentationMode == .ideationExpanded ? Spacing.lg : Spacing.md)
+                    .frame(maxWidth: .infinity, maxHeight: panelHeight, alignment: .top)
+            }
+            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .bottom)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 
     private var messageTimeline: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(spacing: Spacing.sm2) {
+                LazyVStack(alignment: .leading, spacing: Spacing.sm2) {
                     if vm.messages.isEmpty {
                         introMessage
                     }
@@ -339,7 +371,7 @@ struct GenerateView: View {
                         suggestionChips
                     }
 
-                    if vm.isSendingMessage {
+                    if vm.isSendingMessage && vm.presentationMode != .iterating {
                         thinkingShell
                             .padding(.horizontal, Spacing.md)
                             .id("thinking")
@@ -359,10 +391,10 @@ struct GenerateView: View {
                             .preference(
                                 key: GenerateMessageContentHeightKey.self,
                                 value: geo.size.height
-                            )
+                        )
                     }
                 )
-                .padding(.bottom, bottomDockReservedHeight)
+                .padding(.bottom, messageListBottomInset)
             }
             .background(
                 GeometryReader { geo in
@@ -425,7 +457,7 @@ struct GenerateView: View {
     }
 
     private var bottomDock: some View {
-        VStack(spacing: vm.presentationMode == .iterating ? Spacing.sm : Spacing.md) {
+        VStack(spacing: vm.presentationMode == .iterating ? Spacing.sm2 : Spacing.lg2) {
             switch vm.presentationMode {
             case .generationMinimized:
                 compactGenerationStatus
@@ -497,22 +529,14 @@ struct GenerateView: View {
         return Group {
             if isUser {
                 VStack(alignment: .trailing, spacing: 4) {
-                    Text(message.content)
-                        .font(AlchemyFont.chatBody)
-                        .foregroundStyle(AlchemyColors.textPrimary)
-                        .padding(.horizontal, Spacing.md)
-                        .padding(.vertical, Spacing.sm2)
+                    userBubbleLabel(message.content)
                         .frame(maxWidth: userBubbleMaxWidth, alignment: .leading)
-                        .chatLiquidSurface(
-                            role: .userBubble,
-                            focused: false,
-                            cornerRadius: Radius.lg
-                        )
+                        .frame(maxWidth: .infinity, alignment: .trailing)
 
                     Text(message.timestamp, style: .time)
                         .font(AlchemyFont.chatTimestamp)
                         .foregroundStyle(AlchemyColors.textTertiary)
-                        .padding(.trailing, Spacing.sm)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
                 }
                 .frame(maxWidth: .infinity, alignment: .trailing)
                 .padding(.horizontal, Spacing.md)
@@ -531,6 +555,22 @@ struct GenerateView: View {
                 .padding(.horizontal, Spacing.lg)
             }
         }
+    }
+
+    private func userBubbleLabel(_ text: String) -> some View {
+        Text(text)
+            .font(AlchemyFont.chatBody)
+            .foregroundStyle(AlchemyColors.textPrimary)
+            .multilineTextAlignment(.leading)
+            .lineLimit(nil)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, Spacing.md)
+            .padding(.vertical, Spacing.sm2)
+            .chatLiquidSurface(
+                role: .userBubble,
+                focused: false,
+                cornerRadius: Radius.lg
+            )
     }
 
     private var suggestionChips: some View {
@@ -610,15 +650,15 @@ struct GenerateView: View {
                 onComposerFocusChange(true)
             }
             .padding(.leading, Spacing.md)
-            .padding(.trailing, 46)
-            .padding(.vertical, 10)
+            .padding(.trailing, 44)
+            .padding(.vertical, 11)
             .frame(maxWidth: .infinity, alignment: .leading)
 
             Button {
                 Task { await vm.sendMessage(api: api) }
             } label: {
                 Image(systemName: "paperplane.fill")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(
                         LinearGradient(
                             colors: [
@@ -629,13 +669,14 @@ struct GenerateView: View {
                             endPoint: .bottom
                         )
                     )
-                    .frame(width: 20, height: 20)
+                    .frame(width: 14, height: 14)
+                    .frame(width: 26, height: 26, alignment: .center)
             }
             .disabled(sendDisabled)
             .opacity(sendDisabled ? 0.5 : 1)
-            .padding(.trailing, 14)
+            .padding(.trailing, 13)
         }
-        .frame(minHeight: 48, alignment: .center)
+        .frame(minHeight: 46, alignment: .center)
         .chatLiquidSurface(role: .composer, focused: isInputFocused, cornerRadius: Radius.xl)
         .background(
             GeometryReader { geo in
