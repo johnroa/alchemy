@@ -49,7 +49,13 @@ from (
     ('preference_normalize', 'preference_normalize_default'),
     ('equipment_filter', 'equipment_filter_default')
 ) as ts(scope, route_name)
-left join active_classify_route ar on true
+left join lateral (
+  select provider, model, config
+  from public.llm_model_routes
+  where scope = 'classify' and is_active = true
+  order by created_at desc
+  limit 1
+) ar on true
 on conflict (scope, route_name) do update
 set provider = excluded.provider,
     model = excluded.model,
