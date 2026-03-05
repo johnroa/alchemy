@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import {
   Activity,
   BarChart3,
+  BookOpen,
   Bot,
   Carrot,
   Database,
@@ -58,12 +59,13 @@ const navGroups = [
     items: [
       { href: "/changelog", label: "Changelog", icon: History },
       { href: "/request-trace", label: "Request Trace", icon: Radar },
-      { href: "/version-causality", label: "Version Causality", icon: FolderGit2 }
+      { href: "/version-causality", label: "Version Causality", icon: FolderGit2 },
+      { href: "/api-docs", label: "API Reference", icon: BookOpen }
     ]
   }
 ];
 
-export function SideNav(): React.JSX.Element {
+export function SideNav({ onNavigate }: { onNavigate?: () => void } = {}): React.JSX.Element {
   const pathname = usePathname();
 
   return (
@@ -82,6 +84,7 @@ export function SideNav(): React.JSX.Element {
                 <Link
                   key={item.href}
                   href={item.href}
+                  {...(onNavigate ? { onClick: onNavigate } : {})}
                   className={cn(
                     "flex items-center gap-2.5 rounded-md px-3 py-2 text-sm font-medium transition-colors",
                     active

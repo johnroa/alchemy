@@ -195,6 +195,7 @@ Next.js 15 App Router. All pages under `app/(admin)/`:
 | `/ingredients` | Canonical ingredient registry with semantic food icons, enrichment metadata, and ontology links |
 | `/graph` | Entity relationship graph — force-directed canvas with type filters, fullscreen, and confidence-ranked edges |
 | `/version-causality` | Recipe version causality chains |
+| `/api-docs` | Auto-generated API reference from OpenAPI spec + admin route discovery |
 
 ---
 
@@ -520,6 +521,32 @@ End-to-end API simulation covering the full chat-driven candidate loop:
 API_URL=https://api.cookwithalchemy.com/v1 \
 API_BEARER_TOKEN=<jwt> \
 pnpm simulate:api
+```
+
+---
+
+## Admin API Helper
+
+`scripts/admin-api.sh` — streamlined CLI for managing LLM config and running queries against the Supabase Management API. Auto-resolves the Supabase CLI token from macOS keychain.
+
+```bash
+# SQL queries
+./scripts/admin-api.sh sql "SELECT * FROM llm_prompts WHERE is_active = true"
+./scripts/admin-api.sh sql-file /path/to/query.sql
+
+# Prompt management (versioned, append-only)
+./scripts/admin-api.sh prompt-list [scope]                       # List all (>>> = active)
+./scripts/admin-api.sh prompt-create <scope> <ver> <name> <file> # Create & activate from file
+./scripts/admin-api.sh prompt-activate <scope> <version>         # Activate existing version
+
+# Rule management
+./scripts/admin-api.sh rule-list [scope]
+./scripts/admin-api.sh rule-create <scope> <ver> <name> <file>
+
+# Routes and auth
+./scripts/admin-api.sh route-list        # Active model routes per scope
+./scripts/admin-api.sh service-key       # Print service role key
+./scripts/admin-api.sh sim-token         # Get sim user access token for API testing
 ```
 
 ---

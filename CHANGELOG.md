@@ -2,6 +2,46 @@
 
 ## [Unreleased] — 2026-03-05
 
+### Admin API Helper (`scripts/admin-api.sh`)
+
+New CLI tool for managing LLM config and running ad-hoc queries against the Supabase Management API. Auto-resolves the Supabase CLI token from macOS keychain.
+
+- `sql` / `sql-file` — run SQL queries directly
+- `prompt-list` / `prompt-create` / `prompt-activate` — versioned prompt management
+- `rule-list` / `rule-create` — versioned rule management
+- `route-list` — inspect active model routes per scope
+- `service-key` / `sim-token` — auth token helpers for testing
+
+### Admin Console — API Reference Page (`/api-docs`)
+
+New auto-generated API reference page powered directly from the OpenAPI spec (`packages/contracts/openapi.json`). Admin routes are discovered by scanning the filesystem at render time.
+
+- Two tabs: Main API (from OpenAPI spec) and Admin API (from route handler discovery)
+- Grouped by tag/path prefix with method badges, search, expandable request/response details
+- Schema preview with `$ref` resolution
+- Auto-updates on OpenAPI spec changes — no manual sync needed
+- `yaml-to-json.mjs` script added to `packages/contracts/` for spec conversion
+
+### LLM Gateway — Prompt & Parsing Overhaul
+
+Fixed Haiku generation failures (`chat_schema_invalid`) and reduced latency by ~50%.
+
+#### Root cause fixes
+- Removed contradictory `runtimeConstraints` in `llm-gateway.ts` — "Do not enforce artificial ingredient, step, or token budgets" and "Prefer complete and practical recipe outputs over compressed outlines" were appended after the prompt template, causing Haiku to ignore conciseness constraints and produce invalid output
+- Kept only essential runtime constraints: strict JSON, no markdown, match contract schema
+
+#### Prompt versions (via versioning system, not code changes)
+- `chat_ideation` v108 — inline recipe generation when `trigger_recipe=true`, eliminating the second LLM call; concrete JSON shape examples; 1 component default
+- `chat_generation` v110 — simplified with explicit JSON shape, 1 component default
+- `chat_iteration` v107 — simplified, matching format
+
+#### Context slimming (`index.ts`)
+- Removed `memory_snapshot` from both ideation and generation contexts (redundant with `selected_memories`)
+- Removed `ideation_response` from generation context (redundant with user message)
+
+#### Route config
+- Set `max_tokens: 4096` for `chat_generation`, `chat_iteration`, `chat_ideation`, `chat` routes (down from default 8096)
+
 ### Admin Console — Semantic Ingredient Icons
 
 Ingredient icons across admin pages now resolve to food-specific SVG icons based on canonical name, normalized key, and enrichment metadata.

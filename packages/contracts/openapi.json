@@ -1,0 +1,3648 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Alchemy API",
+    "version": "1.2.0",
+    "description": "API contract for Alchemy — an AI-driven recipe creation and management platform.\nCovers the user-facing v1 API at api.cookwithalchemy.com and the admin API at admin.cookwithalchemy.com.\n"
+  },
+  "servers": [
+    {
+      "url": "https://api.cookwithalchemy.com/v1"
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "paths": {
+    "/healthz": {
+      "get": {
+        "summary": "Health check",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Service health",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "status",
+                    "service",
+                    "timestamp",
+                    "request_id"
+                  ],
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "ok"
+                      ]
+                    },
+                    "service": {
+                      "type": "string"
+                    },
+                    "timestamp": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/recipes/{id}": {
+      "get": {
+        "summary": "Get a recipe by id",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RecipeId"
+          },
+          {
+            "in": "query",
+            "name": "units",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "source",
+                "metric",
+                "imperial"
+              ]
+            },
+            "description": "Response projection for ingredient and inline measurement units."
+          },
+          {
+            "in": "query",
+            "name": "group_by",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "flat",
+                "category",
+                "component"
+              ]
+            },
+            "description": "Optional ingredient grouping strategy for response rendering."
+          },
+          {
+            "in": "query",
+            "name": "inline_measurements",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            },
+            "description": "Whether to append inline measurements directly inside step instructions."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Recipe",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Recipe"
+                },
+                "examples": {
+                  "sourceFlat": {
+                    "summary": "Source units with flat ingredient list",
+                    "value": {
+                      "id": "0b123456-1111-2222-3333-444455556666",
+                      "title": "Weeknight Pasta",
+                      "servings": 4,
+                      "ingredients": [
+                        {
+                          "name": "Spaghetti",
+                          "amount": 12,
+                          "unit": "oz",
+                          "ingredient_id": "11111111-2222-3333-4444-555555555555",
+                          "normalized_status": "normalized"
+                        },
+                        {
+                          "name": "Olive Oil",
+                          "amount": 2,
+                          "unit": "tbsp",
+                          "ingredient_id": "aaaa1111-2222-3333-4444-555555555555",
+                          "normalized_status": "normalized",
+                          "category": "Pantry",
+                          "component": "Sauce"
+                        }
+                      ],
+                      "steps": [
+                        {
+                          "index": 1,
+                          "instruction": "Boil the pasta."
+                        }
+                      ],
+                      "visibility": "public",
+                      "updated_at": "2026-03-03T12:00:00.000Z"
+                    }
+                  },
+                  "metricComponentGrouped": {
+                    "summary": "Metric units with component grouping and inline measurements",
+                    "value": {
+                      "id": "0b123456-1111-2222-3333-444455556666",
+                      "title": "Weeknight Pasta",
+                      "servings": 4,
+                      "ingredients": [
+                        {
+                          "name": "Spaghetti",
+                          "amount": 340,
+                          "unit": "g",
+                          "ingredient_id": "11111111-2222-3333-4444-555555555555",
+                          "normalized_status": "normalized",
+                          "component": "Pasta"
+                        },
+                        {
+                          "name": "Tomato",
+                          "amount": 400,
+                          "unit": "g",
+                          "ingredient_id": "bbbb1111-2222-3333-4444-555555555555",
+                          "normalized_status": "normalized",
+                          "component": "Sauce"
+                        }
+                      ],
+                      "ingredient_groups": [
+                        {
+                          "key": "pasta",
+                          "label": "Pasta",
+                          "ingredients": [
+                            {
+                              "name": "Spaghetti",
+                              "amount": 340,
+                              "unit": "g",
+                              "ingredient_id": "11111111-2222-3333-4444-555555555555",
+                              "normalized_status": "normalized",
+                              "component": "Pasta"
+                            }
+                          ]
+                        }
+                      ],
+                      "steps": [
+                        {
+                          "index": 1,
+                          "instruction": "Boil the pasta (Spaghetti: 340 g)"
+                        }
+                      ],
+                      "visibility": "public",
+                      "updated_at": "2026-03-03T12:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/recipes/{id}/history": {
+      "get": {
+        "summary": "Get recipe version history with causal chat/thread context",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RecipeId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Recipe history",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecipeHistoryResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/recipes/cookbook": {
+      "get": {
+        "summary": "Saved cookbook recipes grouped with category precedence",
+        "responses": {
+          "200": {
+            "description": "Cookbook response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "items"
+                  ],
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/RecipeCard"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/recipes/{id}/save": {
+      "post": {
+        "summary": "Save a recipe to cookbook",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RecipeId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Save status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "saved"
+                  ],
+                  "properties": {
+                    "saved": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Unsave a recipe",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RecipeId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Save status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "saved"
+                  ],
+                  "properties": {
+                    "saved": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/recipes/{id}/attachments": {
+      "post": {
+        "summary": "Create and attach a child recipe (side/appetizer/etc)",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RecipeId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateAttachmentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Parent recipe with updated attachments",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "recipe",
+                    "attachment_id"
+                  ],
+                  "properties": {
+                    "recipe": {
+                      "$ref": "#/components/schemas/Recipe"
+                    },
+                    "attachment_id": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/recipes/{id}/attachments/{attachment_id}": {
+      "patch": {
+        "summary": "Update attachment position or relation type",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RecipeId"
+          },
+          {
+            "in": "path",
+            "name": "attachment_id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateAttachmentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Parent recipe with updated attachments",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "recipe"
+                  ],
+                  "properties": {
+                    "recipe": {
+                      "$ref": "#/components/schemas/Recipe"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Remove attachment link",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RecipeId"
+          },
+          {
+            "in": "path",
+            "name": "attachment_id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Parent recipe with updated attachments",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "recipe"
+                  ],
+                  "properties": {
+                    "recipe": {
+                      "$ref": "#/components/schemas/Recipe"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/collections": {
+      "get": {
+        "summary": "List user collections",
+        "responses": {
+          "200": {
+            "description": "Collections",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "items"
+                  ],
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Collection"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      },
+      "post": {
+        "summary": "Create collection",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Created collection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Collection"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/collections/{id}/items": {
+      "post": {
+        "summary": "Add recipe to collection",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "recipe_id"
+                ],
+                "properties": {
+                  "recipe_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Item add status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/preferences": {
+      "get": {
+        "summary": "Get user preferences",
+        "responses": {
+          "200": {
+            "description": "Preferences",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreferenceProfile"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      },
+      "patch": {
+        "summary": "Update user preferences",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreferenceProfile"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated preferences",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreferenceProfile"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/onboarding/state": {
+      "get": {
+        "summary": "Get onboarding completion state for authenticated user",
+        "responses": {
+          "200": {
+            "description": "Onboarding state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OnboardingState"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/onboarding/chat": {
+      "post": {
+        "summary": "Continue onboarding interview and persist preference updates",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OnboardingChatRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Onboarding assistant response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OnboardingChatResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/memories": {
+      "get": {
+        "summary": "Get active user memories and snapshot",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Memory response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryListResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/memories/forget": {
+      "post": {
+        "summary": "Soft-delete a specific memory",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "memory_id"
+                ],
+                "properties": {
+                  "memory_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Forget status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/memories/reset": {
+      "post": {
+        "summary": "Reset all user memories",
+        "responses": {
+          "200": {
+            "description": "Reset status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/changelog": {
+      "get": {
+        "summary": "User-scoped changelog timeline",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Changelog response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangelogResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/image-jobs/process": {
+      "post": {
+        "summary": "Process pending image jobs for authenticated user",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 20
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Processing summary",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "processed",
+                    "ready",
+                    "failed",
+                    "pending"
+                  ],
+                  "properties": {
+                    "processed": {
+                      "type": "integer"
+                    },
+                    "ready": {
+                      "type": "integer"
+                    },
+                    "failed": {
+                      "type": "integer"
+                    },
+                    "pending": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/metadata-jobs/process": {
+      "post": {
+        "summary": "Process due recipe metadata jobs (internal authenticated scope)",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "limit": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 50
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Metadata queue processing summary",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetadataJobsProcessResponse"
+                },
+                "examples": {
+                  "processed": {
+                    "value": {
+                      "reaped": 1,
+                      "claimed": 5,
+                      "processed": 5,
+                      "ready": 4,
+                      "failed": 0,
+                      "pending": 1,
+                      "queue": {
+                        "pending": 3,
+                        "processing": 0,
+                        "ready": 12,
+                        "failed": 1
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/metadata-jobs/retry": {
+      "post": {
+        "summary": "Re-queue a metadata job safely (internal authenticated scope)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "job_id"
+                ],
+                "properties": {
+                  "job_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Retry status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "job"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "job": {
+                      "type": "object",
+                      "required": [
+                        "id",
+                        "status",
+                        "attempts",
+                        "next_attempt_at"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "pending",
+                            "processing",
+                            "ready",
+                            "failed"
+                          ]
+                        },
+                        "attempts": {
+                          "type": "integer"
+                        },
+                        "next_attempt_at": {
+                          "type": "string",
+                          "format": "date-time"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/metadata-jobs/recompute": {
+      "post": {
+        "summary": "Recompute metadata for a recipe or recipe version (internal authenticated scope)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "recipe_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "recipe_version_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Recompute enqueue status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "recipe_id",
+                    "recipe_version_id"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "recipe_id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "recipe_version_id": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/memory-jobs/process": {
+      "post": {
+        "summary": "Process due memory extraction jobs (internal authenticated scope)",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Memory queue processing summary",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryJobsProcessResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/memory-jobs/retry": {
+      "post": {
+        "summary": "Re-queue a memory job safely (internal authenticated scope)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "job_id"
+                ],
+                "properties": {
+                  "job_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Retry status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "job"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "job": {
+                      "type": "object",
+                      "required": [
+                        "id",
+                        "status",
+                        "attempts",
+                        "next_attempt_at"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "pending",
+                            "processing",
+                            "ready",
+                            "failed"
+                          ]
+                        },
+                        "attempts": {
+                          "type": "integer"
+                        },
+                        "next_attempt_at": {
+                          "type": "string",
+                          "format": "date-time"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/chat": {
+      "post": {
+        "summary": "Start a new chat session",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SimModelOverrides"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "message"
+                ],
+                "properties": {
+                  "message": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Chat session created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatSession"
+                },
+                "examples": {
+                  "ideation": {
+                    "summary": "Ideation response without candidate set",
+                    "value": {
+                      "id": "e3fa8890-1111-2222-3333-444455556666",
+                      "loop_state": "ideation",
+                      "assistant_reply": {
+                        "text": "Do you want this to be creamy or tomato-forward?"
+                      },
+                      "response_context": {
+                        "intent": "in_scope_ideation",
+                        "mode": "ideation"
+                      },
+                      "messages": [],
+                      "candidate_recipe_set": null,
+                      "memory_context_ids": [
+                        "f2f3a1f0-1111-2222-3333-444455556666"
+                      ],
+                      "context_version": 2
+                    }
+                  },
+                  "outOfScope": {
+                    "summary": "Out-of-scope ask is refused and redirected to cooking",
+                    "value": {
+                      "id": "e3fa8890-1111-2222-3333-444455556666",
+                      "loop_state": "ideation",
+                      "assistant_reply": {
+                        "text": "I can’t help with that here. I can help with recipes or cooking techniques."
+                      },
+                      "response_context": {
+                        "intent": "out_of_scope",
+                        "mode": "ideation"
+                      },
+                      "messages": [],
+                      "candidate_recipe_set": null,
+                      "memory_context_ids": [],
+                      "context_version": 2
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/chat/{id}": {
+      "get": {
+        "summary": "Get chat session thread",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Chat session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatSession"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/chat/{id}/messages": {
+      "post": {
+        "summary": "Add a message to chat session thread",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/SimModelOverrides"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "message"
+                ],
+                "properties": {
+                  "message": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated chat session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatSession"
+                },
+                "examples": {
+                  "triggeredGeneration": {
+                    "summary": "Assistant triggered candidate recipe set",
+                    "value": {
+                      "id": "e3fa8890-1111-2222-3333-444455556666",
+                      "loop_state": "candidate_presented",
+                      "assistant_reply": {
+                        "text": "Here are two options to start from."
+                      },
+                      "response_context": {
+                        "intent": "in_scope_generate",
+                        "mode": "generation"
+                      },
+                      "candidate_recipe_set": {
+                        "candidate_id": "8f32d780-1111-2222-3333-444455556666",
+                        "revision": 1,
+                        "active_component_id": "component-main",
+                        "components": [
+                          {
+                            "component_id": "component-main",
+                            "role": "main",
+                            "title": "Spicy Chicken Parm",
+                            "recipe": {
+                              "title": "Spicy Chicken Parm",
+                              "servings": 2,
+                              "ingredients": [],
+                              "steps": []
+                            }
+                          },
+                          {
+                            "component_id": "component-side",
+                            "role": "side",
+                            "title": "Garlicky Broccolini",
+                            "recipe": {
+                              "title": "Garlicky Broccolini",
+                              "servings": 2,
+                              "ingredients": [],
+                              "steps": []
+                            }
+                          }
+                        ]
+                      },
+                      "messages": [],
+                      "memory_context_ids": [],
+                      "context_version": 2,
+                      "ui_hints": {
+                        "show_generation_animation": true,
+                        "focus_component_id": "component-main"
+                      }
+                    }
+                  },
+                  "iterate": {
+                    "summary": "Candidate set updated after tweak",
+                    "value": {
+                      "id": "e3fa8890-1111-2222-3333-444455556666",
+                      "loop_state": "candidate_presented",
+                      "assistant_reply": {
+                        "text": "Updated with a lighter breading and shorter timing."
+                      },
+                      "response_context": {
+                        "intent": "in_scope_generate",
+                        "mode": "iteration"
+                      },
+                      "candidate_recipe_set": {
+                        "candidate_id": "8f32d780-1111-2222-3333-444455556666",
+                        "revision": 2,
+                        "active_component_id": "component-main",
+                        "components": [
+                          {
+                            "component_id": "component-main",
+                            "role": "main",
+                            "title": "Lighter Spicy Chicken Parm",
+                            "recipe": {
+                              "title": "Lighter Spicy Chicken Parm",
+                              "servings": 2,
+                              "ingredients": [],
+                              "steps": []
+                            }
+                          }
+                        ]
+                      },
+                      "messages": [],
+                      "memory_context_ids": [],
+                      "context_version": 2
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "examples": {
+                  "generationMissingCandidate": {
+                    "summary": "Trigger said generate but no candidate was returned",
+                    "value": {
+                      "code": "chat_generation_missing_candidate",
+                      "message": "Generation trigger did not produce a candidate recipe set",
+                      "request_id": "7b8d4f00-1111-2222-3333-444455556666"
+                    }
+                  },
+                  "invalidJson": {
+                    "summary": "Model returned invalid JSON in generation scope",
+                    "value": {
+                      "code": "llm_invalid_json",
+                      "message": "LLM output is not valid JSON",
+                      "details": "{ \"assistant_reply\": { \"text\": \"...\" }",
+                      "request_id": "1cb9f9dd-1111-2222-3333-444455556666"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/chat/{id}/candidate": {
+      "patch": {
+        "summary": "Mutate ephemeral candidate recipe set state for a chat session",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/SimModelOverrides"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PatchCandidateRequest"
+              },
+              "examples": {
+                "setActiveComponent": {
+                  "summary": "Set active tab",
+                  "value": {
+                    "action": "set_active_component",
+                    "component_id": "component-side"
+                  }
+                },
+                "deleteComponent": {
+                  "summary": "Remove an extra tab before commit",
+                  "value": {
+                    "action": "delete_component",
+                    "component_id": "component-side"
+                  }
+                },
+                "clearCandidate": {
+                  "summary": "Clear candidate set and return to ideation mode",
+                  "value": {
+                    "action": "clear_candidate"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated chat session candidate set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PatchCandidateResponse"
+                },
+                "examples": {
+                  "candidateUpdated": {
+                    "summary": "Candidate still present",
+                    "value": {
+                      "id": "e3fa8890-1111-2222-3333-444455556666",
+                      "loop_state": "candidate_presented",
+                      "assistant_reply": {
+                        "text": "Updated the active tab."
+                      },
+                      "candidate_recipe_set": {
+                        "candidate_id": "8f32d780-1111-2222-3333-444455556666",
+                        "revision": 3,
+                        "active_component_id": "component-side",
+                        "components": [
+                          {
+                            "component_id": "component-main",
+                            "role": "main",
+                            "title": "Lighter Spicy Chicken Parm",
+                            "recipe": {
+                              "title": "Lighter Spicy Chicken Parm",
+                              "servings": 2,
+                              "ingredients": [],
+                              "steps": []
+                            }
+                          },
+                          {
+                            "component_id": "component-side",
+                            "role": "side",
+                            "title": "Garlicky Broccolini",
+                            "recipe": {
+                              "title": "Garlicky Broccolini",
+                              "servings": 2,
+                              "ingredients": [],
+                              "steps": []
+                            }
+                          }
+                        ]
+                      },
+                      "messages": [],
+                      "memory_context_ids": [],
+                      "context_version": 2,
+                      "ui_hints": {
+                        "focus_component_id": "component-side"
+                      }
+                    }
+                  },
+                  "candidateCleared": {
+                    "summary": "Candidate cleared, back to ideation",
+                    "value": {
+                      "id": "e3fa8890-1111-2222-3333-444455556666",
+                      "loop_state": "ideation",
+                      "assistant_reply": {
+                        "text": "Ready for a fresh start."
+                      },
+                      "candidate_recipe_set": null,
+                      "messages": [],
+                      "memory_context_ids": [],
+                      "context_version": 2
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/chat/{id}/commit": {
+      "post": {
+        "summary": "Persist all remaining candidate components to cookbook",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/SimModelOverrides"
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommitChatRecipesRequest"
+              },
+              "examples": {
+                "default": {
+                  "value": {}
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Candidate components committed and linked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommitChatRecipesResponse"
+                },
+                "examples": {
+                  "commit": {
+                    "value": {
+                      "id": "e3fa8890-1111-2222-3333-444455556666",
+                      "loop_state": "ideation",
+                      "candidate_recipe_set": null,
+                      "assistant_reply": {
+                        "text": "Saved all recipes to your cookbook."
+                      },
+                      "messages": [],
+                      "memory_context_ids": [],
+                      "context_version": 2,
+                      "commit": {
+                        "candidate_id": "8f32d780-1111-2222-3333-444455556666",
+                        "revision": 2,
+                        "committed_count": 2,
+                        "recipes": [
+                          {
+                            "component_id": "component-main",
+                            "role": "main",
+                            "title": "Lighter Spicy Chicken Parm",
+                            "recipe_id": "64f2b410-1111-2222-3333-444455556666",
+                            "recipe_version_id": "3c25b8e1-1111-2222-3333-444455556666"
+                          },
+                          {
+                            "component_id": "component-side",
+                            "role": "side",
+                            "title": "Garlicky Broccolini",
+                            "recipe_id": "d76cbf20-1111-2222-3333-444455556666",
+                            "recipe_version_id": "f59a98f0-1111-2222-3333-444455556666"
+                          }
+                        ],
+                        "links": [
+                          {
+                            "id": "1a2b3c4d-1111-2222-3333-444455556666",
+                            "parent_recipe_id": "64f2b410-1111-2222-3333-444455556666",
+                            "child_recipe_id": "d76cbf20-1111-2222-3333-444455556666",
+                            "relation_type": "is_side_of",
+                            "position": 1
+                          }
+                        ],
+                        "post_save_options": [
+                          "continue_chat",
+                          "restart_chat",
+                          "go_to_cookbook"
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/recipes/{id}/categories/override": {
+      "post": {
+        "summary": "Add a user category override",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RecipeId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "category"
+                ],
+                "properties": {
+                  "category": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Override status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/recipes/{id}/categories/override/{category}": {
+      "delete": {
+        "summary": "Remove category override",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RecipeId"
+          },
+          {
+            "in": "path",
+            "name": "category",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Remove status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/recipes/{id}/graph": {
+      "get": {
+        "summary": "Fetch graph entities and edges related to a recipe",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RecipeId"
+          },
+          {
+            "in": "query",
+            "name": "min_confidence",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          },
+          {
+            "in": "query",
+            "name": "relation_types",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Comma-separated relation types filter"
+          },
+          {
+            "in": "query",
+            "name": "entity_types",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Comma-separated entity types filter"
+          },
+          {
+            "in": "query",
+            "name": "depth",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Recipe graph",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "entities",
+                    "edges"
+                  ],
+                  "properties": {
+                    "entities": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/GraphEntity"
+                      }
+                    },
+                    "edges": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/GraphEdge"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/ingredients/{id}/graph": {
+      "get": {
+        "summary": "Fetch graph entities and edges related to an ingredient",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IngredientId"
+          },
+          {
+            "in": "query",
+            "name": "min_confidence",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          },
+          {
+            "in": "query",
+            "name": "relation_types",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Comma-separated relation types filter"
+          },
+          {
+            "in": "query",
+            "name": "entity_types",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Comma-separated entity types filter"
+          },
+          {
+            "in": "query",
+            "name": "depth",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Ingredient graph",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "entities",
+                    "edges"
+                  ],
+                  "properties": {
+                    "entities": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/GraphEntity"
+                      }
+                    },
+                    "edges": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/GraphEdge"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    },
+    "parameters": {
+      "RecipeId": {
+        "in": "path",
+        "name": "id",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "IngredientId": {
+        "in": "path",
+        "name": "id",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "SimModelOverrides": {
+        "in": "header",
+        "name": "x-sim-model-overrides",
+        "required": false,
+        "schema": {
+          "type": "string"
+        },
+        "description": "Optional JSON string used by Admin Simulation Runner to override model/provider per scope.\nFormat:\n{\n  \"chat_ideation\":{\"provider\":\"anthropic\",\"model\":\"claude-3-5-haiku-latest\"},\n  \"ingredient_enrich\":{\"provider\":\"openai\",\"model\":\"gpt-5-mini\"}\n}\nCommon scope keys:\nchat_ideation, chat_generation, chat_iteration, classify,\ningredient_alias_normalize, ingredient_phrase_split, ingredient_enrich,\nrecipe_metadata_enrich, ingredient_relation_infer, preference_normalize, equipment_filter,\nonboarding, image, memory_extract, memory_select, memory_summarize, memory_conflict_resolve.\nNot required for normal mobile clients.\n"
+      }
+    },
+    "responses": {
+      "ErrorResponse": {
+        "description": "Error envelope",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "LlmScope": {
+        "type": "string",
+        "description": "Internal LLM pipeline scope key used for prompt/rule/model routing.",
+        "enum": [
+          "chat",
+          "chat_ideation",
+          "chat_generation",
+          "chat_iteration",
+          "generate",
+          "tweak",
+          "classify",
+          "ingredient_alias_normalize",
+          "ingredient_phrase_split",
+          "ingredient_enrich",
+          "recipe_metadata_enrich",
+          "ingredient_relation_infer",
+          "preference_normalize",
+          "equipment_filter",
+          "onboarding",
+          "image",
+          "memory_extract",
+          "memory_select",
+          "memory_summarize",
+          "memory_conflict_resolve"
+        ]
+      },
+      "ErrorEnvelope": {
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "request_id"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "details": {},
+          "request_id": {
+            "type": "string"
+          }
+        }
+      },
+      "Ingredient": {
+        "type": "object",
+        "required": [
+          "name",
+          "amount",
+          "unit"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "amount": {
+            "type": "number"
+          },
+          "unit": {
+            "type": "string"
+          },
+          "preparation": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "ingredient_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "normalized_status": {
+            "type": "string",
+            "enum": [
+              "normalized",
+              "needs_retry"
+            ]
+          },
+          "component": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "IngredientGroup": {
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "ingredients"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "ingredients": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Ingredient"
+            }
+          }
+        }
+      },
+      "InlineMeasurement": {
+        "type": "object",
+        "required": [
+          "ingredient",
+          "amount",
+          "unit"
+        ],
+        "properties": {
+          "ingredient": {
+            "type": "string"
+          },
+          "amount": {
+            "type": "number"
+          },
+          "unit": {
+            "type": "string"
+          }
+        }
+      },
+      "Step": {
+        "type": "object",
+        "required": [
+          "index",
+          "instruction"
+        ],
+        "properties": {
+          "index": {
+            "type": "integer"
+          },
+          "instruction": {
+            "type": "string"
+          },
+          "timer_seconds": {
+            "type": "integer"
+          },
+          "notes": {
+            "type": "string"
+          },
+          "inline_measurements": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InlineMeasurement"
+            }
+          }
+        }
+      },
+      "Nutrition": {
+        "type": "object",
+        "properties": {
+          "calories": {
+            "type": "number"
+          },
+          "protein_g": {
+            "type": "number"
+          },
+          "carbs_g": {
+            "type": "number"
+          },
+          "fat_g": {
+            "type": "number"
+          },
+          "fiber_g": {
+            "type": "number"
+          },
+          "sugar_g": {
+            "type": "number"
+          },
+          "sodium_mg": {
+            "type": "number"
+          }
+        }
+      },
+      "RecipeMetadata": {
+        "type": "object",
+        "properties": {
+          "metadata_schema_version": {
+            "type": "integer"
+          },
+          "vibe": {
+            "type": "string"
+          },
+          "flavor_profile": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "flavor_axes": {
+            "type": "object",
+            "properties": {
+              "sweet": {
+                "type": "number"
+              },
+              "salty": {
+                "type": "number"
+              },
+              "sour": {
+                "type": "number"
+              },
+              "bitter": {
+                "type": "number"
+              },
+              "umami": {
+                "type": "number"
+              },
+              "fatty": {
+                "type": "number"
+              }
+            }
+          },
+          "spice_level": {
+            "type": "string"
+          },
+          "nutrition": {
+            "$ref": "#/components/schemas/Nutrition"
+          },
+          "difficulty": {
+            "type": "string"
+          },
+          "skill_level": {
+            "type": "string"
+          },
+          "complexity_score": {
+            "type": "number"
+          },
+          "allergens": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "allergen_flags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "diet_tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "health_flags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "substitutions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "from": {
+                  "type": "string"
+                },
+                "to": {
+                  "type": "string"
+                },
+                "note": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "timing": {
+            "type": "object",
+            "properties": {
+              "prep_minutes": {
+                "type": "integer"
+              },
+              "cook_minutes": {
+                "type": "integer"
+              },
+              "total_minutes": {
+                "type": "integer"
+              }
+            }
+          },
+          "cuisine_tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "occasion_tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "cuisine": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "course_type": {
+            "type": "string"
+          },
+          "seasonality": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "techniques": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "equipment": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "pairing_rationale": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "serving_notes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "storage_reheat_profile": {
+            "type": "object",
+            "properties": {
+              "storage": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "reheat": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "practical": {
+            "type": "object",
+            "properties": {
+              "cost_tier": {
+                "type": "string"
+              },
+              "meal_prep_friendly": {
+                "type": "boolean"
+              }
+            }
+          },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "RecipePayloadAttachment": {
+        "type": "object",
+        "required": [
+          "title",
+          "relation_type",
+          "recipe"
+        ],
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "relation_type": {
+            "type": "string"
+          },
+          "recipe": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "RecipePayload": {
+        "type": "object",
+        "required": [
+          "title",
+          "servings",
+          "ingredients",
+          "steps"
+        ],
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "servings": {
+            "type": "integer"
+          },
+          "ingredients": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Ingredient"
+            }
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Step"
+            }
+          },
+          "notes": {
+            "type": "string"
+          },
+          "pairings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "emoji": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/RecipeMetadata"
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RecipePayloadAttachment"
+            }
+          }
+        }
+      },
+      "RecipeAttachment": {
+        "type": "object",
+        "required": [
+          "attachment_id",
+          "relation_type",
+          "position",
+          "recipe"
+        ],
+        "properties": {
+          "attachment_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "relation_type": {
+            "type": "string"
+          },
+          "position": {
+            "type": "integer"
+          },
+          "recipe": {
+            "$ref": "#/components/schemas/Recipe"
+          }
+        }
+      },
+      "Recipe": {
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "servings",
+          "ingredients",
+          "steps",
+          "updated_at",
+          "visibility"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "image_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uri"
+          },
+          "image_status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "ready",
+              "failed"
+            ]
+          },
+          "servings": {
+            "type": "integer"
+          },
+          "ingredients": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Ingredient"
+            }
+          },
+          "ingredient_groups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IngredientGroup"
+            }
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Step"
+            }
+          },
+          "notes": {
+            "type": "string"
+          },
+          "pairings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "emoji": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/RecipeMetadata"
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RecipeAttachment"
+            }
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "public",
+              "private"
+            ]
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "version": {
+            "$ref": "#/components/schemas/RecipeVersion"
+          }
+        }
+      },
+      "RecipeCard": {
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "summary",
+          "updated_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "image_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uri"
+          },
+          "image_status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "ready",
+              "failed"
+            ]
+          },
+          "category": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RecipeVersion": {
+        "type": "object",
+        "required": [
+          "version_id",
+          "recipe_id",
+          "created_at"
+        ],
+        "properties": {
+          "version_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "recipe_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "parent_version_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "diff_summary": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RecipeHistoryResponse": {
+        "type": "object",
+        "required": [
+          "recipe_id",
+          "versions",
+          "chat_messages"
+        ],
+        "properties": {
+          "recipe_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "source_chat_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "versions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "parent_version_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid"
+                },
+                "diff_summary": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "payload": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "created_by": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid"
+                }
+              }
+            }
+          },
+          "version_events": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "chat_messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChatMessage"
+            }
+          }
+        }
+      },
+      "Memory": {
+        "type": "object",
+        "required": [
+          "id",
+          "memory_type",
+          "memory_kind",
+          "confidence",
+          "salience",
+          "status"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "memory_type": {
+            "type": "string"
+          },
+          "memory_kind": {
+            "type": "string"
+          },
+          "memory_content": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "salience": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "status": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "MemoryListResponse": {
+        "type": "object",
+        "required": [
+          "items",
+          "snapshot"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Memory"
+            }
+          },
+          "snapshot": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "ChangelogEvent": {
+        "type": "object",
+        "required": [
+          "id",
+          "scope",
+          "entity_type",
+          "action",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "entity_type": {
+            "type": "string"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "action": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "before_json": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": true
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "after_json": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": true
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ChangelogResponse": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChangelogEvent"
+            }
+          }
+        }
+      },
+      "MetadataJobsProcessResponse": {
+        "type": "object",
+        "required": [
+          "reaped",
+          "claimed",
+          "processed",
+          "ready",
+          "failed",
+          "pending",
+          "queue"
+        ],
+        "properties": {
+          "reaped": {
+            "type": "integer"
+          },
+          "claimed": {
+            "type": "integer"
+          },
+          "processed": {
+            "type": "integer"
+          },
+          "ready": {
+            "type": "integer"
+          },
+          "failed": {
+            "type": "integer"
+          },
+          "pending": {
+            "type": "integer"
+          },
+          "queue": {
+            "type": "object",
+            "required": [
+              "pending",
+              "processing",
+              "ready",
+              "failed"
+            ],
+            "properties": {
+              "pending": {
+                "type": "integer"
+              },
+              "processing": {
+                "type": "integer"
+              },
+              "ready": {
+                "type": "integer"
+              },
+              "failed": {
+                "type": "integer"
+              }
+            }
+          }
+        }
+      },
+      "PreferenceProfile": {
+        "type": "object",
+        "required": [
+          "dietary_preferences",
+          "skill_level",
+          "equipment"
+        ],
+        "properties": {
+          "free_form": {
+            "type": "string"
+          },
+          "dietary_preferences": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "dietary_restrictions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "skill_level": {
+            "type": "string"
+          },
+          "equipment": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "cuisines": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "aversions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "cooking_for": {
+            "type": "string"
+          },
+          "max_difficulty": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5
+          },
+          "presentation_preferences": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "AssistantReply": {
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "tone": {
+            "type": "string"
+          },
+          "emoji": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "suggested_next_actions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "focus_summary": {
+            "type": "string"
+          }
+        }
+      },
+      "OnboardingState": {
+        "type": "object",
+        "required": [
+          "completed",
+          "progress",
+          "missing_topics",
+          "state"
+        ],
+        "properties": {
+          "completed": {
+            "type": "boolean"
+          },
+          "progress": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "missing_topics": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "state": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "OnboardingChatMessage": {
+        "type": "object",
+        "required": [
+          "role",
+          "content"
+        ],
+        "properties": {
+          "role": {
+            "type": "string",
+            "enum": [
+              "assistant",
+              "user"
+            ]
+          },
+          "content": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "OnboardingChatRequest": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "transcript": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OnboardingChatMessage"
+            }
+          },
+          "state": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "OnboardingChatResponse": {
+        "type": "object",
+        "required": [
+          "assistant_reply",
+          "onboarding_state"
+        ],
+        "properties": {
+          "assistant_reply": {
+            "$ref": "#/components/schemas/AssistantReply"
+          },
+          "onboarding_state": {
+            "$ref": "#/components/schemas/OnboardingState"
+          },
+          "preference_updates": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "ChatLoopState": {
+        "type": "string",
+        "enum": [
+          "ideation",
+          "candidate_presented",
+          "iterating"
+        ]
+      },
+      "ChatResponseContext": {
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "string"
+          },
+          "intent": {
+            "type": "string",
+            "enum": [
+              "in_scope_ideation",
+              "in_scope_generate",
+              "out_of_scope"
+            ]
+          },
+          "changed_sections": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "personalization_notes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "preference_updates": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "CandidateRecipeComponent": {
+        "type": "object",
+        "required": [
+          "component_id",
+          "role",
+          "title",
+          "recipe"
+        ],
+        "properties": {
+          "component_id": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "main",
+              "side",
+              "appetizer",
+              "dessert",
+              "drink"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "recipe": {
+            "$ref": "#/components/schemas/RecipePayload"
+          }
+        }
+      },
+      "CandidateRecipeSet": {
+        "type": "object",
+        "required": [
+          "candidate_id",
+          "revision",
+          "active_component_id",
+          "components"
+        ],
+        "properties": {
+          "candidate_id": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "active_component_id": {
+            "type": "string"
+          },
+          "components": {
+            "type": "array",
+            "maxItems": 3,
+            "items": {
+              "$ref": "#/components/schemas/CandidateRecipeComponent"
+            }
+          }
+        }
+      },
+      "PatchCandidateRequest": {
+        "type": "object",
+        "required": [
+          "action"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "set_active_component",
+              "delete_component",
+              "clear_candidate"
+            ]
+          },
+          "component_id": {
+            "type": "string"
+          }
+        }
+      },
+      "PatchCandidateResponse": {
+        "$ref": "#/components/schemas/ChatSession"
+      },
+      "CommitChatRecipesRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "CommitChatRecipesResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ChatSession"
+          },
+          {
+            "type": "object",
+            "required": [
+              "commit"
+            ],
+            "properties": {
+              "commit": {
+                "type": "object",
+                "required": [
+                  "candidate_id",
+                  "revision",
+                  "committed_count",
+                  "recipes",
+                  "links",
+                  "post_save_options"
+                ],
+                "properties": {
+                  "candidate_id": {
+                    "type": "string"
+                  },
+                  "revision": {
+                    "type": "integer"
+                  },
+                  "committed_count": {
+                    "type": "integer"
+                  },
+                  "recipes": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "component_id",
+                        "role",
+                        "title",
+                        "recipe_id",
+                        "recipe_version_id"
+                      ],
+                      "properties": {
+                        "component_id": {
+                          "type": "string"
+                        },
+                        "role": {
+                          "type": "string",
+                          "enum": [
+                            "main",
+                            "side",
+                            "appetizer",
+                            "dessert",
+                            "drink"
+                          ]
+                        },
+                        "title": {
+                          "type": "string"
+                        },
+                        "recipe_id": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "recipe_version_id": {
+                          "type": "string",
+                          "format": "uuid"
+                        }
+                      }
+                    }
+                  },
+                  "links": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "id",
+                        "parent_recipe_id",
+                        "child_recipe_id",
+                        "relation_type",
+                        "position"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "parent_recipe_id": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "child_recipe_id": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "relation_type": {
+                          "type": "string"
+                        },
+                        "position": {
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  },
+                  "post_save_options": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "continue_chat",
+                        "restart_chat",
+                        "go_to_cookbook"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "MemoryJobsProcessResponse": {
+        "type": "object",
+        "required": [
+          "processed",
+          "succeeded",
+          "failed",
+          "queue"
+        ],
+        "properties": {
+          "processed": {
+            "type": "integer"
+          },
+          "succeeded": {
+            "type": "integer"
+          },
+          "failed": {
+            "type": "integer"
+          },
+          "queue": {
+            "type": "object",
+            "required": [
+              "pending",
+              "processing",
+              "ready",
+              "failed"
+            ],
+            "properties": {
+              "pending": {
+                "type": "integer"
+              },
+              "processing": {
+                "type": "integer"
+              },
+              "ready": {
+                "type": "integer"
+              },
+              "failed": {
+                "type": "integer"
+              }
+            }
+          }
+        }
+      },
+      "CreateAttachmentRequest": {
+        "type": "object",
+        "required": [
+          "relation_type"
+        ],
+        "properties": {
+          "relation_type": {
+            "type": "string"
+          },
+          "position": {
+            "type": "integer"
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "recipe": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "UpdateAttachmentRequest": {
+        "type": "object",
+        "properties": {
+          "relation_type": {
+            "type": "string"
+          },
+          "position": {
+            "type": "integer"
+          }
+        }
+      },
+      "ChatMessage": {
+        "type": "object",
+        "required": [
+          "id",
+          "role",
+          "content",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "user",
+              "assistant",
+              "system"
+            ]
+          },
+          "content": {
+            "type": "string"
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ChatSession": {
+        "type": "object",
+        "required": [
+          "id",
+          "messages",
+          "loop_state",
+          "assistant_reply",
+          "memory_context_ids",
+          "context_version"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChatMessage"
+            }
+          },
+          "loop_state": {
+            "$ref": "#/components/schemas/ChatLoopState"
+          },
+          "assistant_reply": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AssistantReply"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "candidate_recipe_set": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CandidateRecipeSet"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "response_context": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ChatResponseContext"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "memory_context_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "context_version": {
+            "type": "integer"
+          },
+          "ui_hints": {
+            "type": "object",
+            "properties": {
+              "show_generation_animation": {
+                "type": "boolean"
+              },
+              "focus_component_id": {
+                "type": "string"
+              }
+            }
+          },
+          "context": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Collection": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "GraphEntity": {
+        "type": "object",
+        "required": [
+          "id",
+          "entity_type",
+          "label"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_type": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "GraphEdge": {
+        "type": "object",
+        "required": [
+          "id",
+          "from_entity_id",
+          "to_entity_id",
+          "relation_type",
+          "confidence",
+          "source"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "from_entity_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "to_entity_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "relation_type": {
+            "type": "string"
+          },
+          "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "source": {
+            "type": "string"
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "evidence_count": {
+            "type": "integer"
+          },
+          "is_inferred": {
+            "type": "boolean"
+          }
+        }
+      }
+    }
+  }
+}

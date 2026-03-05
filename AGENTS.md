@@ -61,3 +61,22 @@ curl https://api.cookwithalchemy.com/v1/healthz
 - Edit LLM call: prompt/rule/model edits through Admin API/UI only; if output contract changes, update validator/tests and OpenAPI examples if public behavior changes.
 - Remove LLM call: remove callsite + wrapper + scope, add migration that deactivates scope config rows, and update docs/tests.
 - Never place direct provider endpoint calls outside `supabase/functions/_shared/llm-adapters/`.
+
+## Admin API Helper (`scripts/admin-api.sh`)
+
+CLI tool for LLM config management and database queries. Auto-resolves Supabase CLI token from macOS keychain.
+
+```bash
+./scripts/admin-api.sh sql "<query>"                             # Run SQL
+./scripts/admin-api.sh sql-file <file>                           # Run SQL from file
+./scripts/admin-api.sh prompt-list [scope]                       # List prompts (>>> = active)
+./scripts/admin-api.sh prompt-create <scope> <ver> <name> <file> # Create & activate prompt
+./scripts/admin-api.sh prompt-activate <scope> <version>         # Activate existing version
+./scripts/admin-api.sh rule-list [scope]                         # List rules
+./scripts/admin-api.sh rule-create <scope> <ver> <name> <file>   # Create & activate rule
+./scripts/admin-api.sh route-list                                # Active model routes
+./scripts/admin-api.sh service-key                               # Print service role key
+./scripts/admin-api.sh sim-token                                 # Get sim user access token
+```
+
+Use this for all LLM prompt/rule/route operations instead of raw curl.

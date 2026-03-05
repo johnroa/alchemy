@@ -1629,9 +1629,7 @@ const generateChatConversationPayload = async (
   const runtimeConstraints = `Runtime requirements:
 - Output one strict JSON object only.
 - Do not emit markdown or code fences.
-- Match the provided contract keys and schema.
-- Do not enforce artificial ingredient, step, or token budgets.
-- Prefer complete and practical recipe outputs over compressed outlines.`;
+- Match the provided contract keys and schema exactly.`;
 
   const runtimePromptTemplate = config.promptTemplate?.trim().length
     ? config.promptTemplate

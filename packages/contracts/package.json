@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "generate": "openapi-typescript openapi.yaml --output src/generated.ts",
+    "generate:json": "node scripts/yaml-to-json.mjs",
     "check": "openapi-typescript openapi.yaml --output /tmp/alchemy-openapi-check.ts"
   },
   "devDependencies": {

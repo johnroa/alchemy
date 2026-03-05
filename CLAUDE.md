@@ -142,5 +142,33 @@ Write detailed inline comments in all code you touch. This codebase is maintaine
 
 Do not add trivial comments that restate the code. Focus on information that would save a future agent 5+ minutes of investigation.
 
+## Admin API Helper (`scripts/admin-api.sh`)
+
+Streamlined CLI for managing LLM config and running queries against the Supabase Management API. Auto-resolves the Supabase CLI token from macOS keychain — no manual auth needed.
+
+```bash
+# Run SQL queries
+./scripts/admin-api.sh sql "SELECT * FROM llm_prompts WHERE is_active = true"
+./scripts/admin-api.sh sql-file /path/to/query.sql
+
+# Prompt management (versioned, append-only)
+./scripts/admin-api.sh prompt-list [scope]                      # List all prompts (>>> = active)
+./scripts/admin-api.sh prompt-create <scope> <ver> <name> <file> # Create & activate prompt from file
+./scripts/admin-api.sh prompt-activate <scope> <version>         # Activate existing version
+
+# Rule management
+./scripts/admin-api.sh rule-list [scope]
+./scripts/admin-api.sh rule-create <scope> <ver> <name> <file>
+
+# Route inspection
+./scripts/admin-api.sh route-list                                # Active model routes
+
+# Auth tokens
+./scripts/admin-api.sh service-key                               # Print service role key
+./scripts/admin-api.sh sim-token                                 # Get sim user access token
+```
+
+Use this for all LLM prompt/rule/route operations instead of raw curl or the Supabase Management API directly.
+
 ## When Blocked
 State what is missing, give the smallest set of options, default to the simplest option that preserves API-first correctness and premium UI feel.

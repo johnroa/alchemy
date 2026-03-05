@@ -311,6 +311,22 @@ Write detailed inline comments in all code you produce or modify. This codebase 
 
 The goal: a future agent reading any file for the first time should be able to understand the design intent and constraints without needing to reverse-engineer them from the code alone.
 
+## Admin API Helper (`scripts/admin-api.sh`)
+
+CLI tool for managing LLM config (prompts, rules, routes) and running ad-hoc SQL against the production database via the Supabase Management API. Auto-resolves the Supabase CLI token from macOS keychain.
+
+```bash
+./scripts/admin-api.sh sql "<query>"                             # Run SQL
+./scripts/admin-api.sh prompt-list [scope]                       # List prompts (>>> = active)
+./scripts/admin-api.sh prompt-create <scope> <ver> <name> <file> # Create & activate prompt
+./scripts/admin-api.sh prompt-activate <scope> <version>         # Activate existing version
+./scripts/admin-api.sh rule-list [scope]                         # List rules
+./scripts/admin-api.sh rule-create <scope> <ver> <name> <file>   # Create & activate rule
+./scripts/admin-api.sh route-list                                # Active model routes
+./scripts/admin-api.sh service-key                               # Print service role key
+./scripts/admin-api.sh sim-token                                 # Get sim user access token
+```
+
 ## If blocked
 If information is missing:
 - State what is missing.

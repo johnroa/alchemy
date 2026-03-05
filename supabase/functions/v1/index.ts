@@ -5927,7 +5927,6 @@ const orchestrateChatTurn = async (params: {
       preferences: params.contextPack.preferences,
       preferences_natural_language:
         params.contextPack.preferencesNaturalLanguage,
-      memory_snapshot: params.contextPack.memorySnapshot,
       selected_memories: params.contextPack.selectedMemories,
     },
     scopeHint: params.existingCandidate ? "chat_iteration" : "chat_ideation",
@@ -5957,12 +5956,10 @@ const orchestrateChatTurn = async (params: {
             active_recipe: null,
             candidate_recipe_set: null,
             candidate_recipe_set_outline: null,
-            loop_state: "ideation",
-            ideation_response: assistantChatResponse as unknown as JsonValue,
+            loop_state: "generation",
             preferences: params.contextPack.preferences,
             preferences_natural_language:
               params.contextPack.preferencesNaturalLanguage,
-            memory_snapshot: params.contextPack.memorySnapshot,
             selected_memories: params.contextPack.selectedMemories,
           },
           scopeHint: "chat_generation",
