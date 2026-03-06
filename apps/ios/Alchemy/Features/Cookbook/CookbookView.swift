@@ -3,59 +3,77 @@ import NukeUI
 
 /// Cookbook screen — saved recipes displayed in a staggered masonry 2-column grid.
 ///
-/// Layout (top to bottom):
-/// 1. Custom inline header: "Cookbook" left-aligned, ProfileMenu icon right-aligned, vertically centered
-/// 2. Search bar (GlassInputBar style)
-/// 3. Horizontal Liquid Glass filter chips (All, Italian, Japanese, etc.)
-/// 4. Masonry 2-column grid with staggered card heights
-///
-/// Interactions:
-/// - Tap card: full-screen image takeover with dark overlay, title, description, gauges, "Open Recipe"
-/// - Long-press: Liquid Glass context menu with [View, Edit, Add Companion, Share, Delete]
-/// - "Open Recipe" pushes to RecipeDetailView
-///
-/// Data source: PreviewData.cookbookCards (dummy). When API is wired,
-/// this will use GET /recipes/cookbook with query caching.
+/// Data source: GET /recipes/cookbook. Falls back to empty state when no
+/// recipes are saved. Supports pull-to-refresh and client-side filtering
+/// by category and search text.
 struct CookbookView: View {
-    @State private var selectedCard: RecipeCard? = nil
-    @State private var navigateToRecipe = false
+    @State private var previews: [RecipePreview] = []
+    @State private var isLoading = true
+    @State private var errorMessage: String?
+    @State private var selectedPreview: RecipePreview?
+    @State private var navigateToRecipeId: String?
     @State private var showPreferences = false
     @State private var showSettings = false
     @State private var searchText = ""
     @State private var selectedFilter = "All"
     @State private var showFullScreenPreview = false
 
+    /// Unique categories derived from the loaded cookbook items.
+    private var categories: [String] {
+        let unique = Set(previews.map(\.category))
+        return ["All"] + unique.sorted()
+    }
+
+    /// Filtered previews based on selected category and search text.
+    private var filteredPreviews: [RecipePreview] {
+        previews.filter { preview in
+            let matchesFilter = selectedFilter == "All" || preview.category == selectedFilter
+            let matchesSearch = searchText.isEmpty
+                || preview.title.localizedCaseInsensitiveContains(searchText)
+                || preview.summary.localizedCaseInsensitiveContains(searchText)
+            return matchesFilter && matchesSearch
+        }
+    }
+
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                // MARK: - Custom Header
                 headerBar
 
-                ScrollView {
-                    VStack(spacing: AlchemySpacing.md) {
-                        // MARK: - Search Bar
-                        searchBar
-
-                        // MARK: - Filter Chips
-                        filterChips
-
-                        // MARK: - Masonry Grid
-                        masonryGrid
+                if isLoading && previews.isEmpty {
+                    Spacer()
+                    ProgressView()
+                        .tint(.white)
+                    Spacer()
+                } else if let errorMessage, previews.isEmpty {
+                    Spacer()
+                    errorView(errorMessage)
+                    Spacer()
+                } else if previews.isEmpty {
+                    Spacer()
+                    emptyView
+                    Spacer()
+                } else {
+                    ScrollView {
+                        VStack(spacing: AlchemySpacing.md) {
+                            searchBar
+                            filterChips
+                            masonryGrid
+                        }
+                        .padding(.bottom, AlchemySpacing.xxxl)
                     }
-                    .padding(.bottom, AlchemySpacing.xxxl)
+                    .refreshable { await loadCookbook() }
                 }
             }
             .background(AlchemyColors.background)
             .navigationBarHidden(true)
             .overlay {
-                // Full-screen takeover when a card is tapped
-                if showFullScreenPreview, let card = selectedCard {
+                if showFullScreenPreview, let preview = selectedPreview {
                     CookbookFullScreenPreview(
-                        card: card,
+                        preview: preview,
                         onOpenRecipe: {
                             showFullScreenPreview = false
-                            selectedCard = nil
-                            navigateToRecipe = true
+                            navigateToRecipeId = preview.id
                         },
                         onDismiss: {
                             withAnimation(.easeOut(duration: 0.3)) {
@@ -66,8 +84,8 @@ struct CookbookView: View {
                     .transition(.opacity)
                 }
             }
-            .navigationDestination(isPresented: $navigateToRecipe) {
-                RecipeDetailView(recipe: PreviewData.sampleRecipe)
+            .navigationDestination(item: $navigateToRecipeId) { recipeId in
+                RecipeDetailView(recipeId: recipeId)
             }
             .sheet(isPresented: $showPreferences) {
                 PreferencesView()
@@ -76,13 +94,12 @@ struct CookbookView: View {
                 SettingsView()
             }
             .toolbarVisibility(showFullScreenPreview ? .hidden : .automatic, for: .tabBar)
+            .task { await loadCookbook() }
         }
     }
 
     // MARK: - Header
 
-    /// Custom inline header with "Cookbook" title and user icon horizontally aligned.
-    /// Replaces the default .navigationTitle to keep both elements on the same baseline.
     private var headerBar: some View {
         HStack {
             Text("Cookbook")
@@ -118,81 +135,67 @@ struct CookbookView: View {
         .padding(.horizontal, AlchemySpacing.screenHorizontal)
     }
 
-    // MARK: - Filter Chips
+    // MARK: - Filter Labels
 
-    /// Horizontal scroll of Liquid Glass filter chips for recipe categories.
     private var filterChips: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: AlchemySpacing.sm) {
-                ForEach(PreviewData.cookbookCategories, id: \.self) { filter in
+            HStack(spacing: AlchemySpacing.lg) {
+                ForEach(categories, id: \.self) { filter in
                     Button {
                         withAnimation(.easeInOut(duration: 0.2)) {
                             selectedFilter = filter
                         }
                     } label: {
                         Text(filter)
-                            .font(AlchemyTypography.captionBold)
+                            .font(.system(size: 18, weight: selectedFilter == filter ? .bold : .regular))
                             .foregroundStyle(
-                                selectedFilter == filter
-                                    ? AlchemyColors.textPrimary
-                                    : AlchemyColors.textSecondary
+                                AlchemyColors.textPrimary
+                                    .opacity(selectedFilter == filter ? 1.0 : 0.5)
                             )
-                            .padding(.horizontal, AlchemySpacing.md)
-                            .padding(.vertical, AlchemySpacing.sm)
                     }
-                    .glassEffect(
-                        selectedFilter == filter ? .regular : .clear,
-                        in: .capsule
-                    )
+                    .buttonStyle(.plain)
                 }
             }
             .padding(.horizontal, AlchemySpacing.screenHorizontal)
+            .padding(.vertical, AlchemySpacing.md)
         }
     }
 
     // MARK: - Masonry Grid
 
-    /// Two-column masonry layout with staggered heights.
-    /// LazyVGrid doesn't support variable row heights, so we manually split
-    /// cards into left/right columns and use two side-by-side LazyVStacks.
     private var masonryGrid: some View {
-        let cards = PreviewData.cookbookCards
+        let cards = filteredPreviews
         let leftCards = cards.enumerated().filter { $0.offset % 2 == 0 }.map(\.element)
         let rightCards = cards.enumerated().filter { $0.offset % 2 != 0 }.map(\.element)
 
         return HStack(alignment: .top, spacing: AlchemySpacing.gridSpacing) {
-            // Left column
             LazyVStack(spacing: AlchemySpacing.gridSpacing) {
-                ForEach(leftCards) { card in
-                    cardCell(card)
+                ForEach(leftCards) { preview in
+                    cardCell(preview)
                 }
             }
 
-            // Right column
             LazyVStack(spacing: AlchemySpacing.gridSpacing) {
-                ForEach(rightCards) { card in
-                    cardCell(card)
+                ForEach(rightCards) { preview in
+                    cardCell(preview)
                 }
             }
         }
         .padding(.horizontal, AlchemySpacing.screenHorizontal)
     }
 
-    /// Individual card cell with tap and long-press gestures.
-    private func cardCell(_ card: RecipeCard) -> some View {
-        RecipeCardView(card: card)
+    private func cardCell(_ preview: RecipePreview) -> some View {
+        RecipeCardView(card: preview.asRecipeCard)
             .onTapGesture {
-                selectedCard = card
+                selectedPreview = preview
                 withAnimation(.easeInOut(duration: 0.3)) {
                     showFullScreenPreview = true
                 }
             }
             .contextMenu {
                 Button {
-                    selectedCard = card
-                    withAnimation {
-                        showFullScreenPreview = true
-                    }
+                    selectedPreview = preview
+                    withAnimation { showFullScreenPreview = true }
                 } label: {
                     Label("View", systemImage: "eye")
                 }
@@ -203,16 +206,10 @@ struct CookbookView: View {
                     Label("Edit", systemImage: "pencil")
                 }
 
-                Button {
-                    // Add companion — triggers generate with context
-                } label: {
-                    Label("Add Companion", systemImage: "plus.circle")
-                }
-
                 ShareLink(
-                    item: card.title,
-                    subject: Text(card.title),
-                    message: Text(card.summary)
+                    item: preview.title,
+                    subject: Text(preview.title),
+                    message: Text(preview.summary)
                 ) {
                     Label("Share", systemImage: "square.and.arrow.up")
                 }
@@ -220,59 +217,100 @@ struct CookbookView: View {
                 Divider()
 
                 Button(role: .destructive) {
-                    // Delete — will call DELETE /recipes/{id}/save
+                    Task { await unsaveRecipe(preview.id) }
                 } label: {
-                    Label("Delete", systemImage: "trash")
+                    Label("Remove", systemImage: "trash")
                 }
-            } preview: {
-                RecipeCardView(card: card, fixedHeight: 330)
-                    .frame(width: 280)
             }
+    }
+
+    // MARK: - Empty / Error States
+
+    private var emptyView: some View {
+        VStack(spacing: AlchemySpacing.md) {
+            Image(systemName: "book.closed")
+                .font(.system(size: 48))
+                .foregroundStyle(AlchemyColors.textTertiary)
+            Text("No recipes yet")
+                .font(AlchemyTypography.subheading)
+                .foregroundStyle(AlchemyColors.textSecondary)
+            Text("Generate your first recipe to get started.")
+                .font(AlchemyTypography.body)
+                .foregroundStyle(AlchemyColors.textTertiary)
+        }
+    }
+
+    private func errorView(_ message: String) -> some View {
+        VStack(spacing: AlchemySpacing.md) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 48))
+                .foregroundStyle(AlchemyColors.textTertiary)
+            Text(message)
+                .font(AlchemyTypography.body)
+                .foregroundStyle(AlchemyColors.textSecondary)
+                .multilineTextAlignment(.center)
+            Button("Retry") {
+                Task { await loadCookbook() }
+            }
+            .foregroundStyle(AlchemyColors.accent)
+        }
+        .padding(.horizontal, AlchemySpacing.screenHorizontal)
+    }
+
+    // MARK: - API
+
+    private func loadCookbook() async {
+        if previews.isEmpty { isLoading = true }
+        errorMessage = nil
+
+        do {
+            let response: CookbookResponse = try await APIClient.shared.request("/recipes/cookbook")
+            previews = response.items
+        } catch {
+            errorMessage = "Couldn't load your cookbook. Check your connection."
+            print("[CookbookView] load failed: \(error)")
+        }
+
+        isLoading = false
+    }
+
+    private func unsaveRecipe(_ id: String) async {
+        do {
+            try await APIClient.shared.requestVoid("/recipes/\(id)/save", method: .delete)
+            withAnimation {
+                previews.removeAll { $0.id == id }
+            }
+        } catch {
+            print("[CookbookView] unsave failed: \(error)")
+        }
     }
 }
 
 // MARK: - Full Screen Preview
 
-/// Bottom-anchored recipe preview that slides up from the bottom, covering 90% of
-/// the screen. The top 10% remains visible so the user can drag the panel back down
-/// to dismiss. No nav bar is shown.
-///
-/// The card's image fills the panel with a dark overlay. Title, description,
-/// gauges, and "Open Recipe" are layered on top with proper text constraints.
+/// Bottom-anchored recipe preview that slides up, covering 90% of the screen.
 struct CookbookFullScreenPreview: View {
-    let card: RecipeCard
+    let preview: RecipePreview
     var onOpenRecipe: () -> Void
     var onDismiss: () -> Void
 
-    /// Drag offset for the dismiss gesture — pulling down dismisses the panel
     @State private var dragOffset: CGFloat = 0
-
-    /// Threshold in points: if the user drags down past this, we dismiss
     private let dismissThreshold: CGFloat = 120
-
-    private var stats: QuickStats {
-        PreviewData.sampleRecipe.quickStats ?? QuickStats(
-            timeMinutes: 30, difficulty: 0.5, healthScore: 0.7, ingredientCount: 8
-        )
-    }
 
     var body: some View {
         GeometryReader { geo in
             let panelHeight = geo.size.height * 0.90
 
             ZStack {
-                // Dimmed background — tap to dismiss
                 Color.black.opacity(0.4)
                     .ignoresSafeArea()
                     .onTapGesture { onDismiss() }
 
-                // Bottom-anchored panel
                 VStack {
                     Spacer()
 
                     ZStack(alignment: .top) {
-                        // Full-bleed background image clipped to panel
-                        LazyImage(url: card.imageURL) { state in
+                        LazyImage(url: preview.resolvedImageURL) { state in
                             if let image = state.image {
                                 image
                                     .resizable()
@@ -284,12 +322,9 @@ struct CookbookFullScreenPreview: View {
                         .frame(width: geo.size.width, height: panelHeight)
                         .clipped()
 
-                        // Dark overlay
                         Color.black.opacity(0.55)
 
-                        // Content
                         VStack(spacing: AlchemySpacing.lg) {
-                            // Drag handle
                             RoundedRectangle(cornerRadius: 2.5)
                                 .fill(.white.opacity(0.5))
                                 .frame(width: 36, height: 5)
@@ -297,16 +332,15 @@ struct CookbookFullScreenPreview: View {
 
                             Spacer()
 
-                            // Title and description — padded to stay within bounds
                             VStack(spacing: AlchemySpacing.sm) {
-                                Text(card.title)
+                                Text(preview.title)
                                     .font(AlchemyTypography.displayLarge)
                                     .foregroundStyle(.white)
                                     .multilineTextAlignment(.center)
                                     .lineLimit(3)
                                     .shadow(color: .black.opacity(0.5), radius: 8, x: 0, y: 2)
 
-                                Text(card.summary)
+                                Text(preview.summary)
                                     .font(AlchemyTypography.body)
                                     .foregroundStyle(.white.opacity(0.85))
                                     .multilineTextAlignment(.center)
@@ -315,19 +349,19 @@ struct CookbookFullScreenPreview: View {
                             }
                             .padding(.horizontal, AlchemySpacing.xl + AlchemySpacing.sm)
 
-                            // Gauge row
-                            HStack(spacing: AlchemySpacing.xl) {
-                                NutritionGauge.time(minutes: stats.timeMinutes)
-                                NutritionGauge.difficulty(stats.difficulty)
-                                NutritionGauge.health(stats.healthScore)
-                                NutritionGauge.ingredients(count: stats.ingredientCount)
+                            if let stats = preview.quickStats {
+                                HStack(spacing: AlchemySpacing.xxl) {
+                                    CompactGauge.time(minutes: stats.timeMinutes)
+                                    CompactGauge.difficulty(stats.difficultyNormalized)
+                                    CompactGauge.health(stats.healthNormalized)
+                                    CompactGauge.ingredients(count: stats.items)
+                                }
+                                .padding(.top, AlchemySpacing.md)
                             }
-                            .padding(.top, AlchemySpacing.sm)
 
                             Spacer()
                                 .frame(height: AlchemySpacing.md)
 
-                            // Open Recipe button — positioned in the lower third
                             Button {
                                 onOpenRecipe()
                             } label: {
@@ -373,5 +407,27 @@ struct CookbookFullScreenPreview: View {
                 .ignoresSafeArea(edges: .bottom)
             }
         }
+    }
+}
+
+// MARK: - RecipePreview → RecipeCard Conversion
+
+extension RecipePreview {
+    /// Converts an API RecipePreview to the UI RecipeCard model for
+    /// compatibility with RecipeCardView and other existing components.
+    var asRecipeCard: RecipeCard {
+        RecipeCard(
+            id: id,
+            title: title,
+            summary: summary,
+            category: category,
+            imageURL: resolvedImageURL,
+            imageStatus: ImageStatus(rawValue: imageStatus) ?? .pending,
+            updatedAt: ISO8601DateFormatter().date(from: updatedAt) ?? .now,
+            cookTimeMinutes: quickStats?.timeMinutes ?? 30,
+            difficulty: quickStats?.difficultyNormalized ?? 0.5,
+            healthScore: quickStats?.healthNormalized ?? 0.5,
+            ingredientCount: quickStats?.items ?? 8
+        )
     }
 }

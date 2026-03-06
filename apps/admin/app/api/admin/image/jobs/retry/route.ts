@@ -15,7 +15,7 @@ export async function POST(request: Request): Promise<NextResponse> {
 
   const client = getAdminClient();
   const { error } = await client
-    .from("recipe_image_jobs")
+    .from("image_jobs")
     .update({ status: "pending", next_attempt_at: new Date().toISOString(), updated_at: new Date().toISOString() })
     .eq("id", body.job_id);
 

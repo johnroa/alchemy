@@ -116,7 +116,7 @@ enum PreviewData {
     ]
 
     static let onboardingMessages: [ChatMessage] = [
-        ChatMessage(id: "ob-1", role: .assistant, content: "Welcome to Alchemy! I'm here to learn what you love to cook and eat. Let's start simple — do you have any dietary preferences or restrictions?", createdAt: .now.addingTimeInterval(-300)),
+        ChatMessage(id: "ob-1", role: .assistant, content: "Welcome to Alchemy! I'm your personal chef assistant. Tell me a little about yourself — who are you cooking for, and how comfortable are you in the kitchen?", createdAt: .now.addingTimeInterval(-300)),
     ]
 
     // MARK: - Explore Cards
@@ -127,9 +127,13 @@ enum PreviewData {
             title: "Seared Duck Breast",
             summary: "Perfectly rendered duck with cherry gastrique and roasted root vegetables",
             category: "French",
-            imageURL: URL(string: "https://images.unsplash.com/photo-1432139509613-5c4255a1d197?w=1200&q=80"),
+            imageURL: URL(string: "https://images.unsplash.com/photo-1580554530778-ca36943938b2?w=1200&q=80"),
             imageStatus: .ready,
-            updatedAt: .now
+            updatedAt: .now,
+            cookTimeMinutes: 75,
+            difficulty: 0.7,
+            healthScore: 0.65,
+            ingredientCount: 12
         ),
         RecipeCard(
             id: "e2",
@@ -138,7 +142,11 @@ enum PreviewData {
             category: "Mediterranean",
             imageURL: URL(string: "https://images.unsplash.com/photo-1565557623262-b51c2513a641?w=1200&q=80"),
             imageStatus: .ready,
-            updatedAt: .now
+            updatedAt: .now,
+            cookTimeMinutes: 55,
+            difficulty: 0.8,
+            healthScore: 0.75,
+            ingredientCount: 9
         ),
         RecipeCard(
             id: "e3",
@@ -147,7 +155,11 @@ enum PreviewData {
             category: "Italian",
             imageURL: URL(string: "https://images.unsplash.com/photo-1473093295043-cdd812d0e601?w=1200&q=80"),
             imageStatus: .ready,
-            updatedAt: .now
+            updatedAt: .now,
+            cookTimeMinutes: 40,
+            difficulty: 0.5,
+            healthScore: 0.45,
+            ingredientCount: 7
         ),
         RecipeCard(
             id: "e4",
@@ -156,7 +168,11 @@ enum PreviewData {
             category: "Korean",
             imageURL: URL(string: "https://images.unsplash.com/photo-1544025162-d76694265947?w=1200&q=80"),
             imageStatus: .ready,
-            updatedAt: .now
+            updatedAt: .now,
+            cookTimeMinutes: 90,
+            difficulty: 0.4,
+            healthScore: 0.55,
+            ingredientCount: 14
         ),
     ]
 

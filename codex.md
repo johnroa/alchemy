@@ -5,7 +5,7 @@ Alchemy is an iOS-first, API-driven recipe app. Users set dietary/skill/equipmen
 
 ## Monorepo Structure
 ```
-apps/mobile/          Expo 52 React Native (iOS-first)
+apps/ios/             Native SwiftUI iOS app
 apps/admin/           Next.js 15 admin dashboard
 infra/cloudflare/     Cloudflare Worker API gateway (TypeScript)
 supabase/             Auth, Postgres, Edge Functions (LLM gateway)
@@ -31,44 +31,18 @@ packages/shared/      Shared utilities
 - Remove LLM call: remove callsite/wrapper/scope and add migration deactivating corresponding scope rows.
 - Direct provider endpoints (`api.openai.com`, `api.anthropic.com`, `generativelanguage.googleapis.com`) are allowed only in `supabase/functions/_shared/llm-adapters/*`.
 
-## Mobile Stack (`apps/mobile/`)
-- **Expo Router** — file-based routing
-- **TanStack Query v5** — all server state, caching, retries
-- **Zustand v5** — UI-only state (toggles, ephemeral chat input); never server data
-- **React Native Reanimated 3 + Gesture Handler** — animations and gestures
-- **Supabase JS** — auth session via `lib/auth.tsx` and `lib/supabase.ts`
-- **Custom design system** — `components/alchemy/primitives.tsx` + `theme.ts`
-- API calls go through `lib/api.ts` → Cloudflare Worker
+## iOS App (`apps/ios/`)
+- **SwiftUI** — native iOS views and navigation
+- **Observable state** — view-local state and feature orchestration
+- **XcodeGen** — project generation from `apps/ios/project.yml`
+- **SPM** — package management for iOS dependencies
+- API calls go through the Cloudflare gateway at `https://api.cookwithalchemy.com/v1`
 
-### Mobile Conventions
-Query keys:
-```ts
-['me']
-['preferences']
-['recipes', 'feed', filters]
-['recipes', id]
-['collections']
-['collections', id]
-['search', query, filters]
-```
-
-Zustand (`lib/ui-store.ts`) is for: measurement display mode, servings scaling, ephemeral chat text, temporary filter state. Not for recipes or preferences.
-
-Route structure:
-```
-/sign-in, /register, /onboarding       auth/setup flows
-/(tabs)/generate                        prompt-to-recipe
-/(tabs)/my-cookbook                     saved recipes + collections
-/preferences, /settings                 user config
-```
-
-UI standards:
-- Touch targets ≥ 44×44
-- Skeleton loaders for primary content
-- Pull-to-refresh where appropriate
-- Subtle haptics for key actions (save, generate, tweak)
-- Keyboard avoidance on all inputs
-- Dark mode supported
+### iOS Conventions
+- Keep product logic server-side; the app should remain API-driven.
+- Treat `apps/ios/Alchemy/Features/*` as the main feature boundaries.
+- Keep shared visual primitives under `apps/ios/Alchemy/DesignSystem/*`.
+- Preserve loading, empty, and error states for user-facing flows.
 
 ## Admin Stack (`apps/admin/`)
 - **Next.js 15** (App Router)
@@ -152,9 +126,10 @@ The OpenAPI spec (`packages/contracts/openapi.yaml`) is the source of truth. On 
    ```bash
    pnpm --filter @alchemy/contracts generate
    pnpm --filter @alchemy/contracts generate:json
+   pnpm admin:routes:generate
    cp packages/contracts/openapi.json apps/admin/lib/openapi-spec.json
    ```
-4. If admin routes changed: edit `apps/admin/lib/admin-routes.ts`
+4. If admin routes changed: regenerate `apps/admin/lib/admin-routes.ts`
 5. Add CHANGELOG.md entry
 6. Deploy affected services
 7. Commit generated files with the source change

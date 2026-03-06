@@ -21,6 +21,7 @@ export {
   getImagePipelineData,
   getMetadataPipelineData,
 } from "./admin-data/pipelines";
+export { getImagesDashboardData } from "./admin-data/images";
 export { getIngredientsData } from "./admin-data/ingredients";
 export {
   getImageSimulationData,

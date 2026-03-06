@@ -554,7 +554,7 @@ export const buildRecipeSearchDocument = (
     image_url: resolvedImageUrl,
     image_status: resolvedImageStatus,
     explore_eligible: params.visibility === "public" &&
-      resolvedImageUrl.length > 0,
+      Boolean(resolvedImageUrl),
     title,
     summary,
     time_minutes: normalizeFiniteInteger(metadata?.time_minutes),
@@ -573,7 +573,7 @@ export const buildRecipeSearchDocument = (
   };
 };
 
-const loadRecipeSearchDocumentSource = async (params: {
+export const loadRecipeSearchDocumentSource = async (params: {
   serviceClient: SupabaseClient;
   recipeId: string;
   recipeVersionId: string;

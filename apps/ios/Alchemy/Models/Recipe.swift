@@ -74,6 +74,12 @@ struct RecipeCard: Identifiable, Hashable {
     let imageURL: URL?
     let imageStatus: ImageStatus
     let updatedAt: Date
+
+    // Quick-stat data for explore card gauges (TikTok-style right rail)
+    var cookTimeMinutes: Int = 45
+    var difficulty: Double = 0.5
+    var healthScore: Double = 0.65
+    var ingredientCount: Int = 10
 }
 
 /// Chat message used across Generate and Onboarding chat interfaces.
@@ -82,6 +88,9 @@ struct ChatMessage: Identifiable, Hashable {
     let role: MessageRole
     let content: String
     let createdAt: Date
+    /// When true, the bubble shows an animated chef loading phrase
+    /// instead of `content`. Set to false once the real reply arrives.
+    var isLoading: Bool = false
 }
 
 enum MessageRole: String, Hashable {

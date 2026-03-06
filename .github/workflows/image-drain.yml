@@ -1,0 +1,81 @@
+name: Image Queue Drain
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/5 * * * *"
+
+concurrency:
+  group: image-drain
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  drain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    env:
+      PROJECT_REF: dwptbjcxrsmmgjmnumpg
+      API_BASE_URL: https://api.cookwithalchemy.com/v1
+      SIM_USER_EMAIL: sim-1772428603705@cookwithalchemy.com
+      SUPABASE_PAT: ${{ secrets.SUPABASE_PAT }}
+
+    steps:
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Validate required secrets
+        run: |
+          test -n "$SUPABASE_PAT" || (echo "Missing SUPABASE_PAT" && exit 1)
+
+      - name: Authenticate CLI
+        run: supabase login --token "$SUPABASE_PAT"
+
+      - name: Fetch service role key
+        id: keys
+        run: |
+          SERVICE_KEY=$(supabase projects api-keys --project-ref "$PROJECT_REF" -o json | jq -r '.[] | select(.name=="service_role") | .api_key' | head -n 1)
+          test -n "$SERVICE_KEY" || (echo "Could not resolve service role key" && exit 1)
+          echo "service_key=$SERVICE_KEY" >> "$GITHUB_OUTPUT"
+
+      - name: Acquire simulation token
+        id: token
+        run: |
+          SERVICE_KEY='${{ steps.keys.outputs.service_key }}'
+          SUPABASE_URL="https://${PROJECT_REF}.supabase.co"
+          OTP=$(curl -sS "$SUPABASE_URL/auth/v1/admin/generate_link" \
+            -H "Authorization: Bearer $SERVICE_KEY" \
+            -H "apikey: $SERVICE_KEY" \
+            -H "Content-Type: application/json" \
+            -d "{\"type\":\"magiclink\",\"email\":\"${SIM_USER_EMAIL}\"}" | jq -r '.email_otp // .properties.email_otp // ""')
+          test -n "$OTP" || (echo "Could not acquire simulation OTP" && exit 1)
+          TOKEN=$(curl -sS "$SUPABASE_URL/auth/v1/verify" \
+            -H "apikey: $SERVICE_KEY" \
+            -H "Content-Type: application/json" \
+            -d "{\"type\":\"magiclink\",\"token\":\"${OTP}\",\"email\":\"${SIM_USER_EMAIL}\"}" | jq -r '.access_token')
+          test -n "$TOKEN" || (echo "Could not acquire simulation token" && exit 1)
+          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
+
+      - name: Drain queue batches
+        run: |
+          TOKEN='${{ steps.token.outputs.token }}'
+          for i in 1 2 3 4 5 6 7 8; do
+            echo "processing batch $i"
+            RESPONSE=$(curl -sS --max-time 90 "$API_BASE_URL/image-jobs/process" \
+              -H "Authorization: Bearer $TOKEN" \
+              -H "Content-Type: application/json" \
+              -d '{"limit":10}')
+
+            echo "$RESPONSE" | jq -c '{processed,ready,failed,pending}'
+
+            PROCESSED=$(echo "$RESPONSE" | jq -r '.processed // 0')
+            if [ "$PROCESSED" -eq 0 ]; then
+              break
+            fi
+            sleep 2
+          done

@@ -1,3 +1,4 @@
+import { normalizeDelimitedToken } from "@alchemy/shared/text-normalization";
 import { NextResponse } from "next/server";
 import { getAdminClient, requireCloudflareAccess } from "@/lib/supabase-admin";
 
@@ -142,13 +143,7 @@ const normalizeOntologyTerm = (
 };
 
 const normalizeOntologyToken = (value: string): string =>
-  value
-    .trim()
-    .toLocaleLowerCase()
-    .normalize("NFKD")
-    .replace(/[^a-z0-9\s:_-]/g, " ")
-    .replace(/\s+/g, "_")
-    .replace(/^_+|_+$/g, "");
+  normalizeDelimitedToken(value);
 
 const singularizeToken = (value: string): string => {
   if (value.length <= 3) {

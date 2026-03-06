@@ -20,7 +20,7 @@ struct TabShell: View {
             }
 
             Tab("Generate", systemImage: "wand.and.stars", value: .generate) {
-                GenerateView()
+                GenerateView(selectedTab: $selectedTab)
             }
 
             Tab("Explore", systemImage: "safari", value: .explore) {

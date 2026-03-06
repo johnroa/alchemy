@@ -55,6 +55,13 @@ import {
   backfillRecipeSearchDocuments,
 } from "./recipe-search.ts";
 import {
+  attachCommittedCandidateImages,
+  enrollCandidateImageRequests,
+  ensurePersistedRecipeImageRequest,
+  hydrateCandidateRecipeSetImages,
+  processImageJobs as processCandidateImageJobs,
+} from "./recipe-image-pipeline.ts";
+import {
   resolveRecipeImageStatus,
   resolveRecipeImageUrl,
 } from "./recipe-images.ts";
@@ -153,6 +160,8 @@ type CandidateRecipeComponent = {
   component_id: string;
   role: CandidateRecipeRole;
   title: string;
+  image_url: string | null;
+  image_status: "pending" | "processing" | "ready" | "failed";
   recipe: RecipePayload;
 };
 
@@ -220,6 +229,29 @@ const normalizeCandidateRole = (value: unknown): CandidateRecipeRole => {
   return "main";
 };
 
+const normalizeCandidateImageUrl = (value: unknown): string | null => {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : null;
+};
+
+const normalizeCandidateImageStatus = (
+  value: unknown,
+): "pending" | "processing" | "ready" | "failed" => {
+  const normalized = typeof value === "string"
+    ? value.trim().toLowerCase()
+    : "";
+  if (
+    normalized === "pending" || normalized === "processing" ||
+    normalized === "ready" || normalized === "failed"
+  ) {
+    return normalized;
+  }
+  return "pending";
+};
+
 const normalizeCandidateRecipeSet = (
   candidate: unknown,
 ): CandidateRecipeSet | null => {
@@ -264,6 +296,8 @@ const normalizeCandidateRecipeSet = (
         component_id: componentId,
         role: normalizeCandidateRole(value.role),
         title,
+        image_url: normalizeCandidateImageUrl(value.image_url),
+        image_status: normalizeCandidateImageStatus(value.image_status),
         recipe: normalizedRecipe,
       };
     })
@@ -316,6 +350,8 @@ const wrapRecipeInCandidateSet = (
         component_id: componentId,
         role: "main",
         title: recipe.title,
+        image_url: null,
+        image_status: "pending",
         recipe,
       },
     ],
@@ -954,27 +990,6 @@ const logChangelog = async (params: {
 
   if (error) {
     console.error("changelog_log_failed", error);
-  }
-};
-
-const enqueueImageJob = async (
-  client: SupabaseClient,
-  recipeId: string,
-  errorMessage?: string,
-): Promise<void> => {
-  const { error } = await client.from("recipe_image_jobs").upsert(
-    {
-      recipe_id: recipeId,
-      status: "pending",
-      next_attempt_at: new Date().toISOString(),
-      last_error: errorMessage ?? null,
-      updated_at: new Date().toISOString(),
-    },
-    { onConflict: "recipe_id" },
-  );
-
-  if (error) {
-    console.error("recipe_image_job_enqueue_failed", error);
   }
 };
 
@@ -4510,6 +4525,34 @@ const scheduleMetadataQueueDrain = (params: {
   runInBackground(task);
 };
 
+const scheduleImageQueueDrain = (params: {
+  serviceClient: SupabaseClient;
+  actorUserId: string;
+  requestId: string;
+  limit?: number;
+  modelOverrides?: ModelOverrideMap;
+}): void => {
+  const limit = Number.isFinite(Number(params.limit))
+    ? Math.max(1, Math.min(20, Number(params.limit)))
+    : 5;
+
+  const task = processCandidateImageJobs({
+    serviceClient: params.serviceClient,
+    userId: params.actorUserId,
+    requestId: params.requestId,
+    limit,
+    modelOverrides: params.modelOverrides,
+  }).then(() => undefined).catch((error) => {
+    console.error("image_queue_drain_failed", {
+      request_id: params.requestId,
+      actor_user_id: params.actorUserId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
+
+  runInBackground(task);
+};
+
 const fetchGraphNeighborhood = async (params: {
   client: SupabaseClient;
   seedEntityIds: string[];
@@ -6325,6 +6368,8 @@ const candidateFromRecipePayload = (
         crypto.randomUUID(),
       role: "main",
       title: recipe.title,
+      image_url: null,
+      image_status: "pending",
       recipe: removeRecipeAttachments(recipe),
     },
   ];
@@ -6336,6 +6381,8 @@ const candidateFromRecipePayload = (
       component_id: crypto.randomUUID(),
       role: mapRelationTypeToCandidateRole(attachment.relation_type),
       title: attachment.title?.trim() || attachment.recipe.title,
+      image_url: null,
+      image_status: "pending",
       recipe: removeRecipeAttachments(attachment.recipe as RecipePayload),
     });
   }
@@ -6971,233 +7018,6 @@ const orchestrateChatTurn = async (params: {
   };
 };
 
-const processImageJobs = async (params: {
-  userClient: SupabaseClient;
-  serviceClient: SupabaseClient;
-  userId: string;
-  requestId: string;
-  limit: number;
-}): Promise<{
-  processed: number;
-  ready: number;
-  failed: number;
-  pending: number;
-}> => {
-  const { data: jobs, error: jobsError } = await params.userClient
-    .from("recipe_image_jobs")
-    .select("id,recipe_id,attempt,max_attempts,status")
-    .in("status", ["pending", "failed"])
-    .order("updated_at", { ascending: true })
-    .limit(params.limit);
-
-  if (jobsError) {
-    throw new ApiError(
-      500,
-      "image_jobs_fetch_failed",
-      "Could not fetch image jobs",
-      jobsError.message,
-    );
-  }
-
-  if (!jobs || jobs.length === 0) {
-    return { processed: 0, ready: 0, failed: 0, pending: 0 };
-  }
-
-  const preferences = await getPreferences(params.userClient, params.userId);
-  const snapshot = await getMemorySnapshot(params.userClient, params.userId);
-
-  let ready = 0;
-  let failed = 0;
-  let pending = 0;
-
-  for (const job of jobs) {
-    const nextAttempt = Number(job.attempt) + 1;
-    await params.userClient
-      .from("recipe_image_jobs")
-      .update({
-        status: "processing",
-        attempt: nextAttempt,
-        updated_at: new Date().toISOString(),
-        locked_at: new Date().toISOString(),
-        locked_by: "v1_image_jobs_process",
-      })
-      .eq("id", job.id);
-
-    const { data: recipe, error: recipeError } = await params.userClient
-      .from("recipes")
-      .select("id,current_version_id")
-      .eq("id", job.recipe_id)
-      .maybeSingle();
-
-    if (recipeError || !recipe?.current_version_id) {
-      await params.userClient
-        .from("recipe_image_jobs")
-        .update({
-          status: "failed",
-          last_error: "recipe_or_current_version_missing",
-          updated_at: new Date().toISOString(),
-          locked_at: null,
-          locked_by: null,
-        })
-        .eq("id", job.id);
-      await logChangelog({
-        serviceClient: params.serviceClient,
-        actorUserId: params.userId,
-        scope: "image",
-        entityType: "recipe",
-        entityId: job.recipe_id,
-        action: "image_failed",
-        requestId: params.requestId,
-        afterJson: {
-          reason: "recipe_or_current_version_missing",
-        },
-      });
-      failed += 1;
-      continue;
-    }
-
-    const { data: version, error: versionError } = await params.userClient
-      .from("recipe_versions")
-      .select("payload")
-      .eq("id", recipe.current_version_id)
-      .maybeSingle();
-
-    if (versionError || !version?.payload) {
-      await params.userClient
-        .from("recipe_image_jobs")
-        .update({
-          status: "failed",
-          last_error: "recipe_payload_missing",
-          updated_at: new Date().toISOString(),
-          locked_at: null,
-          locked_by: null,
-        })
-        .eq("id", job.id);
-      await logChangelog({
-        serviceClient: params.serviceClient,
-        actorUserId: params.userId,
-        scope: "image",
-        entityType: "recipe",
-        entityId: job.recipe_id,
-        action: "image_failed",
-        requestId: params.requestId,
-        afterJson: {
-          reason: "recipe_payload_missing",
-        },
-      });
-      failed += 1;
-      continue;
-    }
-
-    const recipePayload = version.payload as RecipePayload;
-
-    try {
-      const imageUrl = await llmGateway.generateRecipeImage({
-        client: params.serviceClient,
-        userId: params.userId,
-        requestId: params.requestId,
-        recipe: recipePayload,
-        context: {
-          preferences,
-          preferences_natural_language: buildNaturalLanguagePreferenceContext(
-            preferences,
-          ),
-          memory_snapshot: snapshot,
-        },
-      });
-
-      await params.userClient
-        .from("recipes")
-        .update({
-          hero_image_url: imageUrl,
-          image_status: "ready",
-          image_last_error: null,
-          image_updated_at: new Date().toISOString(),
-          image_generation_attempts: nextAttempt,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", job.recipe_id);
-
-      await params.userClient
-        .from("recipe_image_jobs")
-        .update({
-          status: "ready",
-          last_error: null,
-          updated_at: new Date().toISOString(),
-          locked_at: null,
-          locked_by: null,
-        })
-        .eq("id", job.id);
-
-      await logChangelog({
-        serviceClient: params.serviceClient,
-        actorUserId: params.userId,
-        scope: "image",
-        entityType: "recipe",
-        entityId: job.recipe_id,
-        action: "image_ready",
-        requestId: params.requestId,
-      });
-      ready += 1;
-    } catch (error) {
-      const message = error instanceof Error
-        ? error.message
-        : "image_generation_failed";
-      const terminalFailure = nextAttempt >= Number(job.max_attempts);
-      await params.userClient
-        .from("recipes")
-        .update({
-          image_status: terminalFailure ? "failed" : "pending",
-          image_last_error: message,
-          image_updated_at: new Date().toISOString(),
-          image_generation_attempts: nextAttempt,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", job.recipe_id);
-
-      await params.userClient
-        .from("recipe_image_jobs")
-        .update({
-          status: terminalFailure ? "failed" : "pending",
-          last_error: message,
-          next_attempt_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-          locked_at: null,
-          locked_by: null,
-        })
-        .eq("id", job.id);
-
-      await logChangelog({
-        serviceClient: params.serviceClient,
-        actorUserId: params.userId,
-        scope: "image",
-        entityType: "recipe",
-        entityId: job.recipe_id,
-        action: terminalFailure ? "image_failed" : "image_retry_scheduled",
-        requestId: params.requestId,
-        afterJson: {
-          reason: message,
-          attempt: nextAttempt,
-          terminal_failure: terminalFailure,
-        },
-      });
-
-      if (terminalFailure) {
-        failed += 1;
-      } else {
-        pending += 1;
-      }
-    }
-  }
-
-  return {
-    processed: jobs.length,
-    ready,
-    failed,
-    pending,
-  };
-};
-
 Deno.serve(async (request) => {
   const requestId = crypto.randomUUID();
   const requestStartedAt = Date.now();
@@ -7374,7 +7194,14 @@ Deno.serve(async (request) => {
     const metadataResponse = await handleMetadataRoutes(routeContext, {
       parseUuid,
       logChangelog,
-      processImageJobs,
+      processImageJobs: async (input) => {
+        return await processCandidateImageJobs({
+          serviceClient: input.serviceClient,
+          userId: input.userId,
+          requestId: input.requestId,
+          limit: input.limit,
+        });
+      },
       processMetadataJobs,
       backfillRecipeSearchDocuments: async (input) => {
         return await backfillRecipeSearchDocuments({
@@ -7409,7 +7236,8 @@ Deno.serve(async (request) => {
       logChangelog,
       buildCookbookItems,
       buildCookbookInsightDeterministic,
-      enqueueImageJob,
+      ensurePersistedRecipeImageRequest,
+      scheduleImageQueueDrain,
       searchRecipes: async (input) => {
         return await searchRecipes({
           serviceClient: input.serviceClient,
@@ -7449,11 +7277,37 @@ Deno.serve(async (request) => {
       extractChatContext,
       extractLatestAssistantReply,
       normalizeCandidateRecipeSet,
+      hydrateCandidateRecipeSetImages: async (input) => {
+        return await hydrateCandidateRecipeSetImages({
+          serviceClient: input.serviceClient,
+          chatId: input.chatId,
+          candidateSet: input.candidateSet,
+        });
+      },
+      enrollCandidateImageRequests: async (input) => {
+        return await enrollCandidateImageRequests({
+          serviceClient: input.serviceClient,
+          userId: input.userId,
+          requestId: input.requestId,
+          chatId: input.chatId,
+          candidateSet: input.candidateSet,
+        });
+      },
+      attachCommittedCandidateImages: async (input) => {
+        await attachCommittedCandidateImages({
+          serviceClient: input.serviceClient,
+          userId: input.userId,
+          requestId: input.requestId,
+          chatId: input.chatId,
+          candidateSet: input.candidateSet,
+          committedRecipes: input.committedRecipes,
+        });
+      },
       deriveLoopState,
       buildCandidateOutlineForPrompt,
       parseUuid,
       persistRecipe,
-      enqueueImageJob,
+      scheduleImageQueueDrain,
       mapCandidateRoleToRelation,
       resolveRelationTypeId,
       fetchChatMessages,

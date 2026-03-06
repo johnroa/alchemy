@@ -157,7 +157,8 @@ const createDeps = (overrides: Record<string, unknown> = {}) => ({
   logChangelog: unused,
   buildCookbookItems: async () => [] as RecipePreview[],
   buildCookbookInsightDeterministic: () => null,
-  enqueueImageJob: unused,
+  ensurePersistedRecipeImageRequest: unused,
+  scheduleImageQueueDrain: unused,
   searchRecipes,
   toJsonValue: (value: unknown) => value,
   ...overrides,
@@ -202,6 +203,47 @@ const createRouteContext = (input: {
 
 const parseJson = async (response: Response) => {
   return await response.json() as Record<string, unknown>;
+};
+
+const createRecipeSaveClient = (currentVersionId: string | null) => {
+  const savedPairs: Array<{ user_id: string; recipe_id: string }> = [];
+
+  return {
+    savedPairs,
+    client: {
+      from(table: string) {
+        if (table === "recipe_saves") {
+          return {
+            async upsert(payload: { user_id: string; recipe_id: string }) {
+              savedPairs.push(payload);
+              return { error: null };
+            },
+          };
+        }
+
+        if (table === "recipes") {
+          return {
+            select(_columns: string) {
+              return {
+                eq(_column: string, _value: string) {
+                  return {
+                    async maybeSingle() {
+                      return {
+                        data: currentVersionId ? { current_version_id: currentVersionId } : null,
+                        error: null,
+                      };
+                    },
+                  };
+                },
+              };
+            },
+          };
+        }
+
+        throw new Error(`unexpected table: ${table}`);
+      },
+    },
+  };
 };
 
 Deno.test("GET /recipes/cookbook returns the preview shape plus cookbook_insight", async () => {
@@ -450,5 +492,52 @@ Deno.test("OpenAPI uses RecipePreview for cookbook and search responses", () => 
     if (!required.includes(key)) {
       throw new Error(`expected RecipePreview.required to include ${key}`);
     }
+  }
+});
+
+Deno.test("POST /recipes/{id}/save attaches the persisted version to the image pipeline", async () => {
+  const recipeClient = createRecipeSaveClient("version-123");
+  const ensureCalls: Array<{ recipeId: string; recipeVersionId: string }> = [];
+  const scheduleCalls: Array<{ limit?: number }> = [];
+
+  const response = await handleRecipeRoutes(
+    createRouteContext({
+      path: "/recipes/recipe-123/save",
+      method: "POST",
+      client: recipeClient.client,
+      serviceClient: {},
+    }) as never,
+    createDeps({
+      logChangelog: async () => undefined,
+      ensurePersistedRecipeImageRequest: async (
+        input: { recipeId: string; recipeVersionId: string },
+      ) => {
+        ensureCalls.push(input);
+      },
+      scheduleImageQueueDrain: (input: { limit?: number }) => {
+        scheduleCalls.push({ limit: input.limit });
+      },
+    }) as never,
+  );
+
+  if (!response || response.status !== 200) {
+    throw new Error("expected save route response");
+  }
+
+  const body = await parseJson(response);
+  if (body.saved !== true) {
+    throw new Error("expected saved=true response");
+  }
+  if (recipeClient.savedPairs.length !== 1) {
+    throw new Error("expected recipe save upsert");
+  }
+  if (ensureCalls.length !== 1) {
+    throw new Error("expected persisted recipe image request attachment");
+  }
+  if (ensureCalls[0].recipeId !== "recipe-123" || ensureCalls[0].recipeVersionId !== "version-123") {
+    throw new Error("expected save route to attach the current recipe version");
+  }
+  if (scheduleCalls.length !== 1 || scheduleCalls[0].limit !== 5) {
+    throw new Error("expected image queue drain scheduling after save");
   }
 });

@@ -2106,6 +2106,9 @@ export interface components {
             /** @enum {string} */
             role: "main" | "side" | "appetizer" | "dessert" | "drink";
             title: string;
+            image_url: string | null;
+            /** @enum {string} */
+            image_status: "pending" | "processing" | "ready" | "failed";
             recipe: components["schemas"]["RecipePayload"];
         };
         CandidateRecipeSet: {

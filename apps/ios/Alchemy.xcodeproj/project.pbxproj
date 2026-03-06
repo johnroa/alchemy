@@ -9,8 +9,12 @@
 /* Begin PBXBuildFile section */
 		0102A7DABC96D0AF3534FE85 /* RecipeDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 635F4D1E11354088D7E60332 /* RecipeDetailView.swift */; };
 		09F9CB80C3738977CD00F63B /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D92723C258CA540A3F92B30C /* SettingsView.swift */; };
+		0CC44F91B845E0A2A59565C2 /* AnimatedMeshBackground.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9BC218713992D6BA03C55B5 /* AnimatedMeshBackground.swift */; };
 		13D3D15DE40CEB19C2055317 /* NukeUI in Frameworks */ = {isa = PBXBuildFile; productRef = 8D91DB8AD300F7012A81FA10 /* NukeUI */; };
+		18E73A73E21723DD2702F997 /* APIModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6846E9DD30BF0EE67FFB668 /* APIModels.swift */; };
+		1BCAA1BF4DDE155C7DFDC1AD /* CompactGauge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68F1901D9F8AEF2C890D5D53 /* CompactGauge.swift */; };
 		254C6E7CC41F99739F9F995E /* PreferencesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EDCB8A192471A69938D2F32F /* PreferencesView.swift */; };
+		25C0EDE087DEC767163A670F /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2E3C78202A1FFEE730D31FE /* APIClient.swift */; };
 		298E8D59DB41594A075B7D81 /* AlchemyTypography.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE0962ABEA0819410B795078 /* AlchemyTypography.swift */; };
 		2B0B3C95404A842218E3042D /* alchemy-loading.json in Resources */ = {isa = PBXBuildFile; fileRef = E7D059A499F94C5F767F33CB /* alchemy-loading.json */; };
 		313B3438DB832ED7AA62728E /* PreviewData.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4AC78BEDA2FB83D1AC2B0BC /* PreviewData.swift */; };
@@ -25,44 +29,52 @@
 		60968686BEA8C1AA49E0E1DB /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59C6013CE1030E98DF4E617B /* ContentView.swift */; };
 		67419F9DFC457F1F202E8B54 /* Supabase in Frameworks */ = {isa = PBXBuildFile; productRef = 768CD6AAFD77D3BB27D13150 /* Supabase */; };
 		698B3C7D3C46D818CB832386 /* GlassInputBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87391E8941518B7568F1F1D3 /* GlassInputBar.swift */; };
-		718E3CB386298F276E37414A /* SignInView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB746D9E26C33380D14F46AD /* SignInView.swift */; };
-		8E6CD4F56B3DE69D1DE1103B /* RegisterView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6764C35BB229A65455736E11 /* RegisterView.swift */; };
 		92B2D41E5F1EF5194B385E98 /* TabShell.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1905F952E153213B82628C1E /* TabShell.swift */; };
 		9F99918ACFA548C23B11F940 /* Lottie in Frameworks */ = {isa = PBXBuildFile; productRef = 92C2805B6E32180FC1015CF1 /* Lottie */; };
+		A8F2490B77EECF2BFF284BAC /* SupabaseManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B8F424DA5D2661C4CB5914A /* SupabaseManager.swift */; };
 		ABD002AB352654AB6DE0B7DE /* CookbookView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0217F804B0511D28857FC816 /* CookbookView.swift */; };
 		B79A39E174485B7BAA126A2D /* ChatBubble.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE34608B8617C7346206908A /* ChatBubble.swift */; };
 		C443599D1A92A4DE6694A063 /* NutritionGauge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20A4C7C99FB3A4527D8BD1AA /* NutritionGauge.swift */; };
 		C9397C3E69FB3E3AEA3A458F /* Recipe.swift in Sources */ = {isa = PBXBuildFile; fileRef = B797512F015EA11E3535ED6B /* Recipe.swift */; };
 		CF48116E892E4614B5C29EC1 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E5E7F9B8EADC528775CC62E /* OnboardingView.swift */; };
+		E6D7A1B09ABAB6A8B49EA54D /* AuthManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 815B265102D0AC689E0800AB /* AuthManager.swift */; };
 		F205CC290343B5D206997842 /* AlchemyApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 680B4527FA728D679417F0A5 /* AlchemyApp.swift */; };
+		F5372D3CC30E4886B6B137EE /* APIError.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A19FF6B7729BFE0C2694901 /* APIError.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		0217F804B0511D28857FC816 /* CookbookView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CookbookView.swift; sourceTree = "<group>"; };
 		02EC5BA4511893A5F8586B47 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		0B8F424DA5D2661C4CB5914A /* SupabaseManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupabaseManager.swift; sourceTree = "<group>"; };
+		0DBDD34995EA79A8AB727747 /* Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Debug.xcconfig; sourceTree = "<group>"; };
 		1905F952E153213B82628C1E /* TabShell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabShell.swift; sourceTree = "<group>"; };
 		1C28B61F4E21CEE9BBC0973A /* AlchemyColors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlchemyColors.swift; sourceTree = "<group>"; };
 		20A4C7C99FB3A4527D8BD1AA /* NutritionGauge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NutritionGauge.swift; sourceTree = "<group>"; };
+		31A803D819EE21D9B9F1C894 /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Release.xcconfig; sourceTree = "<group>"; };
 		3CBE1C0886A1C2E204748114 /* ProfileMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileMenu.swift; sourceTree = "<group>"; };
 		47F2029BC56872F28BD677E1 /* Alchemy.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Alchemy.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		4A19FF6B7729BFE0C2694901 /* APIError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIError.swift; sourceTree = "<group>"; };
 		4CD75C625E706ECE7EB76187 /* GenerateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerateView.swift; sourceTree = "<group>"; };
 		59C6013CE1030E98DF4E617B /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		635F4D1E11354088D7E60332 /* RecipeDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecipeDetailView.swift; sourceTree = "<group>"; };
-		6764C35BB229A65455736E11 /* RegisterView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RegisterView.swift; sourceTree = "<group>"; };
 		680B4527FA728D679417F0A5 /* AlchemyApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlchemyApp.swift; sourceTree = "<group>"; };
+		68F1901D9F8AEF2C890D5D53 /* CompactGauge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompactGauge.swift; sourceTree = "<group>"; };
 		6B23DB2CD81D8EA131F8420C /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		7E5E7F9B8EADC528775CC62E /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
+		815B265102D0AC689E0800AB /* AuthManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthManager.swift; sourceTree = "<group>"; };
 		87391E8941518B7568F1F1D3 /* GlassInputBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlassInputBar.swift; sourceTree = "<group>"; };
 		A6AA8D5FB7A26CA063097587 /* RecipeCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecipeCardView.swift; sourceTree = "<group>"; };
 		AE34608B8617C7346206908A /* ChatBubble.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatBubble.swift; sourceTree = "<group>"; };
+		B6846E9DD30BF0EE67FFB668 /* APIModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIModels.swift; sourceTree = "<group>"; };
 		B70AE7658CE52F4C4D9D16E2 /* ExploreView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExploreView.swift; sourceTree = "<group>"; };
 		B797512F015EA11E3535ED6B /* Recipe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Recipe.swift; sourceTree = "<group>"; };
 		C4AC78BEDA2FB83D1AC2B0BC /* PreviewData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewData.swift; sourceTree = "<group>"; };
+		D2E3C78202A1FFEE730D31FE /* APIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClient.swift; sourceTree = "<group>"; };
 		D8B08178F20A5FDCD50954CE /* AuthFlowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthFlowView.swift; sourceTree = "<group>"; };
 		D92723C258CA540A3F92B30C /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
-		DB746D9E26C33380D14F46AD /* SignInView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignInView.swift; sourceTree = "<group>"; };
 		DBB2A0915507D2539E028F35 /* AlchemySpacing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlchemySpacing.swift; sourceTree = "<group>"; };
 		E7D059A499F94C5F767F33CB /* alchemy-loading.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "alchemy-loading.json"; sourceTree = "<group>"; };
+		E9BC218713992D6BA03C55B5 /* AnimatedMeshBackground.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnimatedMeshBackground.swift; sourceTree = "<group>"; };
 		EDCB8A192471A69938D2F32F /* PreferencesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferencesView.swift; sourceTree = "<group>"; };
 		FE0962ABEA0819410B795078 /* AlchemyTypography.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlchemyTypography.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -106,6 +118,15 @@
 			path = Shell;
 			sourceTree = "<group>";
 		};
+		3F34CB8B538A14012D4F6E1C /* Core */ = {
+			isa = PBXGroup;
+			children = (
+				BF9411A10C6C201FDF50DFCC /* Auth */,
+				A1AE02657C78E5A6C631EB79 /* Networking */,
+			);
+			path = Core;
+			sourceTree = "<group>";
+		};
 		3FF541A0EE3AC34ECC15FB92 /* Features */ = {
 			isa = PBXGroup;
 			children = (
@@ -134,6 +155,7 @@
 			isa = PBXGroup;
 			children = (
 				7DFC4214C373202EDC21083D /* App */,
+				3F34CB8B538A14012D4F6E1C /* Core */,
 				15A3FFD667634A9BC08D27BF /* DesignSystem */,
 				3FF541A0EE3AC34ECC15FB92 /* Features */,
 				8A1AFE1C892751B4D4F405CB /* Models */,
@@ -146,8 +168,6 @@
 			isa = PBXGroup;
 			children = (
 				D8B08178F20A5FDCD50954CE /* AuthFlowView.swift */,
-				6764C35BB229A65455736E11 /* RegisterView.swift */,
-				DB746D9E26C33380D14F46AD /* SignInView.swift */,
 			);
 			path = Auth;
 			sourceTree = "<group>";
@@ -196,7 +216,9 @@
 		87D393C6F8B37EE0DD94C4B3 /* Components */ = {
 			isa = PBXGroup;
 			children = (
+				E9BC218713992D6BA03C55B5 /* AnimatedMeshBackground.swift */,
 				AE34608B8617C7346206908A /* ChatBubble.swift */,
+				68F1901D9F8AEF2C890D5D53 /* CompactGauge.swift */,
 				87391E8941518B7568F1F1D3 /* GlassInputBar.swift */,
 				20A4C7C99FB3A4527D8BD1AA /* NutritionGauge.swift */,
 				3CBE1C0886A1C2E204748114 /* ProfileMenu.swift */,
@@ -214,6 +236,25 @@
 			path = Models;
 			sourceTree = "<group>";
 		};
+		A1AE02657C78E5A6C631EB79 /* Networking */ = {
+			isa = PBXGroup;
+			children = (
+				D2E3C78202A1FFEE730D31FE /* APIClient.swift */,
+				4A19FF6B7729BFE0C2694901 /* APIError.swift */,
+				B6846E9DD30BF0EE67FFB668 /* APIModels.swift */,
+			);
+			path = Networking;
+			sourceTree = "<group>";
+		};
+		AA0CD7E713CFECFC7F186F44 /* Configuration */ = {
+			isa = PBXGroup;
+			children = (
+				0DBDD34995EA79A8AB727747 /* Debug.xcconfig */,
+				31A803D819EE21D9B9F1C894 /* Release.xcconfig */,
+			);
+			path = Configuration;
+			sourceTree = "<group>";
+		};
 		B51463D88EB47D2F558E2EC5 /* Onboarding */ = {
 			isa = PBXGroup;
 			children = (
@@ -222,10 +263,20 @@
 			path = Onboarding;
 			sourceTree = "<group>";
 		};
+		BF9411A10C6C201FDF50DFCC /* Auth */ = {
+			isa = PBXGroup;
+			children = (
+				815B265102D0AC689E0800AB /* AuthManager.swift */,
+				0B8F424DA5D2661C4CB5914A /* SupabaseManager.swift */,
+			);
+			path = Auth;
+			sourceTree = "<group>";
+		};
 		C44816BBD2EDA9C3F674542E = {
 			isa = PBXGroup;
 			children = (
 				4A9FFC7CB98F952C0C6DF274 /* Alchemy */,
+				AA0CD7E713CFECFC7F186F44 /* Configuration */,
 				09CE78A5AAE24E6E9EF575C4 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -339,12 +390,18 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				25C0EDE087DEC767163A670F /* APIClient.swift in Sources */,
+				F5372D3CC30E4886B6B137EE /* APIError.swift in Sources */,
+				18E73A73E21723DD2702F997 /* APIModels.swift in Sources */,
 				F205CC290343B5D206997842 /* AlchemyApp.swift in Sources */,
 				3A51B8D2AC4FDC9BD9E34F47 /* AlchemyColors.swift in Sources */,
 				4A522F0FAC7B7669D0DBE472 /* AlchemySpacing.swift in Sources */,
 				298E8D59DB41594A075B7D81 /* AlchemyTypography.swift in Sources */,
+				0CC44F91B845E0A2A59565C2 /* AnimatedMeshBackground.swift in Sources */,
 				35FFBC157D573C451EEE926C /* AuthFlowView.swift in Sources */,
+				E6D7A1B09ABAB6A8B49EA54D /* AuthManager.swift in Sources */,
 				B79A39E174485B7BAA126A2D /* ChatBubble.swift in Sources */,
+				1BCAA1BF4DDE155C7DFDC1AD /* CompactGauge.swift in Sources */,
 				60968686BEA8C1AA49E0E1DB /* ContentView.swift in Sources */,
 				ABD002AB352654AB6DE0B7DE /* CookbookView.swift in Sources */,
 				5BCB1FCA2408B21C8FAA869A /* ExploreView.swift in Sources */,
@@ -358,9 +415,8 @@
 				C9397C3E69FB3E3AEA3A458F /* Recipe.swift in Sources */,
 				581098E885FA7B26E26C5ECB /* RecipeCardView.swift in Sources */,
 				0102A7DABC96D0AF3534FE85 /* RecipeDetailView.swift in Sources */,
-				8E6CD4F56B3DE69D1DE1103B /* RegisterView.swift in Sources */,
 				09F9CB80C3738977CD00F63B /* SettingsView.swift in Sources */,
-				718E3CB386298F276E37414A /* SignInView.swift in Sources */,
+				A8F2490B77EECF2BFF284BAC /* SupabaseManager.swift in Sources */,
 				92B2D41E5F1EF5194B385E98 /* TabShell.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -505,6 +561,7 @@
 		};
 		BB3DCEBFBD7FF14B8B6B6AB2 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 0DBDD34995EA79A8AB727747 /* Debug.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
@@ -516,12 +573,12 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.cookwithalchemy.app;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
-				xcconfig = Configuration/Debug.xcconfig;
 			};
 			name = Debug;
 		};
 		C38AC04D5E2C05D5BC74C3BA /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 31A803D819EE21D9B9F1C894 /* Release.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
@@ -533,7 +590,6 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.cookwithalchemy.app;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
-				xcconfig = Configuration/Release.xcconfig;
 			};
 			name = Release;
 		};

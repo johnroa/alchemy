@@ -23,7 +23,8 @@
 - `NEXT_PUBLIC_SUPABASE_URL` = `https://<project-ref>.supabase.co`
 - `SUPABASE_SECRET_KEY` = Supabase project secret key
 - `API_BASE_URL` = `https://api.cookwithalchemy.com/v1`
-- `ADMIN_SIMULATION_BEARER_TOKEN` = JWT bearer token for a simulation user (used by admin simulation/image processing actions)
+- `ADMIN_SIMULATION_USER_EMAIL` = simulation user email for admin-triggered processing actions
+- Optional: `ADMIN_SIMULATION_BEARER_TOKEN` = pre-minted override token if you do not want runtime magic-link token acquisition
 
 Note: in Cloudflare Workers UI, these can be added as `Secret` entries.
 

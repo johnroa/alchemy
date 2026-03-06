@@ -72,18 +72,20 @@ if (disallowedProviderCallFiles.length > 0) {
 }
 
 const registryText = read("supabase/functions/_shared/llm-scope-registry.ts");
-const scopeMatches = [...registryText.matchAll(/^\s{2}([a-z_]+):\s*\{/gm)].map((m) => m[1]);
+const legacyRegistryText = read("supabase/functions/_shared/llm-legacy-scopes.ts");
+const scopeMatches = [
+  ...registryText.matchAll(/^\s{2}([a-z_]+):\s*\{/gm),
+  ...legacyRegistryText.matchAll(/^\s{2}([a-z_]+):\s*\{/gm),
+].map((m) => m[1]);
 if (scopeMatches.length === 0) {
   fail("No scopes found in llm-scope-registry.ts");
 }
 
 const requiredScopes = [
-  "chat",
   "chat_ideation",
   "chat_generation",
   "chat_iteration",
   "generate",
-  "tweak",
   "classify",
   "ingredient_alias_normalize",
   "ingredient_phrase_split",

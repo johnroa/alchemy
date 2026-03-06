@@ -57,7 +57,8 @@ const scopeLabel = (scope: string): string => {
     memory_select: "Memory Select",
     memory_summarize: "Memory Summarize",
     memory_conflict_resolve: "Memory Conflict Resolve",
-    image_quality_eval: "Image Quality Eval"
+    image_quality_eval: "Image Quality Eval",
+    image_reuse_eval: "Image Reuse Eval"
   };
 
   if (scope in known) {

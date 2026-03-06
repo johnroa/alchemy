@@ -5,7 +5,7 @@ import {
   CheckCircle2,
   Clock,
   DollarSign,
-  Image,
+  Image as ImageIcon,
   ImageOff,
   ShieldAlert,
   XCircle,
@@ -115,7 +115,7 @@ export default async function DashboardPage(): Promise<React.JSX.Element> {
             label="Image Pending"
             value={String(data.imagePendingCount)}
             hint="Recipes waiting for generated image"
-            icon={Image}
+            icon={ImageIcon}
             variant={data.imagePendingCount > 10 ? "warning" : "default"}
           />
           <KpiCard
@@ -142,14 +142,14 @@ export default async function DashboardPage(): Promise<React.JSX.Element> {
             <div className="flex items-center justify-between">
               <div>
                 <CardTitle className="flex items-center gap-2 text-base">
-                  <Image className="h-4 w-4 text-muted-foreground" />
+                  <ImageIcon className="h-4 w-4 text-muted-foreground" />
                   Image Pipeline
                 </CardTitle>
                 <CardDescription className="mt-0.5">
                   {imageTotal > 0 ? `${imageTotal} total jobs` : "No jobs yet"}
                 </CardDescription>
               </div>
-              <Link href="/image-pipeline">
+              <Link href="/images">
                 <Badge variant="outline" className="gap-1 text-xs hover:bg-zinc-50 cursor-pointer">
                   View all <ArrowRight className="h-3 w-3" />
                 </Badge>

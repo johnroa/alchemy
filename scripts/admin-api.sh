@@ -20,7 +20,6 @@ set -euo pipefail
 PROJECT="dwptbjcxrsmmgjmnumpg"
 SUPABASE_URL="https://dwptbjcxrsmmgjmnumpg.supabase.co"
 SIM_EMAIL="sim-1772428603705@cookwithalchemy.com"
-SIM_PASS="AlchemySim2026"
 
 # Resolve Supabase CLI token from macOS keychain
 get_token() {
@@ -40,6 +39,21 @@ run_sql() {
     -d "$(python3 -c "import sys,json; print(json.dumps({'query': sys.stdin.read()}))" <<< "$sql")"
 }
 
+ensure_row_exists() {
+  local table scope version
+  table="$1"
+  scope="$2"
+  version="$3"
+  local result
+  result=$(run_sql "SELECT id FROM $table WHERE scope = '$scope' AND version = $version LIMIT 1")
+  python3 -c "
+import json, sys
+payload = json.load(sys.stdin)
+if not isinstance(payload, list) or len(payload) == 0:
+    raise SystemExit(1)
+" <<< "$result"
+}
+
 # Get the service role API key
 get_service_key() {
   local token
@@ -52,11 +66,26 @@ get_service_key() {
 # Get a sim user access token
 get_sim_token() {
   local skey
+  local otp
   skey=$(get_service_key)
-  curl -s -X POST "$SUPABASE_URL/auth/v1/token?grant_type=password" \
+  otp=$(
+    curl -s -X POST "$SUPABASE_URL/auth/v1/admin/generate_link" \
+      -H "Authorization: Bearer $skey" \
+      -H "apikey: $skey" \
+      -H "Content-Type: application/json" \
+      -d "{\"type\":\"magiclink\",\"email\":\"$SIM_EMAIL\"}" |
+      python3 -c "import sys,json; payload=json.load(sys.stdin); props=payload.get('properties') if isinstance(payload.get('properties'), dict) else {}; print(payload.get('email_otp') or props.get('email_otp') or '')"
+  )
+
+  if [ -z "$otp" ]; then
+    echo "FAILED"
+    return 1
+  fi
+
+  curl -s -X POST "$SUPABASE_URL/auth/v1/verify" \
     -H "apikey: $skey" \
     -H "Content-Type: application/json" \
-    -d "{\"email\":\"$SIM_EMAIL\",\"password\":\"$SIM_PASS\"}" |
+    -d "{\"type\":\"magiclink\",\"token\":\"$otp\",\"email\":\"$SIM_EMAIL\"}" |
     python3 -c "import sys,json; print(json.load(sys.stdin).get('access_token','FAILED'))"
 }
 
@@ -90,15 +119,15 @@ for r in data:
     # prompt-create <scope> <version> <name> <template_file>
     shift
     scope="$1"; version="$2"; name="$3"; template_file="$4"
-    # Deactivate current
-    run_sql "UPDATE llm_prompts SET is_active = false WHERE scope = '$scope' AND is_active = true" > /dev/null
-    # Insert new
     escaped_template=$(python3 -c "
 import sys
 t = open('$template_file').read().strip()
 print(t.replace(\"'\", \"''\"))
 ")
-    run_sql "INSERT INTO llm_prompts (scope, version, name, template, is_active) VALUES ('$scope', $version, '$name', '$escaped_template', true)" > /dev/null
+    run_sql "INSERT INTO llm_prompts (scope, version, name, template, is_active) VALUES ('$scope', $version, '$name', '$escaped_template', false)" > /dev/null
+    ensure_row_exists "llm_prompts" "$scope" "$version"
+    run_sql "UPDATE llm_prompts SET is_active = false WHERE scope = '$scope' AND is_active = true" > /dev/null
+    run_sql "UPDATE llm_prompts SET is_active = true WHERE scope = '$scope' AND version = $version" > /dev/null
     echo "Created and activated $scope v$version ($name)"
     ;;
 
@@ -131,14 +160,25 @@ for r in data:
     # rule-create <scope> <version> <name> <rule_json_file>
     shift
     scope="$1"; version="$2"; name="$3"; rule_file="$4"
-    run_sql "UPDATE llm_rules SET is_active = false WHERE scope = '$scope' AND is_active = true" > /dev/null
     escaped_rule=$(python3 -c "
 import json
 r = json.load(open('$rule_file'))
 print(json.dumps(json.dumps(r)).replace(\"'\", \"''\"))
 " | sed "s/^\"//;s/\"$//")
-    run_sql "INSERT INTO llm_rules (scope, version, name, rule, is_active) VALUES ('$scope', $version, '$name', '$escaped_rule'::jsonb, true)" > /dev/null
+    run_sql "INSERT INTO llm_rules (scope, version, name, rule, is_active) VALUES ('$scope', $version, '$name', '$escaped_rule'::jsonb, false)" > /dev/null
+    ensure_row_exists "llm_rules" "$scope" "$version"
+    run_sql "UPDATE llm_rules SET is_active = false WHERE scope = '$scope' AND is_active = true" > /dev/null
+    run_sql "UPDATE llm_rules SET is_active = true WHERE scope = '$scope' AND version = $version" > /dev/null
     echo "Created and activated rule $scope v$version ($name)"
+    ;;
+
+  rule-activate)
+    # rule-activate <scope> <version>
+    shift
+    scope="$1"; version="$2"
+    run_sql "UPDATE llm_rules SET is_active = false WHERE scope = '$scope' AND is_active = true" > /dev/null
+    run_sql "UPDATE llm_rules SET is_active = true WHERE scope = '$scope' AND version = $version" > /dev/null
+    echo "Activated rule $scope v$version"
     ;;
 
   route-list)
@@ -171,6 +211,7 @@ for r in data:
     echo "  prompt-activate <scope> <version>    Activate existing prompt version"
     echo "  rule-list [scope]                    List rules"
     echo "  rule-create <scope> <ver> <name> <file>    Create & activate rule"
+    echo "  rule-activate <scope> <version>      Activate existing rule version"
     echo "  route-list                           List active model routes"
     echo "  service-key                          Print service role key"
     echo "  sim-token                            Get sim user access token"

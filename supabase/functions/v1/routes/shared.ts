@@ -129,6 +129,8 @@ export type CandidateRecipeComponent = {
   component_id: string;
   role: CandidateRecipeRole;
   title: string;
+  image_url: string | null;
+  image_status: "pending" | "processing" | "ready" | "failed";
   recipe: RecipePayload;
 };
 

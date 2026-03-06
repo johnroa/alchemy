@@ -2,6 +2,18 @@
 
 ## [Unreleased] — 2026-03-05
 
+### Candidate-Time Recipe Images + Admin Images Console
+
+- Moved recipe image enrollment earlier so candidate components start resolving hero images as soon as chat generation or iteration returns a candidate set.
+- Added candidate component `image_url` and `image_status` to the chat contract and updated iOS generate flow to render/poll those async states.
+- Introduced shared image request orchestration with canonical image assets, candidate bindings, persisted recipe assignments, global reuse evaluation, and generic image jobs.
+- Made recipe image truthfulness strict:
+  - missing images no longer use placeholder URLs
+  - missing images no longer surface synthetic `ready` state
+  - search/explore eligibility now tracks real attached assets only
+- Added a consolidated Admin `/images` page with overview, live pipeline queue, shared assets/reuse provenance, and image QA tooling.
+- Added scheduled GitHub Actions queue draining for image jobs and route/test coverage for candidate image responses and persisted save attachment behavior.
+
 ### Search-Backed Explore API Cleanup
 
 - Promoted `POST /v1/recipes/search` to the canonical recipe discovery API for search and Explore feed pagination
@@ -100,6 +112,7 @@
   - `GET /api/admin/development/runs`
 - Added Admin UI page:
   - `/development` with preset selection, dry-run preview, typed confirmation, execute, and run audit table
+- Refreshed reset target coverage for the current food schema so recipe/full resets now count and wipe newer search, image, publication, and draft artifacts instead of silently reporting `0` when only those tables contain rows.
 
 ### Admin API Helper (`scripts/admin-api.sh`)
 

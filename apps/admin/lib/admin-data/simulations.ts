@@ -71,23 +71,18 @@ export const getRecipeSimulationData = async (): Promise<{
 export const getSimulationData = getRecipeSimulationData;
 
 export const getImageSimulationData = async (): Promise<{
-  recentRuns: Array<{ created_at: string; request_id: string | null; event_type: string; event_payload: Record<string, unknown> }>;
   activeImageRoute: { provider: string; model: string } | null;
   activeJudgeRoute: { provider: string; model: string } | null;
-  registryModels: RegistryModel[];
+  registryModels: Array<{
+    id: string;
+    provider: string;
+    model: string;
+    display_name: string;
+    billing_mode: "token" | "image";
+  }>;
 }> => {
   const client = getAdminClient();
-  const [{ data: events }, { data: routes }, { data: registry }] = await Promise.all([
-    client
-      .from("events")
-      .select("created_at,request_id,event_type,event_payload")
-      .in("event_type", [
-        "image_simulation_run_started",
-        "image_simulation_run_completed",
-        "image_simulation_run_failed"
-      ])
-      .order("created_at", { ascending: false })
-      .limit(100),
+  const [{ data: routes }, { data: registry }] = await Promise.all([
     client
       .from("llm_model_routes")
       .select("scope,provider,model,is_active")
@@ -95,7 +90,7 @@ export const getImageSimulationData = async (): Promise<{
       .eq("is_active", true),
     client
       .from("llm_model_registry")
-      .select("id,provider,model,display_name,input_cost_per_1m_tokens,output_cost_per_1m_tokens,billing_mode,billing_metadata,context_window_tokens,max_output_tokens,is_available,notes")
+      .select("id,provider,model,display_name,billing_mode")
       .eq("is_available", true)
       .eq("billing_mode", "image")
       .order("provider")
@@ -106,12 +101,6 @@ export const getImageSimulationData = async (): Promise<{
   const activeJudgeRoute = (routes ?? []).find((route) => route.scope === "image_quality_eval");
 
   return {
-    recentRuns: (events ?? []).map((row) => ({
-      created_at: row.created_at as string,
-      request_id: (row.request_id as string | null) ?? null,
-      event_type: row.event_type as string,
-      event_payload: toRecord(row.event_payload as never) as Record<string, unknown>
-    })),
     activeImageRoute: activeImageRoute
       ? {
           provider: String(activeImageRoute.provider ?? ""),
@@ -124,6 +113,12 @@ export const getImageSimulationData = async (): Promise<{
           model: String(activeJudgeRoute.model ?? "")
         }
       : null,
-    registryModels: toRegistryModels(registry as unknown[] | null | undefined)
+    registryModels: (registry ?? []).map((row) => ({
+      id: String(row.id ?? ""),
+      provider: String(row.provider ?? ""),
+      model: String(row.model ?? ""),
+      display_name: String(row.display_name ?? ""),
+      billing_mode: row.billing_mode === "image" ? "image" : "token",
+    }))
   };
 };

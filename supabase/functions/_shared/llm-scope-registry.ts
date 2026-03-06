@@ -211,6 +211,16 @@ export const LLM_SCOPE_REGISTRY = {
     fallback_policy: "none",
     telemetry_tags: { task: "image_quality_eval", criticality: "medium" },
   },
+  image_reuse_eval: {
+    output_contract: "image_reuse_eval_v1",
+    mode: "classification",
+    retry_policy: {
+      max_attempts: 2,
+      retryable_codes: [...STRICT_JSON_RETRYABLE_CODES, ...STANDARD_RETRYABLE_CODES],
+    },
+    fallback_policy: "none",
+    telemetry_tags: { task: "image_reuse_eval", criticality: "medium" },
+  },
   memory_extract: {
     output_contract: "memory_extract_v1",
     mode: "memory",

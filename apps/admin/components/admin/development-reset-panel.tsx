@@ -11,22 +11,15 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  DEVELOPMENT_RESET_PRESETS,
+  confirmTextForPreset,
+  type DevelopmentResetPresetKey,
+} from "@/lib/development-reset";
 import { cn } from "@/lib/utils";
 
-type PresetKey =
-  | "recipes_domain_reset"
-  | "ingredients_ontology_reset"
-  | "graph_reset"
-  | "full_food_reset";
-
-type Preset = {
-  key: PresetKey;
-  label: string;
-  description: string;
-};
-
 type PreviewPayload = {
-  preset: PresetKey;
+  preset: DevelopmentResetPresetKey;
   table_counts: Record<string, number>;
   total_rows: number;
 };
@@ -45,37 +38,11 @@ type RunRecord = {
   completed_at: string | null;
 };
 
-const PRESETS: Preset[] = [
-  {
-    key: "recipes_domain_reset",
-    label: "Recipes Domain Reset",
-    description: "Wipe recipes, versions, recipe ingredients, jobs, links, pair stats, and graph rows.",
-  },
-  {
-    key: "ingredients_ontology_reset",
-    label: "Ingredients + Ontology Reset",
-    description: "Wipe canonical ingredients, aliases, ontology links/terms, ingredient rows, and graph rows.",
-  },
-  {
-    key: "graph_reset",
-    label: "Graph Reset",
-    description: "Wipe graph entities/edges/evidence plus pair-stat tables.",
-  },
-  {
-    key: "full_food_reset",
-    label: "Full Food Reset",
-    description: "Wipe recipes, ingredients, ontology, graph, links, jobs, pair stats, and related food-domain data.",
-  },
-];
-
 const labelizePreset = (value: string): string =>
   value
     .split("_")
     .map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`)
     .join(" ");
-
-const confirmTextForPreset = (preset: PresetKey): string =>
-  `WIPE ${preset.replaceAll("_", " ").toUpperCase()}`;
 
 const asNumber = (value: unknown): number => {
   const parsed = Number(value);
@@ -106,7 +73,7 @@ const statusBadgeClass = (status: string): string => {
 };
 
 export function DevelopmentResetPanel(): React.JSX.Element {
-  const [selectedPreset, setSelectedPreset] = useState<PresetKey>("full_food_reset");
+  const [selectedPreset, setSelectedPreset] = useState<DevelopmentResetPresetKey>("full_food_reset");
   const [preview, setPreview] = useState<PreviewPayload | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [runsLoading, setRunsLoading] = useState(false);
@@ -222,7 +189,7 @@ export function DevelopmentResetPanel(): React.JSX.Element {
       </Alert>
 
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        {PRESETS.map((preset) => (
+        {DEVELOPMENT_RESET_PRESETS.map((preset) => (
           <Card
             key={preset.key}
             className={cn(

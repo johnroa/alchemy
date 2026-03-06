@@ -38,14 +38,12 @@ targets:
       - path: Alchemy
     resources:
       - path: Alchemy/Resources
+    configFiles:
+      Debug: Configuration/Debug.xcconfig
+      Release: Configuration/Release.xcconfig
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.cookwithalchemy.app
-      configs:
-        Debug:
-          xcconfig: Configuration/Debug.xcconfig
-        Release:
-          xcconfig: Configuration/Release.xcconfig
     dependencies:
       - package: Nuke
         product: NukeUI

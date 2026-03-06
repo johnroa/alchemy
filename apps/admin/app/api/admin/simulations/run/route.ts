@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { normalizeApiBase } from "@/lib/admin-api-base";
+import { getAdminSimulationBearerToken } from "@/lib/admin-simulation-token";
 import { getAdminClient, requireCloudflareAccess } from "@/lib/supabase-admin";
 
 type ModelOverride = { provider: string; model: string };
@@ -158,20 +160,6 @@ type SimResult = {
   error?: string;
   steps: SimStep[];
   trace: SimTraceEvent[];
-};
-
-const SIM_USER_EMAIL = "sim-1772428603705@cookwithalchemy.com";
-const SIM_USER_PASSWORD = "AlchemySim2026";
-
-const normalizeApiBase = (raw: string | undefined): string => {
-  const value = (raw ?? "https://api.cookwithalchemy.com/v1").trim();
-  if (!value) {
-    return "https://api.cookwithalchemy.com/v1";
-  }
-
-  const withProtocol = /^https?:\/\//i.test(value) ? value : `https://${value}`;
-  const withoutTrailing = withProtocol.replace(/\/+$/, "");
-  return withoutTrailing.endsWith("/v1") ? withoutTrailing : `${withoutTrailing}/v1`;
 };
 
 const normalizeSeed = (value: unknown): number => {
@@ -503,87 +491,6 @@ const projectCandidateForTrace = (candidate: CandidateRecipeSet | null | undefin
     active_component_id: candidate.active_component_id ?? null,
     components
   };
-};
-
-const readJsonBody = async (response: Response): Promise<Record<string, unknown>> => {
-  const text = await response.text();
-  if (!text.trim()) {
-    return {};
-  }
-
-  try {
-    const parsed = JSON.parse(text);
-    if (parsed && typeof parsed === "object") {
-      return parsed as Record<string, unknown>;
-    }
-    return { raw: parsed };
-  } catch {
-    return { raw: text };
-  }
-};
-
-const signInSimulationUser = async (supabaseUrl: string, serviceKey: string): Promise<string> => {
-  const signInRes = await fetch(`${supabaseUrl}/auth/v1/token?grant_type=password`, {
-    method: "POST",
-    headers: { apikey: serviceKey, "Content-Type": "application/json" },
-    body: JSON.stringify({ email: SIM_USER_EMAIL, password: SIM_USER_PASSWORD })
-  });
-
-  const signInData = await readJsonBody(signInRes);
-  const accessToken = String(signInData["access_token"] ?? "");
-  if (!signInRes.ok || accessToken.length === 0) {
-    throw new Error(
-      `Simulation user password sign-in failed (${signInRes.status}): ${JSON.stringify(signInData)}`
-    );
-  }
-
-  return accessToken;
-};
-
-const getSimToken = async (supabaseUrl: string, serviceKey: string): Promise<string> => {
-  if (!supabaseUrl || !serviceKey) {
-    throw new Error("Missing Supabase URL or service key in admin worker environment");
-  }
-
-  let magiclinkFailure = "";
-
-  const linkRes = await fetch(`${supabaseUrl}/auth/v1/admin/generate_link`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${serviceKey}`,
-      apikey: serviceKey,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({ type: "magiclink", email: SIM_USER_EMAIL })
-  });
-
-  const linkData = await readJsonBody(linkRes);
-  const emailOtp = String(linkData["email_otp"] ?? "");
-
-  if (linkRes.ok && emailOtp.length > 0) {
-    const verifyRes = await fetch(`${supabaseUrl}/auth/v1/verify`, {
-      method: "POST",
-      headers: { apikey: serviceKey, "Content-Type": "application/json" },
-      body: JSON.stringify({ type: "magiclink", token: emailOtp, email: SIM_USER_EMAIL })
-    });
-
-    const verifyData = await readJsonBody(verifyRes);
-    const verifyToken = String(verifyData["access_token"] ?? "");
-    if (verifyRes.ok && verifyToken.length > 0) {
-      return verifyToken;
-    }
-
-    magiclinkFailure = `Magiclink verify failed (${verifyRes.status}): ${JSON.stringify(verifyData)}`;
-  } else {
-    magiclinkFailure = `Magiclink generation failed (${linkRes.status}): ${JSON.stringify(linkData)}`;
-  }
-
-  try {
-    return await signInSimulationUser(supabaseUrl, serviceKey);
-  } catch (error) {
-    const passwordFailure = error instanceof Error ? error.message : String(error);
-    throw new Error(`${magiclinkFailure}; ${passwordFailure}`);
-  }
 };
 
 /**
@@ -980,12 +887,10 @@ const handleSimInit = async (body: Body): Promise<Response> => {
   const modelOverrides = body.model_overrides ?? {};
 
   const apiBase = normalizeApiBase(process.env["API_BASE_URL"]);
-  const supabaseUrl = (process.env["NEXT_PUBLIC_SUPABASE_URL"] ?? "").trim().replace(/\/+$/, "");
-  const serviceKey = process.env["SUPABASE_SECRET_KEY"] ?? process.env["SUPABASE_SERVICE_ROLE_KEY"] ?? "";
 
   let token: string;
   try {
-    token = process.env["ADMIN_SIMULATION_BEARER_TOKEN"] ?? await getSimToken(supabaseUrl, serviceKey);
+    token = await getAdminSimulationBearerToken();
   } catch (error) {
     return NextResponse.json(
       { error: `Failed to acquire simulation token: ${error instanceof Error ? error.message : String(error)}` },
@@ -1119,8 +1024,6 @@ const runSimulation = async (params: {
   const trace: SimTraceEvent[] = [];
 
   const apiBase = normalizeApiBase(process.env["API_BASE_URL"]);
-  const supabaseUrl = (process.env["NEXT_PUBLIC_SUPABASE_URL"] ?? "").trim().replace(/\/+$/, "");
-  const serviceKey = process.env["SUPABASE_SECRET_KEY"] ?? process.env["SUPABASE_SERVICE_ROLE_KEY"] ?? "";
 
   const emit = async (event: SimTraceEvent): Promise<void> => {
     trace.push(event);
@@ -1316,7 +1219,7 @@ const runSimulation = async (params: {
   try {
     let token: string;
     try {
-      token = process.env["ADMIN_SIMULATION_BEARER_TOKEN"] ?? await getSimToken(supabaseUrl, serviceKey);
+      token = await getAdminSimulationBearerToken();
     } catch (error) {
       throw new Error(`Failed to acquire simulation token: ${error instanceof Error ? error.message : String(error)}`);
     }

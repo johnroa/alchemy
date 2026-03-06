@@ -5,7 +5,7 @@ Alchemy is an iOS-first, API-driven recipe app. Users set dietary/skill/equipmen
 
 ## Monorepo Structure
 ```
-apps/mobile/          Expo 52 React Native (iOS-first)
+apps/ios/             Native SwiftUI iOS app
 apps/admin/           Next.js 15 admin dashboard
 infra/cloudflare/     Cloudflare Worker API gateway (TypeScript)
 supabase/             Auth, Postgres, Edge Functions (LLM gateway)
@@ -31,44 +31,18 @@ packages/shared/      Shared utilities
 - Remove LLM call: remove callsite/wrapper/scope and add migration deactivating corresponding scope rows.
 - Direct provider endpoints (`api.openai.com`, `api.anthropic.com`, `generativelanguage.googleapis.com`) are allowed only in `supabase/functions/_shared/llm-adapters/*`.
 
-## Mobile Stack (`apps/mobile/`)
-- **Expo Router** — file-based routing
-- **TanStack Query v5** — all server state, caching, retries
-- **Zustand v5** — UI-only state (toggles, ephemeral chat input); never server data
-- **React Native Reanimated 3 + Gesture Handler** — animations and gestures
-- **Supabase JS** — auth session via `lib/auth.tsx` and `lib/supabase.ts`
-- **Custom design system** — `components/alchemy/primitives.tsx` + `theme.ts`
-- API calls go through `lib/api.ts` → Cloudflare Worker
+## iOS App (`apps/ios/`)
+- **SwiftUI** — native iOS views and navigation
+- **Observable state** — view-local state and feature orchestration
+- **XcodeGen** — project generation from `apps/ios/project.yml`
+- **SPM** — package management for iOS dependencies
+- API calls go through the Cloudflare gateway at `https://api.cookwithalchemy.com/v1`
 
-### Mobile Conventions
-Query keys:
-```ts
-['me']
-['preferences']
-['recipes', 'feed', filters]
-['recipes', id]
-['collections']
-['collections', id]
-['search', query, filters]
-```
-
-Zustand (`lib/ui-store.ts`) is for: measurement display mode, servings scaling, ephemeral chat text, temporary filter state. Not for recipes or preferences.
-
-Route structure:
-```
-/sign-in, /register, /onboarding       auth/setup flows
-/(tabs)/generate                        prompt-to-recipe
-/(tabs)/my-cookbook                     saved recipes + collections
-/preferences, /settings                 user config
-```
-
-UI standards:
-- Touch targets ≥ 44×44
-- Skeleton loaders for primary content
-- Pull-to-refresh where appropriate
-- Subtle haptics for key actions (save, generate, tweak)
-- Keyboard avoidance on all inputs
-- Dark mode supported
+### iOS Conventions
+- Keep product logic server-side; the app should remain API-driven.
+- Treat `apps/ios/Alchemy/Features/*` as the main feature boundaries.
+- Keep shared visual primitives under `apps/ios/Alchemy/DesignSystem/*`.
+- Preserve loading, empty, and error states for user-facing flows.
 
 ## Admin Stack (`apps/admin/`)
 - **Next.js 15** (App Router)
@@ -140,12 +114,12 @@ packages/contracts/openapi.yaml          ← source of truth (edit this)
 packages/contracts/openapi.json          ← generated (do not edit)
 packages/contracts/src/generated.ts      ← generated (do not edit)
 apps/admin/lib/openapi-spec.json         ← copy for admin API docs page (do not edit)
-apps/admin/lib/admin-routes.ts           ← hardcoded admin route list (edit when adding/removing admin routes)
+apps/admin/lib/admin-routes.ts           ← generated admin route inventory (do not edit)
 ```
 
 ### When to update
 - **Adding/removing/changing a public API endpoint** (request/response shape, new path, removed path)
-- **Adding/removing an admin API route** (also update `apps/admin/lib/admin-routes.ts`)
+- **Adding/removing an admin API route** (also regenerate `apps/admin/lib/admin-routes.ts`)
 - **Changing authentication, error codes, or shared schemas**
 
 ### Step-by-step
@@ -155,9 +129,10 @@ apps/admin/lib/admin-routes.ts           ← hardcoded admin route list (edit wh
    ```bash
    pnpm --filter @alchemy/contracts generate        # openapi.yaml → src/generated.ts
    pnpm --filter @alchemy/contracts generate:json    # openapi.yaml → openapi.json
+   pnpm admin:routes:generate
    cp packages/contracts/openapi.json apps/admin/lib/openapi-spec.json
    ```
-4. **Update admin routes** (if admin API routes changed): edit `apps/admin/lib/admin-routes.ts`
+4. **Update admin routes** (if admin API routes changed): regenerate `apps/admin/lib/admin-routes.ts`
 5. **Update CHANGELOG.md**: add entry under `[Unreleased]` describing the API change
 6. **Deploy affected services**: if the gateway contract changed, deploy the gateway; if admin routes changed, deploy admin
 7. **Commit all generated files together** with the source change
@@ -172,7 +147,7 @@ apps/admin/lib/admin-routes.ts           ← hardcoded admin route list (edit wh
 - Edit `openapi.json`, `generated.ts`, or `openapi-spec.json` directly — they are generated
 - Skip the version bump — the admin API docs page displays the version
 - Forget to copy `openapi.json` → `apps/admin/lib/openapi-spec.json` (the admin page reads this copy)
-- Add an admin API route without adding it to `apps/admin/lib/admin-routes.ts`
+- Add an admin API route without regenerating `apps/admin/lib/admin-routes.ts`
 
 ## Code Comments (Required)
 Write detailed inline comments in all code you touch. This codebase is maintained by multiple AI agents across sessions — comments are the primary way context survives between them. Specifically:

@@ -8,13 +8,10 @@
   ],
   "scripts": {
     "build": "pnpm -r build",
+    "admin:routes:generate": "node ./scripts/generate-admin-routes.mjs",
+    "check:repo-guardrails": "node ./scripts/check-repo-guardrails.mjs",
     "dev:admin": "pnpm --filter @alchemy/admin dev",
-    "dev:mobile": "pnpm --filter @alchemy/mobile start",
-    "dev:mobile:ios": "pnpm --filter @alchemy/mobile ios",
-    "dev:mobile:ios:clear": "pnpm --filter @alchemy/mobile ios:clear",
-    "logs:mobile:ios": "pnpm --filter @alchemy/mobile ios:logs",
     "contracts:generate": "pnpm --filter @alchemy/contracts generate",
-    "simulate:api": "node ./scripts/simulate-api-ux.mjs",
-    "sim:reload": "xcrun simctl terminate booted host.exp.Exponent 2>/dev/null; xcrun simctl openurl booted \"exp://$(ipconfig getifaddr en0):8081\""
+    "simulate:api": "node ./scripts/simulate-api-ux.mjs"
   }
 }

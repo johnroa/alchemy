@@ -178,6 +178,15 @@ type ImageQualityEvaluationResult = {
   confidence: number | null;
 };
 
+type ImageReuseDecision = "reuse" | "generate_new";
+
+type ImageReuseEvaluationResult = {
+  decision: ImageReuseDecision;
+  selectedCandidateId: string | null;
+  rationale: string;
+  confidence: number | null;
+};
+
 type ConflictResolution = {
   actions: Array<{
     action: "keep" | "supersede" | "delete" | "merge";
@@ -330,6 +339,27 @@ const normalizeImageQualityWinner = (value: unknown): ImageQualityWinner | null 
   return null;
 };
 
+const normalizeOptionalText = (value: unknown): string | null => {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : null;
+};
+
+const normalizeCandidateImageStatus = (
+  value: unknown,
+): "pending" | "processing" | "ready" | "failed" => {
+  const normalized = normalizeOptionalText(value)?.toLowerCase();
+  if (
+    normalized === "pending" || normalized === "processing" ||
+    normalized === "ready" || normalized === "failed"
+  ) {
+    return normalized;
+  }
+  return "pending";
+};
+
 const normalizeImageQualityEvaluation = (
   value: unknown,
 ): ImageQualityEvaluationResult | null => {
@@ -353,6 +383,66 @@ const normalizeImageQualityEvaluation = (
 
   return {
     winner,
+    rationale,
+    confidence,
+  };
+};
+
+const normalizeImageReuseDecision = (
+  value: unknown,
+): ImageReuseDecision | null => {
+  if (value === "reuse" || value === "generate_new") {
+    return value;
+  }
+
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "reuse") {
+    return "reuse";
+  }
+  if (normalized === "generate_new") {
+    return "generate_new";
+  }
+
+  return null;
+};
+
+const normalizeImageReuseEvaluation = (
+  value: unknown,
+  candidateIds: Set<string>,
+): ImageReuseEvaluationResult | null => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  const decision = normalizeImageReuseDecision(record.decision);
+  const selectedCandidateId = normalizeOptionalText(record.selected_candidate_id) ??
+    normalizeOptionalText(record.selectedCandidateId);
+  const rationale = typeof record.rationale === "string"
+    ? record.rationale.trim()
+    : "";
+  const confidenceValue = Number(record.confidence);
+  const confidence = Number.isFinite(confidenceValue)
+    ? Math.max(0, Math.min(1, confidenceValue))
+    : null;
+
+  if (!decision || !rationale) {
+    return null;
+  }
+
+  if (decision === "reuse") {
+    if (!selectedCandidateId || !candidateIds.has(selectedCandidateId)) {
+      return null;
+    }
+  }
+
+  return {
+    decision,
+    selectedCandidateId: decision === "reuse" ? selectedCandidateId : null,
     rationale,
     confidence,
   };
@@ -1212,6 +1302,8 @@ const normalizeCandidateRecipeSet = (
         title: typeof value.title === "string" && value.title.trim().length > 0
           ? value.title.trim()
           : recipe.title,
+        image_url: normalizeOptionalText(value.image_url),
+        image_status: normalizeCandidateImageStatus(value.image_status),
         recipe,
       };
     })
@@ -4083,6 +4175,127 @@ export const llmGateway = {
           model: config?.model ?? null,
           scenario_id: params.scenario.id,
           error_code: errorCode,
+        },
+        accum,
+      );
+      throw error;
+    }
+  },
+
+  async evaluateRecipeImageReuse(params: {
+    client: SupabaseClient;
+    userId: string;
+    requestId: string;
+    targetRecipe: RecipePayload;
+    targetTitle: string;
+    targetSearchText: string;
+    candidates: Array<{
+      id: string;
+      title: string;
+      imageUrl: string;
+      recipeId?: string | null;
+      recipeVersionId?: string | null;
+    }>;
+    modelOverrides?: { provider: string; model: string };
+  }): Promise<{
+    decision: ImageReuseDecision;
+    selectedCandidateId: string | null;
+    rationale: string;
+    confidence: number | null;
+    provider: string;
+    model: string;
+    latencyMs: number;
+  }> {
+    const startedAt = Date.now();
+    const accum: TokenAccum = { input: 0, output: 0, costUsd: 0 };
+    let config: GatewayConfig | null = null;
+
+    try {
+      const {
+        result,
+        inputTokens,
+        outputTokens,
+        config: resolvedConfig,
+      } = await executeVisionScope<{
+        decision?: unknown;
+        selected_candidate_id?: unknown;
+        rationale?: unknown;
+        confidence?: unknown;
+      }>({
+        client: params.client,
+        scope: "image_reuse_eval",
+        userInput: {
+          target_recipe: params.targetRecipe as unknown as JsonValue,
+          target_title: params.targetTitle,
+          target_search_text: params.targetSearchText,
+          candidates: params.candidates.map((candidate) => ({
+            id: candidate.id,
+            title: candidate.title,
+            recipe_id: candidate.recipeId ?? null,
+            recipe_version_id: candidate.recipeVersionId ?? null,
+          })),
+        },
+        images: params.candidates.map((candidate) => ({
+          label: candidate.id,
+          imageUrl: candidate.imageUrl,
+        })),
+        modelOverride: params.modelOverrides,
+      });
+      config = resolvedConfig;
+      addTokens(accum, inputTokens, outputTokens, resolvedConfig);
+
+      const evaluation = normalizeImageReuseEvaluation(
+        result,
+        new Set(params.candidates.map((candidate) => candidate.id)),
+      );
+      if (!evaluation) {
+        throw new ApiError(
+          422,
+          "image_reuse_eval_invalid",
+          "Image reuse evaluation did not match required schema",
+        );
+      }
+
+      const latencyMs = Date.now() - startedAt;
+      await logLlmEvent(
+        params.client,
+        params.userId,
+        params.requestId,
+        "image_reuse_eval",
+        latencyMs,
+        "ok",
+        {
+          provider: resolvedConfig.provider,
+          model: resolvedConfig.model,
+          decision: evaluation.decision,
+          selected_candidate_id: evaluation.selectedCandidateId,
+          candidate_count: params.candidates.length,
+        },
+        accum,
+      );
+
+      return {
+        ...evaluation,
+        provider: resolvedConfig.provider,
+        model: resolvedConfig.model,
+        latencyMs,
+      };
+    } catch (error) {
+      const errorCode = error instanceof ApiError
+        ? error.code
+        : "unknown_error";
+      await logLlmEvent(
+        params.client,
+        params.userId,
+        params.requestId,
+        "image_reuse_eval",
+        Date.now() - startedAt,
+        "error",
+        {
+          provider: config?.provider ?? null,
+          model: config?.model ?? null,
+          error_code: errorCode,
+          candidate_count: params.candidates.length,
         },
         accum,
       );

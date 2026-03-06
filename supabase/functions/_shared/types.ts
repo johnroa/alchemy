@@ -204,10 +204,18 @@ export type ChatLoopState = "ideation" | "candidate_presented" | "iterating";
 
 export type CandidateRecipeRole = "main" | "side" | "appetizer" | "dessert" | "drink";
 
+export type CandidateRecipeImageStatus =
+  | "pending"
+  | "processing"
+  | "ready"
+  | "failed";
+
 export type CandidateRecipeComponent = {
   component_id: string;
   role: CandidateRecipeRole;
   title: string;
+  image_url: string | null;
+  image_status: CandidateRecipeImageStatus;
   recipe: RecipePayload;
 };
 

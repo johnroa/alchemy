@@ -1,12 +1,6 @@
 import { NextResponse } from "next/server";
+import { isDevelopmentResetPreset } from "@/lib/development-reset";
 import { getAdminClient, requireCloudflareAccess } from "@/lib/supabase-admin";
-
-const allowedPresets = new Set([
-  "recipes_domain_reset",
-  "ingredients_ontology_reset",
-  "graph_reset",
-  "full_food_reset",
-]);
 
 type Body = {
   preset?: string;
@@ -22,7 +16,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   const confirmText = typeof body.confirm_text === "string" ? body.confirm_text.trim() : "";
   const reason = typeof body.reason === "string" ? body.reason.trim() : "";
 
-  if (!allowedPresets.has(preset)) {
+  if (!isDevelopmentResetPreset(preset)) {
     return NextResponse.json(
       {
         error:

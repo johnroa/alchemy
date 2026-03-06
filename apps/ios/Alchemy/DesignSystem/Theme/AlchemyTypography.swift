@@ -2,23 +2,25 @@ import SwiftUI
 
 /// Typography system for Alchemy.
 ///
-/// Uses system serif for display/titles (warm, editorial feel for a food app)
-/// and system sans-serif for body/UI text (clarity and legibility).
+/// Display/titles use Apple's "New York" serif typeface (accessed via the
+/// `.serif` design parameter — this IS New York on iOS, no bundling needed).
+/// Body/UI text uses system sans-serif (SF Pro) for clarity and legibility.
 /// All sizes are optimized for the dark-mode, image-heavy design.
 enum AlchemyTypography {
 
-    // MARK: - Display (Serif)
-    // Used for recipe titles, hero text, and large headings.
-    // Georgia or system serif gives an editorial cookbook feel.
+    // MARK: - Display (New York Serif)
+    // `.design(.serif)` resolves to Apple's New York typeface on iOS.
+    // The system automatically selects the correct optical size variant
+    // (Small, Regular, Large, Extra Large) based on the point size.
 
     /// Large display title — recipe hero, splash screen
-    static let displayLarge = Font.system(.largeTitle, design: .serif, weight: .bold)
+    static let displayLarge = Font.system(size: 34, weight: .bold, design: .serif)
 
     /// Medium display — section headers on detail pages
-    static let displayMedium = Font.system(.title, design: .serif, weight: .bold)
+    static let displayMedium = Font.system(size: 28, weight: .bold, design: .serif)
 
     /// Small display — card titles, modal headings
-    static let displaySmall = Font.system(.title2, design: .serif, weight: .semibold)
+    static let displaySmall = Font.system(size: 22, weight: .semibold, design: .serif)
 
     // MARK: - Headings (Sans-serif)
 

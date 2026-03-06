@@ -104,6 +104,32 @@ type ChatDeps = {
   normalizeCandidateRecipeSet: (
     candidate: unknown,
   ) => CandidateRecipeSet | null;
+  hydrateCandidateRecipeSetImages: (input: {
+    serviceClient: RouteContext["serviceClient"];
+    chatId: string;
+    candidateSet: CandidateRecipeSet;
+  }) => Promise<CandidateRecipeSet>;
+  enrollCandidateImageRequests: (input: {
+    serviceClient: RouteContext["serviceClient"];
+    userId: string;
+    requestId: string;
+    chatId: string;
+    candidateSet: CandidateRecipeSet;
+  }) => Promise<CandidateRecipeSet>;
+  attachCommittedCandidateImages: (input: {
+    serviceClient: RouteContext["serviceClient"];
+    userId: string;
+    requestId: string;
+    chatId: string;
+    candidateSet: CandidateRecipeSet;
+    committedRecipes: Array<{
+      component_id: string;
+      recipe_id: string;
+      recipe_version_id: string;
+      recipe: RecipePayload;
+      title: string;
+    }>;
+  }) => Promise<void>;
   deriveLoopState: (
     context: ChatSessionContext,
     candidate: CandidateRecipeSet | null,
@@ -126,10 +152,13 @@ type ChatDeps = {
     imageError?: string;
     selectedMemoryIds?: string[];
   }) => Promise<{ recipeId: string; versionId: string }>;
-  enqueueImageJob: (
-    client: RouteContext["client"],
-    recipeId: string,
-  ) => Promise<void>;
+  scheduleImageQueueDrain: (input: {
+    serviceClient: RouteContext["serviceClient"];
+    actorUserId: string;
+    requestId: string;
+    limit?: number;
+    modelOverrides?: RouteContext["modelOverrides"];
+  }) => void;
   mapCandidateRoleToRelation: (role: CandidateRecipeRole) => string;
   resolveRelationTypeId: (
     client: RouteContext["client"] | RouteContext["serviceClient"],
@@ -169,11 +198,14 @@ export const handleChatRoutes = async (
     extractChatContext,
     extractLatestAssistantReply,
     normalizeCandidateRecipeSet,
+    hydrateCandidateRecipeSetImages,
+    enrollCandidateImageRequests,
+    attachCommittedCandidateImages,
     deriveLoopState,
     buildCandidateOutlineForPrompt,
     parseUuid,
     persistRecipe,
-    enqueueImageJob,
+    scheduleImageQueueDrain,
     mapCandidateRoleToRelation,
     resolveRelationTypeId,
     fetchChatMessages,
@@ -314,6 +346,30 @@ export const handleChatRoutes = async (
       modelOverrides,
     });
 
+    let nextCandidateSet = orchestrated.nextCandidateSet;
+    if (nextCandidateSet) {
+      nextCandidateSet = await enrollCandidateImageRequests({
+        serviceClient,
+        userId: auth.userId,
+        requestId,
+        chatId: chatSession.id,
+        candidateSet: nextCandidateSet,
+      });
+      orchestrated.nextContext = {
+        ...orchestrated.nextContext,
+        candidate_recipe_set: nextCandidateSet,
+        candidate_revision: nextCandidateSet.revision,
+        active_component_id: nextCandidateSet.active_component_id,
+      };
+      scheduleImageQueueDrain({
+        serviceClient,
+        actorUserId: auth.userId,
+        requestId,
+        limit: Math.max(5, nextCandidateSet.components.length),
+        modelOverrides,
+      });
+    }
+
     await updateChatSessionLoopContext({
       client,
       chatId: chatSession.id,
@@ -323,8 +379,8 @@ export const handleChatRoutes = async (
     const assistantEnvelope = {
       assistant_reply: orchestrated.assistantChatResponse.assistant_reply,
       trigger_recipe: orchestrated.assistantChatResponse.trigger_recipe ??
-        Boolean(orchestrated.nextCandidateSet),
-      candidate_recipe_set: orchestrated.nextCandidateSet,
+        Boolean(nextCandidateSet),
+      candidate_recipe_set: nextCandidateSet,
       recipe: orchestrated.assistantChatResponse.recipe,
       response_context: orchestrated.responseContext,
     };
@@ -367,7 +423,7 @@ export const handleChatRoutes = async (
     };
     if (orchestrated.nextCandidateSet) {
       interactionContext.candidate_recipe_set = orchestrated
-        .nextCandidateSet as unknown as JsonValue;
+        .nextContext.candidate_recipe_set as unknown as JsonValue;
     } else if (orchestrated.assistantChatResponse.recipe) {
       interactionContext.assistant_recipe = orchestrated.assistantChatResponse
         .recipe as unknown as JsonValue;
@@ -416,11 +472,10 @@ export const handleChatRoutes = async (
         memoryContextIds: contextPack.selectedMemoryIds,
         createdAt: chatSession.created_at,
         updatedAt: new Date().toISOString(),
-        uiHints: orchestrated.nextCandidateSet
+        uiHints: nextCandidateSet
           ? {
             show_generation_animation: orchestrated.justGenerated,
-            focus_component_id:
-              orchestrated.nextCandidateSet.active_component_id,
+            focus_component_id: nextCandidateSet.active_component_id,
           }
           : undefined,
       }),
@@ -447,6 +502,16 @@ export const handleChatRoutes = async (
 
     const messages = await fetchChatMessages(client, chatId, 120);
     const contextValue = extractChatContext(chatSession.context);
+    const candidateSet = normalizeCandidateRecipeSet(
+      contextValue.candidate_recipe_set ?? null,
+    );
+    const hydratedCandidateSet = candidateSet
+      ? await hydrateCandidateRecipeSetImages({
+        serviceClient,
+        chatId,
+        candidateSet,
+      })
+      : null;
     const memoryContextIds = Array.isArray(contextValue.selected_memory_ids)
       ? contextValue.selected_memory_ids.filter((item): item is string =>
         typeof item === "string"
@@ -458,7 +523,12 @@ export const handleChatRoutes = async (
       buildChatLoopResponse({
         chatId: chatSession.id,
         messages,
-        context: contextValue,
+        context: {
+          ...contextValue,
+          candidate_recipe_set: hydratedCandidateSet,
+          candidate_revision: hydratedCandidateSet?.revision ?? contextValue.candidate_revision,
+          active_component_id: hydratedCandidateSet?.active_component_id ?? contextValue.active_component_id ?? null,
+        },
         assistantReply: extractLatestAssistantReply(messages),
         memoryContextIds,
         createdAt: chatSession.created_at,
@@ -558,6 +628,30 @@ export const handleChatRoutes = async (
       modelOverrides,
     });
 
+    let nextCandidateSet = orchestrated.nextCandidateSet;
+    if (nextCandidateSet) {
+      nextCandidateSet = await enrollCandidateImageRequests({
+        serviceClient,
+        userId: auth.userId,
+        requestId,
+        chatId,
+        candidateSet: nextCandidateSet,
+      });
+      orchestrated.nextContext = {
+        ...orchestrated.nextContext,
+        candidate_recipe_set: nextCandidateSet,
+        candidate_revision: nextCandidateSet.revision,
+        active_component_id: nextCandidateSet.active_component_id,
+      };
+      scheduleImageQueueDrain({
+        serviceClient,
+        actorUserId: auth.userId,
+        requestId,
+        limit: Math.max(5, nextCandidateSet.components.length),
+        modelOverrides,
+      });
+    }
+
     await updateChatSessionLoopContext({
       client,
       chatId,
@@ -567,8 +661,8 @@ export const handleChatRoutes = async (
     const assistantEnvelope = {
       assistant_reply: orchestrated.assistantChatResponse.assistant_reply,
       trigger_recipe: orchestrated.assistantChatResponse.trigger_recipe ??
-        Boolean(orchestrated.nextCandidateSet),
-      candidate_recipe_set: orchestrated.nextCandidateSet,
+        Boolean(nextCandidateSet),
+      candidate_recipe_set: nextCandidateSet,
       recipe: orchestrated.assistantChatResponse.recipe,
       response_context: orchestrated.responseContext,
     };
@@ -610,7 +704,7 @@ export const handleChatRoutes = async (
     };
     if (orchestrated.nextCandidateSet) {
       interactionContext.candidate_recipe_set = orchestrated
-        .nextCandidateSet as unknown as JsonValue;
+        .nextContext.candidate_recipe_set as unknown as JsonValue;
     } else if (orchestrated.assistantChatResponse.recipe) {
       interactionContext.assistant_recipe = orchestrated.assistantChatResponse
         .recipe as unknown as JsonValue;
@@ -649,12 +743,11 @@ export const handleChatRoutes = async (
         uiHints: orchestrated.justGenerated
           ? {
             show_generation_animation: true,
-            focus_component_id: orchestrated.nextCandidateSet
-              ?.active_component_id,
+            focus_component_id: nextCandidateSet?.active_component_id,
           }
-          : orchestrated.nextCandidateSet
+          : nextCandidateSet
           ? {
-            focus_component_id: orchestrated.nextCandidateSet.active_component_id,
+            focus_component_id: nextCandidateSet.active_component_id,
           }
           : undefined,
       }),
@@ -785,7 +878,25 @@ export const handleChatRoutes = async (
       };
     }
 
-    const nextLoopState: ChatLoopState = nextCandidateSet
+    let hydratedNextCandidateSet = nextCandidateSet;
+    if (hydratedNextCandidateSet) {
+      hydratedNextCandidateSet = await enrollCandidateImageRequests({
+        serviceClient,
+        userId: auth.userId,
+        requestId,
+        chatId,
+        candidateSet: hydratedNextCandidateSet,
+      });
+      scheduleImageQueueDrain({
+        serviceClient,
+        actorUserId: auth.userId,
+        requestId,
+        limit: Math.max(5, hydratedNextCandidateSet.components.length),
+        modelOverrides,
+      });
+    }
+
+    const nextLoopState: ChatLoopState = hydratedNextCandidateSet
       ? "candidate_presented"
       : "ideation";
     const memoryContextIds = Array.isArray(contextValue.selected_memory_ids)
@@ -796,9 +907,9 @@ export const handleChatRoutes = async (
     const nextContext: ChatSessionContext = {
       ...contextValue,
       loop_state: nextLoopState,
-      candidate_recipe_set: nextCandidateSet,
-      candidate_revision: nextCandidateSet?.revision ?? 0,
-      active_component_id: nextCandidateSet?.active_component_id ?? null,
+      candidate_recipe_set: hydratedNextCandidateSet,
+      candidate_revision: hydratedNextCandidateSet?.revision ?? 0,
+      active_component_id: hydratedNextCandidateSet?.active_component_id ?? null,
     };
 
     await updateChatSessionLoopContext({
@@ -817,8 +928,8 @@ export const handleChatRoutes = async (
       requestId,
       afterJson: {
         candidate_id: nextCandidateSet?.candidate_id ?? null,
-        revision: nextCandidateSet?.revision ?? null,
-        active_component_id: nextCandidateSet?.active_component_id ?? null,
+        revision: hydratedNextCandidateSet?.revision ?? null,
+        active_component_id: hydratedNextCandidateSet?.active_component_id ?? null,
       },
     });
 
@@ -832,9 +943,9 @@ export const handleChatRoutes = async (
         memoryContextIds,
         createdAt: chatSession.created_at,
         updatedAt: new Date().toISOString(),
-        uiHints: nextCandidateSet
+        uiHints: hydratedNextCandidateSet
           ? {
-            focus_component_id: nextCandidateSet.active_component_id,
+            focus_component_id: hydratedNextCandidateSet.active_component_id,
           }
           : undefined,
       }),
@@ -889,7 +1000,7 @@ export const handleChatRoutes = async (
       )
       : [];
 
-    const committedComponents = await Promise.all(
+    const committedComponentsForImages = await Promise.all(
       candidateSet.components.map(async (component) => {
         const saved = await persistRecipe({
           client,
@@ -920,17 +1031,40 @@ export const handleChatRoutes = async (
           );
         }
 
-        await enqueueImageJob(client, saved.recipeId);
-
         return {
           component_id: component.component_id,
           role: component.role,
           title: component.title,
           recipe_id: saved.recipeId,
           recipe_version_id: saved.versionId,
+          recipe: component.recipe,
         };
       }),
     );
+
+    const committedComponents = committedComponentsForImages.map((component) => ({
+      component_id: component.component_id,
+      role: component.role,
+      title: component.title,
+      recipe_id: component.recipe_id,
+      recipe_version_id: component.recipe_version_id,
+    }));
+
+    await attachCommittedCandidateImages({
+      serviceClient,
+      userId: auth.userId,
+      requestId,
+      chatId,
+      candidateSet,
+      committedRecipes: committedComponentsForImages,
+    });
+    scheduleImageQueueDrain({
+      serviceClient,
+      actorUserId: auth.userId,
+      requestId,
+      limit: Math.max(5, committedComponents.length),
+      modelOverrides,
+    });
 
     const primary = committedComponents[0];
     const links: Array<{

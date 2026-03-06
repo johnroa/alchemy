@@ -6,7 +6,6 @@ iOS-first AI recipe app — users set dietary/skill/equipment preferences, chat 
 
 ```
 apps/ios/             Native SwiftUI iOS app (iOS 18+)
-apps/mobile/          Expo 52 React Native (legacy, being replaced by apps/ios/)
 apps/admin/           Next.js 15 admin dashboard (Cloudflare Workers via OpenNext)
 infra/cloudflare/     Cloudflare Worker API gateway (TypeScript)
 supabase/             Auth, Postgres, Edge Functions (LLM gateway)
@@ -53,16 +52,13 @@ Native SwiftUI rewrite of the Expo mobile app. MVVM architecture with `@Observab
 
 ```
 Alchemy/
-├── App/                    Entry point, routing, environment config
-├── Core/
-│   ├── Auth/               AuthManager (@Observable, supabase-swift)
-│   └── Networking/         APIClient (URLSession + async/await), models
+├── App/                    Entry point and app shell
 ├── DesignSystem/
-│   ├── Components/         Button, TextField, SearchBar, FilterChip, RecipeCard, etc.
-│   ├── Modifiers/          Glass (iOS 26), Haptics, Shimmer
+│   ├── Components/         Shared SwiftUI building blocks
 │   └── Theme/              Colors, Typography, Spacing
-├── Features/               One folder per screen (View + ViewModel pairs)
-└── Resources/              Assets.xcassets, Info.plist, Lottie JSON, entitlements
+├── Features/               Auth, Generate, Cookbook, Explore, Preferences, Settings
+├── Models/                 Shared Swift domain models
+└── Resources/              Assets.xcassets, Info.plist, Lottie JSON
 ```
 
 ### Running the iOS app
@@ -85,91 +81,9 @@ open Alchemy.xcodeproj
 
 Supabase credentials are in `Configuration/Debug.xcconfig` and `Configuration/Release.xcconfig`, injected into `Info.plist` at build time via `$(VARIABLE_NAME)`.
 
----
+## Client History
 
-## Mobile App (`apps/mobile/`) — Legacy
-
-Expo Router + TanStack Query + Zustand. Key screens:
-
-| Route | Description |
-|---|---|
-| `/sign-in` | Auth entry — Figma-matched dark form |
-| `/register` | New account — same form component, register mode |
-| `/onboarding` | First-run preference setup — conversational AI interview |
-| `/(tabs)/generate` | Prompt-to-recipe workspace — chat panel + recipe canvas |
-| `/(tabs)/my-cookbook` | Saved recipes + collections |
-| `/preferences` | Dietary / skill / equipment |
-| `/settings` | Account settings |
-
-Design system: `components/alchemy/primitives.tsx` + `theme.ts`
-
-### Generate Screen flow (current contract)
-
-The loop is chat-driven and endpoint-minimal:
-
-1. Start session: `POST /chat` with `{ message }`.
-2. Continue loop: `POST /chat/{id}/messages` for all user turns (ideation + tweaks).
-3. Candidate tab actions: `PATCH /chat/{id}/candidate` with:
-   - `set_active_component`
-   - `delete_component`
-   - `clear_candidate`
-4. Save all remaining tabs: `POST /chat/{id}/commit`.
-5. Read committed recipes: `GET /recipes/{id}` and `GET /recipes/cookbook`.
-
-Deprecated loop endpoints are removed:
-
-- `POST /recipes/generate`
-- `POST /recipes/{id}/tweak`
-- `POST /chat/{id}/generate`
-
-UI state mapping from `ChatSession.loop_state`:
-
-- `ideation`: full chat panel, no recipe tabs shown.
-- `candidate_presented`: collapse chat panel, show generation animation once, render tabs from `candidate_recipe_set.components`.
-- `iterating`: show tweak chat overlay while waiting, then return to candidate presentation on response.
-
-Out-of-scope behavior:
-
-- Non-cooking asks (for example directions/travel/history) stay in `ideation`.
-- API returns `candidate_recipe_set=null` and `response_context.intent=out_of_scope`.
-- Assistant replies with a concise refusal + redirect back to cooking support.
-- Generation is never triggered from out-of-scope turns.
-
-Core response fields to wire:
-
-- `assistant_reply.text`
-- `candidate_recipe_set` (`candidate_id`, `revision`, `active_component_id`, `components[]`)
-- `ui_hints.show_generation_animation`
-- `ui_hints.focus_component_id`
-- `memory_context_ids`
-
-Commit UX contract (`POST /chat/{id}/commit`):
-
-- `commit.recipes[]`: committed recipe ids per tab/component
-- `commit.links[]`: parent/child links across committed components
-- `commit.post_save_options`: `continue_chat | restart_chat | go_to_cookbook`
-
-Mobile UI handoff checklist:
-
-1. Send first turn to `POST /chat`; all later turns to `POST /chat/{id}/messages`.
-2. Never call removed endpoints (`/recipes/generate`, `/recipes/{id}/tweak`, `/chat/{id}/generate`).
-3. Use `PATCH /chat/{id}/candidate` for `set_active_component`, `delete_component`, `clear_candidate`.
-4. Keep `Add All to Cookbook` wired only to `POST /chat/{id}/commit`.
-5. Interpret `response_context.intent=out_of_scope` as ideation-only (no generation animation, no candidate tabs).
-6. Keep three post-save actions only: continue chat, restart chat, go to cookbook.
-
-### Running the app
-
-```bash
-# Dev server (interactive, hot reload)
-pnpm dev:mobile:ios
-
-# With cache clear
-pnpm dev:mobile:ios:clear
-
-# iOS logs
-pnpm logs:mobile:ios
-```
+An older Expo client existed before the native SwiftUI rewrite, but it is no longer part of this repository. Current client development happens in `apps/ios/`, and API behavior should be treated as contract-driven from the OpenAPI spec plus the live `/v1/*` implementation.
 
 ---
 
@@ -431,12 +345,13 @@ Set in `apps/admin/.env.local` for local dev, and as Cloudflare Worker secrets/v
 | `NEXT_PUBLIC_SUPABASE_URL` | Yes | Supabase project URL |
 | `SUPABASE_SECRET_KEY` | Yes | Supabase service role key |
 | `API_BASE_URL` | No | Defaults to `https://api.cookwithalchemy.com/v1` |
-| `ADMIN_SIMULATION_BEARER_TOKEN` | Yes | JWT for simulation + image-job processing |
+| `ADMIN_SIMULATION_USER_EMAIL` | Yes | Simulation user email for admin-triggered processing flows |
+| `ADMIN_SIMULATION_BEARER_TOKEN` | No | Optional pre-minted override token for simulation + image-job processing |
 
 ```bash
 cd apps/admin
 wrangler secret put SUPABASE_SECRET_KEY
-wrangler secret put ADMIN_SIMULATION_BEARER_TOKEN
+wrangler secret put ADMIN_SIMULATION_USER_EMAIL
 ```
 
 ---
@@ -511,7 +426,7 @@ The OpenAPI spec is the single source of truth for all API contracts. The admin 
 | `packages/contracts/openapi.json` | JSON copy for tooling | Generated |
 | `packages/contracts/src/generated.ts` | TypeScript types for gateway + client | Generated |
 | `apps/admin/lib/openapi-spec.json` | Copy bundled into admin app for `/api-docs` | Generated |
-| `apps/admin/lib/admin-routes.ts` | Hardcoded admin route inventory for `/api-docs` | Yes (when routes change) |
+| `apps/admin/lib/admin-routes.ts` | Generated admin route inventory for `/api-docs` | Generated |
 
 ### Updating the spec
 
@@ -529,10 +444,11 @@ $EDITOR packages/contracts/openapi.yaml
 # 3. Regenerate derived files
 pnpm --filter @alchemy/contracts generate          # → src/generated.ts
 pnpm --filter @alchemy/contracts generate:json      # → openapi.json
+pnpm admin:routes:generate                          # → admin-routes.ts
 cp packages/contracts/openapi.json apps/admin/lib/openapi-spec.json
 
-# 4. If admin API routes were added/removed, update:
-$EDITOR apps/admin/lib/admin-routes.ts
+# 4. If admin API routes were added/removed, regenerate:
+pnpm admin:routes:generate
 
 # 5. Add a CHANGELOG.md entry under [Unreleased]
 
@@ -573,7 +489,7 @@ pnpm --filter @alchemy/contracts generate
 
 # 6. Run apps locally
 pnpm dev:admin          # Next.js admin at localhost:3000
-pnpm dev:mobile:ios     # Expo iOS simulator
+cd apps/ios && xcodegen generate
 ```
 
 Supabase schema/functions are deployed by CI from `main` pushes (not from local CLI).

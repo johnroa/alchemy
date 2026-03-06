@@ -1,6 +1,3 @@
-export const TEMP_RECIPE_PLACEHOLDER_IMAGE_URL =
-  "https://www.eatingwell.com/thmb/AADqyJzanmxhohPE6ieAi4okuQo=/1500x0/filters:no_upscale():max_bytes(150000):strip_icc()/Extra-CrispyEggplantParmesan-Beauty-01-89d65a140a3640e3aba7b80ad8865dba.jpg";
-
 const normalizeText = (value: string | null | undefined): string | null => {
   if (typeof value !== "string") {
     return null;
@@ -11,8 +8,8 @@ const normalizeText = (value: string | null | undefined): string | null => {
 
 export const resolveRecipeImageUrl = (
   value: string | null | undefined,
-): string => {
-  return normalizeText(value) ?? TEMP_RECIPE_PLACEHOLDER_IMAGE_URL;
+): string | null => {
+  return normalizeText(value);
 };
 
 export const resolveRecipeImageStatus = (
@@ -26,5 +23,5 @@ export const resolveRecipeImageStatus = (
       : "ready";
   }
 
-  return "ready";
+  return normalizedStatus === "failed" ? "failed" : "pending";
 };

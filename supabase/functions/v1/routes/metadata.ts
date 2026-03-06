@@ -18,7 +18,6 @@ type MetadataDeps = {
     afterJson?: JsonValue;
   }) => Promise<void>;
   processImageJobs: (input: {
-    userClient: RouteContext["client"];
     serviceClient: RouteContext["serviceClient"];
     userId: string;
     requestId: string;
@@ -175,7 +174,6 @@ export const handleMetadataRoutes = async (
       : 5;
 
     const result = await processImageJobs({
-      userClient: client,
       serviceClient,
       userId: auth.userId,
       requestId,

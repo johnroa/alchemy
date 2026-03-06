@@ -10,7 +10,8 @@ import { cn } from "@/lib/utils";
 
 type Job = {
   id: string;
-  recipe_id: string;
+  image_request_id: string;
+  normalized_title?: string | null;
   status: string;
   attempt: number;
   max_attempts: number;
@@ -86,8 +87,15 @@ export function ImageJobsTable({ jobs }: { jobs: Job[] }): React.JSX.Element {
                   </Badge>
                 </div>
               </TableCell>
-              <TableCell className="font-mono text-xs text-muted-foreground">
-                {job.recipe_id.slice(0, 8)}…
+              <TableCell className="min-w-[220px]">
+                <div className="space-y-0.5">
+                  <p className="truncate text-sm font-medium">
+                    {job.normalized_title && job.normalized_title.length > 0 ? job.normalized_title : "Untitled request"}
+                  </p>
+                  <p className="font-mono text-[11px] text-muted-foreground">
+                    {job.image_request_id.slice(0, 8)}…
+                  </p>
+                </div>
               </TableCell>
               <TableCell>
                 <div className="flex items-center gap-2">

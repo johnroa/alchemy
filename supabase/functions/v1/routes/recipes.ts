@@ -84,10 +84,19 @@ type RecipesDeps = {
     userId: string,
   ) => Promise<CookbookItem[]>;
   buildCookbookInsightDeterministic: (items: CookbookItem[]) => string | null;
-  enqueueImageJob: (
-    client: RouteContext["client"],
-    recipeId: string,
-  ) => Promise<void>;
+  ensurePersistedRecipeImageRequest: (input: {
+    serviceClient: RouteContext["serviceClient"];
+    userId: string;
+    requestId: string;
+    recipeId: string;
+    recipeVersionId: string;
+  }) => Promise<void>;
+  scheduleImageQueueDrain: (input: {
+    serviceClient: RouteContext["serviceClient"];
+    actorUserId: string;
+    requestId: string;
+    limit?: number;
+  }) => void;
   searchRecipes: (input: {
     serviceClient: RouteContext["serviceClient"];
     userId: string;
@@ -139,7 +148,8 @@ export const handleRecipeRoutes = async (
     logChangelog,
     buildCookbookItems,
     buildCookbookInsightDeterministic,
-    enqueueImageJob,
+    ensurePersistedRecipeImageRequest,
+    scheduleImageQueueDrain,
     searchRecipes,
     toJsonValue,
   } = deps;
@@ -620,14 +630,35 @@ export const handleRecipeRoutes = async (
         requestId,
       });
 
-      const { data: recipeImageCheck } = await client
+      const { data: recipeImageCheck, error: recipeImageCheckError } = await client
         .from("recipes")
-        .select("hero_image_url")
+        .select("current_version_id")
         .eq("id", recipeId)
         .maybeSingle();
 
-      if (!recipeImageCheck?.hero_image_url) {
-        await enqueueImageJob(client, recipeId);
+      if (recipeImageCheckError) {
+        throw new ApiError(
+          500,
+          "recipe_image_state_lookup_failed",
+          "Could not load recipe image state",
+          recipeImageCheckError.message,
+        );
+      }
+
+      if (recipeImageCheck?.current_version_id) {
+        await ensurePersistedRecipeImageRequest({
+          serviceClient,
+          userId: auth.userId,
+          requestId,
+          recipeId,
+          recipeVersionId: String(recipeImageCheck.current_version_id),
+        });
+        scheduleImageQueueDrain({
+          serviceClient,
+          actorUserId: auth.userId,
+          requestId,
+          limit: 5,
+        });
       }
 
       return respond(200, { saved: true });

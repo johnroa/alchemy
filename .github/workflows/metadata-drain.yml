@@ -21,7 +21,6 @@ jobs:
       PROJECT_REF: dwptbjcxrsmmgjmnumpg
       API_BASE_URL: https://api.cookwithalchemy.com/v1
       SIM_USER_EMAIL: sim-1772428603705@cookwithalchemy.com
-      SIM_USER_PASSWORD: AlchemySim2026
       SUPABASE_PAT: ${{ secrets.SUPABASE_PAT }}
 
     steps:
@@ -49,10 +48,16 @@ jobs:
         run: |
           SERVICE_KEY='${{ steps.keys.outputs.service_key }}'
           SUPABASE_URL="https://${PROJECT_REF}.supabase.co"
-          TOKEN=$(curl -sS "$SUPABASE_URL/auth/v1/token?grant_type=password" \
+          OTP=$(curl -sS "$SUPABASE_URL/auth/v1/admin/generate_link" \
+            -H "Authorization: Bearer $SERVICE_KEY" \
             -H "apikey: $SERVICE_KEY" \
             -H "Content-Type: application/json" \
-            -d "{\"email\":\"${SIM_USER_EMAIL}\",\"password\":\"${SIM_USER_PASSWORD}\"}" | jq -r '.access_token')
+            -d "{\"type\":\"magiclink\",\"email\":\"${SIM_USER_EMAIL}\"}" | jq -r '.email_otp // .properties.email_otp // ""')
+          test -n "$OTP" || (echo "Could not acquire simulation OTP" && exit 1)
+          TOKEN=$(curl -sS "$SUPABASE_URL/auth/v1/verify" \
+            -H "apikey: $SERVICE_KEY" \
+            -H "Content-Type: application/json" \
+            -d "{\"type\":\"magiclink\",\"token\":\"${OTP}\",\"email\":\"${SIM_USER_EMAIL}\"}" | jq -r '.access_token')
           test -n "$TOKEN" || (echo "Could not acquire simulation token" && exit 1)
           echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
 

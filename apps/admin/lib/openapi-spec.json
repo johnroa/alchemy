@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Alchemy API",
-    "version": "2.0.1",
+    "version": "2.0.2",
     "description": "API contract for Alchemy — an AI-driven recipe creation and management platform.\nCovers the user-facing v1 API at api.cookwithalchemy.com and the admin API at admin.cookwithalchemy.com.\n"
   },
   "servers": [
@@ -1549,6 +1549,8 @@
                             "component_id": "component-main",
                             "role": "main",
                             "title": "Spicy Chicken Parm",
+                            "image_url": null,
+                            "image_status": "pending",
                             "recipe": {
                               "title": "Spicy Chicken Parm",
                               "servings": 2,
@@ -1560,6 +1562,8 @@
                             "component_id": "component-side",
                             "role": "side",
                             "title": "Garlicky Broccolini",
+                            "image_url": "https://cdn.cookwithalchemy.com/images/garlicky-broccolini.jpg",
+                            "image_status": "ready",
                             "recipe": {
                               "title": "Garlicky Broccolini",
                               "servings": 2,
@@ -1599,6 +1603,8 @@
                             "component_id": "component-main",
                             "role": "main",
                             "title": "Lighter Spicy Chicken Parm",
+                            "image_url": null,
+                            "image_status": "processing",
                             "recipe": {
                               "title": "Lighter Spicy Chicken Parm",
                               "servings": 2,
@@ -1724,6 +1730,8 @@
                             "component_id": "component-main",
                             "role": "main",
                             "title": "Lighter Spicy Chicken Parm",
+                            "image_url": "https://cdn.cookwithalchemy.com/images/lighter-spicy-chicken-parm.jpg",
+                            "image_status": "ready",
                             "recipe": {
                               "title": "Lighter Spicy Chicken Parm",
                               "servings": 2,
@@ -1735,6 +1743,8 @@
                             "component_id": "component-side",
                             "role": "side",
                             "title": "Garlicky Broccolini",
+                            "image_url": "https://cdn.cookwithalchemy.com/images/garlicky-broccolini.jpg",
+                            "image_status": "ready",
                             "recipe": {
                               "title": "Garlicky Broccolini",
                               "servings": 2,
@@ -3746,6 +3756,8 @@
           "component_id",
           "role",
           "title",
+          "image_url",
+          "image_status",
           "recipe"
         ],
         "properties": {
@@ -3764,6 +3776,25 @@
           },
           "title": {
             "type": "string"
+          },
+          "image_url": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "image_status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "processing",
+              "ready",
+              "failed"
+            ]
           },
           "recipe": {
             "$ref": "#/components/schemas/RecipePayload"

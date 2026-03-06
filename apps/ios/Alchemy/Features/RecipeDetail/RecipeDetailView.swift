@@ -4,55 +4,138 @@ import NukeUI
 /// Full recipe detail view with hero image, sticky scroll title, ingredient table,
 /// steps, and floating tweak chat bar.
 ///
+/// Can be initialized two ways:
+/// 1. `RecipeDetailView(recipeId:)` — fetches from GET /recipes/{id}
+/// 2. `RecipeDetailView(detail:)` — uses a pre-fetched RecipeDetail
+///
 /// Scroll behavior:
-/// 1. Hero image (40% screen height) with recipe title at bottom in serif + drop shadow
-/// 2. On scroll, hero compresses upward
-/// 3. When title reaches the nav bar, it pins as a sticky header
-/// 4. Title + a sliver of the hero remain visible as user scrolls through content
-///
-/// The bottom tab bar is hidden (this is a pushed detail view) and replaced with
-/// a floating GlassInputBar for tweaking: "Want to tweak this recipe?"
-///
-/// Navigation header: back button (top-left), share button, user icon (top-right)
+/// 1. Hero image extends to the very top of the device (ignores safe area)
+/// 2. Dark overlay on hero for readability
+/// 3. On scroll, hero compresses upward
+/// 4. When title reaches the nav bar area, it pins as a sticky header
 struct RecipeDetailView: View {
-    let recipe: Recipe
+    /// Recipe ID to fetch — mutually exclusive with `detail`.
+    let recipeId: String?
+    /// Pre-fetched recipe detail — used when navigating from Generate after commit.
+    let preloadedDetail: RecipeDetail?
 
-    /// Whether this view should show "Add to Cookbook" action (used from Explore/Generate)
+    /// Whether this view should show "Add to Cookbook" (save) action
     var showAddToCookbook: Bool = false
+    /// Whether to show the share button in the toolbar
+    var showShareButton: Bool = true
+    /// Whether to show the built-in tweak bar at the bottom
+    var showTweakBar: Bool = true
+
+    @State private var detail: RecipeDetail?
+    @State private var isLoading = true
+    @State private var errorMessage: String?
+    @State private var isSaved = false
 
     @State private var tweakText = ""
-    @State private var showTweakChat = false
     @Environment(\.dismiss) private var dismiss
+    @FocusState private var tweakBarFocused: Bool
 
-    /// Tracks scroll offset to determine when to pin the title
     @State private var heroHeight: CGFloat = 0
     @State private var scrollOffset: CGFloat = 0
-
-    /// Height of the hero image as a fraction of screen height
     private let heroFraction: CGFloat = 0.4
 
-    /// The title becomes "stuck" when the hero has scrolled enough that the title
-    /// would leave the screen. This threshold triggers the sticky header.
     private var titleIsPinned: Bool {
         scrollOffset < -(heroHeight - 100)
     }
 
+    // MARK: - Initializers
+
+    /// Fetch-by-ID initializer (most common path)
+    init(recipeId: String, showAddToCookbook: Bool = false, showShareButton: Bool = true, showTweakBar: Bool = true) {
+        self.recipeId = recipeId
+        self.preloadedDetail = nil
+        self.showAddToCookbook = showAddToCookbook
+        self.showShareButton = showShareButton
+        self.showTweakBar = showTweakBar
+    }
+
+    /// Pre-loaded detail initializer (used after commit or from candidate)
+    init(detail: RecipeDetail, showAddToCookbook: Bool = false, showShareButton: Bool = true, showTweakBar: Bool = true) {
+        self.recipeId = nil
+        self.preloadedDetail = detail
+        self.showAddToCookbook = showAddToCookbook
+        self.showShareButton = showShareButton
+        self.showTweakBar = showTweakBar
+    }
+
     var body: some View {
+        Group {
+            if isLoading && detail == nil {
+                loadingView
+            } else if let errorMessage, detail == nil {
+                errorView(errorMessage)
+            } else if let recipe = detail {
+                recipeContent(recipe)
+            }
+        }
+        .background(AlchemyColors.background)
+        .ignoresSafeArea(edges: .top)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbarBackground(.hidden, for: .navigationBar)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Group {
+                    if let recipe = detail {
+                        toolbarActions(recipe)
+                    }
+                }
+            }
+        }
+        .toolbarVisibility(.hidden, for: .tabBar)
+        .animation(.easeInOut(duration: 0.2), value: titleIsPinned)
+        .task { await loadRecipe() }
+    }
+
+    // MARK: - Loading / Error
+
+    private var loadingView: some View {
+        ZStack {
+            AlchemyColors.background.ignoresSafeArea()
+            ProgressView().tint(.white)
+        }
+    }
+
+    private func errorView(_ message: String) -> some View {
+        VStack(spacing: AlchemySpacing.md) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 48))
+                .foregroundStyle(AlchemyColors.textTertiary)
+            Text(message)
+                .font(AlchemyTypography.body)
+                .foregroundStyle(AlchemyColors.textSecondary)
+            Button("Retry") { Task { await loadRecipe() } }
+                .foregroundStyle(AlchemyColors.accent)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(AlchemyColors.background)
+    }
+
+    // MARK: - Recipe Content
+
+    private func recipeContent(_ recipe: RecipeDetail) -> some View {
         ZStack(alignment: .bottom) {
             ScrollView {
                 VStack(spacing: 0) {
-                    // MARK: - Hero Image + Title
-                    heroSection
+                    heroSection(recipe)
 
-                    // MARK: - Content
                     VStack(alignment: .leading, spacing: AlchemySpacing.xl) {
-                        ingredientSection
+                        ingredientSection(recipe)
                         Divider().overlay(AlchemyColors.separator)
-                        stepsSection
+                        stepsSection(recipe)
+
+                        if !recipe.attachments.isEmpty {
+                            Divider().overlay(AlchemyColors.separator)
+                            attachmentsSection(recipe)
+                        }
                     }
                     .padding(.horizontal, AlchemySpacing.screenHorizontal)
                     .padding(.top, AlchemySpacing.xl)
-                    .padding(.bottom, 120) // space for floating input bar
+                    .padding(.bottom, 120)
                 }
                 .background(
                     GeometryReader { geo in
@@ -67,80 +150,52 @@ struct RecipeDetailView: View {
             .onPreferenceChange(ScrollOffsetKey.self) { value in
                 scrollOffset = value
             }
+            .scrollDismissesKeyboard(.interactively)
+            .onTapGesture { tweakBarFocused = false }
 
-            // Sticky pinned title that appears when hero scrolls off
             if titleIsPinned {
-                stickyTitleBar
+                stickyTitleBar(recipe)
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
 
-            // Floating tweak input bar at bottom
-            VStack {
-                Spacer()
-                GlassInputBar(
-                    placeholder: "Want to tweak this recipe?",
-                    text: $tweakText,
-                    onSubmit: {
-                        // Will send to POST /chat/{id}/messages for iteration
-                        tweakText = ""
-                    }
-                )
-                .padding(.bottom, AlchemySpacing.sm)
-            }
-        }
-        .background(AlchemyColors.background)
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbarBackground(.hidden, for: .navigationBar)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                HStack(spacing: AlchemySpacing.sm) {
-                    if showAddToCookbook {
-                        Button {
-                            // Will call POST /recipes/{id}/save
-                        } label: {
-                            Image(systemName: "bookmark.fill")
-                                .foregroundStyle(AlchemyColors.accent)
+            if showTweakBar {
+                VStack(spacing: 0) {
+                    Spacer()
+                    GlassInputBar(
+                        placeholder: "Make changes, add a side, change servings",
+                        text: $tweakText,
+                        onSubmit: {
+                            tweakText = ""
+                            tweakBarFocused = false
                         }
-                    }
-
-                    ShareLink(
-                        item: recipe.title,
-                        subject: Text(recipe.title),
-                        message: Text(recipe.summary)
-                    ) {
-                        Image(systemName: "square.and.arrow.up")
-                            .foregroundStyle(AlchemyColors.textPrimary)
-                    }
+                    )
+                    .focused($tweakBarFocused)
+                    .background(
+                        Ellipse()
+                            .fill(.ultraThinMaterial)
+                            .frame(width: 400, height: 80)
+                            .blur(radius: 20)
+                            .opacity(0.8)
+                    )
+                    .padding(.bottom, AlchemySpacing.md)
                 }
             }
         }
-        .toolbarVisibility(.hidden, for: .tabBar)
-        .animation(.easeInOut(duration: 0.2), value: titleIsPinned)
     }
 
     // MARK: - Hero Section
 
-    private var heroSection: some View {
+    private func heroSection(_ recipe: RecipeDetail) -> some View {
         GeometryReader { geo in
             let height = geo.size.height
             ZStack(alignment: .bottomLeading) {
-                // Hero image — fills the full width, stretches on over-scroll
-                LazyImage(url: recipe.imageURL) { state in
-                    if let image = state.image {
-                        image
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                    } else {
-                        Rectangle().fill(AlchemyColors.surfaceSecondary)
-                    }
-                }
-                .frame(width: geo.size.width, height: height)
-                .clipped()
+                heroImageContent(recipe, size: geo.size)
+                    .frame(width: geo.size.width, height: height)
+                    .clipped()
 
-                // Gradient overlay for title readability
+                Color.black.opacity(0.45)
                 AlchemyColors.heroGradient
 
-                // Recipe title at bottom of hero
                 Text(recipe.title)
                     .font(AlchemyTypography.displayLarge)
                     .foregroundStyle(.white)
@@ -155,11 +210,36 @@ struct RecipeDetailView: View {
         }
     }
 
+    /// Chooses the right hero content based on image readiness:
+    /// - "ready" → loads the actual image via Nuke
+    /// - "pending"/"processing" → animated shimmer placeholder
+    /// - "failed" or no URL → static dark placeholder
+    @ViewBuilder
+    private func heroImageContent(_ recipe: RecipeDetail, size: CGSize) -> some View {
+        let status = recipe.imageStatus.lowercased()
+
+        if status == "pending" || status == "processing" {
+            ImageShimmerPlaceholder()
+        } else if let url = recipe.resolvedImageURL {
+            LazyImage(url: url) { state in
+                if let image = state.image {
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                } else if state.error != nil {
+                    Rectangle().fill(AlchemyColors.surfaceSecondary)
+                } else {
+                    ImageShimmerPlaceholder()
+                }
+            }
+        } else {
+            Rectangle().fill(AlchemyColors.surfaceSecondary)
+        }
+    }
+
     // MARK: - Sticky Title Bar
 
-    /// Pinned title bar that appears at the top when the hero scrolls off screen.
-    /// Shows a sliver of the hero gradient + the recipe title.
-    private var stickyTitleBar: some View {
+    private func stickyTitleBar(_ recipe: RecipeDetail) -> some View {
         VStack {
             VStack(spacing: 0) {
                 Rectangle()
@@ -177,7 +257,6 @@ struct RecipeDetailView: View {
                     }
             }
             .frame(maxWidth: .infinity)
-
             Spacer()
         }
         .ignoresSafeArea(edges: .top)
@@ -185,9 +264,7 @@ struct RecipeDetailView: View {
 
     // MARK: - Ingredients
 
-    /// Clean ingredient table with horizontal rules only.
-    /// Name left-aligned, quantity right-aligned and bold.
-    private var ingredientSection: some View {
+    private func ingredientSection(_ recipe: RecipeDetail) -> some View {
         VStack(alignment: .leading, spacing: AlchemySpacing.md) {
             Text("Ingredients")
                 .font(AlchemyTypography.heading)
@@ -200,9 +277,17 @@ struct RecipeDetailView: View {
             VStack(spacing: 0) {
                 ForEach(recipe.ingredients) { ingredient in
                     HStack {
-                        Text(ingredient.name)
-                            .font(AlchemyTypography.ingredientName)
-                            .foregroundStyle(AlchemyColors.textPrimary)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(ingredient.name)
+                                .font(AlchemyTypography.ingredientName)
+                                .foregroundStyle(AlchemyColors.textPrimary)
+
+                            if let prep = ingredient.preparation, !prep.isEmpty {
+                                Text(prep)
+                                    .font(AlchemyTypography.caption)
+                                    .foregroundStyle(AlchemyColors.textTertiary)
+                            }
+                        }
 
                         Spacer()
 
@@ -220,7 +305,7 @@ struct RecipeDetailView: View {
 
     // MARK: - Steps
 
-    private var stepsSection: some View {
+    private func stepsSection(_ recipe: RecipeDetail) -> some View {
         VStack(alignment: .leading, spacing: AlchemySpacing.lg) {
             Text("Steps")
                 .font(AlchemyTypography.heading)
@@ -228,28 +313,175 @@ struct RecipeDetailView: View {
 
             ForEach(recipe.steps) { step in
                 HStack(alignment: .top, spacing: AlchemySpacing.md) {
-                    // Step number in a circle
-                    Text("\(step.number)")
+                    Text("\(step.index)")
                         .font(AlchemyTypography.captionBold)
                         .foregroundStyle(AlchemyColors.accent)
                         .frame(width: 28, height: 28)
                         .background(AlchemyColors.accent.opacity(0.15))
                         .clipShape(Circle())
 
-                    Text(step.instruction)
-                        .font(AlchemyTypography.body)
-                        .foregroundStyle(AlchemyColors.textPrimary)
-                        .fixedSize(horizontal: false, vertical: true)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(step.instruction)
+                            .font(AlchemyTypography.body)
+                            .foregroundStyle(AlchemyColors.textPrimary)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        if let notes = step.notes, !notes.isEmpty {
+                            Text(notes)
+                                .font(AlchemyTypography.caption)
+                                .foregroundStyle(AlchemyColors.textTertiary)
+                        }
+
+                        if let timer = step.timerSeconds, timer > 0 {
+                            Label("\(timer / 60) min", systemImage: "timer")
+                                .font(AlchemyTypography.caption)
+                                .foregroundStyle(AlchemyColors.accent)
+                        }
+                    }
                 }
             }
         }
     }
+
+    // MARK: - Attachments (sides, appetizers, etc.)
+
+    private func attachmentsSection(_ recipe: RecipeDetail) -> some View {
+        VStack(alignment: .leading, spacing: AlchemySpacing.md) {
+            Text("Companions")
+                .font(AlchemyTypography.heading)
+                .foregroundStyle(AlchemyColors.textPrimary)
+
+            ForEach(recipe.attachments) { attachment in
+                NavigationLink(value: attachment.recipe.id) {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(attachment.relationType.capitalized)
+                                .font(AlchemyTypography.caption)
+                                .foregroundStyle(AlchemyColors.accent)
+                            Text(attachment.recipe.title)
+                                .font(AlchemyTypography.subheading)
+                                .foregroundStyle(AlchemyColors.textPrimary)
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .foregroundStyle(AlchemyColors.textTertiary)
+                    }
+                    .padding(AlchemySpacing.md)
+                    .background(AlchemyColors.surface)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                }
+            }
+        }
+    }
+
+    // MARK: - Toolbar
+
+    @ViewBuilder
+    private func toolbarActions(_ recipe: RecipeDetail) -> some View {
+        HStack(spacing: AlchemySpacing.sm) {
+            if showAddToCookbook {
+                Button {
+                    Task { await saveRecipe(recipe.id) }
+                } label: {
+                    Image(systemName: isSaved ? "bookmark.fill" : "bookmark")
+                        .foregroundStyle(isSaved ? AlchemyColors.accent : AlchemyColors.textPrimary)
+                }
+            }
+
+            if showShareButton {
+                ShareLink(
+                    item: recipe.title,
+                    subject: Text(recipe.title),
+                    message: Text(recipe.summary)
+                ) {
+                    Image(systemName: "square.and.arrow.up")
+                        .foregroundStyle(AlchemyColors.textPrimary)
+                }
+            }
+        }
+    }
+
+    // MARK: - API
+
+    private func loadRecipe() async {
+        if let preloadedDetail {
+            detail = preloadedDetail
+            isLoading = false
+            return
+        }
+
+        guard let recipeId else {
+            errorMessage = "No recipe to display."
+            isLoading = false
+            return
+        }
+
+        isLoading = true
+        errorMessage = nil
+
+        do {
+            let fetched: RecipeDetail = try await APIClient.shared.request("/recipes/\(recipeId)")
+            detail = fetched
+        } catch {
+            errorMessage = "Couldn't load this recipe."
+            print("[RecipeDetailView] load failed: \(error)")
+        }
+
+        isLoading = false
+    }
+
+    private func saveRecipe(_ id: String) async {
+        do {
+            try await APIClient.shared.requestVoid("/recipes/\(id)/save", method: .post)
+            withAnimation { isSaved = true }
+        } catch {
+            print("[RecipeDetailView] save failed: \(error)")
+        }
+    }
 }
 
-/// Preference key to track scroll offset in the coordinate space.
 private struct ScrollOffsetKey: PreferenceKey {
     nonisolated(unsafe) static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = nextValue()
+    }
+}
+
+// MARK: - Image Shimmer Placeholder
+
+/// Skeleton shimmer placeholder for the hero image area while the
+/// image is being generated. Just a subtle sweep — no icon, no text.
+struct ImageShimmerPlaceholder: View {
+    @State private var phase: CGFloat = -1.0
+
+    var body: some View {
+        Rectangle()
+            .fill(AlchemyColors.surfaceSecondary)
+            .overlay {
+                Rectangle()
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                .clear,
+                                .white.opacity(0.04),
+                                .white.opacity(0.07),
+                                .white.opacity(0.04),
+                                .clear,
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .offset(x: phase * UIScreen.main.bounds.width)
+            }
+            .clipped()
+            .onAppear {
+                withAnimation(
+                    .linear(duration: 2.0)
+                    .repeatForever(autoreverses: false)
+                ) {
+                    phase = 1.5
+                }
+            }
     }
 }

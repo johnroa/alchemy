@@ -30,7 +30,7 @@ const navGroups = [
       { href: "/dashboard", label: "Dashboard", icon: Home },
       { href: "/users", label: "Users", icon: Users },
       { href: "/simulation-recipe", label: "Recipe Simulations", icon: Activity },
-      { href: "/simulation-image", label: "Image Simulations", icon: Image },
+      { href: "/images", label: "Images", icon: Image },
       { href: "/development", label: "Development", icon: Wrench }
     ]
   },
@@ -51,7 +51,6 @@ const navGroups = [
       { href: "/recipes", label: "Recipes", icon: FlaskConical },
       { href: "/ingredients", label: "Ingredients", icon: Carrot },
       { href: "/graph", label: "Graph", icon: Network },
-      { href: "/image-pipeline", label: "Image Pipeline", icon: Image },
       { href: "/metadata-pipeline", label: "Metadata Pipeline", icon: Database }
     ]
   },

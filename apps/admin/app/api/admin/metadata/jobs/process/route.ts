@@ -1,17 +1,8 @@
 import { NextResponse } from "next/server";
+import { normalizeApiBase } from "@/lib/admin-api-base";
+import { proxyJsonRequest } from "@/lib/admin-http";
 import { getAdminSimulationBearerToken } from "@/lib/admin-simulation-token";
 import { requireCloudflareAccess } from "@/lib/supabase-admin";
-
-const normalizeApiBase = (raw: string | undefined): string => {
-  const value = (raw ?? "https://api.cookwithalchemy.com/v1").trim();
-  if (!value) {
-    return "https://api.cookwithalchemy.com/v1";
-  }
-
-  const withProtocol = /^https?:\/\//i.test(value) ? value : `https://${value}`;
-  const withoutTrailing = withProtocol.replace(/\/+$/, "");
-  return withoutTrailing.endsWith("/v1") ? withoutTrailing : `${withoutTrailing}/v1`;
-};
 
 type Body = {
   limit?: number;
@@ -38,33 +29,12 @@ export async function POST(request: Request): Promise<NextResponse> {
   const body = (await request.json().catch(() => ({}))) as Body;
   const limit = Number.isFinite(Number(body.limit)) ? Math.max(0, Math.min(50, Number(body.limit))) : 10;
   const apiBase = normalizeApiBase(process.env["API_BASE_URL"]);
-
-  const response = await fetch(`${apiBase}/metadata-jobs/process`, {
+  return await proxyJsonRequest({
+    apiBase,
+    token,
+    path: "/metadata-jobs/process",
     method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${token}`
-    },
-    body: JSON.stringify({ limit })
+    body: { limit },
+    errorMessage: "Metadata job processing failed",
   });
-
-  const payloadText = await response.text();
-  let payload: unknown = payloadText;
-  try {
-    payload = JSON.parse(payloadText);
-  } catch {
-    // keep raw string payload
-  }
-
-  if (!response.ok) {
-    return NextResponse.json(
-      {
-        error: "Metadata job processing failed",
-        details: payload
-      },
-      { status: response.status }
-    );
-  }
-
-  return NextResponse.json(payload);
 }

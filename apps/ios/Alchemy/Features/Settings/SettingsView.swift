@@ -1,11 +1,21 @@
 import SwiftUI
 
-/// Stub settings screen with grouped sections.
+/// Settings screen wired to real API endpoints.
 ///
-/// When wired to the API, account actions will call Supabase auth methods
-/// and memory endpoints (GET /memories, POST /memories/reset).
+/// Sections:
+/// - Account: email from Supabase session
+/// - Memory: count from GET /memories, reset via POST /memories/reset
+/// - App: version, changelog
+/// - Sign Out: calls AuthManager.signOut()
 struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
+
+    @State private var memoryCount = 0
+    @State private var isLoadingMemories = true
+    @State private var isResettingMemories = false
+    @State private var showResetConfirmation = false
+
+    private let authManager = AuthManager.shared
 
     var body: some View {
         NavigationStack {
@@ -14,15 +24,8 @@ struct SettingsView: View {
                     HStack {
                         Label("Email", systemImage: "envelope")
                         Spacer()
-                        Text("user@example.com")
+                        Text(authManager.userEmail ?? "—")
                             .foregroundStyle(AlchemyColors.textSecondary)
-                    }
-
-                    NavigationLink {
-                        Text("Change Password")
-                            .foregroundStyle(AlchemyColors.textPrimary)
-                    } label: {
-                        Label("Password", systemImage: "lock")
                     }
                 }
 
@@ -30,36 +33,40 @@ struct SettingsView: View {
                     HStack {
                         Label("Stored Memories", systemImage: "brain.head.profile")
                         Spacer()
-                        Text("12")
-                            .foregroundStyle(AlchemyColors.textSecondary)
+                        if isLoadingMemories {
+                            ProgressView()
+                        } else {
+                            Text("\(memoryCount)")
+                                .foregroundStyle(AlchemyColors.textSecondary)
+                        }
                     }
 
                     Button(role: .destructive) {
-                        // Will call POST /memories/reset
+                        showResetConfirmation = true
                     } label: {
-                        Label("Reset All Memories", systemImage: "arrow.counterclockwise")
+                        Label(
+                            isResettingMemories ? "Resetting..." : "Reset All Memories",
+                            systemImage: "arrow.counterclockwise"
+                        )
                     }
+                    .disabled(isResettingMemories || memoryCount == 0)
                 }
 
                 Section("App") {
                     HStack {
                         Label("Version", systemImage: "info.circle")
                         Spacer()
-                        Text("1.0.0")
+                        Text(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0")
                             .foregroundStyle(AlchemyColors.textSecondary)
-                    }
-
-                    NavigationLink {
-                        Text("Changelog")
-                            .foregroundStyle(AlchemyColors.textPrimary)
-                    } label: {
-                        Label("What's New", systemImage: "sparkles")
                     }
                 }
 
                 Section {
                     Button(role: .destructive) {
-                        // Will call supabase.auth.signOut()
+                        Task {
+                            await authManager.signOut()
+                            dismiss()
+                        }
                     } label: {
                         Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
                     }
@@ -72,6 +79,45 @@ struct SettingsView: View {
                     Button("Done") { dismiss() }
                 }
             }
+            .confirmationDialog(
+                "Reset All Memories?",
+                isPresented: $showResetConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button("Reset", role: .destructive) {
+                    Task { await resetMemories() }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This will permanently delete all learned preferences and cooking memories. This cannot be undone.")
+            }
+            .task { await loadMemories() }
+        }
+    }
+
+    // MARK: - API
+
+    private func loadMemories() async {
+        isLoadingMemories = true
+        defer { isLoadingMemories = false }
+
+        do {
+            let response: MemoryListResponse = try await APIClient.shared.request("/memories")
+            memoryCount = response.items.count
+        } catch {
+            print("[SettingsView] loadMemories failed: \(error)")
+        }
+    }
+
+    private func resetMemories() async {
+        isResettingMemories = true
+        defer { isResettingMemories = false }
+
+        do {
+            try await APIClient.shared.requestVoid("/memories/reset", method: .post)
+            withAnimation { memoryCount = 0 }
+        } catch {
+            print("[SettingsView] resetMemories failed: \(error)")
         }
     }
 }

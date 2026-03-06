@@ -3,61 +3,112 @@ import Lottie
 
 /// Generate screen — the core recipe creation experience.
 ///
-/// State machine flow:
-/// 1. `.chatting` — Recipe skeleton in background, chat window floating over bottom 2/3
-///    - iMessage-style bubbles, assistant greeting, keyboard defaulted up
-///    - User chats until they trigger generation (e.g., "make that" / "let's go")
-/// 2. `.generating` — Chat minimizes, keyboard collapses, Lottie animation plays over skeleton
-/// 3. `.presenting` — Recipe result loads in-place (same layout as RecipeDetail)
-///    - "Add to Cookbook" animates into header
-///    - Component tabs appear below header for multi-dish results
-///    - Input bar placeholder changes to "Want to make any changes?"
-/// 4. `.iterating` — User sends changes via input bar, loops back to generating/presenting
+/// State machine driven by the chat API's loop_state:
+/// 1. `.chatting` (ideation) — Skeleton in background, chat floating over bottom 75%
+/// 2. `.generating` — Chat minimizes, Lottie animation plays over skeleton
+/// 3. `.presenting` (candidate_presented) — Recipe loads, "Add to Cookbook" appears
+/// 4. `.iterating` — User sends tweaks, loops back through generating/presenting
 ///
-/// The chat window is resizable via drag handle — user can pull it up/down.
-/// It terminates above the keyboard so the last message is always visible.
+/// API endpoints used:
+///   - GET /chat/greeting — personalized opening message
+///   - POST /chat — create session + first message
+///   - POST /chat/{id}/messages — continue conversation
+///   - PATCH /chat/{id}/candidate — switch active component
+///   - POST /chat/{id}/commit — save all components to cookbook
 struct GenerateView: View {
+    @Binding var selectedTab: AppTab
+
+    // MARK: - UI State
+
     @State private var phase: GeneratePhase = .chatting
-    @State private var messages: [ChatMessage] = [PreviewData.generateGreeting]
+    @State private var messages: [ChatMessage] = []
     @State private var inputText = ""
-    @State private var chatHeight: CGFloat = 400
     @State private var showAddToCookbook = false
     @State private var activeComponentIndex = 0
     @State private var showPreferences = false
     @State private var showSettings = false
+    @State private var chatHasStarted = false
+    @State private var isSending = false
+    /// Populated from AssistantReply.suggestedNextActions after each API
+    /// response. The first item becomes the placeholder text in the input
+    /// bar, giving contextual hints instead of a static default.
+    @State private var suggestedPlaceholder: String?
 
-    @Environment(\.dismiss) private var dismiss
+    @FocusState private var inputFocused: Bool
+    @State private var keyboardHeight: CGFloat = 0
 
-    /// Minimum chat panel height — enough for ~3 messages
-    private let minChatHeight: CGFloat = 200
-    /// Maximum chat panel height — leaves room for skeleton peek
-    private let maxChatHeight: CGFloat = 600
+    // MARK: - API State
+
+    /// Session ID from POST /chat. Nil until the first message is sent.
+    @State private var chatSessionId: String?
+    /// Current loop state from the API response.
+    @State private var loopState: ChatLoopState = .ideation
+    /// The candidate recipe set returned when the LLM generates a recipe.
+    @State private var candidateSet: APICandidateRecipeSet?
+    @State private var imagePollingTask: Task<Void, Never>?
 
     var body: some View {
-        NavigationStack {
-            ZStack {
-                // Background: recipe skeleton or loaded recipe
-                backgroundContent
+        ZStack {
+            Color.clear
+                .ignoresSafeArea()
+                .overlay { backgroundContent }
 
-                // Chat overlay (bottom-anchored, resizable)
-                if phase == .chatting || phase == .iterating {
-                    chatOverlay
+            NavigationStack {
+                ZStack {
+                    if phase == .presenting {
+                        presentedRecipe
+                    } else {
+                        Color.clear.allowsHitTesting(false)
+                    }
+
+                    if phase == .chatting || phase == .iterating {
+                        chatPanelContent
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
+
+                    if phase == .presenting {
+                        VStack {
+                            Spacer()
+                            Button {
+                                withAnimation(.spring(duration: 0.4)) {
+                                    phase = .iterating
+                                }
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                                    inputFocused = true
+                                }
+                            } label: {
+                                Text("Want to make any changes?")
+                                    .font(AlchemyTypography.chatPlaceholder)
+                                    .foregroundStyle(AlchemyColors.textSecondary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.horizontal, AlchemySpacing.lg)
+                                    .padding(.vertical, AlchemySpacing.md)
+                            }
+                            .glassEffect(.regular, in: .capsule)
+                            .padding(.horizontal, AlchemySpacing.screenHorizontal)
+                            .padding(.bottom, AlchemySpacing.lg)
+                        }
                         .transition(.move(edge: .bottom).combined(with: .opacity))
-                }
+                    }
 
-                // Lottie loading animation
-                if phase == .generating {
-                    generationLoader
-                        .transition(.opacity)
+                    if phase == .generating {
+                        generationLoader.transition(.opacity)
+                    }
                 }
+                .containerBackground(.clear, for: .navigation)
+                .toolbarBackground(.hidden, for: .navigationBar)
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar { toolbarContent }
+                .animation(.spring(duration: 0.5, bounce: 0.2), value: phase)
+                .toolbarVisibility(.hidden, for: .tabBar)
+                .sheet(isPresented: $showPreferences) { PreferencesView() }
+                .sheet(isPresented: $showSettings) { SettingsView() }
             }
-            .background(AlchemyColors.background)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { toolbarContent }
-            .animation(.spring(duration: 0.5, bounce: 0.2), value: phase)
-            .sheet(isPresented: $showPreferences) { PreferencesView() }
-            .sheet(isPresented: $showSettings) { SettingsView() }
         }
+        .background(AlchemyColors.background)
+        .ignoresSafeArea(.keyboard)
+        .task { await loadGreeting() }
+        .onDisappear { imagePollingTask?.cancel() }
     }
 
     // MARK: - Background Content
@@ -65,108 +116,102 @@ struct GenerateView: View {
     @ViewBuilder
     private var backgroundContent: some View {
         switch phase {
-        case .chatting:
+        case .chatting, .generating:
             recipeSkeleton
-        case .generating:
-            recipeSkeleton
-        case .presenting, .iterating:
+        case .iterating:
             presentedRecipe
+        case .presenting:
+            EmptyView()
         }
     }
 
     // MARK: - Recipe Skeleton
 
-    /// Placeholder skeleton mimicking the recipe detail layout.
-    /// Gray blocks for image, title, ingredients, steps — gives the user
-    /// a sense of what's coming while they chat.
     private var recipeSkeleton: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: AlchemySpacing.lg) {
-                // Image placeholder
-                RoundedRectangle(cornerRadius: AlchemySpacing.cardRadius)
-                    .fill(AlchemyColors.surfaceSecondary)
-                    .frame(height: 200)
+        VStack(alignment: .leading, spacing: AlchemySpacing.lg) {
+            RoundedRectangle(cornerRadius: AlchemySpacing.cardRadius)
+                .fill(AlchemyColors.surfaceSecondary)
+                .frame(height: 200)
 
-                // Title placeholder
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(AlchemyColors.surfaceSecondary)
-                    .frame(width: 200, height: 24)
+            RoundedRectangle(cornerRadius: 4)
+                .fill(AlchemyColors.surfaceSecondary)
+                .frame(width: 200, height: 24)
 
-                // Subtitle placeholder
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(AlchemyColors.surface)
-                    .frame(width: 280, height: 16)
+            RoundedRectangle(cornerRadius: 4)
+                .fill(AlchemyColors.surface)
+                .frame(width: 280, height: 16)
 
-                // Ingredient lines
-                ForEach(0..<5, id: \.self) { i in
-                    HStack {
-                        RoundedRectangle(cornerRadius: 4)
-                            .fill(AlchemyColors.surface)
-                            .frame(width: CGFloat.random(in: 100...160), height: 14)
-                        Spacer()
-                        RoundedRectangle(cornerRadius: 4)
-                            .fill(AlchemyColors.surface)
-                            .frame(width: 50, height: 14)
-                    }
-                    if i < 4 {
-                        Divider().overlay(AlchemyColors.separator)
-                    }
+            ForEach(0..<5, id: \.self) { i in
+                HStack {
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(AlchemyColors.surface)
+                        .frame(width: CGFloat.random(in: 100...160), height: 14)
+                    Spacer()
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(AlchemyColors.surface)
+                        .frame(width: 50, height: 14)
                 }
-
-                // Step lines
-                ForEach(0..<3, id: \.self) { _ in
-                    HStack(alignment: .top, spacing: AlchemySpacing.md) {
-                        Circle()
-                            .fill(AlchemyColors.surface)
-                            .frame(width: 28, height: 28)
-                        VStack(alignment: .leading, spacing: 6) {
-                            RoundedRectangle(cornerRadius: 4)
-                                .fill(AlchemyColors.surface)
-                                .frame(height: 14)
-                            RoundedRectangle(cornerRadius: 4)
-                                .fill(AlchemyColors.surface)
-                                .frame(width: 200, height: 14)
-                        }
-                    }
+                if i < 4 {
+                    Divider().overlay(AlchemyColors.separator)
                 }
             }
-            .padding(.horizontal, AlchemySpacing.screenHorizontal)
-            .padding(.top, AlchemySpacing.lg)
-            .padding(.bottom, 500) // extra space so skeleton peeks above chat
+
+            Spacer()
         }
-        .scrollDisabled(true)
+        .padding(.horizontal, AlchemySpacing.screenHorizontal)
+        .padding(.top, AlchemySpacing.lg)
         .opacity(0.5)
     }
 
     // MARK: - Presented Recipe
 
-    /// The generated recipe rendered in-place, same format as RecipeDetail.
-    /// Includes component tabs for multi-dish results.
+    /// Displays the active candidate component as a RecipeDetailView.
+    /// Converts the RecipePayload from the candidate set into a RecipeDetail
+    /// for display. Lacks image/id since the recipe hasn't been committed yet.
     private var presentedRecipe: some View {
-        VStack(spacing: 0) {
-            // Component tabs (Main Dish, Side, etc.)
-            if PreviewData.sampleComponents.count > 1 {
-                componentTabs
+        ZStack(alignment: .top) {
+            if let component = activeComponent {
+                RecipeDetailView(
+                    detail: component.recipe.asDisplayDetail(
+                        title: component.title,
+                        imageUrl: component.imageUrl,
+                        imageStatus: component.imageStatus
+                    ),
+                    showShareButton: false,
+                    showTweakBar: false
+                )
+                // Force view recreation when image status changes so the
+                // @State detail inside RecipeDetailView picks up the new
+                // imageUrl/imageStatus from polling.
+                .id("\(component.componentId)-\(component.imageStatus)-\(component.imageUrl ?? "")")
+            } else {
+                recipeSkeleton
             }
 
-            let component = PreviewData.sampleComponents[activeComponentIndex]
-            RecipeDetailView(
-                recipe: component.recipe,
-                showAddToCookbook: false
-            )
+            if let components = candidateSet?.components, components.count > 1 {
+                componentTabs(components)
+                    .padding(.top, 50)
+            }
         }
     }
 
-    /// Horizontal tab strip below the nav bar for multi-component recipe sets.
-    /// Each tab represents a component: Main Dish, Side, Appetizer, etc.
-    private var componentTabs: some View {
+    /// The currently active candidate component based on tab selection.
+    private var activeComponent: APICandidateComponent? {
+        guard let components = candidateSet?.components else { return nil }
+        let idx = min(activeComponentIndex, components.count - 1)
+        return idx >= 0 ? components[idx] : nil
+    }
+
+    private func componentTabs(_ components: [APICandidateComponent]) -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: AlchemySpacing.sm) {
-                ForEach(Array(PreviewData.sampleComponents.enumerated()), id: \.element.id) { index, component in
+                ForEach(Array(components.enumerated()), id: \.element.id) { index, component in
                     Button {
                         withAnimation { activeComponentIndex = index }
+                        // Tell the API which component is active
+                        Task { await setActiveComponent(component.componentId) }
                     } label: {
-                        Text(component.role)
+                        Text(component.role.capitalized)
                             .font(AlchemyTypography.captionBold)
                             .foregroundStyle(
                                 index == activeComponentIndex
@@ -187,88 +232,168 @@ struct GenerateView: View {
         }
     }
 
-    // MARK: - Chat Overlay
+    // MARK: - Chat Panel Content
 
-    /// Floating chat panel anchored to the bottom of the screen.
-    /// Resizable via drag handle. Contains iMessage-style chat bubbles
-    /// and the glass input bar.
-    private var chatOverlay: some View {
+    private var chatPanelContent: some View {
         VStack(spacing: 0) {
-            Spacer()
+            RoundedRectangle(cornerRadius: 2)
+                .fill(Color.black.opacity(0.3))
+                .frame(width: 36, height: 4)
+                .padding(.top, AlchemySpacing.sm)
+                .padding(.bottom, AlchemySpacing.xs)
 
-            VStack(spacing: 0) {
-                // Drag handle for resizing
-                dragHandle
-
-                // Chat messages
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVStack(spacing: AlchemySpacing.sm) {
-                            ForEach(messages) { message in
-                                ChatBubble(message: message)
-                                    .id(message.id)
-                            }
-                        }
-                        .padding(.horizontal, AlchemySpacing.screenHorizontal)
-                        .padding(.vertical, AlchemySpacing.sm)
-                    }
-                    .onChange(of: messages.count) {
-                        if let last = messages.last {
-                            withAnimation {
-                                proxy.scrollTo(last.id, anchor: .bottom)
-                            }
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: AlchemySpacing.sm) {
+                        ForEach(messages) { message in
+                            ChatBubble(message: message)
+                                .id(message.id)
                         }
                     }
+                    .padding(.horizontal, AlchemySpacing.screenHorizontal)
+                    .padding(.top, AlchemySpacing.sm)
+                    .padding(.bottom, AlchemySpacing.xl)
                 }
-
-                // Input bar
-                GlassInputBar(
-                    placeholder: phase == .iterating
-                        ? "Want to make any changes?"
-                        : "Give me dinner ideas",
-                    text: $inputText,
-                    onSubmit: sendMessage
-                )
-                .padding(.bottom, AlchemySpacing.sm)
+                .scrollDismissesKeyboard(.interactively)
+                .onTapGesture { inputFocused = false }
+                .onChange(of: messages.count) { scrollToBottom(proxy: proxy) }
+                .onChange(of: messages.last?.isLoading) { scrollToBottom(proxy: proxy) }
+                .onChange(of: keyboardHeight) { scrollToBottom(proxy: proxy) }
             }
-            .frame(height: chatHeight)
-            .background(
-                AlchemyColors.background.opacity(0.85)
-                    .background(.ultraThinMaterial)
+
+            chatInputBar
+                .padding(.bottom, keyboardHeight > 0 ? keyboardHeight - 16 : 40)
+        }
+        .frame(maxHeight: UIScreen.main.bounds.height * 0.75)
+        .background(
+            UnevenRoundedRectangle(
+                topLeadingRadius: 20,
+                bottomLeadingRadius: 0,
+                bottomTrailingRadius: 0,
+                topTrailingRadius: 20
             )
-            .clipShape(
-                UnevenRoundedRectangle(
-                    topLeadingRadius: 20,
-                    bottomLeadingRadius: 0,
-                    bottomTrailingRadius: 0,
-                    topTrailingRadius: 20
-                )
-            )
-            .gesture(chatResizeGesture)
+            .fill(.ultraThinMaterial)
+            .overlay {
+                chatGradientBackground
+                    .clipShape(
+                        UnevenRoundedRectangle(
+                            topLeadingRadius: 20,
+                            bottomLeadingRadius: 0,
+                            bottomTrailingRadius: 0,
+                            topTrailingRadius: 20
+                        )
+                    )
+            }
+            .ignoresSafeArea(edges: .bottom)
+        )
+        .frame(maxHeight: .infinity, alignment: .bottom)
+        .ignoresSafeArea(.keyboard)
+        .animation(.spring(duration: 0.35), value: keyboardHeight)
+        .onReceive(
+            NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)
+        ) { notification in
+            if let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect {
+                keyboardHeight = frame.height
+            }
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)
+        ) { _ in
+            keyboardHeight = 0
         }
     }
 
-    /// Pill-shaped drag handle at the top of the chat panel
-    private var dragHandle: some View {
-        RoundedRectangle(cornerRadius: 2)
-            .fill(AlchemyColors.textTertiary)
-            .frame(width: 36, height: 4)
-            .padding(.top, AlchemySpacing.sm)
-            .padding(.bottom, AlchemySpacing.xs)
+    private var chatGradientBackground: some View {
+        MeshGradient(
+            width: 3,
+            height: 3,
+            points: [
+                SIMD2(0.0, 0.0), SIMD2(0.5, 0.0), SIMD2(1.0, 0.0),
+                SIMD2(0.0, 0.5), SIMD2(0.6, 0.45), SIMD2(1.0, 0.5),
+                SIMD2(0.0, 1.0), SIMD2(0.5, 1.0), SIMD2(1.0, 1.0),
+            ],
+            colors: [
+                Color(red: 0.88, green: 0.85, blue: 0.95),
+                Color(red: 0.82, green: 0.92, blue: 0.96),
+                Color(red: 0.90, green: 0.88, blue: 0.96),
+                Color(red: 0.85, green: 0.94, blue: 0.90),
+                Color(red: 0.95, green: 0.86, blue: 0.90),
+                Color(red: 0.84, green: 0.90, blue: 0.97),
+                Color(red: 0.92, green: 0.88, blue: 0.94),
+                Color(red: 0.86, green: 0.95, blue: 0.94),
+                Color(red: 0.90, green: 0.86, blue: 0.93),
+            ],
+            smoothsColors: true
+        )
+        .opacity(0.95)
     }
 
-    /// Drag gesture to resize the chat panel between min and max heights
-    private var chatResizeGesture: some Gesture {
-        DragGesture()
-            .onChanged { value in
-                let newHeight = chatHeight - value.translation.height
-                chatHeight = min(max(newHeight, minChatHeight), maxChatHeight)
+    private var chatInputBar: some View {
+        HStack(spacing: AlchemySpacing.sm) {
+            TextField(
+                "",
+                text: $inputText,
+                prompt: Text(dynamicPlaceholder)
+                    .foregroundStyle(Color(red: 0.35, green: 0.35, blue: 0.40)),
+                axis: .vertical
+            )
+            .lineLimit(1...3)
+            .submitLabel(.return)
+            .font(AlchemyTypography.chatPlaceholder)
+            .foregroundStyle(Color(red: 0.15, green: 0.15, blue: 0.18))
+            .tint(Color(red: 0.2, green: 0.2, blue: 0.25))
+            .focused($inputFocused)
+            .fixedSize(horizontal: false, vertical: true)
+
+            Button {
+                sendMessage()
+            } label: {
+                Image(systemName: "arrow.up.circle.fill")
+                    .font(.title2)
+                    .foregroundStyle(
+                        inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSending
+                            ? Color(red: 0.3, green: 0.3, blue: 0.35).opacity(0.4)
+                            : Color(red: 0.3, green: 0.3, blue: 0.35)
+                    )
             }
+            .disabled(inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSending)
+        }
+        .submitScope()
+        .padding(.horizontal, AlchemySpacing.lg)
+        .padding(.vertical, AlchemySpacing.md)
+        .background {
+            ZStack {
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .fill(.white.opacity(0.35))
+                    .blur(radius: 16)
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .fill(.white.opacity(0.25))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 24, style: .continuous)
+                            .fill(.ultraThinMaterial.opacity(0.5))
+                    )
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .strokeBorder(.white.opacity(0.4), lineWidth: 0.5)
+            }
+        }
+        .padding(.horizontal, AlchemySpacing.screenHorizontal)
+        .animation(.easeInOut(duration: 0.2), value: inputText)
+    }
+
+    /// Contextual placeholder for the chat input. Prefers the first
+    /// `suggestedNextActions` item from the latest assistant reply, with
+    /// phase-appropriate fallbacks.
+    private var dynamicPlaceholder: String {
+        if let suggestion = suggestedPlaceholder {
+            return suggestion
+        }
+        return phase == .iterating
+            ? "Want to make any changes?"
+            : "Give me dinner ideas"
     }
 
     // MARK: - Generation Loader
 
-    /// Lottie animation that plays over the skeleton during recipe generation.
     private var generationLoader: some View {
         VStack {
             Spacer()
@@ -291,9 +416,9 @@ struct GenerateView: View {
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
         ToolbarItem(placement: .topBarLeading) {
-            HStack(spacing: AlchemySpacing.sm) {
+            HStack(spacing: AlchemySpacing.md) {
                 Button {
-                    dismiss()
+                    selectedTab = .cookbook
                 } label: {
                     Image(systemName: "chevron.left")
                         .foregroundStyle(AlchemyColors.textPrimary)
@@ -301,11 +426,22 @@ struct GenerateView: View {
 
                 if showAddToCookbook {
                     Button {
-                        // Will call POST /chat/{id}/commit
+                        Task { await commitToCookbook() }
                     } label: {
-                        Label("Add to Cookbook", systemImage: "bookmark.fill")
+                        Text("Save")
                             .font(AlchemyTypography.captionBold)
                             .foregroundStyle(AlchemyColors.accent)
+                    }
+                    .transition(.scale.combined(with: .opacity))
+                }
+
+                if chatHasStarted {
+                    Button {
+                        startOver()
+                    } label: {
+                        Text("Start Over")
+                            .font(AlchemyTypography.captionBold)
+                            .foregroundStyle(AlchemyColors.textSecondary)
                     }
                     .transition(.scale.combined(with: .opacity))
                 }
@@ -320,11 +456,67 @@ struct GenerateView: View {
         }
     }
 
-    // MARK: - Actions
+    // MARK: - Scroll
 
+    private func scrollToBottom(proxy: ScrollViewProxy) {
+        guard let last = messages.last else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            withAnimation {
+                proxy.scrollTo(last.id, anchor: .bottom)
+            }
+        }
+    }
+
+    // MARK: - API Integration
+
+    /// Fetches a personalized greeting from GET /chat/greeting.
+    /// Shows a chef loading bubble immediately so the screen is never blank,
+    /// then swaps it for the real greeting once the API responds.
+    private func loadGreeting() async {
+        let loadingId = "greeting-loading"
+
+        // Show the loading bubble right away so the user sees activity
+        withAnimation {
+            messages = [ChatMessage(
+                id: loadingId,
+                role: .assistant,
+                content: "",
+                createdAt: .now,
+                isLoading: true
+            )]
+        }
+
+        let greetingText: String
+        do {
+            let greeting: ChatGreetingResponse = try await APIClient.shared.request("/chat/greeting")
+            greetingText = greeting.text
+        } catch {
+            greetingText = "Hey Chef, what are we making today?"
+        }
+
+        // Replace loading bubble with the actual greeting
+        withAnimation {
+            if let idx = messages.firstIndex(where: { $0.id == loadingId }) {
+                messages[idx] = ChatMessage(
+                    id: "greeting",
+                    role: .assistant,
+                    content: greetingText,
+                    createdAt: .now
+                )
+            }
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+            inputFocused = true
+        }
+    }
+
+    /// Sends a message via the chat API.
+    /// First message creates a session (POST /chat), subsequent messages
+    /// continue it (POST /chat/{id}/messages).
     private func sendMessage() {
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
+        guard !text.isEmpty, !isSending else { return }
 
         let userMsg = ChatMessage(
             id: UUID().uuidString,
@@ -333,61 +525,280 @@ struct GenerateView: View {
             createdAt: .now
         )
         messages.append(userMsg)
-        inputText = ""
+        isSending = true
 
-        // Simulate generation after a few chat turns
-        let shouldGenerate = messages.filter { $0.role == .user }.count >= 2
+        // Deferred clear: multi-line TextField (axis: .vertical) has a known
+        // SwiftUI issue where setting the binding to "" while focused doesn't
+        // visually update. Deferring to the next runloop tick lets the view
+        // cycle complete first, ensuring the field actually clears.
+        Task { @MainActor in inputText = "" }
+
+        if !chatHasStarted {
+            withAnimation { chatHasStarted = true }
+        }
+
+        let loadingId = UUID().uuidString
+        let loadingMsg = ChatMessage(
+            id: loadingId,
+            role: .assistant,
+            content: "",
+            createdAt: .now,
+            isLoading: true
+        )
+        withAnimation { messages.append(loadingMsg) }
 
         Task {
-            // Simulate assistant thinking
-            try? await Task.sleep(for: .seconds(1))
+            defer { isSending = false }
 
-            if shouldGenerate && phase == .chatting {
-                // Assistant confirms and triggers generation
-                let reply = ChatMessage(
-                    id: UUID().uuidString,
-                    role: .assistant,
-                    content: "That sounds delicious! Let me put that together for you.",
-                    createdAt: .now
-                )
-                messages.append(reply)
+            do {
+                let response: ChatSessionResponse
 
-                try? await Task.sleep(for: .seconds(0.8))
-
-                // Transition to generating: chat minimizes, loader appears
-                phase = .generating
-
-                // Simulate generation time
-                try? await Task.sleep(for: .seconds(3))
-
-                // Present the result
-                phase = .presenting
-                withAnimation(.spring(duration: 0.4)) {
-                    showAddToCookbook = true
+                if let sessionId = chatSessionId {
+                    // Continue existing session
+                    response = try await APIClient.shared.request(
+                        "/chat/\(sessionId)/messages",
+                        method: .post,
+                        body: ChatMessageRequest(message: text)
+                    )
+                } else {
+                    // Create new session with first message
+                    response = try await APIClient.shared.request(
+                        "/chat",
+                        method: .post,
+                        body: ChatMessageRequest(message: text)
+                    )
+                    chatSessionId = response.id
                 }
-            } else {
-                // Normal assistant reply
-                let reply = ChatMessage(
-                    id: UUID().uuidString,
-                    role: .assistant,
-                    content: "Great idea! Tell me more — any specific ingredients, cuisine style, or dietary needs?",
-                    createdAt: .now
-                )
-                messages.append(reply)
+
+                handleChatResponse(response, loadingId: loadingId)
+
+            } catch {
+                let userFacingMessage = Self.describeError(error)
+                withAnimation {
+                    if let idx = messages.firstIndex(where: { $0.id == loadingId }) {
+                        messages[idx] = ChatMessage(
+                            id: loadingId,
+                            role: .assistant,
+                            content: userFacingMessage,
+                            createdAt: .now
+                        )
+                    }
+                }
+                // Re-populate the input so the user can retry without retyping
+                inputText = text
+                print("[GenerateView] sendMessage error: \(error)")
             }
         }
+    }
+
+    /// Processes the chat API response, updating the UI state machine.
+    private func handleChatResponse(_ response: ChatSessionResponse, loadingId: String) {
+        // Replace loading bubble with assistant reply
+        let replyText = response.assistantReply?.text ?? ""
+        if !replyText.isEmpty {
+            withAnimation {
+                if let idx = messages.firstIndex(where: { $0.id == loadingId }) {
+                    messages[idx] = ChatMessage(
+                        id: loadingId,
+                        role: .assistant,
+                        content: replyText,
+                        createdAt: .now
+                    )
+                }
+            }
+        } else {
+            // No text reply — remove the loading bubble
+            withAnimation {
+                messages.removeAll { $0.id == loadingId }
+            }
+        }
+
+        // Update the placeholder with the first suggested next action from
+        // the LLM, so the input bar adapts to conversation context.
+        if let actions = response.assistantReply?.suggestedNextActions, !actions.isEmpty {
+            suggestedPlaceholder = actions[0]
+        } else {
+            suggestedPlaceholder = nil
+        }
+
+        // Handle generation animation
+        if response.uiHints?.showGenerationAnimation == true {
+            Task { @MainActor in
+                withAnimation { phase = .generating }
+
+                // Show loader for 2 seconds before revealing the recipe
+                try? await Task.sleep(for: .seconds(2))
+
+                withAnimation(.spring(duration: 0.5)) {
+                    phase = .presenting
+                    showAddToCookbook = true
+                }
+
+                inputFocused = false
+            }
+        } else if response.candidateRecipeSet != nil && phase != .presenting {
+            // Recipe was updated without animation (iteration)
+            withAnimation(.spring(duration: 0.5)) {
+                phase = .presenting
+                showAddToCookbook = true
+            }
+        }
+        applyChatSessionState(response)
+    }
+
+    private func applyChatSessionState(_ response: ChatSessionResponse) {
+        loopState = response.loopState
+        candidateSet = response.candidateRecipeSet
+
+        if let activeId = response.candidateRecipeSet?.activeComponentId,
+           let idx = response.candidateRecipeSet?.components.firstIndex(where: { $0.componentId == activeId }) {
+            activeComponentIndex = idx
+        } else {
+            activeComponentIndex = 0
+        }
+
+        refreshImagePolling()
+    }
+
+    private func refreshImagePolling() {
+        imagePollingTask?.cancel()
+
+        guard let sessionId = chatSessionId,
+              let candidateSet,
+              candidateSet.components.contains(where: {
+                  let status = $0.imageStatus.lowercased()
+                  return status == "pending" || status == "processing"
+              }) else {
+            return
+        }
+
+        imagePollingTask = Task {
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled else { return }
+
+            do {
+                let response: ChatSessionResponse = try await APIClient.shared.request("/chat/\(sessionId)")
+                await MainActor.run {
+                    guard chatSessionId == sessionId else { return }
+                    applyChatSessionState(response)
+                }
+            } catch {
+                print("[GenerateView] image poll error: \(error)")
+            }
+        }
+    }
+
+    /// Tells the API to switch the active component in the candidate set.
+    private func setActiveComponent(_ componentId: String) async {
+        guard let sessionId = chatSessionId else { return }
+        do {
+            let _: ChatSessionResponse = try await APIClient.shared.request(
+                "/chat/\(sessionId)/candidate",
+                method: .patch,
+                body: PatchCandidateRequest(action: "set_active_component", componentId: componentId)
+            )
+        } catch {
+            print("[GenerateView] setActiveComponent error: \(error)")
+        }
+    }
+
+    /// Commits all candidate components to the cookbook.
+    private func commitToCookbook() async {
+        guard let sessionId = chatSessionId else { return }
+        do {
+            let response: ChatCommitResponse = try await APIClient.shared.request(
+                "/chat/\(sessionId)/commit",
+                method: .post
+            )
+
+            // Navigate to the first committed recipe in the cookbook
+            if let firstRecipe = response.commit?.recipes.first {
+                selectedTab = .cookbook
+            }
+        } catch {
+            print("[GenerateView] commit error: \(error)")
+        }
+    }
+
+    /// Converts a caught error into a concise, user-facing message.
+    /// Prioritizes API error messages when available, falls back to
+    /// network error descriptions, and uses a generic fallback last.
+    private static func describeError(_ error: Error) -> String {
+        if let apiError = error as? APIError {
+            return apiError.message
+        }
+        if let networkError = error as? NetworkError {
+            return networkError.localizedDescription
+        }
+        if (error as NSError).domain == NSURLErrorDomain {
+            return "Network connection failed. Please check your internet and try again."
+        }
+        return "Something went wrong. Tap send to try again."
+    }
+
+    /// Resets all state for a fresh conversation.
+    private func startOver() {
+        imagePollingTask?.cancel()
+        withAnimation {
+            phase = .chatting
+            messages = []
+            inputText = ""
+            suggestedPlaceholder = nil
+            showAddToCookbook = false
+            chatHasStarted = false
+            activeComponentIndex = 0
+            chatSessionId = nil
+            loopState = .ideation
+            candidateSet = nil
+        }
+        Task { await loadGreeting() }
     }
 }
 
 /// The discrete states of the generate screen.
-/// Transitions between these drive all visual changes.
 enum GeneratePhase: Equatable {
-    /// User is chatting with assistant, skeleton visible behind
     case chatting
-    /// Generation in progress, Lottie animation playing
     case generating
-    /// Recipe result is displayed, user can review
     case presenting
-    /// User is tweaking the presented recipe via chat
     case iterating
+}
+
+// MARK: - RecipePayload → RecipeDetail Conversion
+
+extension RecipePayload {
+    /// Converts a candidate RecipePayload into a RecipeDetail for display.
+    /// Fills in placeholder values for fields that only exist after persistence
+    /// (id, image_url, version, etc.).
+    func asDisplayDetail(
+        title: String? = nil,
+        imageUrl: String? = nil,
+        imageStatus: String = "pending"
+    ) -> RecipeDetail {
+        RecipeDetail(
+            id: "candidate-\(UUID().uuidString.prefix(8))",
+            title: title ?? self.title,
+            description: self.description,
+            summary: self.description ?? self.title,
+            servings: self.servings ?? 4,
+            ingredients: self.ingredients ?? [],
+            steps: self.steps ?? [],
+            ingredientGroups: nil,
+            notes: self.notes,
+            pairings: self.pairings ?? [],
+            metadata: self.metadata,
+            emoji: self.emoji ?? [],
+            imageUrl: imageUrl,
+            imageStatus: imageStatus,
+            visibility: "private",
+            updatedAt: ISO8601DateFormatter().string(from: .now),
+            version: RecipeVersionInfo(
+                versionId: "candidate",
+                recipeId: "candidate",
+                parentVersionId: nil,
+                diffSummary: nil,
+                createdAt: ISO8601DateFormatter().string(from: .now)
+            ),
+            attachments: []
+        )
+    }
 }

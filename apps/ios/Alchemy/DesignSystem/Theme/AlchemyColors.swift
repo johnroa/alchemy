@@ -9,8 +9,8 @@ enum AlchemyColors {
 
     // MARK: - Backgrounds
 
-    /// Primary app background — near-black with a hint of navy
-    static let background = Color(red: 0.07, green: 0.07, blue: 0.10)
+    /// Primary app background — solid black
+    static let background = Color.black
 
     /// Elevated surface (cards, modals) — slightly lighter than background
     static let surface = Color(red: 0.11, green: 0.11, blue: 0.14)

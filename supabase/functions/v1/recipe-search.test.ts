@@ -3,9 +3,8 @@ import {
   decodeSearchCursor,
   encodeSearchCursor,
 } from "./recipe-search.ts";
-import { TEMP_RECIPE_PLACEHOLDER_IMAGE_URL } from "./recipe-images.ts";
 
-Deno.test("buildRecipeSearchDocument injects the temporary placeholder image", () => {
+Deno.test("buildRecipeSearchDocument keeps missing images truthful", () => {
   const document = buildRecipeSearchDocument({
     recipeId: "11111111-1111-1111-1111-111111111111",
     recipeVersionId: "22222222-2222-2222-2222-222222222222",
@@ -44,14 +43,14 @@ Deno.test("buildRecipeSearchDocument injects the temporary placeholder image", (
     },
   });
 
-  if (!document.explore_eligible) {
-    throw new Error("expected placeholder images to be explore eligible");
+  if (document.explore_eligible) {
+    throw new Error("expected missing images to stay ineligible for explore");
   }
-  if (document.image_url !== TEMP_RECIPE_PLACEHOLDER_IMAGE_URL) {
-    throw new Error("expected placeholder image URL to be injected");
+  if (document.image_url !== null) {
+    throw new Error("expected image_url to remain null");
   }
-  if (document.image_status !== "ready") {
-    throw new Error("expected placeholder image to surface as ready");
+  if (document.image_status !== "pending") {
+    throw new Error("expected missing image to stay pending");
   }
   if (document.category !== "Dinner") {
     throw new Error("expected indexed category on the search document");

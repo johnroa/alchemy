@@ -5,7 +5,7 @@ Alchemy is an iOS-first, API-driven recipe app. Admin UI at `admin.cookwithalche
 
 ## Monorepo Structure
 ```
-apps/mobile/          Expo 52 React Native (iOS-first)
+apps/ios/             Native SwiftUI iOS app
 apps/admin/           Next.js 15 admin dashboard (Cloudflare Workers via OpenNext)
 infra/cloudflare/     Cloudflare Worker API gateway (TypeScript)
 supabase/             Auth, Postgres, Edge Functions (LLM gateway)
@@ -71,7 +71,7 @@ The OpenAPI spec is the single source of truth for all API contracts. When chang
 - `packages/contracts/openapi.json` — generated, do not edit
 - `packages/contracts/src/generated.ts` — generated, do not edit
 - `apps/admin/lib/openapi-spec.json` — copy for admin API docs page, do not edit
-- `apps/admin/lib/admin-routes.ts` — hardcoded admin route list (edit when adding/removing admin routes)
+- `apps/admin/lib/admin-routes.ts` — generated admin route inventory, do not edit by hand
 
 ### Steps (every API change)
 1. Edit `packages/contracts/openapi.yaml`
@@ -80,9 +80,10 @@ The OpenAPI spec is the single source of truth for all API contracts. When chang
    ```bash
    pnpm --filter @alchemy/contracts generate
    pnpm --filter @alchemy/contracts generate:json
+   pnpm admin:routes:generate
    cp packages/contracts/openapi.json apps/admin/lib/openapi-spec.json
    ```
-4. If admin routes changed: edit `apps/admin/lib/admin-routes.ts`
+4. If admin routes changed: regenerate `apps/admin/lib/admin-routes.ts`
 5. Add CHANGELOG.md entry under `[Unreleased]`
 6. Deploy affected services
 7. Commit all generated files with the source change
@@ -90,7 +91,7 @@ The OpenAPI spec is the single source of truth for all API contracts. When chang
 ### Do NOT
 - Edit generated files directly (`openapi.json`, `generated.ts`, `openapi-spec.json`)
 - Skip the version bump
-- Add an admin route without updating `apps/admin/lib/admin-routes.ts`
+- Add an admin route without regenerating `apps/admin/lib/admin-routes.ts`
 
 ## Admin API Helper (`scripts/admin-api.sh`)
 

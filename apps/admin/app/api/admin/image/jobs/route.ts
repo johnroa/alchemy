@@ -6,8 +6,8 @@ export async function GET(): Promise<NextResponse> {
   const client = getAdminClient();
 
   const { data, error } = await client
-    .from("recipe_image_jobs")
-    .select("id,recipe_id,status,attempt,max_attempts,next_attempt_at,last_error,updated_at")
+    .from("image_jobs")
+    .select("id,image_request_id,status,attempt,max_attempts,next_attempt_at,last_error,updated_at")
     .order("updated_at", { ascending: false })
     .limit(250);
 

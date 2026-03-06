@@ -549,6 +549,26 @@ export default async function RecipesPage({
                       )}
                     </div>
                   )}
+                  {detail.image_assignment && (
+                    <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                      <span>
+                        Image request: <span className="font-mono">{shortId(detail.image_assignment.image_request_id)}</span>
+                      </span>
+                      <span>
+                        Source: <span className="font-medium">{detail.image_assignment.assignment_source ?? "pending"}</span>
+                      </span>
+                      {detail.image_assignment.asset_id && (
+                        <span>
+                          Asset: <span className="font-mono">{shortId(detail.image_assignment.asset_id)}</span>
+                        </span>
+                      )}
+                      {detail.image_assignment.reused_from_recipe_id && (
+                        <span>
+                          Reused from: <span className="font-mono">{shortId(detail.image_assignment.reused_from_recipe_id)}</span>
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </CardHeader>
               </Card>
 

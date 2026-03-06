@@ -32,8 +32,11 @@ struct ProfileMenu: View {
                 Label("Admin", systemImage: "lock.shield")
             }
         } label: {
-            Image(systemName: "person.circle.fill")
-                .font(.title3)
+            Image("chef-hat")
+                .renderingMode(.template)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(width: 28, height: 28)
                 .foregroundStyle(AlchemyColors.textPrimary)
                 .frame(width: AlchemySpacing.minTouchTarget, height: AlchemySpacing.minTouchTarget)
         }
