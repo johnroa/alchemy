@@ -593,7 +593,7 @@ export const callOpenAiImage = async (params: {
   const timeoutCandidate = Number(params.modelConfig.timeout_ms);
   const timeoutMs = Number.isFinite(timeoutCandidate)
     ? Math.max(5_000, Math.min(180_000, timeoutCandidate))
-    : 40_000;
+    : 120_000;
 
   const requestBody: Record<string, JsonValue> = {
     model: params.model,
