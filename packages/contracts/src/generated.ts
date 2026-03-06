@@ -157,7 +157,8 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
-                            items: components["schemas"]["RecipeCard"][];
+                            items: components["schemas"]["RecipePreview"][];
+                            cookbook_insight: string | null;
                         };
                     };
                 };
@@ -181,7 +182,11 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Search public recipes for Explore and shared retrieval */
+        /**
+         * Search public recipes for Explore and shared retrieval
+         * @description Canonical discovery endpoint for recipe search and Explore feed pagination.
+         *     When both `query` and `preset_id` are omitted or blank, this returns the Explore feed using the same cursor-backed search session infrastructure.
+         */
         post: {
             parameters: {
                 query?: never;
@@ -1752,13 +1757,7 @@ export interface components {
             health_score?: number;
             time_minutes?: number;
             items?: number;
-            quick_stats?: {
-                time_minutes: number;
-                /** @enum {string} */
-                difficulty: "easy" | "medium" | "complex";
-                health_score: number;
-                items: number;
-            };
+            quick_stats?: components["schemas"]["RecipeQuickStats"];
             allergens?: string[];
             allergen_flags?: string[];
             diet_tags?: string[];
@@ -1845,39 +1844,34 @@ export interface components {
             updated_at: string;
             version?: components["schemas"]["RecipeVersion"];
         };
-        RecipeCard: {
+        RecipeQuickStats: {
+            time_minutes: number;
+            /** @enum {string} */
+            difficulty: "easy" | "medium" | "complex";
+            health_score: number;
+            items: number;
+        };
+        RecipePreview: {
             /** Format: uuid */
             id: string;
             title: string;
             summary: string;
             /** Format: uri */
-            image_url?: string | null;
+            image_url: string | null;
             /** @enum {string} */
-            image_status?: "pending" | "ready" | "failed";
-            category?: string;
+            image_status: "pending" | "ready" | "failed";
+            category: string;
+            /** @enum {string} */
+            visibility: "public" | "private";
             /** Format: date-time */
             updated_at: string;
+            quick_stats: components["schemas"]["RecipeQuickStats"] | null;
         };
         RecipeSearchRequest: {
             query?: string;
             preset_id?: string;
             cursor?: string;
             limit?: number;
-        };
-        RecipeSearchCard: {
-            /** Format: uuid */
-            id: string;
-            title: string;
-            summary: string;
-            /** Format: uri */
-            image_url?: string | null;
-            /** @enum {string} */
-            image_status: "pending" | "ready" | "failed";
-            time_minutes?: number | null;
-            /** @enum {string|null} */
-            difficulty?: "easy" | "medium" | "complex" | null;
-            health_score?: number | null;
-            ingredient_count: number;
         };
         RecipeSearchNoMatch: {
             code: string;
@@ -1889,7 +1883,7 @@ export interface components {
             search_id: string;
             /** @enum {string} */
             applied_context: "all" | "preset" | "query";
-            items: components["schemas"]["RecipeSearchCard"][];
+            items: components["schemas"]["RecipePreview"][];
             next_cursor: string | null;
             no_match: components["schemas"]["RecipeSearchNoMatch"] | null;
         };

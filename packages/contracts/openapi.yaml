@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Alchemy API
-  version: 1.5.0
+  version: 2.0.0
   description: |
     API contract for Alchemy — an AI-driven recipe creation and management platform.
     Covers the user-facing v1 API at api.cookwithalchemy.com and the admin API at admin.cookwithalchemy.com.
@@ -152,17 +152,22 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [items]
+                required: [items, cookbook_insight]
                 properties:
                   items:
                     type: array
                     items:
-                      $ref: '#/components/schemas/RecipeCard'
+                      $ref: '#/components/schemas/RecipePreview'
+                  cookbook_insight:
+                    type: [string, 'null']
         default:
           $ref: '#/components/responses/ErrorResponse'
   /recipes/search:
     post:
       summary: Search public recipes for Explore and shared retrieval
+      description: |
+        Canonical discovery endpoint for recipe search and Explore feed pagination.
+        When both `query` and `preset_id` are omitted or blank, this returns the Explore feed using the same cursor-backed search session infrastructure.
       requestBody:
         required: true
         content:
@@ -1483,22 +1488,7 @@ components:
           type: integer
           minimum: 1
         quick_stats:
-          type: object
-          required: [time_minutes, difficulty, health_score, items]
-          properties:
-            time_minutes:
-              type: integer
-              minimum: 1
-            difficulty:
-              type: string
-              enum: [easy, medium, complex]
-            health_score:
-              type: integer
-              minimum: 1
-              maximum: 100
-            items:
-              type: integer
-              minimum: 1
+          $ref: '#/components/schemas/RecipeQuickStats'
         allergens:
           type: array
           items:
@@ -1705,9 +1695,27 @@ components:
           format: date-time
         version:
           $ref: '#/components/schemas/RecipeVersion'
-    RecipeCard:
+    RecipeQuickStats:
       type: object
-      required: [id, title, summary, updated_at]
+      required: [time_minutes, difficulty, health_score, items]
+      properties:
+        time_minutes:
+          type: integer
+          minimum: 1
+        difficulty:
+          type: string
+          enum: [easy, medium, complex]
+        health_score:
+          type: integer
+          minimum: 1
+          maximum: 100
+        items:
+          type: integer
+          minimum: 1
+    RecipePreview:
+      type: object
+      required:
+        [id, title, summary, image_url, image_status, category, visibility, updated_at, quick_stats]
       properties:
         id:
           type: string
@@ -1724,9 +1732,16 @@ components:
           enum: [pending, ready, failed]
         category:
           type: string
+        visibility:
+          type: string
+          enum: [public, private]
         updated_at:
           type: string
           format: date-time
+        quick_stats:
+          oneOf:
+            - $ref: '#/components/schemas/RecipeQuickStats'
+            - type: 'null'
     RecipeSearchRequest:
       type: object
       properties:
@@ -1740,33 +1755,6 @@ components:
           type: integer
           minimum: 1
           maximum: 20
-    RecipeSearchCard:
-      type: object
-      required:
-        [id, title, summary, image_status, ingredient_count]
-      properties:
-        id:
-          type: string
-          format: uuid
-        title:
-          type: string
-        summary:
-          type: string
-        image_url:
-          type: [string, 'null']
-          format: uri
-        image_status:
-          type: string
-          enum: [pending, ready, failed]
-        time_minutes:
-          type: [integer, 'null']
-        difficulty:
-          type: [string, 'null']
-          enum: [easy, medium, complex, null]
-        health_score:
-          type: [integer, 'null']
-        ingredient_count:
-          type: integer
     RecipeSearchNoMatch:
       type: object
       required: [code, message, suggested_action]
@@ -1790,7 +1778,7 @@ components:
         items:
           type: array
           items:
-            $ref: '#/components/schemas/RecipeSearchCard'
+            $ref: '#/components/schemas/RecipePreview'
         next_cursor:
           type: [string, 'null']
         no_match:

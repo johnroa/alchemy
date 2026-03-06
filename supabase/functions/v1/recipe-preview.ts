@@ -239,3 +239,16 @@ export const buildHighestConfidenceCategoryMap = (
     ]),
   );
 };
+
+export const resolveCookbookPreviewCategory = (
+  userOverride: unknown,
+  autoCategory: unknown,
+): string | null => {
+  return normalizeScalarText(userOverride) ?? normalizeScalarText(autoCategory);
+};
+
+export const resolveSearchPreviewCategory = (
+  autoCategory: unknown,
+): string | null => {
+  return normalizeScalarText(autoCategory);
+};

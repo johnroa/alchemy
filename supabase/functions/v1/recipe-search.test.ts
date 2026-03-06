@@ -9,7 +9,9 @@ Deno.test("buildRecipeSearchDocument injects the temporary placeholder image", (
   const document = buildRecipeSearchDocument({
     recipeId: "11111111-1111-1111-1111-111111111111",
     recipeVersionId: "22222222-2222-2222-2222-222222222222",
+    category: "Dinner",
     visibility: "public",
+    updatedAt: "2026-03-06T12:00:00.000Z",
     imageUrl: null,
     imageStatus: "pending",
     canonicalIngredientIds: [
@@ -51,8 +53,17 @@ Deno.test("buildRecipeSearchDocument injects the temporary placeholder image", (
   if (document.image_status !== "ready") {
     throw new Error("expected placeholder image to surface as ready");
   }
+  if (document.category !== "Dinner") {
+    throw new Error("expected indexed category on the search document");
+  }
+  if (document.recipe_updated_at !== "2026-03-06T12:00:00.000Z") {
+    throw new Error("expected recipe updated_at on the search document");
+  }
   if (document.time_minutes !== 35 || document.health_score !== 72) {
     throw new Error("expected quick stats to flow into the search document");
+  }
+  if (document.ingredient_count !== 2) {
+    throw new Error("expected ingredient count to flow into the search document");
   }
   if (!document.search_text.includes("Seared Duck Breast")) {
     throw new Error("expected title inside search text");

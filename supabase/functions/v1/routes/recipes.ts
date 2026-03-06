@@ -12,6 +12,7 @@ import type {
   ChatMessageView,
   ContextPack,
   PreferenceContext,
+  RecipePreview,
   RecipeViewOptions,
   RecipeView,
   RouteContext,
@@ -99,9 +100,13 @@ type RecipesDeps = {
   }) => Promise<{
     search_id: string;
     applied_context: "all" | "preset" | "query";
-    items: Array<Record<string, JsonValue>>;
+    items: RecipePreview[];
     next_cursor: string | null;
-    no_match: Record<string, JsonValue> | null;
+    no_match: {
+      code: string;
+      message: string;
+      suggested_action: string;
+    } | null;
   }>;
   toJsonValue: (value: unknown) => JsonValue;
 };

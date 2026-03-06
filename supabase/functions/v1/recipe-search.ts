@@ -6,22 +6,20 @@ import {
   resolveRecipeImageStatus,
   resolveRecipeImageUrl,
 } from "./recipe-images.ts";
+import {
+  buildRecipePreview,
+  canonicalizeRecipePayloadMetadata,
+  normalizeRecipePreview,
+  resolveSearchPreviewCategory,
+  serializeRecipePreview,
+  type RecipePreview,
+} from "./recipe-preview.ts";
 
 export type RecipeSearchSurface = "explore" | "chat";
 export type RecipeSearchAppliedContext = "all" | "preset" | "query";
 export type RecipeSearchDifficulty = "easy" | "medium" | "complex";
 
-export type RecipeSearchCard = {
-  id: string;
-  title: string;
-  summary: string;
-  image_url: string | null;
-  image_status: string;
-  time_minutes: number | null;
-  difficulty: RecipeSearchDifficulty | null;
-  health_score: number | null;
-  ingredient_count: number;
-};
+export type RecipeSearchCard = RecipePreview;
 
 export type RecipeSearchNoMatch = {
   code: string;
@@ -111,17 +109,19 @@ type SearchRpcRow = {
   summary: string | null;
   image_url: string | null;
   image_status: string;
-  time_minutes: number | null;
-  difficulty: string | null;
-  health_score: number | null;
-  ingredient_count: number | null;
+  category: string | null;
+  visibility: string;
+  updated_at: string;
+  quick_stats: JsonValue;
   indexed_at: string;
 };
 
 type SearchDocumentSource = {
   recipeId: string;
   recipeVersionId: string;
+  category: string | null;
   visibility: string;
+  updatedAt: string;
   imageUrl: string | null;
   imageStatus: string;
   payload: RecipePayload;
@@ -300,28 +300,7 @@ export const decodeSearchCursor = (
   return null;
 };
 
-const normalizeRecipeSearchCard = (
-  value: unknown,
-): RecipeSearchCard | null => {
-  const record = asRecord(value);
-  const id = normalizeScalarText(record?.id);
-  const title = normalizeScalarText(record?.title);
-  if (!record || !id || !title) {
-    return null;
-  }
-
-  return {
-    id,
-    title,
-    summary: normalizeScalarText(record.summary) ?? "",
-    image_url: normalizeScalarText(record.image_url),
-    image_status: normalizeScalarText(record.image_status) ?? "pending",
-    time_minutes: normalizeFiniteInteger(record.time_minutes),
-    difficulty: normalizeDifficulty(record.difficulty),
-    health_score: normalizeFiniteInteger(record.health_score),
-    ingredient_count: normalizeFiniteInteger(record.ingredient_count) ?? 0,
-  };
-};
+const normalizeRecipeSearchCard = normalizeRecipePreview;
 
 const normalizeStoredCards = (value: unknown): RecipeSearchCard[] => {
   if (!Array.isArray(value)) {
@@ -371,33 +350,24 @@ const buildNoMatch = (
   };
 };
 
-const serializeSearchCard = (item: RecipeSearchCard): Record<string, JsonValue> => ({
-  id: item.id,
-  title: item.title,
-  summary: item.summary,
-  image_url: item.image_url,
-  image_status: item.image_status,
-  time_minutes: item.time_minutes,
-  difficulty: item.difficulty,
-  health_score: item.health_score,
-  ingredient_count: item.ingredient_count,
-});
+const serializeSearchCard = serializeRecipePreview;
 
 const serializeVector = (vector: number[]): string => {
   return `[${vector.map((value) => Number(value).toFixed(12)).join(",")}]`;
 };
 
-const mapRpcRowToCard = (row: SearchRpcRow): RecipeSearchCard => ({
-  id: row.recipe_id,
-  title: normalizeScalarText(row.title) ?? "Untitled Recipe",
-  summary: normalizeScalarText(row.summary) ?? "",
-  image_url: normalizeScalarText(row.image_url),
-  image_status: normalizeScalarText(row.image_status) ?? "pending",
-  time_minutes: normalizeFiniteInteger(row.time_minutes),
-  difficulty: normalizeDifficulty(row.difficulty),
-  health_score: normalizeFiniteInteger(row.health_score),
-  ingredient_count: normalizeFiniteInteger(row.ingredient_count) ?? 0,
-});
+const mapRpcRowToCard = (row: SearchRpcRow): RecipeSearchCard =>
+  buildRecipePreview({
+    id: row.recipe_id,
+    title: row.title,
+    summary: row.summary,
+    image_url: row.image_url,
+    image_status: row.image_status,
+    category: row.category,
+    visibility: row.visibility,
+    updated_at: row.updated_at,
+    quick_stats: row.quick_stats,
+  });
 
 const normalizeSearchIntent = (params: {
   appliedContext: RecipeSearchAppliedContext;
@@ -505,7 +475,9 @@ export const buildRecipeSearchDocument = (
 ): {
   recipe_id: string;
   recipe_version_id: string;
+  category: string | null;
   visibility: string;
+  recipe_updated_at: string;
   image_url: string | null;
   image_status: string;
   explore_eligible: boolean;
@@ -525,11 +497,7 @@ export const buildRecipeSearchDocument = (
   keyword_terms: string[];
   search_text: string;
 } => {
-  const metadata = params.payload.metadata &&
-      typeof params.payload.metadata === "object" &&
-      !Array.isArray(params.payload.metadata)
-    ? params.payload.metadata as Record<string, JsonValue>
-    : undefined;
+  const metadata = canonicalizeRecipePayloadMetadata(params.payload);
 
   const resolvedImageUrl = resolveRecipeImageUrl(params.imageUrl);
   const resolvedImageStatus = resolveRecipeImageStatus(
@@ -580,7 +548,9 @@ export const buildRecipeSearchDocument = (
   return {
     recipe_id: params.recipeId,
     recipe_version_id: params.recipeVersionId,
+    category: resolveSearchPreviewCategory(params.category),
     visibility: params.visibility,
+    recipe_updated_at: params.updatedAt,
     image_url: resolvedImageUrl,
     image_status: resolvedImageStatus,
     explore_eligible: params.visibility === "public" &&
@@ -612,10 +582,11 @@ const loadRecipeSearchDocumentSource = async (params: {
     { data: recipeRow, error: recipeError },
     { data: versionRow, error: versionError },
     { data: ingredientRows, error: ingredientRowsError },
+    { data: autoCategoryRow, error: autoCategoryError },
   ] = await Promise.all([
     params.serviceClient
       .from("recipes")
-      .select("id,visibility,hero_image_url,image_status")
+      .select("id,visibility,hero_image_url,image_status,updated_at")
       .eq("id", params.recipeId)
       .maybeSingle(),
     params.serviceClient
@@ -628,6 +599,14 @@ const loadRecipeSearchDocumentSource = async (params: {
       .select("ingredient_id,source_name,metadata")
       .eq("recipe_version_id", params.recipeVersionId)
       .order("position", { ascending: true }),
+    params.serviceClient
+      .from("recipe_auto_categories")
+      .select("category,confidence")
+      .eq("recipe_id", params.recipeId)
+      .order("confidence", { ascending: false, nullsFirst: false })
+      .order("category", { ascending: true })
+      .limit(1)
+      .maybeSingle(),
   ]);
 
   if (recipeError || !recipeRow) {
@@ -654,6 +633,15 @@ const loadRecipeSearchDocumentSource = async (params: {
       "recipe_search_source_ingredients_failed",
       "Could not load recipe ingredients for search backfill",
       ingredientRowsError.message,
+    );
+  }
+
+  if (autoCategoryError) {
+    throw new ApiError(
+      500,
+      "recipe_search_source_category_failed",
+      "Could not load recipe category for search backfill",
+      autoCategoryError.message,
     );
   }
 
@@ -733,7 +721,9 @@ const loadRecipeSearchDocumentSource = async (params: {
   return {
     recipeId: params.recipeId,
     recipeVersionId: params.recipeVersionId,
+    category: resolveSearchPreviewCategory(autoCategoryRow?.category),
     visibility: String(recipeRow.visibility ?? "private"),
+    updatedAt: String(recipeRow.updated_at ?? new Date(0).toISOString()),
     imageUrl: normalizeScalarText(recipeRow.hero_image_url),
     imageStatus: normalizeScalarText(recipeRow.image_status) ?? "pending",
     payload: versionRow.payload as RecipePayload,

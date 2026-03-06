@@ -15,6 +15,10 @@ import type {
   UnitPreference,
 } from "../recipe-standardization.ts";
 import type {
+  RecipePreview,
+  RecipeQuickStats,
+} from "../recipe-preview.ts";
+import type {
   PendingPreferenceConflict,
   ThreadPreferenceOverrides,
 } from "../chat-preference-conflicts.ts";
@@ -105,7 +109,9 @@ export type RecipeViewOptions = {
   inlineMeasurements: boolean;
 };
 
-export type CookbookItem = Record<string, JsonValue>;
+export type { RecipePreview, RecipeQuickStats };
+
+export type CookbookItem = RecipePreview;
 
 export type ChatLoopState = "ideation" | "candidate_presented" | "iterating";
 export type CandidateRecipeRole =

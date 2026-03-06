@@ -2,6 +2,17 @@
 
 ## [Unreleased] — 2026-03-05
 
+### Search-Backed Explore API Cleanup
+
+- Promoted `POST /v1/recipes/search` to the canonical recipe discovery API for search and Explore feed pagination
+- Realigned `/v1/recipes/search` and `/v1/recipes/cookbook` around a shared `RecipePreview` contract
+- Documented preview `quick_stats`, `visibility`, and `cookbook_insight` in the public API surface
+- Extended indexed recipe search documents with category and recipe `updated_at` so previews can be served directly from the search index
+- Made category precedence deterministic:
+  - cookbook uses user override > highest-confidence auto category > fallback
+  - search and Explore use indexed auto category > fallback
+- Added preview projector tests, recipes route tests, and contract checks covering cookbook/search response alignment
+
 ### Recipe Search / RAG Backend
 
 - Added `POST /v1/recipes/search` for shared Explore/chat recipe retrieval

@@ -20,10 +20,6 @@ import type {
   RecipePayload,
 } from "../_shared/types.ts";
 import {
-  normalizeRecipeMetadata,
-  sumRecipeStepTimerSeconds,
-} from "../_shared/recipe-metadata-normalization.ts";
-import {
   buildIngredientGroups,
   type CanonicalIngredientView,
   canonicalizeIngredients,
@@ -62,6 +58,13 @@ import {
   resolveRecipeImageStatus,
   resolveRecipeImageUrl,
 } from "./recipe-images.ts";
+import {
+  buildHighestConfidenceCategoryMap,
+  buildRecipePreview,
+  canonicalizeRecipePayloadMetadata,
+  resolveCookbookPreviewCategory,
+  type RecipePreview,
+} from "./recipe-preview.ts";
 import {
   applyThreadPreferenceOverrides,
   derivePendingPreferenceConflictFromResponse,
@@ -4261,17 +4264,34 @@ const processMetadataJobs = async (params: {
         },
       });
 
-      const { data: searchRecipeRow, error: searchRecipeError } = await params
-        .serviceClient
-        .from("recipes")
-        .select("id,visibility,hero_image_url,image_status")
-        .eq("id", job.recipe_id)
-        .maybeSingle();
+      const [
+        { data: searchRecipeRow, error: searchRecipeError },
+        { data: searchCategoryRow, error: searchCategoryError },
+      ] = await Promise.all([
+        params
+          .serviceClient
+          .from("recipes")
+          .select("id,visibility,hero_image_url,image_status,updated_at")
+          .eq("id", job.recipe_id)
+          .maybeSingle(),
+        params.serviceClient
+          .from("recipe_auto_categories")
+          .select("category,confidence")
+          .eq("recipe_id", job.recipe_id)
+          .order("confidence", { ascending: false, nullsFirst: false })
+          .order("category", { ascending: true })
+          .limit(1)
+          .maybeSingle(),
+      ]);
 
       if (searchRecipeError || !searchRecipeRow) {
         throw new Error(
           searchRecipeError?.message ?? "recipe_search_source_missing",
         );
+      }
+
+      if (searchCategoryError) {
+        throw new Error(searchCategoryError.message);
       }
 
       let ontologyTermKeys: string[] = [];
@@ -4315,7 +4335,9 @@ const processMetadataJobs = async (params: {
         source: {
           recipeId: job.recipe_id,
           recipeVersionId: job.recipe_version_id,
+          category: searchCategoryRow?.category ?? null,
           visibility: searchRecipeRow.visibility,
+          updatedAt: searchRecipeRow.updated_at,
           imageUrl: searchRecipeRow.hero_image_url,
           imageStatus: searchRecipeRow.image_status,
           payload,
@@ -6183,22 +6205,6 @@ const buildCandidateOutlineForPrompt = (
   };
 };
 
-const canonicalizeRecipePayloadMetadata = (
-  payload: Pick<RecipePayload, "metadata" | "ingredients" | "steps">,
-): Record<string, JsonValue> | undefined => {
-  const { metadata } = normalizeRecipeMetadata({
-    metadata: payload.metadata &&
-        typeof payload.metadata === "object" && !Array.isArray(payload.metadata)
-      ? payload.metadata as Record<string, JsonValue>
-      : undefined,
-    ingredientCount: Array.isArray(payload.ingredients)
-      ? payload.ingredients.length
-      : 0,
-    stepTimerSecondsTotal: sumRecipeStepTimerSeconds(payload.steps),
-  });
-  return Object.keys(metadata).length > 0 ? metadata : undefined;
-};
-
 const updateChatSessionLoopContext = async (params: {
   client: SupabaseClient;
   chatId: string;
@@ -6471,10 +6477,14 @@ const buildCookbookItems = async (
       client
         .from("recipe_user_categories")
         .select("recipe_id,category")
-        .eq("user_id", userId),
+        .eq("user_id", userId)
+        .in("recipe_id", recipeIds),
       client
         .from("recipe_auto_categories")
-        .select("recipe_id,category,confidence"),
+        .select("recipe_id,category,confidence")
+        .in("recipe_id", recipeIds)
+        .order("confidence", { ascending: false, nullsFirst: false })
+        .order("category", { ascending: true }),
     ]);
 
   const userCategoryByRecipe = new Map<string, string>();
@@ -6482,12 +6492,7 @@ const buildCookbookItems = async (
     userCategoryByRecipe.set(entry.recipe_id, entry.category);
   }
 
-  const autoCategoryByRecipe = new Map<string, string>();
-  for (const entry of autoCategories ?? []) {
-    if (!autoCategoryByRecipe.has(entry.recipe_id)) {
-      autoCategoryByRecipe.set(entry.recipe_id, entry.category);
-    }
-  }
+  const autoCategoryByRecipe = buildHighestConfidenceCategoryMap(autoCategories ?? []);
 
   return recipes.map((recipe) => {
     const payload = recipe.current_version_id
@@ -6495,6 +6500,9 @@ const buildCookbookItems = async (
       : undefined;
     const userCategory = userCategoryByRecipe.get(recipe.id);
     const autoCategory = autoCategoryByRecipe.get(recipe.id);
+    const canonicalMetadata = payload
+      ? canonicalizeRecipePayloadMetadata(payload)
+      : undefined;
 
     return buildRecipePreview({
       id: recipe.id,
@@ -6505,13 +6513,14 @@ const buildCookbookItems = async (
         recipe.hero_image_url,
         recipe.image_status,
       ),
-      category: userCategory ?? autoCategory ?? "Auto Organized",
+      category: resolveCookbookPreviewCategory(userCategory, autoCategory),
       visibility: recipe.visibility,
       updated_at: recipe.updated_at,
-      time_minutes: payload?.metadata?.time_minutes,
-      difficulty: payload?.metadata?.difficulty,
-      health_score: payload?.metadata?.health_score,
-      items: Array.isArray(payload?.ingredients) ? payload.ingredients.length : null,
+      quick_stats: canonicalMetadata?.quick_stats,
+      time_minutes: canonicalMetadata?.time_minutes,
+      difficulty: canonicalMetadata?.difficulty,
+      health_score: canonicalMetadata?.health_score,
+      items: canonicalMetadata?.items,
     });
   });
 };
@@ -7393,7 +7402,7 @@ Deno.serve(async (request) => {
       buildCookbookInsightDeterministic,
       enqueueImageJob,
       searchRecipes: async (input) => {
-        const response = await searchRecipes({
+        return await searchRecipes({
           serviceClient: input.serviceClient,
           userId: input.userId,
           requestId: input.requestId,
@@ -7403,14 +7412,6 @@ Deno.serve(async (request) => {
           cursor: input.cursor,
           limit: input.limit,
         });
-
-        return {
-          search_id: response.search_id,
-          applied_context: response.applied_context,
-          items: response.items.map((item) => item as unknown as Record<string, JsonValue>),
-          next_cursor: response.next_cursor,
-          no_match: response.no_match as unknown as Record<string, JsonValue> | null,
-        };
       },
       toJsonValue,
     });
