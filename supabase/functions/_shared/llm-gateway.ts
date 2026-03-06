@@ -3951,6 +3951,9 @@ export const llmGateway = {
           provider: config?.provider ?? null,
           model: config?.model ?? null,
           error_code: errorCode,
+          error_details: error instanceof ApiError
+            ? error.details ?? null
+            : null,
           ...(params.eventPayload ?? {}),
         },
       );

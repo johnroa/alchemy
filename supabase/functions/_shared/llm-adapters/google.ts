@@ -124,7 +124,9 @@ const getUsageTokens = (
   return { inputTokens, outputTokens };
 };
 
-const extractCandidateText = (payload: GoogleGenerateContentPayload): string | null => {
+const extractCandidateText = (
+  payload: GoogleGenerateContentPayload,
+): string | null => {
   for (const candidate of payload.candidates ?? []) {
     for (const part of candidate.content?.parts ?? []) {
       if (typeof part.text === "string" && part.text.trim().length > 0) {
@@ -216,17 +218,31 @@ const buildTextGenerationConfig = (
   return generationConfig;
 };
 
-const buildImageGenerationConfig = (
-  modelConfig: Record<string, JsonValue>,
-): Record<string, JsonValue> => {
-  const generationConfig: Record<string, JsonValue> = {
-    responseModalities: ["IMAGE"],
-  };
+const buildImageGenerationConfig = (params: {
+  model: string;
+  modelConfig: Record<string, JsonValue>;
+}): Record<string, JsonValue> => {
+  const generationConfig: Record<string, JsonValue> = {};
 
-  const temperature = toFiniteNumber(modelConfig.temperature);
-  const topP = toFiniteNumber(modelConfig.top_p);
-  const topK = toFiniteNumber(modelConfig.top_k);
-  const maxOutputTokens = toFiniteNumber(modelConfig.max_output_tokens);
+  const temperature = toFiniteNumber(params.modelConfig.temperature);
+  const topP = toFiniteNumber(params.modelConfig.top_p);
+  const topK = toFiniteNumber(params.modelConfig.top_k);
+  const maxOutputTokens = toFiniteNumber(params.modelConfig.max_output_tokens);
+  const aspectRatio = typeof params.modelConfig.aspect_ratio === "string"
+    ? params.modelConfig.aspect_ratio.trim()
+    : "";
+  const imageSize = typeof params.modelConfig.image_size === "string"
+    ? params.modelConfig.image_size.trim()
+    : "";
+  const resolvedAspectRatio = aspectRatio ||
+    (params.model === "gemini-2.5-flash-image" ? "3:2" : "");
+  const responseModalities = Array.isArray(
+      params.modelConfig.response_modalities,
+    )
+    ? params.modelConfig.response_modalities.filter((value): value is string =>
+      typeof value === "string" && value.trim().length > 0
+    )
+    : [];
 
   if (temperature !== null) {
     generationConfig.temperature = temperature;
@@ -239,6 +255,23 @@ const buildImageGenerationConfig = (
   }
   if (maxOutputTokens !== null && maxOutputTokens > 0) {
     generationConfig.maxOutputTokens = Math.trunc(maxOutputTokens);
+  }
+
+  if (resolvedAspectRatio || imageSize) {
+    generationConfig.imageConfig = {
+      ...(resolvedAspectRatio ? { aspectRatio: resolvedAspectRatio } : {}),
+      ...(imageSize ? { imageSize } : {}),
+    };
+  }
+
+  // Gemini 2.5 Flash Image's current text-to-image examples omit
+  // responseModalities and rely on the model defaulting to mixed text/image
+  // outputs. Keep explicit responseModalities only when configured, or for
+  // newer preview image models that expect image-only forcing.
+  if (responseModalities.length > 0) {
+    generationConfig.responseModalities = responseModalities;
+  } else if (params.model.startsWith("gemini-3")) {
+    generationConfig.responseModalities = ["IMAGE"];
   }
 
   return generationConfig;
@@ -584,7 +617,7 @@ export const callGoogleImage = async (params: {
   const timeoutCandidate = Number(params.modelConfig.timeout_ms);
   const timeoutMs = Number.isFinite(timeoutCandidate)
     ? Math.max(5_000, Math.min(180_000, timeoutCandidate))
-    : 40_000;
+    : 120_000;
 
   let response: Response;
   try {
@@ -602,7 +635,10 @@ export const callGoogleImage = async (params: {
             parts: [{ text: params.prompt }],
           },
         ],
-        generationConfig: buildImageGenerationConfig(params.modelConfig),
+        generationConfig: buildImageGenerationConfig({
+          model: params.model,
+          modelConfig: params.modelConfig,
+        }),
       }),
     });
   } catch (error) {
@@ -635,10 +671,16 @@ export const callGoogleImage = async (params: {
   const imageData = extractImageData(payload);
 
   if (!imageData) {
+    const candidateText = extractCandidateText(payload);
+    const finishReason = extractFinishReason(payload);
     throw new ApiError(
       502,
       "image_empty_output",
       "Image provider returned no image output",
+      {
+        finish_reason: finishReason,
+        text: candidateText ? truncateErrorDetailText(candidateText) : null,
+      },
     );
   }
 

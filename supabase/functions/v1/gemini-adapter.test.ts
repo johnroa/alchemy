@@ -78,7 +78,7 @@ Deno.test("callGoogleJson returns parsed JSON and token usage", async () => {
             candidates: [
               {
                 content: {
-                  parts: [{ text: "{\"ok\":true}" }],
+                  parts: [{ text: '{"ok":true}' }],
                 },
               },
             ],
@@ -111,7 +111,9 @@ Deno.test("callGoogleJson returns parsed JSON and token usage", async () => {
       throw new Error("expected parsed JSON result");
     }
     if (result.inputTokens !== 111) {
-      throw new Error(`unexpected input token count: ${String(result.inputTokens)}`);
+      throw new Error(
+        `unexpected input token count: ${String(result.inputTokens)}`,
+      );
     }
     if (result.outputTokens !== 29) {
       throw new Error(
@@ -219,7 +221,7 @@ Deno.test("callGoogleJson maps token limit truncation to llm_json_truncated", as
             candidates: [
               {
                 content: {
-                  parts: [{ text: "{\"incomplete\": true" }],
+                  parts: [{ text: '{"incomplete": true' }],
                 },
                 finishReason: "MAX_TOKENS",
               },
@@ -259,7 +261,50 @@ Deno.test("callGoogleImage returns data URL from inline image bytes", async () =
   Deno.env.set("GEMINI_API_KEY", TEST_API_KEY);
 
   try {
-    globalThis.fetch = (() => {
+    globalThis.fetch = ((
+      input: Request | URL | string,
+      init?: RequestInit,
+    ) => {
+      const url = getRequestUrl(input);
+      if (
+        url !==
+          "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent"
+      ) {
+        throw new Error(`unexpected URL: ${url}`);
+      }
+
+      const headers = new Headers(init?.headers);
+      if (headers.get("x-goog-api-key") !== TEST_API_KEY) {
+        throw new Error("expected x-goog-api-key header");
+      }
+
+      const bodyText = typeof init?.body === "string" ? init.body : "";
+      if (!bodyText) {
+        throw new Error("expected request body");
+      }
+
+      const payload = JSON.parse(bodyText) as {
+        generationConfig?: {
+          imageConfig?: {
+            aspectRatio?: string;
+            imageSize?: string;
+          };
+          responseModalities?: string[];
+        };
+      };
+      const generationConfig = payload.generationConfig;
+      if (!generationConfig) {
+        throw new Error("expected generationConfig");
+      }
+      if (generationConfig.imageConfig?.aspectRatio !== "3:2") {
+        throw new Error("expected default 3:2 aspect ratio for Gemini image");
+      }
+      if (typeof generationConfig.responseModalities !== "undefined") {
+        throw new Error(
+          "did not expect responseModalities for Gemini 2.5 Flash Image",
+        );
+      }
+
       return Promise.resolve(
         new Response(
           JSON.stringify({
@@ -290,6 +335,88 @@ Deno.test("callGoogleImage returns data URL from inline image bytes", async () =
     });
 
     if (imageUrl !== "data:image/jpeg;base64,abc123") {
+      throw new Error(`unexpected image url: ${imageUrl}`);
+    }
+  } finally {
+    globalThis.fetch = previousFetch;
+    Deno.env.delete("GEMINI_API_KEY");
+  }
+});
+
+Deno.test("callGoogleImage forwards explicit image config overrides", async () => {
+  const previousFetch = globalThis.fetch;
+  Deno.env.set("GEMINI_API_KEY", TEST_API_KEY);
+
+  try {
+    globalThis.fetch = ((
+      _input: Request | URL | string,
+      init?: RequestInit,
+    ) => {
+      const bodyText = typeof init?.body === "string" ? init.body : "";
+      if (!bodyText) {
+        throw new Error("expected request body");
+      }
+
+      const payload = JSON.parse(bodyText) as {
+        generationConfig?: {
+          imageConfig?: {
+            aspectRatio?: string;
+            imageSize?: string;
+          };
+          responseModalities?: string[];
+        };
+      };
+      const generationConfig = payload.generationConfig;
+      if (!generationConfig) {
+        throw new Error("expected generationConfig");
+      }
+      if (generationConfig.imageConfig?.aspectRatio !== "16:9") {
+        throw new Error("expected explicit aspect ratio override");
+      }
+      if (generationConfig.imageConfig?.imageSize !== "1K") {
+        throw new Error("expected explicit image size override");
+      }
+      if (
+        JSON.stringify(generationConfig.responseModalities) !==
+          JSON.stringify(["TEXT", "IMAGE"])
+      ) {
+        throw new Error("expected explicit responseModalities override");
+      }
+
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            candidates: [
+              {
+                content: {
+                  parts: [
+                    {
+                      inlineData: {
+                        mimeType: "image/png",
+                        data: "override456",
+                      },
+                    },
+                  ],
+                },
+              },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      );
+    }) as typeof fetch;
+
+    const imageUrl = await callGoogleImage({
+      model: "gemini-2.5-flash-image",
+      modelConfig: {
+        aspect_ratio: "16:9",
+        image_size: "1K",
+        response_modalities: ["TEXT", "IMAGE"],
+      },
+      prompt: "Generate a plated pasta photo",
+    });
+
+    if (imageUrl !== "data:image/png;base64,override456") {
       throw new Error(`unexpected image url: ${imageUrl}`);
     }
   } finally {
@@ -336,6 +463,18 @@ Deno.test("callGoogleImage maps empty image outputs to image_empty_output", asyn
     }
     if (thrown.code !== "image_empty_output") {
       throw new Error(`unexpected error code: ${thrown.code}`);
+    }
+    const details = thrown.details as {
+      finish_reason?: string | null;
+      text?: string | null;
+    };
+    if (details.finish_reason !== null) {
+      throw new Error(
+        `unexpected finish reason: ${String(details.finish_reason)}`,
+      );
+    }
+    if (details.text !== "no image") {
+      throw new Error(`unexpected error detail text: ${String(details.text)}`);
     }
   } finally {
     globalThis.fetch = previousFetch;
