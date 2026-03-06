@@ -22,6 +22,14 @@ where recipes.id = documents.recipe_id
     or documents.recipe_updated_at is distinct from recipes.updated_at
   );
 
+drop function if exists public.list_recipe_search_documents(
+  timestamptz,
+  boolean,
+  int,
+  timestamptz,
+  uuid
+);
+
 create or replace function public.list_recipe_search_documents(
   p_snapshot_cutoff_indexed_at timestamptz,
   p_explore_only boolean default false,
@@ -84,6 +92,20 @@ as $$
   order by d.indexed_at desc, d.recipe_id desc
   limit greatest(1, least(coalesce(p_limit, 20), 100));
 $$;
+
+drop function if exists public.hybrid_search_recipe_documents(
+  text,
+  vector,
+  timestamptz,
+  boolean,
+  int,
+  text[],
+  text[],
+  text[],
+  text[],
+  int,
+  text
+);
 
 create or replace function public.hybrid_search_recipe_documents(
   p_query_text text,
