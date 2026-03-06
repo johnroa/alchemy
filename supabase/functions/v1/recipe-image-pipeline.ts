@@ -697,7 +697,45 @@ export const enrollCandidateImageRequests = async (params: {
   chatId: string;
   candidateSet: CandidateRecipeSet;
 }): Promise<CandidateRecipeSet> => {
+  // On iterations (revision > 0), look up prior bindings so we can
+  // carry forward existing ready images instead of regenerating them
+  // for every minor tweak. New images are only created when there's
+  // no prior binding at all (first generation).
+  const priorBindings = await loadPriorRevisionBindings({
+    serviceClient: params.serviceClient,
+    chatId: params.chatId,
+    candidateId: params.candidateSet.candidate_id,
+    currentRevision: params.candidateSet.revision,
+    componentIds: params.candidateSet.components.map((c) => c.component_id),
+  });
+
   for (const component of params.candidateSet.components) {
+    const priorRequestId = priorBindings.get(component.component_id);
+
+    if (priorRequestId) {
+      // Carry forward the existing image binding — don't regenerate
+      // unless the prior request failed permanently.
+      const priorRequest = await loadImageRequestById(
+        params.serviceClient,
+        priorRequestId,
+      );
+      if (priorRequest && priorRequest.status !== "failed") {
+        await touchCandidateBinding({
+          serviceClient: params.serviceClient,
+          chatId: params.chatId,
+          candidateId: params.candidateSet.candidate_id,
+          candidateRevision: params.candidateSet.revision,
+          componentId: component.component_id,
+          imageRequestId: priorRequestId,
+        });
+        if (priorRequest.status !== "ready") {
+          await enqueueImageRequestJob(params.serviceClient, priorRequestId);
+        }
+        continue;
+      }
+    }
+
+    // No prior binding or it failed — create a fresh image request
     const request = await ensureImageRequestForRecipe({
       serviceClient: params.serviceClient,
       recipe: component.recipe,
@@ -723,6 +761,46 @@ export const enrollCandidateImageRequests = async (params: {
     chatId: params.chatId,
     candidateSet: params.candidateSet,
   });
+};
+
+/**
+ * Finds the most recent image binding for each component from any prior
+ * revision of the same candidate. Returns a map of component_id → image_request_id.
+ * If no prior revision exists (first generation), returns an empty map.
+ */
+const loadPriorRevisionBindings = async (params: {
+  serviceClient: SupabaseClient;
+  chatId: string;
+  candidateId: string;
+  currentRevision: number;
+  componentIds: string[];
+}): Promise<Map<string, string>> => {
+  if (params.componentIds.length === 0 || params.currentRevision <= 0) {
+    return new Map();
+  }
+
+  const { data, error } = await params.serviceClient
+    .from("candidate_image_bindings")
+    .select("component_id,image_request_id,candidate_revision")
+    .eq("chat_session_id", params.chatId)
+    .eq("candidate_id", params.candidateId)
+    .lt("candidate_revision", params.currentRevision)
+    .in("component_id", params.componentIds)
+    .order("candidate_revision", { ascending: false });
+
+  if (error || !data) {
+    return new Map();
+  }
+
+  // Take the highest-revision binding per component
+  const result = new Map<string, string>();
+  for (const row of data as Array<Record<string, unknown>>) {
+    const componentId = String(row.component_id);
+    if (!result.has(componentId)) {
+      result.set(componentId, String(row.image_request_id));
+    }
+  }
+  return result;
 };
 
 const createRecipeImageAsset = async (params: {

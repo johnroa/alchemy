@@ -33,6 +33,9 @@ struct GenerateView: View {
     /// response. The first item becomes the placeholder text in the input
     /// bar, giving contextual hints instead of a static default.
     @State private var suggestedPlaceholder: String?
+    /// All suggested actions from the latest assistant reply. Used to build
+    /// the iteration briefing when "Make Changes" is tapped.
+    @State private var iterationSuggestions: [String] = []
 
     @FocusState private var inputFocused: Bool
     @State private var keyboardHeight: CGFloat = 0
@@ -70,12 +73,7 @@ struct GenerateView: View {
                         VStack {
                             Spacer()
                             Button {
-                                withAnimation(.spring(duration: 0.4)) {
-                                    phase = .iterating
-                                }
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                                    inputFocused = true
-                                }
+                                enterIterationMode()
                             } label: {
                                 Text("Want to make any changes?")
                                     .font(AlchemyTypography.chatPlaceholder)
@@ -616,17 +614,21 @@ struct GenerateView: View {
             }
         }
 
-        // Update the placeholder with the first suggested next action from
-        // the LLM, so the input bar adapts to conversation context.
+        // Update iteration suggestions and placeholder from the LLM response.
+        // All actions are kept for the iteration briefing; the first becomes
+        // the input placeholder for contextual hints.
         if let actions = response.assistantReply?.suggestedNextActions, !actions.isEmpty {
+            iterationSuggestions = actions
             suggestedPlaceholder = actions[0]
         } else {
+            iterationSuggestions = []
             suggestedPlaceholder = nil
         }
 
         // Handle generation animation
         if response.uiHints?.showGenerationAnimation == true {
             Task { @MainActor in
+                inputFocused = false
                 withAnimation { phase = .generating }
 
                 // Show loader for 2 seconds before revealing the recipe
@@ -636,8 +638,6 @@ struct GenerateView: View {
                     phase = .presenting
                     showAddToCookbook = true
                 }
-
-                inputFocused = false
             }
         } else if response.candidateRecipeSet != nil && phase != .presenting {
             // Recipe was updated without animation (iteration)
@@ -739,6 +739,47 @@ struct GenerateView: View {
         return "Something went wrong. Tap send to try again."
     }
 
+    /// Transitions to iteration mode with an assistant briefing message
+    /// that tells the user what they can change, using the LLM-provided
+    /// suggestions that are already tailored to the recipe and preferences.
+    private func enterIterationMode() {
+        let briefing = buildIterationBriefing()
+        withAnimation(.spring(duration: 0.4)) {
+            phase = .iterating
+            messages.append(ChatMessage(
+                id: UUID().uuidString,
+                role: .assistant,
+                content: briefing,
+                createdAt: .now
+            ))
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            inputFocused = true
+        }
+    }
+
+    /// Constructs a concise iteration briefing from the LLM's suggested
+    /// next actions. Falls back to generic guidance if none are available.
+    private func buildIterationBriefing() -> String {
+        if iterationSuggestions.count >= 2 {
+            let joined = iterationSuggestions
+                .prefix(3)
+                .enumerated()
+                .map { index, suggestion in
+                    // Lowercase the first character for mid-sentence flow
+                    let clean = suggestion.prefix(1).lowercased() + suggestion.dropFirst()
+                    return clean
+                }
+                .joined(separator: ", or ")
+            return "Sure! I can \(joined) — or tell me whatever you'd like to change."
+        } else if let single = iterationSuggestions.first {
+            let clean = single.prefix(1).lowercased() + single.dropFirst()
+            return "Sure! I can \(clean), swap ingredients, adjust servings — whatever you'd like."
+        } else {
+            return "Sure! I can swap ingredients, adjust portions, change the cooking method, or tweak the spice level. What would you like?"
+        }
+    }
+
     /// Resets all state for a fresh conversation.
     private func startOver() {
         imagePollingTask?.cancel()
@@ -747,6 +788,7 @@ struct GenerateView: View {
             messages = []
             inputText = ""
             suggestedPlaceholder = nil
+            iterationSuggestions = []
             showAddToCookbook = false
             chatHasStarted = false
             activeComponentIndex = 0
