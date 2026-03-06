@@ -245,11 +245,12 @@ const buildScenarioPrompts = (scenario: string, seed: number, complexity: SimCom
   );
   const servingCount = pickSeeded(rng, diners);
   const complexityWord = complexity === "high" ? "high-complexity" : complexity === "basic" ? "simple" : "moderately complex";
+  const dishAnchor = `${spice} ${protein} with ${side}`;
   const complexityTargets = complexity === "high"
-    ? "Target roughly 12-18 ingredients and 10-16 steps for the main component."
+    ? "roughly 12-18 ingredients and 10-16 steps for the main component"
     : complexity === "basic"
-    ? "Target roughly 6-9 ingredients and 4-7 steps for the main component."
-    : "Target roughly 9-12 ingredients and 7-10 steps for the main component.";
+    ? "roughly 6-9 ingredients and 4-7 steps for the main component"
+    : "roughly 9-12 ingredients and 7-10 steps for the main component";
   const componentGuidance = complexity === "high"
     ? "Include a main plus 1-2 substantial supporting components."
     : complexity === "basic"
@@ -266,10 +267,11 @@ const buildScenarioPrompts = (scenario: string, seed: number, complexity: SimCom
       start:
         `I need a quick weeknight dinner for ${servingCount}. Keep it ${complexityWord} but practical.`,
       refine:
-        `Let's do ${spice} ${protein} with a ${side} side. ${techniqueGuidance} ${componentGuidance}`,
-      trigger: `Great, that sounds right. Write the full recipe now with this complexity target: ${complexityTargets}`,
+        `Let's lock the dish to ${dishAnchor}. ${techniqueGuidance} ${componentGuidance}`,
+      trigger:
+        `Great, generate the full candidate recipe set for exactly that dish. Aim for ${complexityTargets}.`,
       iterate:
-        `Tweak it so total time stays under ${quickTargetMinutes} minutes and keep it dairy-free.`,
+        `Looks good. Keep the same dish and core ingredients, but make it dairy-free and under ${quickTargetMinutes} minutes.`,
     };
   }
 
@@ -277,11 +279,11 @@ const buildScenarioPrompts = (scenario: string, seed: number, complexity: SimCom
     start:
       `I want a ${complexityWord} dinner for ${servingCount} with coordinated components.`,
     refine:
-      `Use ${spice} ${protein} as the centerpiece with ${side}. ${componentGuidance} ${techniqueGuidance}`,
+      `Can we do ${dishAnchor}? ${componentGuidance} ${techniqueGuidance}`,
     trigger:
-      `Generate the full candidate recipe set now. ${complexityTargets} Include clear timers and step-by-step detail.`,
+      `Perfect. Generate the full candidate recipe set for that exact dish. Aim for ${complexityTargets}. Include clear timers and step-by-step detail.`,
     iterate:
-      `Refine while staying coherent. ${complexityTargets} Keep total time under ${targetMinutes} minutes and keep it dairy-free.`,
+      `Nice. Keep the same dish identity and core ingredients, but bring total time under ${targetMinutes} minutes and keep it dairy-free.`,
   };
 };
 
@@ -778,7 +780,7 @@ const execChatGenerationTrigger = async (p: StepExecParams): Promise<StepExecRes
   const refineSummary = Array.isArray(p.ctx["refine_candidate_summary"]) ? p.ctx["refine_candidate_summary"] : [];
   return {
     result: {
-      generation_prompt: p.prompts.trigger, generation_source: "chat_refine",
+      generation_prompt: p.prompts.refine, generation_source: "chat_refine",
       loop_state: String(p.ctx["refine_loop_state"] ?? "unknown"),
       candidate_id: candidateId, revision, active_component_id: activeComponentId,
       candidate_count: refineCount, candidate_summary: refineSummary,
@@ -1453,7 +1455,7 @@ const runSimulation = async (params: {
       }
 
       return {
-        generation_prompt: prompts.trigger,
+        generation_prompt: prompts.refine,
         generation_source: "chat_refine",
         loop_state: refine.loop_state,
         candidate_id:

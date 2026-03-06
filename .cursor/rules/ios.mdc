@@ -1,0 +1,246 @@
+---
+description: iOS native SwiftUI architecture, patterns, and coding standards
+alwaysApply: true
+---
+
+# iOS Native SwiftUI Rules
+
+## Purpose
+Build production-grade iOS apps using Swift and SwiftUI with native Apple patterns only. Prefer correctness, maintainability, performance, accessibility, and App Store readiness over speed of output.
+
+## Non-Negotiables
+- Use Swift and SwiftUI only.
+- Use native Apple components and system APIs only unless the user explicitly approves a dependency.
+- Follow Apple Human Interface Guidelines and native iOS behavior.
+- Follow modern Apple architecture and state-management patterns.
+- Prefer simple, idiomatic Swift over clever abstractions.
+- Never invent Apple APIs or guess framework behavior.
+- Never introduce web-style or cross-platform UI patterns that feel un-iOS.
+- Never add hidden complexity, speculative architecture, or premature abstraction.
+- Never hardcode mock business logic into production paths unless explicitly asked.
+- Keep the app fully compatible with Xcode, the iOS Simulator, and standard Apple tooling.
+
+## Source of Truth
+For any Apple API, SwiftUI behavior, Swift language feature, Human Interface Guideline, WWDC recommendation, or platform capability:
+1. **Sosumi MCP is mandatory.** Query `searchAppleDocumentation` or `fetchAppleDocumentation` for every Apple API you use. Never guess at API signatures, modifiers, or framework behavior.
+2. **Web search is mandatory.** For every non-trivial task, search the web for current (2026) best practices, known pitfalls, breaking changes, and community patterns before writing code. Include the current year in search queries.
+3. If sources conflict, prefer Apple documentation and current Apple platform behavior.
+
+## Required Research Workflow
+Before coding any non-trivial change — this is not optional:
+1. Inspect the existing codebase and identify impacted files, models, views, navigation flows, and state owners.
+2. **Sosumi MCP**: Search and fetch the exact Apple documentation pages for every API and pattern involved.
+3. **Web search**: Search for current (2026) SwiftUI/Swift best practices, known pitfalls, migration guidance, and community patterns. Always include "2026" or "iOS 26" in queries.
+4. Produce a brief implementation plan citing what you found.
+5. Only then begin edits.
+
+For every meaningful task, explicitly verify:
+- correct state ownership
+- navigation pattern
+- concurrency correctness
+- accessibility impact
+- preview strategy
+- testing strategy
+- performance implications
+
+## Architecture
+- Use a clean native SwiftUI architecture with clear separation of:
+  - App entry and scenes
+  - navigation
+  - feature views
+  - state and domain models
+  - services and side effects
+  - persistence
+  - testing
+- Keep business logic out of view bodies.
+- Keep views focused on rendering and user interaction.
+- Prefer small composable views over massive screens.
+- Prefer feature-first organization when the project grows.
+- Put side effects behind dedicated service types or clients.
+- Prefer protocol-backed boundaries only where there is a real testing or substitution need.
+- Prefer value types for models unless reference semantics are clearly required.
+- Use Apple-native persistence and platform services when appropriate.
+
+## Swift Language Standards
+- Use modern Swift syntax and APIs.
+- Prefer strong typing over stringly-typed logic.
+- Prefer structs unless a class is required.
+- Use access control deliberately.
+- Mark unavailable paths and impossible states explicitly.
+- Use `async/await` over callback-based code when possible.
+- Use `throws` instead of hiding failure.
+- Avoid force unwraps except in tightly proven cases.
+- Avoid global mutable state.
+- Avoid singletons unless the API itself is singleton-driven and the usage is well-contained.
+
+## SwiftUI Standards
+- Use SwiftUI-native composition and modifiers.
+- Use `NavigationStack` and typed destinations for push navigation.
+- Use `TabView`, sheets, popovers, alerts, confirmation dialogs, toolbars, swipe actions, search, and other native affordances when they match the job.
+- Prefer system controls and behaviors before creating custom controls.
+- Keep view bodies lightweight and deterministic.
+- Move expensive work out of `body`.
+- Avoid deeply nested conditional view trees when extraction improves clarity.
+- Use reusable view modifiers and helper views when they improve consistency.
+- Prefer environment values and bindings only where ownership is clear.
+- Do not wrap UIKit unless there is no native SwiftUI solution and the user explicitly allows it.
+
+## State Management
+- Use modern Observation-based patterns where appropriate.
+- Place state at the lowest level that can own it correctly, but no lower.
+- Differentiate clearly between:
+  - local view state
+  - shared app state
+  - persisted state
+  - transient UI state
+  - async loading state
+- Avoid passing large mutable objects through many layers when a clearer ownership model exists.
+- Avoid duplicate sources of truth.
+- Derived state should be computed, not duplicated.
+- Mutations should happen in the logical owner of the state.
+
+## Navigation
+- Use `NavigationStack` for stack-based flows.
+- Model navigation explicitly and predictably.
+- Prefer typed routes or strongly typed destination values over ad hoc booleans scattered across the tree.
+- Keep deep links and restoration in mind when designing routes.
+- Do not bury navigation side effects inside unrelated view code.
+- For tab-based apps, keep each tab’s navigation independent where appropriate.
+
+## Concurrency
+- Use structured concurrency.
+- Isolate UI updates to the main actor when required.
+- Do not block the main thread.
+- Run expensive work off the main actor.
+- Be explicit about actor isolation when state can be mutated from async contexts.
+- Support cancellation for user-initiated tasks, searches, and refresh flows.
+- Avoid fire-and-forget tasks unless they are truly safe.
+- Propagate and surface errors intentionally.
+
+## Data, Networking, and Persistence
+- Keep networking in dedicated clients or services.
+- Decode into typed models.
+- Validate assumptions at boundaries.
+- Separate transport models from domain models when useful.
+- Handle loading, empty, success, and failure states explicitly.
+- Prefer Apple-native persistence solutions where they fit.
+- Never mix view rendering code directly with networking code.
+- Avoid hidden side effects on property access.
+
+## UI and Design
+- Match native Apple interaction patterns.
+- Prefer clarity and hierarchy over visual novelty.
+- Respect safe areas, dynamic type, content size changes, and device classes.
+- Support light mode and dark mode correctly.
+- Use SF Symbols, system typography, spacing, materials, and semantic colors where possible.
+- Do not invent non-native gestures or controls without a strong reason.
+- Every screen should feel like a real iOS app, not a web app inside iOS.
+
+## Accessibility
+- Accessibility is required, not optional.
+- Ensure semantic labels, hints, values, and traits where needed.
+- Support Dynamic Type without clipping or broken layouts.
+- Preserve sufficient contrast.
+- Verify VoiceOver behavior on custom compositions.
+- Ensure tap targets are appropriately sized.
+- Do not communicate critical meaning by color alone.
+
+## Performance
+- Keep `body` cheap.
+- Reduce unnecessary state dependencies.
+- Avoid accidental view invalidation across large subtrees.
+- Use lazy containers for large data sets when appropriate.
+- Avoid unnecessary `AnyView`, overuse of geometry readers, and expensive work during rendering.
+- Profile before making invasive performance changes.
+- Prefer the simplest performant solution.
+
+## Testing
+- Add or update tests for all non-trivial logic.
+- Prefer Swift Testing for modern tests unless the project already standardizes on XCTest in that area.
+- Test business logic, reducers, services, parsing, formatting, and state transitions.
+- Add UI tests for critical user journeys when warranted.
+- Previews do not replace tests.
+- Never ship behavior that is unverified when it can be tested.
+
+## Previews
+- Create SwiftUI previews for major states:
+  - default
+  - loading
+  - empty
+  - error
+  - long text
+  - dark mode
+  - accessibility sizes where useful
+- Use lightweight preview data.
+- Keep previews compiling and useful.
+
+## Error Handling and UX States
+- Every async user flow should define:
+  - loading state
+  - success state
+  - empty state
+  - failure state
+  - retry behavior where applicable
+- Error messages should be human-readable and actionable.
+- Avoid silent failures.
+- Avoid generic alerts for everything when inline recovery is better.
+
+## App Store and Platform Readiness
+- Follow Apple platform conventions and App Review expectations.
+- Request permissions only when needed and only at the right moment.
+- Include clear purpose strings for system permissions.
+- Do not implement dark patterns, deceptive prompts, or non-native payment behavior.
+- Respect privacy and data minimization.
+
+## File and Code Organization
+- Keep files focused.
+- Prefer one primary type per file for important feature code.
+- Name files and symbols clearly by role.
+- Use extensions to organize conformance and related helpers when it improves readability.
+- Avoid giant files, giant views, and giant managers.
+- Do not create utility dumping grounds.
+
+## Change Discipline
+For each task:
+1. Understand the existing implementation.
+2. Make the smallest correct change that solves the real problem.
+3. Preserve style consistency with the existing codebase unless the current pattern is clearly wrong.
+4. Update related tests and previews.
+5. Run through compile impact mentally before finishing.
+6. Summarize what changed, why, and any tradeoffs.
+
+## What To Avoid
+- UIKit wrappers without strong justification
+- custom design systems that fight iOS
+- web-inspired component naming and layout habits
+- giant observable god objects
+- duplicated state
+- boolean-driven navigation sprawl
+- force unwraps
+- magic numbers without semantic meaning
+- hidden side effects
+- speculative abstractions
+- dependencies added without approval
+- code generation style comments or obvious AI filler
+
+## Required Output Format For Cursor
+When responding to a coding request in this project:
+1. Start with a concise plan.
+2. Cite the Apple APIs or docs consulted via Sosumi MCP.
+3. Note any web-verified best practice or pitfall that influenced the design.
+4. Implement the change.
+5. List tests, previews, and validation steps.
+6. Call out any assumptions or unresolved risks.
+
+## Review Checklist
+Before finalizing any change, verify:
+- uses native Apple APIs and controls
+- follows HIG-aligned interaction patterns
+- uses correct state ownership
+- uses modern SwiftUI navigation
+- handles loading, error, and empty states
+- supports accessibility
+- respects concurrency rules
+- avoids unnecessary complexity
+- includes tests or explains why not
+- is ready to build in Xcode without guesswork

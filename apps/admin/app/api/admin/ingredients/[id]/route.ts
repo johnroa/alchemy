@@ -47,6 +47,36 @@ type OntologyLinkRow = {
     | null;
 };
 
+type RecipeOntologyLinkRow = {
+  id: string;
+  recipe_ingredient_id: string;
+  ontology_term_id: string;
+  relation_type: string;
+  source: string;
+  confidence: number;
+  metadata: Record<string, unknown> | null;
+  created_at: string;
+  updated_at: string;
+  ontology_term:
+    | {
+        id: string;
+        term_type: string;
+        term_key: string;
+        label: string;
+        source: string;
+        metadata: Record<string, unknown> | null;
+      }
+    | Array<{
+        id: string;
+        term_type: string;
+        term_key: string;
+        label: string;
+        source: string;
+        metadata: Record<string, unknown> | null;
+      }>
+    | null;
+};
+
 type PairRow = {
   ingredient_a_id: string;
   ingredient_b_id: string;
@@ -90,6 +120,25 @@ type RecipeRow = {
 const toFiniteNumber = (value: unknown): number | null => {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : null;
+};
+
+const normalizeOntologyTerm = (
+  value: OntologyLinkRow["ontology_term"] | RecipeOntologyLinkRow["ontology_term"]
+):
+  | {
+      id: string;
+      term_type: string;
+      term_key: string;
+      label: string;
+      source: string;
+      metadata: Record<string, unknown> | null;
+    }
+  | null => {
+  if (!value) {
+    return null;
+  }
+
+  return Array.isArray(value) ? value[0] ?? null : value;
 };
 
 export async function GET(
@@ -161,9 +210,85 @@ export async function GET(
   }
 
   const aliases = (aliasesResult.data ?? []) as AliasRow[];
-  const ontologyLinks = (ontologyResult.data ?? []) as OntologyLinkRow[];
+  let ontologyLinks = (ontologyResult.data ?? []) as OntologyLinkRow[];
   const pairRows = (pairsResult.data ?? []) as PairRow[];
   const usageRows = (usagesResult.data ?? []) as UsageRow[];
+
+  if (ontologyLinks.length === 0 && usageRows.length > 0) {
+    const recipeIngredientIds = Array.from(new Set(usageRows.map((row) => row.id).filter(Boolean)));
+    const { data: fallbackRaw, error: fallbackError } =
+      recipeIngredientIds.length > 0
+        ? await client
+            .from("recipe_ingredient_ontology_links")
+            .select(
+              "id,recipe_ingredient_id,ontology_term_id,relation_type,source,confidence,metadata,created_at,updated_at,ontology_term:ontology_terms(id,term_type,term_key,label,source,metadata)"
+            )
+            .in("recipe_ingredient_id", recipeIngredientIds)
+            .order("confidence", { ascending: false })
+            .order("updated_at", { ascending: false })
+            .limit(400)
+        : { data: [] as RecipeOntologyLinkRow[], error: null };
+
+    if (fallbackError) {
+      return NextResponse.json({ error: fallbackError.message }, { status: 500 });
+    }
+
+    const deduped = new Map<
+      string,
+      {
+        row: OntologyLinkRow;
+        count: number;
+      }
+    >();
+
+    for (const raw of (fallbackRaw ?? []) as RecipeOntologyLinkRow[]) {
+      const term = normalizeOntologyTerm(raw.ontology_term);
+      if (!term) continue;
+
+      const dedupeKey = `${term.id}:${String(raw.relation_type)}:${String(raw.source)}`;
+      const existing = deduped.get(dedupeKey);
+      const nextRow: OntologyLinkRow = {
+        id: String(raw.id),
+        relation_type: String(raw.relation_type),
+        source: String(raw.source),
+        confidence: Number(raw.confidence ?? 0),
+        metadata:
+          raw.metadata && typeof raw.metadata === "object" && !Array.isArray(raw.metadata)
+            ? raw.metadata
+            : {},
+        created_at: String(raw.created_at),
+        updated_at: String(raw.updated_at),
+        ontology_term: term
+      };
+
+      if (!existing) {
+        deduped.set(dedupeKey, { row: nextRow, count: 1 });
+        continue;
+      }
+
+      const existingConfidence = Number(existing.row.confidence ?? 0);
+      const nextConfidence = Number(nextRow.confidence ?? 0);
+      const keepNext =
+        nextConfidence > existingConfidence ||
+        (nextConfidence === existingConfidence && new Date(nextRow.updated_at) > new Date(existing.row.updated_at));
+
+      deduped.set(dedupeKey, {
+        row: keepNext ? nextRow : existing.row,
+        count: existing.count + 1
+      });
+    }
+
+    ontologyLinks = Array.from(deduped.values())
+      .map((entry) => ({
+        ...entry.row,
+        metadata: {
+          ...(entry.row.metadata ?? {}),
+          source_table: "recipe_ingredient_ontology_links",
+          occurrence_count: entry.count
+        }
+      }))
+      .sort((a, b) => Number(b.confidence ?? 0) - Number(a.confidence ?? 0));
+  }
 
   const pairedIngredientIds = Array.from(
     new Set(
@@ -278,9 +403,7 @@ export async function GET(
     })),
     ontology_links: ontologyLinks.map((link) => ({
       ...(() => {
-        const term = Array.isArray(link.ontology_term)
-          ? link.ontology_term[0] ?? null
-          : link.ontology_term ?? null;
+        const term = normalizeOntologyTerm(link.ontology_term);
         return {
           term: term
             ? {

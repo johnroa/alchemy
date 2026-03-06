@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { getAdminSimulationBearerToken } from "@/lib/admin-simulation-token";
 import { requireCloudflareAccess } from "@/lib/supabase-admin";
 
 const normalizeApiBase = (raw: string | undefined): string => {
@@ -19,10 +20,17 @@ type Body = {
 export async function POST(request: Request): Promise<NextResponse> {
   await requireCloudflareAccess();
 
-  const token = process.env["ADMIN_SIMULATION_BEARER_TOKEN"];
-  if (!token) {
+  let token: string;
+  try {
+    token = await getAdminSimulationBearerToken();
+  } catch (error) {
     return NextResponse.json(
-      { error: "ADMIN_SIMULATION_BEARER_TOKEN is required for memory job retry" },
+      {
+        error:
+          error instanceof Error
+            ? error.message
+            : "Unable to acquire admin simulation bearer token for memory retry"
+      },
       { status: 500 }
     );
   }

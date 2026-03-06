@@ -70,38 +70,31 @@ export const getActiveConfig = async (
   let provider: string;
   let model: string;
   let modelConfig: Record<string, JsonValue>;
+  const { data: route, error: routeError } = await client
+    .from("llm_model_routes")
+    .select("provider,model,config")
+    .eq("scope", scope)
+    .eq("is_active", true)
+    .maybeSingle();
 
-  if (modelOverride) {
-    provider = modelOverride.provider;
-    model = modelOverride.model;
-    modelConfig = {};
-  } else {
-    const { data: route, error: routeError } = await client
-      .from("llm_model_routes")
-      .select("provider,model,config")
-      .eq("scope", scope)
-      .eq("is_active", true)
-      .maybeSingle();
+  if (routeError || !route) {
+    throw new ApiError(
+      500,
+      "gateway_route_missing",
+      `No active model route configured for scope: ${scope}`,
+    );
+  }
 
-    if (routeError || !route) {
-      throw new ApiError(
-        500,
-        "gateway_route_missing",
-        `No active model route configured for scope: ${scope}`,
-      );
-    }
+  provider = modelOverride?.provider ?? route.provider;
+  model = modelOverride?.model ?? route.model;
+  modelConfig = (route.config as Record<string, JsonValue>) ?? {};
 
-    if (!route.provider || !route.model) {
-      throw new ApiError(
-        500,
-        "gateway_route_invalid",
-        `Active model route for ${scope} does not contain a model`,
-      );
-    }
-
-    provider = route.provider;
-    model = route.model;
-    modelConfig = (route.config as Record<string, JsonValue>) ?? {};
+  if (!provider || !model) {
+    throw new ApiError(
+      500,
+      "gateway_route_invalid",
+      `Active model route for ${scope} does not contain a model`,
+    );
   }
 
   const { data: reg } = await client

@@ -1,10 +1,18 @@
 "use client";
 
 import { useState } from "react";
-import { RefreshCw } from "lucide-react";
+import { Eye, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger
+} from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 
@@ -22,6 +30,12 @@ type MemoryJob = {
   locked_at: string | null;
   locked_by: string | null;
   updated_at: string;
+};
+
+type MemoryJobMetadata = {
+  id: string;
+  interaction_context: Record<string, unknown>;
+  metadata: Record<string, unknown>;
 };
 
 const statusConfig: Record<string, { badge: string; dot: string }> = {
@@ -42,6 +56,41 @@ const shortId = (value: string): string => {
 
 export function MemoryJobsTable({ jobs }: { jobs: MemoryJob[] }): React.JSX.Element {
   const [busyJobId, setBusyJobId] = useState<string | null>(null);
+  const [openMetadataJobId, setOpenMetadataJobId] = useState<string | null>(null);
+  const [loadingMetadataJobId, setLoadingMetadataJobId] = useState<string | null>(null);
+  const [metadataByJobId, setMetadataByJobId] = useState<Record<string, MemoryJobMetadata>>({});
+  const [metadataErrorByJobId, setMetadataErrorByJobId] = useState<Record<string, string>>({});
+
+  const loadMetadata = async (jobId: string): Promise<void> => {
+    setOpenMetadataJobId(jobId);
+    if (metadataByJobId[jobId] || loadingMetadataJobId === jobId) {
+      return;
+    }
+
+    setLoadingMetadataJobId(jobId);
+    setMetadataErrorByJobId((current) => ({ ...current, [jobId]: "" }));
+
+    const response = await fetch(`/api/admin/memory/jobs/${jobId}`, { method: "GET" });
+    const payload = (await response.json().catch(() => null)) as
+      | MemoryJobMetadata
+      | { error?: string }
+      | null;
+
+    setLoadingMetadataJobId(null);
+
+    if (!response.ok || !payload || !("interaction_context" in payload)) {
+      setMetadataErrorByJobId((current) => ({
+        ...current,
+        [jobId]:
+          payload && typeof payload === "object" && "error" in payload && typeof payload.error === "string"
+            ? payload.error
+            : "Failed to load job metadata"
+      }));
+      return;
+    }
+
+    setMetadataByJobId((current) => ({ ...current, [jobId]: payload }));
+  };
 
   const retry = async (jobId: string): Promise<void> => {
     setBusyJobId(jobId);
@@ -108,16 +157,66 @@ export function MemoryJobsTable({ jobs }: { jobs: MemoryJob[] }): React.JSX.Elem
                 {job.last_error ?? <span className="text-muted-foreground">—</span>}
               </TableCell>
               <TableCell className="text-right">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="gap-1.5"
-                  disabled={busyJobId === job.id || job.status === "ready"}
-                  onClick={() => void retry(job.id)}
-                >
-                  <RefreshCw className={cn("h-3 w-3", busyJobId === job.id && "animate-spin")} />
-                  {busyJobId === job.id ? "Retrying..." : "Retry"}
-                </Button>
+                <div className="flex justify-end gap-2">
+                  <Dialog
+                    open={openMetadataJobId === job.id}
+                    onOpenChange={(open) => setOpenMetadataJobId(open ? job.id : null)}
+                  >
+                    <DialogTrigger asChild>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        className="gap-1.5"
+                        onClick={() => void loadMetadata(job.id)}
+                      >
+                        <Eye className="h-3 w-3" />
+                        Metadata
+                      </Button>
+                    </DialogTrigger>
+                    <DialogContent className="max-w-3xl">
+                      <DialogHeader>
+                        <DialogTitle>Memory Job Metadata</DialogTitle>
+                        <DialogDescription className="font-mono text-[11px]">
+                          {job.id}
+                        </DialogDescription>
+                      </DialogHeader>
+                      {loadingMetadataJobId === job.id ? (
+                        <p className="text-sm text-muted-foreground">Loading metadata…</p>
+                      ) : metadataErrorByJobId[job.id] ? (
+                        <p className="text-sm text-red-600">{metadataErrorByJobId[job.id]}</p>
+                      ) : (
+                        <div className="space-y-4">
+                          <div className="space-y-1.5">
+                            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                              Interaction Context
+                            </p>
+                            <pre className="max-h-[220px] overflow-auto rounded-md bg-zinc-950 p-3 text-[11px] text-zinc-100">
+                              {JSON.stringify(metadataByJobId[job.id]?.interaction_context ?? {}, null, 2)}
+                            </pre>
+                          </div>
+                          <div className="space-y-1.5">
+                            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                              Metadata
+                            </p>
+                            <pre className="max-h-[220px] overflow-auto rounded-md bg-zinc-950 p-3 text-[11px] text-zinc-100">
+                              {JSON.stringify(metadataByJobId[job.id]?.metadata ?? {}, null, 2)}
+                            </pre>
+                          </div>
+                        </div>
+                      )}
+                    </DialogContent>
+                  </Dialog>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="gap-1.5"
+                    disabled={busyJobId === job.id || job.status === "ready"}
+                    onClick={() => void retry(job.id)}
+                  >
+                    <RefreshCw className={cn("h-3 w-3", busyJobId === job.id && "animate-spin")} />
+                    {busyJobId === job.id ? "Retrying..." : "Retry"}
+                  </Button>
+                </div>
               </TableCell>
             </TableRow>
           );

@@ -29,6 +29,7 @@ export const ADMIN_ROUTES: Array<{ path: string; method: string }> = [
   { path: "/api/admin/memories/rebuild", method: "POST" },
   { path: "/api/admin/memories/reset", method: "POST" },
   { path: "/api/admin/memory/jobs", method: "GET" },
+  { path: "/api/admin/memory/jobs/:id", method: "GET" },
   { path: "/api/admin/memory/jobs", method: "POST" },
   { path: "/api/admin/memory/jobs/process", method: "POST" },
   { path: "/api/admin/memory/jobs/retry", method: "POST" },

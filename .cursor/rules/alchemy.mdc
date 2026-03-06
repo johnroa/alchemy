@@ -1,0 +1,160 @@
+---
+description: Alchemy project conventions — architecture, deployment, LLM pipeline, API contracts, and coding standards
+alwaysApply: true
+---
+
+# Alchemy
+
+iOS-first, API-driven recipe app. Users set dietary/skill/equipment preferences, generate recipes via LLM, iteratively tweak them, and organize favorites. Admin UI manages users, LLM config, and rules.
+
+## Monorepo
+
+```
+apps/ios/             Native SwiftUI iOS app (iOS 18+, MVVM, @Observable)
+apps/mobile/          Expo 52 React Native (legacy, being replaced by apps/ios/)
+apps/admin/           Next.js 15 admin dashboard (Cloudflare Workers via OpenNext)
+infra/cloudflare/     Cloudflare Worker API gateway (TypeScript)
+supabase/             Auth, Postgres, Edge Functions (LLM gateway)
+packages/contracts/   OpenAPI schema + generated TypeScript types
+packages/shared/      Shared utilities (ingredient icons, food icon catalogs, common types)
+```
+
+**Hosts**: API `api.cookwithalchemy.com/v1` · Admin `admin.cookwithalchemy.com`
+
+## Non-Negotiables
+
+- Strict TypeScript. No `any`.
+- Minimal diffs. Do not touch unrelated code.
+- Do not add dependencies unless explicitly asked.
+- All LLM calls go through the pipeline (`llm-scope-registry.ts` + `llm-executor.ts` + `llm-adapters/*`) via `supabase/functions/v1/` — never from the client.
+- Supabase deploy is GitHub CI only (`.github/workflows/supabase-deploy.yml`). Never run local `supabase db push` / `supabase functions deploy`.
+- DB changes: sequential, append-only migrations in `supabase/migrations/`. No direct DB edits.
+- LLM prompts/rules/routes: change via Admin API/UI (`/api/admin/llm/prompts`, `/api/admin/llm/rules`, `/api/admin/llm/routes`), never direct DB edits.
+- The client is API-driven. No business logic beyond UI/UX orchestration.
+- Every user-facing screen needs loading, empty, and error states.
+- No silent data loss. Offline reads from cache are fine.
+- Seeds belong in migrations, not API endpoints or hardcoded UI.
+- After any code change: deploy the affected service. Don't ask the user to do it.
+
+## Deployment
+
+All commands from repo root (`/Users/john/Projects/alchemy`). Always deploy after changes — never tell the user to run commands.
+
+```bash
+# Cloudflare API gateway
+npx wrangler deploy --config infra/cloudflare/api-gateway/wrangler.jsonc
+
+# Admin
+pnpm --filter @alchemy/admin cf:build
+pnpm --filter @alchemy/admin exec opennextjs-cloudflare deploy
+
+# Supabase — GitHub CI only (push to main with changes in supabase/migrations/** or supabase/functions/**)
+
+# Verify
+curl https://api.cookwithalchemy.com/v1/healthz
+```
+
+## LLM Pipeline
+
+- **Add**: scope in `llm-scope-registry.ts` → migration seeds for route/prompt/rule → gateway wrapper via executor → wire callsite → tests → docs.
+- **Edit**: prompt/rule/model changes through Admin API/UI only. If output contract changes, update validators/tests and OpenAPI examples.
+- **Remove**: remove callsite + wrapper + scope → migration deactivating scope rows (don't hard-delete).
+- Direct provider endpoints only in `supabase/functions/_shared/llm-adapters/*`.
+
+## API Contract & Spec
+
+OpenAPI spec is single source of truth. Every API change:
+
+1. Edit `packages/contracts/openapi.yaml`
+2. Bump `info.version` (semver: patch=fix, minor=new endpoint, major=breaking)
+3. Regenerate:
+   ```bash
+   pnpm --filter @alchemy/contracts generate
+   pnpm --filter @alchemy/contracts generate:json
+   cp packages/contracts/openapi.json apps/admin/lib/openapi-spec.json
+   ```
+4. If admin routes changed: edit `apps/admin/lib/admin-routes.ts`
+5. Add CHANGELOG.md entry under `[Unreleased]`
+6. Deploy affected services
+7. Commit source + generated files together
+
+Never edit generated files (`openapi.json`, `generated.ts`, `openapi-spec.json`) directly.
+
+## iOS App (`apps/ios/`)
+
+SwiftUI rewrite. MVVM with `@Observable`, targeting iOS 18+ with iOS 26 Liquid Glass.
+
+- **supabase-swift 2.0** — Auth with Keychain sessions
+- **Nuke + NukeUI** — Async image loading
+- **Lottie 4.4** — Animations
+- **SPM** — Dependencies · **XcodeGen** — Project from `project.yml`
+
+```
+Alchemy/
+├── App/                    Entry point, routing, environment
+├── Core/
+│   ├── Auth/               AuthManager (@Observable, supabase-swift)
+│   └── Networking/         APIClient (URLSession + async/await), models
+├── DesignSystem/
+│   ├── Components/         Button, TextField, SearchBar, FilterChip, RecipeCard, TabBar
+│   ├── Modifiers/          Glass (iOS 26), Haptics, Shimmer
+│   └── Theme/              Colors, Typography, Spacing
+├── Features/               One folder per screen (View + ViewModel pairs)
+└── Resources/              Assets.xcassets, Info.plist, Lottie JSON, entitlements
+```
+
+Build: `cd apps/ios && xcodegen generate && open Alchemy.xcodeproj`
+
+## Mobile Legacy (`apps/mobile/`)
+
+Expo Router + TanStack Query v5 + Zustand v5 + Reanimated 3 + Gesture Handler.
+
+- API calls through `lib/api.ts` → Cloudflare Worker
+- Design system: `components/alchemy/primitives.tsx` + `theme.ts`
+- Zustand (`lib/ui-store.ts`): UI-only state (measurement mode, servings, ephemeral chat text, temp filters). Never server data.
+- Touch targets ≥ 44×44, skeleton loaders, pull-to-refresh, subtle haptics, keyboard avoidance, dark mode.
+
+## Admin (`apps/admin/`)
+
+Next.js 15 App Router + Tailwind CSS + shadcn/ui + Lucide React + Sonner. Deployed via OpenNext on Cloudflare.
+
+## Code Comments
+
+This codebase is maintained by multiple AI agents. Comments are the primary way context survives between sessions:
+
+- **Why, not what**: reasoning behind non-obvious decisions, edge cases, constraints.
+- **Data flow**: inputs → transforms → outputs and key invariants at complex functions/modules.
+- **Contract boundaries**: preconditions, postconditions, error behavior at public interfaces.
+- **Gotchas and coupling**: hidden dependencies, ordering requirements, coordinated changes.
+- **Magic values**: explain thresholds, timeouts, retry counts, opacity, padding constants.
+- **Migration/DB context**: what the migration enables, rollback considerations.
+- **Swift/iOS**: animation parameters, gesture thresholds, layout assumptions.
+
+No trivial comments restating code. Focus on what saves 5+ minutes of investigation.
+
+## Development Reset
+
+Destructive resets through Admin API only:
+- `POST /api/admin/development/reset/preview` (always dry-run first)
+- `POST /api/admin/development/reset/execute` (requires `WIPE <PRESET UPPERCASE WITH SPACES>`)
+- Backed by RPCs: `admin_dev_food_data_preview(...)`, `admin_dev_food_data_wipe(...)`
+
+## Admin API Helper
+
+`scripts/admin-api.sh` — CLI for LLM config and DB queries. Auto-resolves Supabase CLI token from macOS keychain.
+
+```bash
+./scripts/admin-api.sh sql "<query>"                             # Run SQL
+./scripts/admin-api.sh prompt-list [scope]                       # List prompts (>>> = active)
+./scripts/admin-api.sh prompt-create <scope> <ver> <name> <file> # Create & activate
+./scripts/admin-api.sh prompt-activate <scope> <version>         # Activate existing
+./scripts/admin-api.sh rule-list [scope]                         # List rules
+./scripts/admin-api.sh rule-create <scope> <ver> <name> <file>   # Create & activate
+./scripts/admin-api.sh route-list                                # Active model routes
+./scripts/admin-api.sh service-key                               # Service role key
+./scripts/admin-api.sh sim-token                                 # Sim user access token
+```
+
+## When Blocked
+
+State what is missing, give the smallest set of options, default to the simplest option that preserves API-first correctness and premium UI feel.
