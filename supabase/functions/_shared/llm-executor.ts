@@ -6,8 +6,16 @@ import {
   type LlmRetryPolicy,
 } from "./llm-scope-registry.ts";
 import { callAnthropicJson } from "./llm-adapters/anthropic.ts";
-import { callGoogleImage, callGoogleJson } from "./llm-adapters/google.ts";
-import { callOpenAiImage, callOpenAiJson } from "./llm-adapters/openai.ts";
+import {
+  callGoogleImage,
+  callGoogleJson,
+  callGoogleVisionJson,
+} from "./llm-adapters/google.ts";
+import {
+  callOpenAiImage,
+  callOpenAiJson,
+  callOpenAiVisionJson,
+} from "./llm-adapters/openai.ts";
 import type { GatewayConfig, JsonValue } from "./types.ts";
 
 export type ModelOverrideMap = Record<
@@ -19,6 +27,18 @@ export type ProviderResult<T> = {
   result: T;
   inputTokens: number;
   outputTokens: number;
+};
+
+export type VisionInputImage = {
+  label: string;
+  imageUrl: string;
+};
+
+const toRecord = (value: unknown): Record<string, JsonValue> => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  return value as Record<string, JsonValue>;
 };
 
 const isRetryableErrorCode = (
@@ -99,7 +119,7 @@ export const getActiveConfig = async (
 
   const { data: reg } = await client
     .from("llm_model_registry")
-    .select("input_cost_per_1m_tokens,output_cost_per_1m_tokens")
+    .select("input_cost_per_1m_tokens,output_cost_per_1m_tokens,billing_mode,billing_metadata")
     .eq("provider", provider)
     .eq("model", model)
     .maybeSingle();
@@ -112,6 +132,8 @@ export const getActiveConfig = async (
     modelConfig,
     inputCostPer1m: Number(reg?.input_cost_per_1m_tokens ?? 0),
     outputCostPer1m: Number(reg?.output_cost_per_1m_tokens ?? 0),
+    billingMode: reg?.billing_mode === "image" ? "image" : "token",
+    billingMetadata: toRecord(reg?.billing_metadata),
   };
 };
 
@@ -213,6 +235,106 @@ export const executeScope = async <T>(params: {
   throw lastError instanceof Error
     ? lastError
     : new ApiError(502, "llm_execution_failed", "LLM scope execution failed");
+};
+
+export const executeVisionWithConfig = async <T>(params: {
+  provider: string;
+  model: string;
+  modelConfig: Record<string, JsonValue>;
+  systemPrompt: string;
+  userInput: Record<string, JsonValue>;
+  images: VisionInputImage[];
+}): Promise<ProviderResult<T>> => {
+  if (params.provider === "openai") {
+    return await callOpenAiVisionJson<T>({
+      model: params.model,
+      modelConfig: params.modelConfig,
+      systemPrompt: params.systemPrompt,
+      userInput: params.userInput,
+      images: params.images,
+    });
+  }
+
+  if (params.provider === "google") {
+    return await callGoogleVisionJson<T>({
+      model: params.model,
+      modelConfig: params.modelConfig,
+      systemPrompt: params.systemPrompt,
+      userInput: params.userInput,
+      images: params.images,
+    });
+  }
+
+  throw new ApiError(
+    500,
+    "llm_provider_not_supported",
+    `Provider adapter not configured for multimodal JSON: ${params.provider}`,
+  );
+};
+
+export const executeVisionScope = async <T>(params: {
+  client: SupabaseClient;
+  scope: GatewayScope;
+  userInput: Record<string, JsonValue>;
+  images: VisionInputImage[];
+  modelOverride?: { provider: string; model: string };
+  systemPromptOverride?: string;
+  modelConfigOverride?: Record<string, JsonValue>;
+  retryPolicyOverride?: LlmRetryPolicy;
+}): Promise<ProviderResult<T> & { config: GatewayConfig; attempts: number }> => {
+  const config = await getActiveConfig(
+    params.client,
+    params.scope,
+    params.modelOverride,
+  );
+  const definition = getLlmScopeDefinition(params.scope);
+  const retryPolicy = params.retryPolicyOverride ?? definition.retry_policy;
+
+  let attempts = 0;
+  let lastError: unknown = null;
+
+  while (attempts < retryPolicy.max_attempts) {
+    attempts += 1;
+    try {
+      const payload: Record<string, JsonValue> = Object.prototype.hasOwnProperty
+          .call(params.userInput, "rule")
+        ? params.userInput
+        : { rule: config.rule, ...params.userInput };
+      const result = await executeVisionWithConfig<T>({
+        provider: config.provider,
+        model: config.model,
+        modelConfig: {
+          ...config.modelConfig,
+          ...(params.modelConfigOverride ?? {}),
+        },
+        systemPrompt: params.systemPromptOverride ?? config.promptTemplate,
+        userInput: payload,
+        images: params.images,
+      });
+
+      return {
+        ...result,
+        config,
+        attempts,
+      };
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableErrorCode(error, retryPolicy)) {
+        throw error;
+      }
+      if (attempts >= retryPolicy.max_attempts) {
+        throw error;
+      }
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new ApiError(
+      502,
+      "llm_execution_failed",
+      "LLM multimodal scope execution failed",
+    );
 };
 
 export const executeImageScope = async (params: {

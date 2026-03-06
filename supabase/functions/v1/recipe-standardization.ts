@@ -1,3 +1,4 @@
+import { normalizeWhitespaceToken } from "../../../packages/shared/src/text-normalization.ts";
 import type { RecipePayload } from "../_shared/types.ts";
 
 export type UnitPreference = "source" | "metric" | "imperial";
@@ -188,12 +189,7 @@ const stringifyAmount = (value: number): string => {
 };
 
 export const normalizeIngredientKey = (input: string): string => {
-  return input
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(/[^a-z0-9\s]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  return normalizeWhitespaceToken(input);
 };
 
 export const toCanonicalIngredientName = (

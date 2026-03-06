@@ -47,6 +47,8 @@ export type RegistryModel = {
   display_name: string;
   input_cost_per_1m_tokens: number;
   output_cost_per_1m_tokens: number;
+  billing_mode: "token" | "image";
+  billing_metadata: Record<string, unknown>;
   context_window_tokens: number | null;
   max_output_tokens: number | null;
   is_available: boolean;
@@ -56,12 +58,10 @@ export type RegistryModel = {
 type LlmPanelMode = "routing" | "prompts" | "rules" | "models";
 
 const ALL_SCOPES = [
-  "chat",
   "chat_ideation",
   "chat_generation",
   "chat_iteration",
   "generate",
-  "tweak",
   "classify",
   "ingredient_alias_normalize",
   "ingredient_phrase_split",
@@ -72,6 +72,7 @@ const ALL_SCOPES = [
   "equipment_filter",
   "onboarding",
   "image",
+  "image_quality_eval",
   "memory_extract",
   "memory_select",
   "memory_summarize",
@@ -578,9 +579,22 @@ function RouteRow({
   registryModels: RegistryModel[];
   onSave: (provider: string, model: string) => Promise<void>;
 }): React.JSX.Element {
+  const scopeFilteredModels = useMemo(
+    () => registryModels.filter((model) => {
+      if (!model.is_available) {
+        return false;
+      }
+      if (scope === "image") {
+        return model.billing_mode === "image";
+      }
+      return model.billing_mode !== "image";
+    }),
+    [registryModels, scope]
+  );
+
   const providers = useMemo(
-    () => Array.from(new Set(registryModels.filter((m) => m.is_available).map((m) => m.provider))).sort(),
-    [registryModels]
+    () => Array.from(new Set(scopeFilteredModels.map((m) => m.provider))).sort(),
+    [scopeFilteredModels]
   );
 
   const [provider, setProvider] = useState(active?.provider ?? providers[0] ?? "");
@@ -588,8 +602,8 @@ function RouteRow({
   const [saving, setSaving] = useState(false);
 
   const modelsForProvider = useMemo(
-    () => registryModels.filter((m) => m.provider === provider && m.is_available),
-    [registryModels, provider]
+    () => scopeFilteredModels.filter((m) => m.provider === provider),
+    [scopeFilteredModels, provider]
   );
 
   const handleProviderChange = (p: string): void => {
@@ -687,6 +701,8 @@ function ModelsPanel({
   const [newDisplayName, setNewDisplayName] = useState("");
   const [newInputCost, setNewInputCost] = useState("0");
   const [newOutputCost, setNewOutputCost] = useState("0");
+  const [newBillingMode, setNewBillingMode] = useState<"token" | "image">("token");
+  const [newBillingMetadata, setNewBillingMetadata] = useState("{}");
   const [newContextWindow, setNewContextWindow] = useState("");
   const [newMaxOutput, setNewMaxOutput] = useState("");
   const [newNotes, setNewNotes] = useState("");
@@ -696,6 +712,15 @@ function ModelsPanel({
     if (!newProvider.trim() || !newModel.trim() || !newDisplayName.trim()) {
       toast.error("Provider, model ID, and display name are required");
       return;
+    }
+    let parsedBillingMetadata: Record<string, unknown> = {};
+    if (newBillingMode === "image") {
+      try {
+        parsedBillingMetadata = JSON.parse(newBillingMetadata) as Record<string, unknown>;
+      } catch {
+        toast.error("Billing metadata must be valid JSON");
+        return;
+      }
     }
     setAdding(true);
     const res = await fetch("/api/admin/llm/models", {
@@ -707,6 +732,8 @@ function ModelsPanel({
         display_name: newDisplayName.trim(),
         input_cost_per_1m_tokens: Number(newInputCost),
         output_cost_per_1m_tokens: Number(newOutputCost),
+        billing_mode: newBillingMode,
+        billing_metadata: parsedBillingMetadata,
         context_window_tokens: newContextWindow ? Number(newContextWindow) : null,
         max_output_tokens: newMaxOutput ? Number(newMaxOutput) : null,
         notes: newNotes.trim() || null,
@@ -720,6 +747,7 @@ function ModelsPanel({
     setShowAddForm(false);
     setNewProvider(""); setNewModel(""); setNewDisplayName("");
     setNewInputCost("0"); setNewOutputCost("0");
+    setNewBillingMode("token"); setNewBillingMetadata("{}");
     setNewContextWindow(""); setNewMaxOutput(""); setNewNotes("");
     toast.success(`${newDisplayName} added to registry`);
   };
@@ -785,7 +813,7 @@ function ModelsPanel({
         <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 pb-3">
           <div>
             <CardTitle className="text-base">Model Registry</CardTitle>
-            <CardDescription>All available providers and models with per-token pricing. Used for routing dropdowns and cost tracking.</CardDescription>
+            <CardDescription>All available providers and models with token or image billing metadata. Used for routing dropdowns and cost tracking.</CardDescription>
           </div>
           <Button size="sm" className="gap-1.5" onClick={() => setShowAddForm(true)}>
             <Plus className="h-3.5 w-3.5" /> Add Model
@@ -806,6 +834,7 @@ function ModelsPanel({
                       <TableRow>
                         <TableHead>Display Name</TableHead>
                         <TableHead className="font-mono text-xs">Model ID</TableHead>
+                        <TableHead className="w-28 text-center">Billing</TableHead>
                         <TableHead className="w-32 text-right">Input $/1M</TableHead>
                         <TableHead className="w-32 text-right">Output $/1M</TableHead>
                         <TableHead className="w-28 text-center">Available</TableHead>
@@ -859,6 +888,20 @@ function ModelsPanel({
                 <Input value={newDisplayName} onChange={(e) => setNewDisplayName(e.target.value)} placeholder="GPT-5 Mini" className="h-8 text-sm" />
               </div>
             </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-muted-foreground">Billing mode</label>
+                <Select value={newBillingMode} onValueChange={(value) => setNewBillingMode(value === "image" ? "image" : "token")}>
+                  <SelectTrigger className="h-8 text-sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="token">Token</SelectItem>
+                    <SelectItem value="image">Image</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <div className="space-y-1">
                 <label className="text-xs font-medium text-muted-foreground">Input $/1M tokens</label>
@@ -877,6 +920,16 @@ function ModelsPanel({
                 <Input value={newMaxOutput} onChange={(e) => setNewMaxOutput(e.target.value)} type="number" placeholder="16384" className="h-8 text-sm" />
               </div>
             </div>
+            {newBillingMode === "image" ? (
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-muted-foreground">Billing metadata (JSON)</label>
+                <Textarea
+                  value={newBillingMetadata}
+                  onChange={(e) => setNewBillingMetadata(e.target.value)}
+                  className="min-h-[120px] font-mono text-xs"
+                />
+              </div>
+            ) : null}
             <Input value={newNotes} onChange={(e) => setNewNotes(e.target.value)} placeholder="Notes (optional)" className="h-8 text-sm" />
             <div className="flex flex-wrap justify-end gap-2">
               <Button variant="outline" size="sm" onClick={() => setShowAddForm(false)}>Cancel</Button>
@@ -945,6 +998,11 @@ function ModelRow({
             className="h-7 font-mono text-xs"
           />
         </TableCell>
+        <TableCell className="text-center">
+          <Badge variant="outline" className="text-xs">
+            {model.billing_mode}
+          </Badge>
+        </TableCell>
         <TableCell className="text-right">
           <Input
             value={inputCost}
@@ -988,6 +1046,11 @@ function ModelRow({
     <TableRow className={cn(!model.is_available && "opacity-50")}>
       <TableCell className="font-medium text-sm">{model.display_name}</TableCell>
       <TableCell className="font-mono text-xs text-muted-foreground">{model.model}</TableCell>
+      <TableCell className="text-center">
+        <Badge variant="outline" className="text-xs">
+          {model.billing_mode}
+        </Badge>
+      </TableCell>
       <TableCell className="text-right text-xs text-muted-foreground">${model.input_cost_per_1m_tokens.toFixed(2)}</TableCell>
       <TableCell className="text-right text-xs text-muted-foreground">${model.output_cost_per_1m_tokens.toFixed(2)}</TableCell>
       <TableCell className="text-center">

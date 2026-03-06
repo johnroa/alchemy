@@ -2,6 +2,36 @@
 
 ## [Unreleased] — 2026-03-05
 
+### Admin Console + API — Recipe and Image Simulations
+
+- Renamed the existing admin simulation page to **Recipe Simulations** at `/simulation-recipe`
+- Added `/simulations` redirect to `/simulation-recipe`
+- Added new **Image Simulations** page at `/simulation-image` for curated recipe-title A/B image compares
+- Added `POST /v1/image-simulations/compare` and `POST /api/admin/simulation-image/compare`
+- Added new `image_quality_eval` LLM scope for server-side pairwise image judging
+- Added `image_simulation_run_started`, `image_simulation_run_completed`, and `image_simulation_run_failed` admin events
+- Extended `llm_model_registry` with explicit billing metadata for image-priced models and now write image `cost_usd` into `llm_call` events
+
+### Recipe Generation Recovery
+
+- Canonical recipe metadata normalization is now shared across generation-time normalization, recipe metadata enrichment merge, and public recipe serialization.
+- Recipe generation no longer invents fallback `difficulty` or `health_score`; missing model signals now fail normalization instead of silently defaulting.
+- Added chat-loop preference-conflict state and thread-local override plumbing so explicit dish conflicts can be confirmed before generation.
+- Unified diacritic-safe token normalization across ingredient keys, ontology keys, semantic diet normalization, and admin ingredient normalization views.
+- Added repeatable recipe-audit tooling with persona cohorts via `scripts/run-recipe-audit.mjs`.
+- Activated new admin prompt versions for `chat_ideation`, `chat_generation`, `chat_iteration`, `generate`, and `recipe_metadata_enrich`.
+- Restored prior active chat/generate rules after uncovering a `scripts/admin-api.sh rule-create` failure mode that can deactivate a scope without successfully inserting the replacement rule.
+
+### Recipe Generation — Guaranteed Quick Stats
+
+- Generation-time recipe normalization now guarantees quick stats in `recipe.metadata`:
+  - `time_minutes` (integer, derived from timing metadata or step timers)
+  - `difficulty` (`easy` | `medium` | `complex`)
+  - `health_score` (integer `1-100`)
+  - `items` (ingredient count-style item total)
+- Added `recipe.metadata.quick_stats` object with the same normalized fields for UI-friendly access.
+- Updated OpenAPI contract for `RecipeMetadata` to document these fields and constrain `difficulty` to the new enum.
+
 ### Semantic Graph + Metadata Pipeline Refactor (LLM-first)
 
 - Added ingredient-line decomposition stage using `ingredient_line_parse` scope:

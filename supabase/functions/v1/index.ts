@@ -1,4 +1,7 @@
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2";
+import {
+  normalizeDelimitedToken,
+} from "../../../packages/shared/src/text-normalization.ts";
 import { requireAuth } from "../_shared/auth.ts";
 import {
   ApiError,
@@ -13,8 +16,13 @@ import type {
   JsonValue,
   MemoryRecord,
   OnboardingState,
+  PreferenceConflictContext,
   RecipePayload,
 } from "../_shared/types.ts";
+import {
+  normalizeRecipeMetadata,
+  sumRecipeStepTimerSeconds,
+} from "../_shared/recipe-metadata-normalization.ts";
 import {
   buildIngredientGroups,
   type CanonicalIngredientView,
@@ -40,6 +48,26 @@ import {
   canonicalizeOntologyTerm,
   type OntologyCatalogTerm,
 } from "./ontology-canonicalization.ts";
+import {
+  runImageSimulationCompare,
+  type ImageSimulationCompareRequest,
+} from "./image-simulations.ts";
+import {
+  applyThreadPreferenceOverrides,
+  derivePendingPreferenceConflictFromResponse,
+  mergeThreadPreferenceOverrides,
+  normalizeChatStringList,
+  normalizePendingPreferenceConflict,
+  normalizeThreadPreferenceOverrides,
+  type PendingPreferenceConflict,
+  type ThreadPreferenceOverrides,
+} from "./chat-preference-conflicts.ts";
+import { handleChatRoutes } from "./routes/chat.ts";
+import { handleGraphRoutes } from "./routes/graph.ts";
+import { handleMemoryRoutes } from "./routes/memory.ts";
+import { handleMetadataRoutes } from "./routes/metadata.ts";
+import { handleOnboardingRoutes } from "./routes/onboarding.ts";
+import { handleRecipeRoutes } from "./routes/recipes.ts";
 
 type PreferenceContext = {
   free_form: string | null;
@@ -130,6 +158,8 @@ type ChatSessionContext = {
   candidate_recipe_set?: CandidateRecipeSet | null;
   candidate_revision?: number;
   active_component_id?: string | null;
+  pending_preference_conflict?: PendingPreferenceConflict | null;
+  thread_preference_overrides?: ThreadPreferenceOverrides | null;
 };
 
 type ChatUiHints = {
@@ -149,6 +179,7 @@ type ChatLoopResponse = {
     changed_sections?: string[];
     personalization_notes?: string[];
     preference_updates?: Record<string, JsonValue>;
+    preference_conflict?: PreferenceConflictContext;
   };
   memory_context_ids: string[];
   context_version: number;
@@ -282,7 +313,16 @@ const extractChatContext = (value: unknown): ChatSessionContext => {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return {};
   }
-  return value as ChatSessionContext;
+  const raw = value as Record<string, unknown>;
+  return {
+    ...raw as ChatSessionContext,
+    pending_preference_conflict: normalizePendingPreferenceConflict(
+      raw.pending_preference_conflict,
+    ),
+    thread_preference_overrides: normalizeThreadPreferenceOverrides(
+      raw.thread_preference_overrides,
+    ),
+  };
 };
 
 const toJsonValue = (value: unknown): JsonValue => {
@@ -512,6 +552,10 @@ const isRlsError = (error: unknown): boolean => {
   const message = (error as { message?: string }).message?.toLowerCase() ?? "";
   const code = (error as { code?: string }).code?.toLowerCase() ?? "";
   return code === "42501" || message.includes("row-level security");
+};
+
+const isOptionalSemanticCapabilityUnavailable = (error: unknown): boolean => {
+  return isSchemaMissingError(error) || isRlsError(error);
 };
 
 const ensureUserProfile = async (
@@ -825,9 +869,6 @@ const getMemorySnapshot = async (
     .maybeSingle();
 
   if (error) {
-    if (isSchemaMissingError(error)) {
-      return {};
-    }
     throw new ApiError(
       500,
       "memory_snapshot_fetch_failed",
@@ -863,48 +904,12 @@ const getActiveMemories = async (
     .limit(limit);
 
   if (preferred.error) {
-    if (!isSchemaMissingError(preferred.error)) {
-      throw new ApiError(
-        500,
-        "memory_fetch_failed",
-        "Could not load user memories",
-        preferred.error.message,
-      );
-    }
-
-    const legacy = await client
-      .from("memories")
-      .select(
-        "id,memory_type,memory_content,confidence,source,created_at,updated_at",
-      )
-      .eq("user_id", userId)
-      .order("updated_at", { ascending: false })
-      .limit(limit);
-
-    if (legacy.error) {
-      if (isSchemaMissingError(legacy.error)) {
-        return [];
-      }
-      throw new ApiError(
-        500,
-        "memory_fetch_failed",
-        "Could not load user memories",
-        legacy.error.message,
-      );
-    }
-
-    return (legacy.data ?? []).map((row) => ({
-      id: row.id,
-      memory_type: row.memory_type,
-      memory_kind: "legacy",
-      memory_content: row.memory_content as JsonValue,
-      confidence: Number(row.confidence ?? 0.5),
-      salience: Number(row.confidence ?? 0.5),
-      status: "active",
-      source: row.source ?? "legacy",
-      created_at: row.created_at,
-      updated_at: row.updated_at,
-    })) as MemoryRecord[];
+    throw new ApiError(
+      500,
+      "memory_fetch_failed",
+      "Could not load user memories",
+      preferred.error.message,
+    );
   }
 
   return (preferred.data ?? []) as MemoryRecord[];
@@ -1088,13 +1093,7 @@ const listifyMaybeText = (value: unknown): string[] => {
 };
 
 const normalizeTermKey = (value: string): string =>
-  value
-    .trim()
-    .toLocaleLowerCase()
-    .normalize("NFKD")
-    .replace(/[^a-z0-9\s:_-]/g, " ")
-    .replace(/\s+/g, "_")
-    .replace(/^_+|_+$/g, "");
+  normalizeDelimitedToken(value);
 
 const parseCsvParam = (value: string | null): string[] => {
   if (!value) return [];
@@ -1112,7 +1111,7 @@ const loadSemanticDietIncompatibilityRules = async (
     .eq("is_active", true);
 
   if (error) {
-    if (isSchemaMissingError(error) || isRlsError(error)) {
+    if (isOptionalSemanticCapabilityUnavailable(error)) {
       return [];
     }
     throw new ApiError(
@@ -1144,7 +1143,7 @@ const loadOntologyCatalogTerms = async (
     .select("term_type,term_key,label");
 
   if (termsError) {
-    if (isSchemaMissingError(termsError) || isRlsError(termsError)) {
+    if (isOptionalSemanticCapabilityUnavailable(termsError)) {
       return [];
     }
     throw new ApiError(
@@ -1176,7 +1175,7 @@ const loadCanonicalDietTags = async (
     .eq("entity_type", "diet_tag");
 
   if (error) {
-    if (isSchemaMissingError(error) || isRlsError(error)) {
+    if (isOptionalSemanticCapabilityUnavailable(error)) {
       return [];
     }
     throw new ApiError(
@@ -1209,7 +1208,7 @@ const fetchRecipeIngredientMentions = async (
     .order("mention_index", { ascending: true });
 
   if (result.error) {
-    if (isSchemaMissingError(result.error) || isRlsError(result.error)) {
+    if (isOptionalSemanticCapabilityUnavailable(result.error)) {
       return [];
     }
     throw new ApiError(
@@ -1267,7 +1266,7 @@ const fetchCanonicalIngredientRows = async (
 
   if (rowsResult.error) {
     if (
-      isSchemaMissingError(rowsResult.error) || isRlsError(rowsResult.error)
+      isOptionalSemanticCapabilityUnavailable(rowsResult.error)
     ) {
       return [];
     }
@@ -1317,7 +1316,7 @@ const loadIngredientNameById = async (
     "id,canonical_name",
   ).in("id", ingredientIds);
   if (error) {
-    if (isSchemaMissingError(error) || isRlsError(error)) {
+    if (isOptionalSemanticCapabilityUnavailable(error)) {
       return new Map();
     }
     throw new ApiError(
@@ -1343,7 +1342,7 @@ const loadIngredientIdsByAliasKey = async (
     "alias_key,ingredient_id",
   ).in("alias_key", aliasKeys);
   if (error) {
-    if (isSchemaMissingError(error) || isRlsError(error)) {
+    if (isOptionalSemanticCapabilityUnavailable(error)) {
       return new Map();
     }
     throw new ApiError(
@@ -1508,7 +1507,7 @@ const startEnrichmentRun = async (params: {
     .maybeSingle();
 
   if (error) {
-    if (isSchemaMissingError(error) || isRlsError(error)) {
+    if (isOptionalSemanticCapabilityUnavailable(error)) {
       return null;
     }
     throw new ApiError(
@@ -1544,7 +1543,7 @@ const completeEnrichmentRun = async (params: {
     updated_at: new Date().toISOString(),
   }).eq("id", params.runId);
 
-  if (error && !isSchemaMissingError(error) && !isRlsError(error)) {
+  if (error && !isOptionalSemanticCapabilityUnavailable(error)) {
     throw new ApiError(
       500,
       "enrichment_run_finalize_failed",
@@ -1901,8 +1900,8 @@ const resolveCanonicalRecipeIngredientsAsync = async (params: {
         .delete()
         .in("recipe_ingredient_id", unresolvedRowIds);
       if (
-        clearMentionsError && !isSchemaMissingError(clearMentionsError) &&
-        !isRlsError(clearMentionsError)
+        clearMentionsError &&
+        !isOptionalSemanticCapabilityUnavailable(clearMentionsError)
       ) {
         throw new ApiError(
           500,
@@ -1928,8 +1927,8 @@ const resolveCanonicalRecipeIngredientsAsync = async (params: {
         })
         .select("id,recipe_ingredient_id,mention_index");
       if (
-        mentionUpsertError && !isSchemaMissingError(mentionUpsertError) &&
-        !isRlsError(mentionUpsertError)
+        mentionUpsertError &&
+        !isOptionalSemanticCapabilityUnavailable(mentionUpsertError)
       ) {
         throw new ApiError(
           500,
@@ -1961,8 +1960,8 @@ const resolveCanonicalRecipeIngredientsAsync = async (params: {
         .delete()
         .in("recipe_ingredient_id", unresolvedRowIds);
       if (
-        clearQualifierLinksError && !isSchemaMissingError(clearQualifierLinksError) &&
-        !isRlsError(clearQualifierLinksError)
+        clearQualifierLinksError &&
+        !isOptionalSemanticCapabilityUnavailable(clearQualifierLinksError)
       ) {
         throw new ApiError(
           500,
@@ -2030,8 +2029,8 @@ const resolveCanonicalRecipeIngredientsAsync = async (params: {
         .from("ontology_terms")
         .upsert(termRows, { onConflict: "term_type,term_key" });
       if (
-        termUpsertError && !isSchemaMissingError(termUpsertError) &&
-        !isRlsError(termUpsertError)
+        termUpsertError &&
+        !isOptionalSemanticCapabilityUnavailable(termUpsertError)
       ) {
         throw new ApiError(
           500,
@@ -2051,8 +2050,8 @@ const resolveCanonicalRecipeIngredientsAsync = async (params: {
           ).join(","),
         );
       if (
-        termFetchError && !isSchemaMissingError(termFetchError) &&
-        !isRlsError(termFetchError)
+        termFetchError &&
+        !isOptionalSemanticCapabilityUnavailable(termFetchError)
       ) {
         throw new ApiError(
           500,
@@ -2106,8 +2105,8 @@ const resolveCanonicalRecipeIngredientsAsync = async (params: {
               "recipe_ingredient_id,mention_id,ontology_term_id,relation_type,source",
           });
         if (
-          qualifierLinkError && !isSchemaMissingError(qualifierLinkError) &&
-          !isRlsError(qualifierLinkError)
+          qualifierLinkError &&
+          !isOptionalSemanticCapabilityUnavailable(qualifierLinkError)
         ) {
           throw new ApiError(
             500,
@@ -2261,42 +2260,13 @@ const enqueueRecipeMetadataJob = async (params: {
       { onConflict: "recipe_version_id" },
     );
 
-  if (error && !isSchemaMissingError(error)) {
+  if (error) {
     throw new ApiError(
       500,
       "recipe_metadata_enqueue_failed",
       "Could not enqueue metadata job",
       error.message,
     );
-  }
-
-  if (error && isSchemaMissingError(error)) {
-    const { error: legacyError } = await params.serviceClient.from(
-      "recipe_metadata_jobs",
-    ).upsert(
-      {
-        recipe_id: params.recipeId,
-        recipe_version_id: params.recipeVersionId,
-        status: "pending",
-        attempts: 0,
-        max_attempts: 5,
-        next_attempt_at: nowIso,
-        locked_at: null,
-        locked_by: null,
-        last_error: null,
-        updated_at: nowIso,
-      },
-      { onConflict: "recipe_version_id" },
-    );
-
-    if (legacyError) {
-      throw new ApiError(
-        500,
-        "recipe_metadata_enqueue_failed",
-        "Could not enqueue metadata job",
-        legacyError.message,
-      );
-    }
   }
 };
 
@@ -2327,8 +2297,7 @@ const upsertIngredientPairStats = async (params: {
         .maybeSingle();
 
       if (
-        fetchError && !isSchemaMissingError(fetchError) &&
-        !isRlsError(fetchError)
+        fetchError && !isOptionalSemanticCapabilityUnavailable(fetchError)
       ) {
         throw new ApiError(
           500,
@@ -2357,8 +2326,7 @@ const upsertIngredientPairStats = async (params: {
         }, { onConflict: "ingredient_a_id,ingredient_b_id" });
 
       if (
-        writeError && !isSchemaMissingError(writeError) &&
-        !isRlsError(writeError)
+        writeError && !isOptionalSemanticCapabilityUnavailable(writeError)
       ) {
         throw new ApiError(
           500,
@@ -2546,15 +2514,6 @@ const upsertIngredientEnrichment = async (params: {
           updated_at: new Date().toISOString(),
         })
         .eq("id", row.id);
-      if (ingredientWriteError && isSchemaMissingError(ingredientWriteError)) {
-        ({ error: ingredientWriteError } = await params.serviceClient
-          .from("ingredients")
-          .update({
-            metadata: nextMetadata,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", row.id));
-      }
       if (ingredientWriteError) {
         throw new ApiError(
           500,
@@ -2590,8 +2549,8 @@ const upsertIngredientEnrichment = async (params: {
         .in("ingredient_id", Array.from(enrichedIngredientIds))
         .eq("source", "llm");
       if (
-        clearLinksError && !isSchemaMissingError(clearLinksError) &&
-        !isRlsError(clearLinksError)
+        clearLinksError &&
+        !isOptionalSemanticCapabilityUnavailable(clearLinksError)
       ) {
         throw new ApiError(
           500,
@@ -2622,8 +2581,8 @@ const upsertIngredientEnrichment = async (params: {
         .from("ontology_terms")
         .upsert(termRows, { onConflict: "term_type,term_key" });
       if (
-        termUpsertError && !isSchemaMissingError(termUpsertError) &&
-        !isRlsError(termUpsertError)
+        termUpsertError &&
+        !isOptionalSemanticCapabilityUnavailable(termUpsertError)
       ) {
         throw new ApiError(
           500,
@@ -2643,8 +2602,8 @@ const upsertIngredientEnrichment = async (params: {
           ).join(","),
         );
       if (
-        termFetchError && !isSchemaMissingError(termFetchError) &&
-        !isRlsError(termFetchError)
+        termFetchError &&
+        !isOptionalSemanticCapabilityUnavailable(termFetchError)
       ) {
         throw new ApiError(
           500,
@@ -2692,8 +2651,7 @@ const upsertIngredientEnrichment = async (params: {
             onConflict: "ingredient_id,ontology_term_id,relation_type,source",
           });
         if (
-          linkError && !isSchemaMissingError(linkError) &&
-          !isRlsError(linkError)
+          linkError && !isOptionalSemanticCapabilityUnavailable(linkError)
         ) {
           throw new ApiError(
             500,
@@ -3137,8 +3095,8 @@ const upsertMetadataGraph = async (params: {
     .select("parent_recipe_id,child_recipe_id,relation_type_id,position")
     .or(`parent_recipe_id.eq.${params.recipeId},child_recipe_id.eq.${params.recipeId}`);
   if (
-    recipeLinkResult.error && !isSchemaMissingError(recipeLinkResult.error) &&
-    !isRlsError(recipeLinkResult.error)
+    recipeLinkResult.error &&
+    !isOptionalSemanticCapabilityUnavailable(recipeLinkResult.error)
   ) {
     throw new ApiError(
       500,
@@ -3852,8 +3810,7 @@ const upsertMetadataGraph = async (params: {
         .from("graph_edge_evidence")
         .insert(evidenceRows);
       if (
-        evidenceError && !isSchemaMissingError(evidenceError) &&
-        !isRlsError(evidenceError)
+        evidenceError && !isOptionalSemanticCapabilityUnavailable(evidenceError)
       ) {
         throw new ApiError(
           500,
@@ -3893,7 +3850,7 @@ const updateMetadataJobState = async (params: {
     })
     .eq("id", params.jobId);
 
-  if (error && !isSchemaMissingError(error) && !isRlsError(error)) {
+  if (error && !isRlsError(error)) {
     throw new ApiError(
       500,
       "metadata_job_update_failed",
@@ -3931,7 +3888,7 @@ const processMetadataJobs = async (params: {
     .eq("status", "processing")
     .lt("locked_at", staleThreshold);
 
-  if (staleJobsError && !isSchemaMissingError(staleJobsError)) {
+  if (staleJobsError) {
     throw new ApiError(
       500,
       "metadata_jobs_stale_fetch_failed",
@@ -3957,33 +3914,13 @@ const processMetadataJobs = async (params: {
       })
       .in("id", staleIds);
 
-    if (reapError && !isSchemaMissingError(reapError)) {
+    if (reapError) {
       throw new ApiError(
         500,
         "metadata_jobs_reap_failed",
         "Could not reap stale metadata locks",
         reapError.message,
       );
-    }
-    if (reapError && isSchemaMissingError(reapError)) {
-      const { error: legacyReapError } = await params.serviceClient
-        .from("recipe_metadata_jobs")
-        .update({
-          status: "pending",
-          locked_at: null,
-          locked_by: null,
-          next_attempt_at: now.toISOString(),
-          updated_at: now.toISOString(),
-        })
-        .in("id", staleIds);
-      if (legacyReapError) {
-        throw new ApiError(
-          500,
-          "metadata_jobs_reap_failed",
-          "Could not reap stale metadata locks",
-          legacyReapError.message,
-        );
-      }
     }
     reaped = staleIds.length;
   }
@@ -4024,17 +3961,6 @@ const processMetadataJobs = async (params: {
     .limit(params.limit);
 
   if (dueJobsError) {
-    if (isSchemaMissingError(dueJobsError)) {
-      return {
-        reaped,
-        claimed: 0,
-        processed: 0,
-        ready: 0,
-        failed: 0,
-        pending: 0,
-        queue: { pending: 0, processing: 0, ready: 0, failed: 0 },
-      };
-    }
     throw new ApiError(
       500,
       "metadata_jobs_due_fetch_failed",
@@ -4071,22 +3997,6 @@ const processMetadataJobs = async (params: {
       .select("id")
       .maybeSingle();
 
-    if (lockResult.error && isSchemaMissingError(lockResult.error)) {
-      lockResult = await params.serviceClient
-        .from("recipe_metadata_jobs")
-        .update({
-          status: "processing",
-          attempts: nextAttempt,
-          locked_at: now.toISOString(),
-          locked_by: "v1_metadata_jobs_process",
-          updated_at: now.toISOString(),
-        })
-        .eq("id", job.id)
-        .eq("status", job.status)
-        .select("id")
-        .maybeSingle();
-    }
-
     if (lockResult.error) {
       throw new ApiError(
         500,
@@ -4106,13 +4016,6 @@ const processMetadataJobs = async (params: {
         .select("id,payload,metadata_schema_version")
         .eq("id", job.recipe_version_id)
         .maybeSingle();
-      if (versionResult.error && isSchemaMissingError(versionResult.error)) {
-        versionResult = await params.serviceClient
-          .from("recipe_versions")
-          .select("id,payload")
-          .eq("id", job.recipe_version_id)
-          .maybeSingle();
-      }
       const version = versionResult.data;
       const versionError = versionResult.error;
 
@@ -4225,11 +4128,13 @@ const processMetadataJobs = async (params: {
       });
 
       if (Object.keys(recipeEnrichment.metadataPatch).length > 0) {
-        const mergedMetadata: Record<string, JsonValue> = {
-          ...(payload.metadata ?? {}),
-          ...recipeEnrichment.metadataPatch,
-          metadata_schema_version: 2,
-        };
+        const mergedMetadata = canonicalizeRecipePayloadMetadata({
+          ...payload,
+          metadata: {
+            ...(payload.metadata ?? {}),
+            ...recipeEnrichment.metadataPatch,
+          },
+        });
         payload = {
           ...payload,
           metadata: mergedMetadata,
@@ -4241,14 +4146,6 @@ const processMetadataJobs = async (params: {
             metadata_schema_version: 2,
           })
           .eq("id", job.recipe_version_id);
-        if (payloadUpdateError && isSchemaMissingError(payloadUpdateError)) {
-          ({ error: payloadUpdateError } = await params.serviceClient
-            .from("recipe_versions")
-            .update({
-              payload,
-            })
-            .eq("id", job.recipe_version_id));
-        }
         if (payloadUpdateError) {
           throw new Error(payloadUpdateError.message);
         }
@@ -4342,20 +4239,6 @@ const processMetadataJobs = async (params: {
         })
         .eq("id", job.id);
 
-      if (readyError && isSchemaMissingError(readyError)) {
-        ({ error: readyError } = await params.serviceClient
-          .from("recipe_metadata_jobs")
-          .update({
-            status: "ready",
-            locked_at: null,
-            locked_by: null,
-            last_error: null,
-            metadata: readyMetadata,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", job.id));
-      }
-
       if (readyError) {
         throw new Error(readyError.message);
       }
@@ -4403,20 +4286,6 @@ const processMetadataJobs = async (params: {
           updated_at: new Date().toISOString(),
         })
         .eq("id", job.id);
-
-      if (failureUpdateError && isSchemaMissingError(failureUpdateError)) {
-        ({ error: failureUpdateError } = await params.serviceClient
-          .from("recipe_metadata_jobs")
-          .update({
-            status: terminal ? "failed" : "pending",
-            next_attempt_at: terminal ? now.toISOString() : nextAttemptAt,
-            locked_at: null,
-            locked_by: null,
-            last_error: message,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", job.id));
-      }
 
       if (failureUpdateError) {
         throw new ApiError(
@@ -4689,8 +4558,7 @@ const fetchGraphNeighborhood = async (params: {
       .select("graph_edge_id")
       .in("graph_edge_id", edgeIds);
     if (
-      evidenceError && !isSchemaMissingError(evidenceError) &&
-      !isRlsError(evidenceError)
+      evidenceError && !isOptionalSemanticCapabilityUnavailable(evidenceError)
     ) {
       throw new ApiError(
         500,
@@ -4784,6 +4652,7 @@ const fetchRecipeView = async (
     units: options.units,
     includeInlineMeasurements: options.inlineMeasurements,
   });
+  const canonicalMetadata = canonicalizeRecipePayloadMetadata(payload);
 
   let attachments: RecipeAttachmentView[] = [];
   if (includeAttachments) {
@@ -4858,7 +4727,7 @@ const fetchRecipeView = async (
     ingredient_groups: ingredientGroups,
     notes: payload.notes,
     pairings: payload.pairings ?? [],
-    metadata: payload.metadata ? toJsonValue(payload.metadata) : undefined,
+    metadata: canonicalMetadata ? toJsonValue(canonicalMetadata) : undefined,
     emoji: payload.emoji ?? [],
     image_url: recipe.hero_image_url,
     image_status: recipe.image_status,
@@ -4915,38 +4784,12 @@ const persistRecipe = async (params: {
 
     let recipe = preferredInsert.data;
     if (preferredInsert.error || !recipe) {
-      if (!isSchemaMissingError(preferredInsert.error)) {
-        throw new ApiError(
-          500,
-          "recipe_insert_failed",
-          "Could not create recipe",
-          preferredInsert.error?.message,
-        );
-      }
-
-      const legacyInsert = await params.client
-        .from("recipes")
-        .insert({
-          owner_user_id: params.userId,
-          title: params.payload.title,
-          hero_image_url: params.heroImageUrl,
-          visibility: "public",
-          source_chat_id: params.sourceChatId,
-          updated_at: now,
-        })
-        .select("id")
-        .single();
-
-      if (legacyInsert.error || !legacyInsert.data) {
-        throw new ApiError(
-          500,
-          "recipe_insert_failed",
-          "Could not create recipe",
-          legacyInsert.error?.message,
-        );
-      }
-
-      recipe = legacyInsert.data;
+      throw new ApiError(
+        500,
+        "recipe_insert_failed",
+        "Could not create recipe",
+        preferredInsert.error?.message,
+      );
     }
 
     recipeId = recipe.id;
@@ -5004,39 +4847,12 @@ const persistRecipe = async (params: {
     updatePayload,
   ).eq("id", recipeId);
   if (updateError) {
-    if (!isSchemaMissingError(updateError)) {
-      throw new ApiError(
-        500,
-        "recipe_update_failed",
-        "Could not update recipe",
-        updateError.message,
-      );
-    }
-
-    const legacyPayload: Record<string, JsonValue> = {
-      title: params.payload.title,
-      current_version_id: version.id,
-      updated_at: now,
-    };
-    if (
-      typeof params.heroImageUrl === "string" && params.heroImageUrl.length > 0
-    ) {
-      legacyPayload.hero_image_url = params.heroImageUrl;
-    }
-
-    const { error: legacyUpdateError } = await params.client
-      .from("recipes")
-      .update(legacyPayload)
-      .eq("id", recipeId);
-
-    if (legacyUpdateError) {
-      throw new ApiError(
-        500,
-        "recipe_update_failed",
-        "Could not update recipe",
-        legacyUpdateError.message,
-      );
-    }
+    throw new ApiError(
+      500,
+      "recipe_update_failed",
+      "Could not update recipe",
+      updateError.message,
+    );
   }
 
   await persistCanonicalRecipeIngredients({
@@ -5295,25 +5111,7 @@ const updateMemoryFromInteraction = async (params: {
     );
 
     if (preferredInsert.error) {
-      if (!isSchemaMissingError(preferredInsert.error)) {
-        console.error("memory_insert_failed", preferredInsert.error);
-      } else {
-        const legacyInsert = await params.userClient.from("memories").insert(
-          candidates.map((candidate) => ({
-            user_id: params.userId,
-            memory_type: candidate.memory_type,
-            memory_content: candidate.memory_content,
-            confidence: Number.isFinite(Number(candidate.confidence))
-              ? Number(candidate.confidence)
-              : 0.5,
-            source: candidate.source ?? "llm_extract",
-          })),
-        );
-
-        if (legacyInsert.error) {
-          console.error("memory_insert_failed", legacyInsert.error);
-        }
-      }
+      console.error("memory_insert_failed", preferredInsert.error);
     }
   }
 
@@ -5337,11 +5135,8 @@ const updateMemoryFromInteraction = async (params: {
           .update({ status: "deleted", updated_at: new Date().toISOString() })
           .eq("id", action.memory_id);
 
-        if (deleteUpdate.error && isSchemaMissingError(deleteUpdate.error)) {
-          await params.userClient.from("memories").delete().eq(
-            "id",
-            action.memory_id,
-          );
+        if (deleteUpdate.error) {
+          console.error("memory_delete_failed", deleteUpdate.error);
         }
       }
 
@@ -5355,11 +5150,8 @@ const updateMemoryFromInteraction = async (params: {
           })
           .eq("id", action.memory_id);
 
-        if (
-          supersedeUpdate.error && isSchemaMissingError(supersedeUpdate.error)
-        ) {
-          // Legacy schema does not support supersession fields.
-          continue;
+        if (supersedeUpdate.error) {
+          console.error("memory_supersede_failed", supersedeUpdate.error);
         }
       }
 
@@ -5400,7 +5192,7 @@ const updateMemoryFromInteraction = async (params: {
       updated_at: new Date().toISOString(),
     });
 
-    if (snapshotError && !isSchemaMissingError(snapshotError)) {
+    if (snapshotError) {
       console.error("memory_snapshot_upsert_failed", snapshotError);
     }
   } catch (error) {
@@ -5447,9 +5239,6 @@ const enqueueMemoryJob = async (params: {
   );
 
   if (error) {
-    if (isSchemaMissingError(error)) {
-      return;
-    }
     throw new ApiError(
       500,
       "memory_job_enqueue_failed",
@@ -5482,7 +5271,7 @@ const processMemoryJobs = async (params: {
     .lt("locked_at", staleCutoffIso)
     .limit(200);
 
-  if (staleResult.error && !isSchemaMissingError(staleResult.error)) {
+  if (staleResult.error) {
     throw new ApiError(
       500,
       "memory_jobs_stale_fetch_failed",
@@ -5504,7 +5293,7 @@ const processMemoryJobs = async (params: {
       })
       .in("id", staleIds);
 
-    if (staleUpdate.error && !isSchemaMissingError(staleUpdate.error)) {
+    if (staleUpdate.error) {
       throw new ApiError(
         500,
         "memory_jobs_stale_requeue_failed",
@@ -5525,14 +5314,6 @@ const processMemoryJobs = async (params: {
     .limit(Math.min(Math.max(params.limit, 1), 100));
 
   if (dueResult.error) {
-    if (isSchemaMissingError(dueResult.error)) {
-      return {
-        processed: 0,
-        succeeded: 0,
-        failed: 0,
-        queue: { pending: 0, processing: 0, ready: 0, failed: 0 },
-      };
-    }
     throw new ApiError(
       500,
       "memory_jobs_due_fetch_failed",
@@ -5636,7 +5417,7 @@ const processMemoryJobs = async (params: {
   const queueRows = await params.serviceClient.from("memory_jobs").select(
     "status",
   );
-  if (queueRows.error && !isSchemaMissingError(queueRows.error)) {
+  if (queueRows.error) {
     throw new ApiError(
       500,
       "memory_jobs_queue_fetch_failed",
@@ -5682,9 +5463,6 @@ const syncRecipeAttachments = async (params: {
     .eq("parent_recipe_id", params.parentRecipeId);
 
   if (clearError) {
-    if (isSchemaMissingError(clearError)) {
-      return;
-    }
     throw new ApiError(
       500,
       "recipe_links_clear_failed",
@@ -6010,6 +5788,35 @@ const parseAssistantChatPayload = (
               !Array.isArray(raw.preference_updates)
             ? (raw.preference_updates as Record<string, JsonValue>)
             : undefined,
+          preference_conflict: raw.preference_conflict &&
+              typeof raw.preference_conflict === "object" &&
+              !Array.isArray(raw.preference_conflict)
+            ? (() => {
+              const conflict =
+                raw.preference_conflict as Record<string, unknown>;
+              const status = typeof conflict.status === "string" &&
+                  (
+                    conflict.status === "pending_confirmation" ||
+                    conflict.status === "adapt" ||
+                    conflict.status === "override" ||
+                    conflict.status === "cleared"
+                  )
+                ? conflict.status
+                : undefined;
+              return {
+                status,
+                conflicting_preferences: normalizeChatStringList(
+                  conflict.conflicting_preferences,
+                ),
+                conflicting_aversions: normalizeChatStringList(
+                  conflict.conflicting_aversions,
+                ),
+                requested_terms: normalizeChatStringList(
+                  conflict.requested_terms,
+                ),
+              } as PreferenceConflictContext;
+            })()
+            : undefined,
         };
       })()
       : null;
@@ -6224,6 +6031,12 @@ const buildCompactChatContext = (
   loop_state: context.loop_state ?? "ideation",
   candidate_revision: context.candidate_revision ?? 0,
   active_component_id: context.active_component_id ?? null,
+  pending_preference_conflict: context.pending_preference_conflict
+    ? context.pending_preference_conflict as unknown as JsonValue
+    : null,
+  thread_preference_overrides: context.thread_preference_overrides
+    ? context.thread_preference_overrides as unknown as JsonValue
+    : null,
 });
 
 const buildCandidateOutlineForPrompt = (
@@ -6249,6 +6062,22 @@ const buildCandidateOutlineForPrompt = (
         : 0,
     })),
   };
+};
+
+const canonicalizeRecipePayloadMetadata = (
+  payload: Pick<RecipePayload, "metadata" | "ingredients" | "steps">,
+): Record<string, JsonValue> | undefined => {
+  const { metadata } = normalizeRecipeMetadata({
+    metadata: payload.metadata &&
+        typeof payload.metadata === "object" && !Array.isArray(payload.metadata)
+      ? payload.metadata as Record<string, JsonValue>
+      : undefined,
+    ingredientCount: Array.isArray(payload.ingredients)
+      ? payload.ingredients.length
+      : 0,
+    stepTimerSecondsTotal: sumRecipeStepTimerSeconds(payload.steps),
+  });
+  return Object.keys(metadata).length > 0 ? metadata : undefined;
 };
 
 const updateChatSessionLoopContext = async (params: {
@@ -6473,36 +6302,12 @@ const buildCookbookItems = async (
   }> = [];
 
   if (preferredRecipesQuery.error) {
-    if (!isSchemaMissingError(preferredRecipesQuery.error)) {
-      throw new ApiError(
-        500,
-        "cookbook_fetch_failed",
-        "Could not load cookbook recipes",
-        preferredRecipesQuery.error.message,
-      );
-    }
-
-    const legacyRecipesQuery = await client
-      .from("recipes")
-      .select(
-        "id,title,hero_image_url,visibility,updated_at,current_version_id",
-      )
-      .in("id", recipeIds)
-      .order("updated_at", { ascending: false });
-
-    if (legacyRecipesQuery.error) {
-      throw new ApiError(
-        500,
-        "cookbook_fetch_failed",
-        "Could not load cookbook recipes",
-        legacyRecipesQuery.error.message,
-      );
-    }
-
-    recipes = (legacyRecipesQuery.data ?? []).map((row) => ({
-      ...row,
-      image_status: row.hero_image_url ? "ready" : "pending",
-    }));
+    throw new ApiError(
+      500,
+      "cookbook_fetch_failed",
+      "Could not load cookbook recipes",
+      preferredRecipesQuery.error.message,
+    );
   } else {
     recipes = (preferredRecipesQuery.data ?? []) as Array<{
       id: string;
@@ -6784,6 +6589,24 @@ const orchestrateChatTurn = async (params: {
     params.existingCandidate,
   );
   const compactChatContext = buildCompactChatContext(params.sessionContext);
+  const currentPendingConflict = normalizePendingPreferenceConflict(
+    params.sessionContext.pending_preference_conflict,
+  );
+  const currentThreadOverrides = normalizeThreadPreferenceOverrides(
+    params.sessionContext.thread_preference_overrides,
+  );
+  const effectivePromptPreferences = applyThreadPreferenceOverrides(
+    params.contextPack.preferences,
+    currentThreadOverrides,
+  );
+  const promptPreferencesNaturalLanguage = buildNaturalLanguagePreferenceContext(
+    effectivePromptPreferences,
+  );
+  const scopeHint = params.existingCandidate
+    ? "chat_iteration"
+    : currentPendingConflict
+    ? "chat_generation"
+    : "chat_ideation";
   const activeComponent =
     params.existingCandidate?.components.find((component) =>
       component.component_id === params.existingCandidate?.active_component_id
@@ -6810,22 +6633,28 @@ const orchestrateChatTurn = async (params: {
         params.sessionContext,
         params.existingCandidate,
       ),
-      preferences: params.contextPack.preferences,
-      preferences_natural_language:
-        params.contextPack.preferencesNaturalLanguage,
+      preferences: effectivePromptPreferences,
+      preferences_natural_language: promptPreferencesNaturalLanguage,
       selected_memories: params.contextPack.selectedMemories,
     },
-    scopeHint: params.existingCandidate ? "chat_iteration" : "chat_ideation",
+    scopeHint,
     modelOverrides: params.modelOverrides,
   });
 
   const intent = getChatIntentFromResponse(assistantChatResponse);
   const isOutOfScope = intent === "out_of_scope";
+  const isPreferenceConflict = assistantChatResponse.response_context?.mode ===
+      "preference_conflict" ||
+    assistantChatResponse.response_context?.preference_conflict?.status ===
+      "pending_confirmation";
   const explicitGenerationIntent = intent === "in_scope_generate" ||
     assistantChatResponse.trigger_recipe === true ||
     assistantChatResponse.response_context?.mode === "generation";
 
-  if (!params.existingCandidate && !isOutOfScope && explicitGenerationIntent) {
+  if (
+    scopeHint === "chat_ideation" && !params.existingCandidate &&
+    !isOutOfScope && !isPreferenceConflict && explicitGenerationIntent
+  ) {
     if (
       !assistantChatResponse.candidate_recipe_set &&
       !assistantChatResponse.recipe
@@ -6843,9 +6672,8 @@ const orchestrateChatTurn = async (params: {
             candidate_recipe_set: null,
             candidate_recipe_set_outline: null,
             loop_state: "generation",
-            preferences: params.contextPack.preferences,
-            preferences_natural_language:
-              params.contextPack.preferencesNaturalLanguage,
+            preferences: effectivePromptPreferences,
+            preferences_natural_language: promptPreferencesNaturalLanguage,
             selected_memories: params.contextPack.selectedMemories,
           },
           scopeHint: "chat_generation",
@@ -6914,6 +6742,9 @@ const orchestrateChatTurn = async (params: {
   const modelCandidateSet = normalizeCandidateRecipeSet(
     assistantChatResponse.candidate_recipe_set ?? null,
   );
+  const generatedCandidateFromModel = Boolean(
+    modelCandidateSet || assistantChatResponse.recipe,
+  );
   let nextCandidateSet: CandidateRecipeSet | null = modelCandidateSet;
   if (!nextCandidateSet && assistantChatResponse.recipe && !isOutOfScope) {
     nextCandidateSet = mergeRecipeIntoCandidate(
@@ -6946,6 +6777,27 @@ const orchestrateChatTurn = async (params: {
   const nextLoopState: ChatLoopState = nextCandidateSet
     ? "candidate_presented"
     : "ideation";
+  const responsePreferenceConflict =
+    assistantChatResponse.response_context?.preference_conflict;
+  let nextPendingPreferenceConflict = derivePendingPreferenceConflictFromResponse(
+    responsePreferenceConflict,
+  );
+  if (!nextPendingPreferenceConflict && isPreferenceConflict) {
+    nextPendingPreferenceConflict = currentPendingConflict;
+  }
+  if (
+    responsePreferenceConflict?.status === "adapt" ||
+    responsePreferenceConflict?.status === "override" ||
+    responsePreferenceConflict?.status === "cleared" ||
+    generatedCandidateFromModel
+  ) {
+    nextPendingPreferenceConflict = null;
+  }
+  const nextThreadOverrides = mergeThreadPreferenceOverrides({
+    current: currentThreadOverrides,
+    pendingConflict: currentPendingConflict,
+    preferenceConflict: responsePreferenceConflict,
+  });
   const responseContext = assistantChatResponse.response_context
     ? {
       mode: assistantChatResponse.response_context.mode,
@@ -6957,6 +6809,7 @@ const orchestrateChatTurn = async (params: {
         .personalization_notes,
       preference_updates: assistantChatResponse.response_context
         .preference_updates,
+      preference_conflict: responsePreferenceConflict,
     }
     : null;
 
@@ -6968,6 +6821,8 @@ const orchestrateChatTurn = async (params: {
     candidate_recipe_set: nextCandidateSet,
     candidate_revision: nextCandidateSet?.revision ?? 0,
     active_component_id: nextCandidateSet?.active_component_id ?? null,
+    pending_preference_conflict: nextPendingPreferenceConflict,
+    thread_preference_overrides: nextThreadOverrides,
   };
 
   return {
@@ -7001,9 +6856,6 @@ const processImageJobs = async (params: {
     .limit(params.limit);
 
   if (jobsError) {
-    if (isSchemaMissingError(jobsError)) {
-      return { processed: 0, ready: 0, failed: 0, pending: 0 };
-    }
     throw new ApiError(
       500,
       "image_jobs_fetch_failed",
@@ -7262,6 +7114,19 @@ Deno.serve(async (request) => {
       avatarUrl: auth.avatarUrl,
     });
 
+    const routeContext = {
+      request,
+      url,
+      segments,
+      method,
+      requestId,
+      auth,
+      client,
+      serviceClient,
+      respond,
+      modelOverrides,
+    };
+
     if (segments.length === 1 && segments[0] === "preferences") {
       if (method === "GET") {
         const preferences = await getPreferences(client, auth.userId);
@@ -7323,2495 +7188,109 @@ Deno.serve(async (request) => {
       }
     }
 
-    if (
-      segments.length === 2 && segments[0] === "onboarding" &&
-      segments[1] === "state" && method === "GET"
-    ) {
-      const preferences = await getPreferences(client, auth.userId);
-      const storedState = extractOnboardingStateFromPreferences(preferences);
-      const derivedState = deriveOnboardingStateFromPreferences(preferences);
+    const onboardingResponse = await handleOnboardingRoutes(routeContext, {
+      getPreferences,
+      extractOnboardingStateFromPreferences,
+      deriveOnboardingStateFromPreferences,
+      buildContextPack,
+      applyModelPreferenceUpdates,
+      updateMemoryFromInteraction,
+      logChangelog,
+    });
+    if (onboardingResponse) {
+      return onboardingResponse;
+    }
 
-      const onboardingState = storedState && storedState.completed
-        ? storedState
-        : {
-          ...derivedState,
-          state: storedState?.state ?? {},
-        };
-
-      return respond(200, onboardingState);
+    const memoryResponse = await handleMemoryRoutes(routeContext, {
+      getActiveMemories,
+      getMemorySnapshot,
+      getLimit,
+      parseUuid,
+      logChangelog,
+      processMemoryJobs,
+    });
+    if (memoryResponse) {
+      return memoryResponse;
     }
 
     if (
-      segments.length === 2 && segments[0] === "onboarding" &&
-      segments[1] === "chat" && method === "POST"
+      segments.length === 2 && segments[0] === "image-simulations" &&
+      segments[1] === "compare" && method === "POST"
     ) {
-      const body = await requireJsonBody<{
-        message?: string;
-        transcript?: Array<
-          { role?: string; content?: string; created_at?: string }
-        >;
-        state?: Record<string, JsonValue>;
-      }>(request);
-
-      const normalizedMessage = typeof body.message === "string"
-        ? body.message.trim()
-        : "";
-      const transcript = Array.isArray(body.transcript)
-        ? body.transcript
-          .filter((entry) =>
-            entry && typeof entry.content === "string" &&
-            typeof entry.role === "string"
-          )
-          .map((entry) => ({
-            role: entry.role === "assistant" ? "assistant" : "user",
-            content: entry.content?.trim() ?? "",
-            created_at: typeof entry.created_at === "string"
-              ? entry.created_at
-              : null,
-          }))
-          .filter((entry) => entry.content.length > 0)
-        : [];
-      const state = body.state && typeof body.state === "object" &&
-          !Array.isArray(body.state)
-        ? body.state
-        : {};
-
-      const contextPack = await buildContextPack({
-        userClient: client,
-        serviceClient,
-        userId: auth.userId,
-        requestId,
-        prompt: normalizedMessage || "start onboarding",
-        context: {
-          workflow: "onboarding",
-          transcript,
-          state,
-        },
-        selectionMode: "fast",
-      });
-
-      const interview = await llmGateway.runOnboardingInterview({
+      const body = await requireJsonBody<ImageSimulationCompareRequest>(request);
+      const response = await runImageSimulationCompare({
         client: serviceClient,
         userId: auth.userId,
         requestId,
-        prompt: normalizedMessage || "start onboarding",
-        context: {
-          preferences: contextPack.preferences,
-          preferences_natural_language: contextPack.preferencesNaturalLanguage,
-          memory_snapshot: contextPack.memorySnapshot,
-          selected_memories: contextPack.selectedMemories,
-          transcript,
-          state,
-        },
+        body,
       });
-
-      const effectivePreferences = await applyModelPreferenceUpdates({
-        client,
-        serviceClient,
-        userId: auth.userId,
-        requestId,
-        currentPreferences: contextPack.preferences,
-        preferenceUpdates: interview.preference_updates,
-        latestUserMessage: normalizedMessage,
-        userMessages: transcript
-          .filter((entry) => entry.role === "user")
-          .map((entry) => entry.content),
-      });
-
-      const inferredState = deriveOnboardingStateFromPreferences(
-        effectivePreferences,
-      );
-      const userSkipRequested = normalizedMessage.length > 0 &&
-        /\b(skip|later|not now|start using|use the app|done for now|skip onboarding)\b/i
-          .test(normalizedMessage);
-
-      const onboardingState: OnboardingState = userSkipRequested
-        ? {
-          completed: true,
-          progress: 1,
-          missing_topics: [],
-          state: {
-            ...interview.onboarding_state.state,
-            skip_requested: true,
-          },
-        }
-        : interview.onboarding_state.completed || inferredState.completed
-        ? {
-          completed: true,
-          progress: 1,
-          missing_topics: [],
-          state: {
-            ...interview.onboarding_state.state,
-            readiness_inferred: inferredState.completed,
-          },
-        }
-        : {
-          completed: false,
-          progress: Math.max(
-            interview.onboarding_state.progress,
-            inferredState.progress,
-          ),
-          missing_topics: Array.from(
-            new Set([
-              ...interview.onboarding_state.missing_topics,
-              ...inferredState.missing_topics,
-            ]),
-          ),
-          state: interview.onboarding_state.state,
-        };
-
-      const mergedPresentationPreferences = {
-        ...(effectivePreferences.presentation_preferences ?? {}),
-        onboarding_state: onboardingState,
-      } as Record<string, JsonValue>;
-
-      const { data: persistedPreferences, error: persistedPreferencesError } =
-        await client
-          .from("preferences")
-          .upsert({
-            user_id: auth.userId,
-            ...effectivePreferences,
-            presentation_preferences: mergedPresentationPreferences,
-            updated_at: new Date().toISOString(),
-          })
-          .select("*")
-          .single();
-
-      if (persistedPreferencesError) {
-        throw new ApiError(
-          500,
-          "onboarding_preferences_persist_failed",
-          "Could not persist onboarding preferences",
-          persistedPreferencesError.message,
-        );
-      }
-
-      // Fire-and-forget: memory pipeline + changelog run in background so the
-      // response returns immediately (~10s saved per round-trip).
-      void (async () => {
-        try {
-          await updateMemoryFromInteraction({
-            userClient: client,
-            serviceClient,
-            userId: auth.userId,
-            requestId,
-            interactionContext: {
-              workflow: "onboarding",
-              user_message: normalizedMessage,
-              transcript,
-              assistant_reply: interview.assistant_reply,
-              onboarding_state: onboardingState,
-              preference_updates: interview.preference_updates ?? {},
-              effective_preferences: persistedPreferences as unknown as Record<
-                string,
-                JsonValue
-              >,
-            },
-          });
-          await logChangelog({
-            serviceClient,
-            actorUserId: auth.userId,
-            scope: "onboarding",
-            entityType: "preferences",
-            entityId: auth.userId,
-            action: onboardingState.completed ? "completed" : "step",
-            requestId,
-            afterJson: {
-              onboarding_state: onboardingState,
-              preference_updates: interview.preference_updates ?? {},
-            },
-          });
-        } catch (bgError) {
-          console.error("onboarding_background_task_failed", bgError);
-        }
-      })();
-
-      return respond(200, {
-        assistant_reply: interview.assistant_reply,
-        onboarding_state: onboardingState,
-        preference_updates: interview.preference_updates ?? {},
-      });
+      return respond(200, response);
     }
 
-    if (segments.length === 1 && segments[0] === "memories") {
-      if (method === "GET") {
-        const memories = await getActiveMemories(
-          client,
-          auth.userId,
-          getLimit(url, 100),
-        );
-        const snapshot = await getMemorySnapshot(client, auth.userId);
-        return respond(200, { items: memories, snapshot });
-      }
+    const metadataResponse = await handleMetadataRoutes(routeContext, {
+      parseUuid,
+      logChangelog,
+      processImageJobs,
+      processMetadataJobs,
+      enqueueRecipeMetadataJob,
+      scheduleMetadataQueueDrain,
+    });
+    if (metadataResponse) {
+      return metadataResponse;
     }
 
-    if (
-      segments.length === 2 && segments[0] === "memories" &&
-      segments[1] === "reset" && method === "POST"
-    ) {
-      const resetResult = await client
-        .from("memories")
-        .update({ status: "deleted", updated_at: new Date().toISOString() })
-        .eq("user_id", auth.userId)
-        .eq("status", "active");
-
-      if (resetResult.error) {
-        if (!isSchemaMissingError(resetResult.error)) {
-          throw new ApiError(
-            500,
-            "memory_reset_failed",
-            "Could not reset memories",
-            resetResult.error.message,
-          );
-        }
-
-        const legacyDelete = await client.from("memories").delete().eq(
-          "user_id",
-          auth.userId,
-        );
-        if (legacyDelete.error) {
-          throw new ApiError(
-            500,
-            "memory_reset_failed",
-            "Could not reset memories",
-            legacyDelete.error.message,
-          );
-        }
-      }
-
-      const snapshotResult = await client.from("memory_snapshots").upsert({
-        user_id: auth.userId,
-        summary: {},
-        token_estimate: 0,
-        updated_at: new Date().toISOString(),
-      });
-      if (snapshotResult.error && !isSchemaMissingError(snapshotResult.error)) {
-        throw new ApiError(
-          500,
-          "memory_reset_failed",
-          "Could not reset memory snapshot",
-          snapshotResult.error.message,
-        );
-      }
-
-      await logChangelog({
-        serviceClient,
-        actorUserId: auth.userId,
-        scope: "memory",
-        entityType: "memory",
-        entityId: auth.userId,
-        action: "reset",
-        requestId,
-      });
-
-      return respond(200, { ok: true });
+    const recipeResponse = await handleRecipeRoutes(routeContext, {
+      parseUuid,
+      getPreferences,
+      resolvePresentationOptions,
+      fetchRecipeView,
+      fetchChatMessages,
+      buildContextPack,
+      deriveAttachmentPayload,
+      persistRecipe,
+      resolveRelationTypeId,
+      logChangelog,
+      buildCookbookItems,
+      buildCookbookInsightDeterministic,
+      enqueueImageJob,
+      toJsonValue,
+    });
+    if (recipeResponse) {
+      return recipeResponse;
     }
 
-    if (
-      segments.length === 2 && segments[0] === "memories" &&
-      segments[1] === "forget" && method === "POST"
-    ) {
-      const body = await requireJsonBody<{ memory_id: string }>(request);
-      const memoryId = parseUuid(body.memory_id);
-
-      const forgetResult = await client
-        .from("memories")
-        .update({ status: "deleted", updated_at: new Date().toISOString() })
-        .eq("id", memoryId)
-        .eq("user_id", auth.userId);
-
-      if (forgetResult.error) {
-        if (!isSchemaMissingError(forgetResult.error)) {
-          throw new ApiError(
-            500,
-            "memory_forget_failed",
-            "Could not forget memory",
-            forgetResult.error.message,
-          );
-        }
-
-        const legacyDelete = await client.from("memories").delete().eq(
-          "id",
-          memoryId,
-        ).eq("user_id", auth.userId);
-        if (legacyDelete.error) {
-          throw new ApiError(
-            500,
-            "memory_forget_failed",
-            "Could not forget memory",
-            legacyDelete.error.message,
-          );
-        }
-      }
-
-      await logChangelog({
-        serviceClient,
-        actorUserId: auth.userId,
-        scope: "memory",
-        entityType: "memory",
-        entityId: memoryId,
-        action: "forgotten",
-        requestId,
-      });
-
-      return respond(200, { ok: true });
+    const graphResponse = await handleGraphRoutes(routeContext, {
+      parseUuid,
+      parseCsvParam,
+      fetchGraphNeighborhood,
+    });
+    if (graphResponse) {
+      return graphResponse;
     }
 
-    if (
-      segments.length === 1 && segments[0] === "changelog" && method === "GET"
-    ) {
-      const limit = getLimit(url, 100);
-      const changelogResult = await client
-        .from("changelog_events")
-        .select(
-          "id,scope,entity_type,entity_id,action,request_id,before_json,after_json,metadata,created_at",
-        )
-        .eq("actor_user_id", auth.userId)
-        .order("created_at", { ascending: false })
-        .limit(limit);
-
-      if (changelogResult.error) {
-        if (!isSchemaMissingError(changelogResult.error)) {
-          throw new ApiError(
-            500,
-            "changelog_fetch_failed",
-            "Could not load changelog",
-            changelogResult.error.message,
-          );
-        }
-
-        const legacyEvents = await client
-          .from("events")
-          .select("id,event_type,request_id,event_payload,created_at")
-          .eq("user_id", auth.userId)
-          .order("created_at", { ascending: false })
-          .limit(limit);
-
-        if (legacyEvents.error) {
-          throw new ApiError(
-            500,
-            "changelog_fetch_failed",
-            "Could not load changelog",
-            legacyEvents.error.message,
-          );
-        }
-
-        const items = (legacyEvents.data ?? []).map((event) => ({
-          id: event.id,
-          scope: "event",
-          entity_type: "event",
-          entity_id: null,
-          action: event.event_type,
-          request_id: event.request_id,
-          before_json: null,
-          after_json: event.event_payload,
-          metadata: {},
-          created_at: event.created_at,
-        }));
-        return respond(200, { items });
-      }
-
-      return respond(200, { items: changelogResult.data ?? [] });
-    }
-
-    if (
-      segments.length === 2 && segments[0] === "image-jobs" &&
-      segments[1] === "process" && method === "POST"
-    ) {
-      const body = await requireJsonBody<{ limit?: number }>(request).catch(
-        () => ({ limit: 5 }),
-      );
-      const limit = Number.isFinite(Number(body.limit))
-        ? Math.max(1, Math.min(20, Number(body.limit)))
-        : 5;
-
-      const result = await processImageJobs({
-        userClient: client,
-        serviceClient,
-        userId: auth.userId,
-        requestId,
-        limit,
-      });
-
-      await logChangelog({
-        serviceClient,
-        actorUserId: auth.userId,
-        scope: "image",
-        entityType: "image_job",
-        action: "process_batch",
-        requestId,
-        afterJson: {
-          processed: result.processed,
-          ready: result.ready,
-          failed: result.failed,
-          pending: result.pending,
-        },
-      });
-
-      return respond(200, result);
-    }
-
-    if (
-      segments.length === 2 && segments[0] === "metadata-jobs" &&
-      segments[1] === "process" && method === "POST"
-    ) {
-      const body = await requireJsonBody<{ limit?: number }>(request).catch(
-        () => ({ limit: 10 }),
-      );
-      const limit = Number.isFinite(Number(body.limit))
-        ? Math.max(0, Math.min(50, Number(body.limit)))
-        : 10;
-
-      const result = await processMetadataJobs({
-        serviceClient,
-        actorUserId: auth.userId,
-        requestId,
-        limit,
-      });
-
-      await logChangelog({
-        serviceClient,
-        actorUserId: auth.userId,
-        scope: "metadata",
-        entityType: "metadata_job",
-        action: "process_batch",
-        requestId,
-        afterJson: {
-          reaped: result.reaped,
-          claimed: result.claimed,
-          processed: result.processed,
-          ready: result.ready,
-          failed: result.failed,
-          pending: result.pending,
-          queue: result.queue,
-        },
-      });
-
-      return respond(200, result);
-    }
-
-    if (
-      segments.length === 2 && segments[0] === "metadata-jobs" &&
-      segments[1] === "recompute" && method === "POST"
-    ) {
-      const body = await requireJsonBody<{
-        recipe_id?: string;
-        recipe_version_id?: string;
-      }>(request);
-
-      const recipeVersionIdInput = typeof body.recipe_version_id === "string" &&
-          body.recipe_version_id.length > 0
-        ? parseUuid(body.recipe_version_id)
-        : null;
-      const recipeIdInput = typeof body.recipe_id === "string" &&
-          body.recipe_id.length > 0
-        ? parseUuid(body.recipe_id)
-        : null;
-
-      let recipeId = recipeIdInput;
-      let recipeVersionId = recipeVersionIdInput;
-      if (!recipeVersionId) {
-        if (!recipeId) {
-          throw new ApiError(
-            400,
-            "metadata_recompute_missing_target",
-            "recipe_id or recipe_version_id is required",
-          );
-        }
-
-        const { data: recipe, error: recipeError } = await client
-          .from("recipes")
-          .select("id,current_version_id")
-          .eq("id", recipeId)
-          .maybeSingle();
-        if (recipeError || !recipe?.current_version_id) {
-          throw new ApiError(
-            404,
-            "metadata_recompute_recipe_not_found",
-            "Recipe version was not found for recompute",
-            recipeError?.message,
-          );
-        }
-        recipeVersionId = recipe.current_version_id;
-      }
-
-      if (!recipeId) {
-        const { data: version, error: versionError } = await client
-          .from("recipe_versions")
-          .select("recipe_id")
-          .eq("id", recipeVersionId)
-          .maybeSingle();
-        if (versionError || !version?.recipe_id) {
-          throw new ApiError(
-            404,
-            "metadata_recompute_version_not_found",
-            "Recipe version was not found",
-            versionError?.message,
-          );
-        }
-        recipeId = version.recipe_id;
-      }
-
-      if (!recipeId || !recipeVersionId) {
-        throw new ApiError(
-          400,
-          "metadata_recompute_missing_target",
-          "recipe_id and recipe_version_id are required",
-        );
-      }
-
-      await enqueueRecipeMetadataJob({
-        serviceClient,
-        recipeId: recipeId,
-        recipeVersionId: recipeVersionId,
-      });
-      scheduleMetadataQueueDrain({
-        serviceClient,
-        actorUserId: auth.userId,
-        requestId,
-        limit: 5,
-      });
-
-      await logChangelog({
-        serviceClient,
-        actorUserId: auth.userId,
-        scope: "metadata",
-        entityType: "metadata_job",
-        entityId: recipeVersionId,
-        action: "manual_recompute",
-        requestId,
-        afterJson: {
-          recipe_id: recipeId,
-          recipe_version_id: recipeVersionId,
-        },
-      });
-
-      return respond(200, {
-        ok: true,
-        recipe_id: recipeId,
-        recipe_version_id: recipeVersionId,
-      });
-    }
-
-    if (
-      segments.length === 2 && segments[0] === "metadata-jobs" &&
-      segments[1] === "retry" && method === "POST"
-    ) {
-      const body = await requireJsonBody<{ job_id?: string }>(request);
-      const jobId = parseUuid(body.job_id ?? "");
-
-      let { data: retried, error: retryError } = await serviceClient
-        .from("recipe_metadata_jobs")
-        .update({
-          status: "pending",
-          stage: "queued",
-          attempts: 0,
-          next_attempt_at: new Date().toISOString(),
-          locked_at: null,
-          locked_by: null,
-          last_error: null,
-          last_stage_error: null,
-          current_run_id: null,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", jobId)
-        .in("status", ["pending", "processing", "failed"])
-        .select("id,status,attempts,next_attempt_at")
-        .maybeSingle();
-
-      if (retryError && isSchemaMissingError(retryError)) {
-        ({ data: retried, error: retryError } = await serviceClient
-          .from("recipe_metadata_jobs")
-          .update({
-            status: "pending",
-            attempts: 0,
-            next_attempt_at: new Date().toISOString(),
-            locked_at: null,
-            locked_by: null,
-            last_error: null,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", jobId)
-          .in("status", ["pending", "processing", "failed"])
-          .select("id,status,attempts,next_attempt_at")
-          .maybeSingle());
-      }
-
-      if (retryError) {
-        throw new ApiError(
-          500,
-          "metadata_job_retry_failed",
-          "Could not retry metadata job",
-          retryError.message,
-        );
-      }
-      if (!retried) {
-        throw new ApiError(
-          404,
-          "metadata_job_not_found",
-          "Metadata job not found",
-        );
-      }
-
-      await logChangelog({
-        serviceClient,
-        actorUserId: auth.userId,
-        scope: "metadata",
-        entityType: "metadata_job",
-        entityId: jobId,
-        action: "manual_retry",
-        requestId,
-      });
-      scheduleMetadataQueueDrain({
-        serviceClient,
-        actorUserId: auth.userId,
-        requestId,
-        limit: 5,
-      });
-
-      return respond(200, { ok: true, job: retried });
-    }
-
-    if (
-      segments.length === 2 && segments[0] === "metadata-jobs" &&
-      segments[1] === "recompute-scope" && method === "POST"
-    ) {
-      const body = await requireJsonBody<{
-        recipe_ids?: string[];
-        recipe_version_ids?: string[];
-        leaked_only?: boolean;
-        current_versions_only?: boolean;
-        limit?: number;
-      }>(request);
-
-      const limit = Number.isFinite(Number(body.limit))
-        ? Math.max(1, Math.min(500, Number(body.limit)))
-        : 500;
-      const leakedOnly = body.leaked_only === true;
-      const currentVersionsOnly = body.current_versions_only !== false;
-
-      const requestedRecipeVersionIds = new Set<string>();
-      for (const value of Array.isArray(body.recipe_version_ids)
-        ? body.recipe_version_ids
-        : []) {
-        if (typeof value !== "string" || value.trim().length === 0) continue;
-        requestedRecipeVersionIds.add(parseUuid(value));
-      }
-
-      const requestedRecipeIds = Array.from(
-        new Set(
-          (Array.isArray(body.recipe_ids) ? body.recipe_ids : [])
-            .filter((value): value is string =>
-              typeof value === "string" && value.trim().length > 0
-            )
-            .map((value) => parseUuid(value)),
-        ),
-      );
-
-      if (requestedRecipeIds.length > 0) {
-        if (currentVersionsOnly) {
-          const { data: recipes, error: recipeError } = await serviceClient
-            .from("recipes")
-            .select("id,current_version_id")
-            .in("id", requestedRecipeIds);
-          if (recipeError) {
-            throw new ApiError(
-              500,
-              "metadata_recompute_scope_recipe_fetch_failed",
-              "Could not fetch requested recipes for recompute scope",
-              recipeError.message,
-            );
-          }
-          for (const recipe of recipes ?? []) {
-            if (recipe.current_version_id) {
-              requestedRecipeVersionIds.add(String(recipe.current_version_id));
-            }
-          }
-        } else {
-          const { data: versions, error: versionsError } = await serviceClient
-            .from("recipe_versions")
-            .select("id")
-            .in("recipe_id", requestedRecipeIds);
-          if (versionsError) {
-            throw new ApiError(
-              500,
-              "metadata_recompute_scope_versions_fetch_failed",
-              "Could not fetch recipe versions for recompute scope",
-              versionsError.message,
-            );
-          }
-          for (const version of versions ?? []) {
-            requestedRecipeVersionIds.add(String(version.id));
-          }
-        }
-      }
-
-      let leakedVersionIds = new Set<string>();
-      if (leakedOnly) {
-        const { data: leakedRows, error: leakedError } = await serviceClient
-          .from("recipe_ingredients")
-          .select("recipe_version_id")
-          .eq("normalized_status", "needs_retry")
-          .not("ingredient_id", "is", null);
-        if (leakedError) {
-          throw new ApiError(
-            500,
-            "metadata_recompute_scope_leaked_fetch_failed",
-            "Could not fetch leaked ingredient rows for recompute scope",
-            leakedError.message,
-          );
-        }
-        leakedVersionIds = new Set(
-          (leakedRows ?? []).map((row) => String(row.recipe_version_id)),
-        );
-      }
-
-      let currentVersionIds = new Set<string>();
-      if (currentVersionsOnly) {
-        const { data: currentRows, error: currentRowsError } = await serviceClient
-          .from("recipes")
-          .select("current_version_id")
-          .not("current_version_id", "is", null);
-        if (currentRowsError) {
-          throw new ApiError(
-            500,
-            "metadata_recompute_scope_current_versions_fetch_failed",
-            "Could not fetch current versions for recompute scope",
-            currentRowsError.message,
-          );
-        }
-        currentVersionIds = new Set(
-          (currentRows ?? []).map((row) => String(row.current_version_id)),
-        );
-      }
-
-      let targetVersionIds = Array.from(requestedRecipeVersionIds);
-      if (leakedOnly) {
-        targetVersionIds = targetVersionIds.length > 0
-          ? targetVersionIds.filter((id) => leakedVersionIds.has(id))
-          : Array.from(leakedVersionIds);
-      }
-      if (currentVersionsOnly) {
-        targetVersionIds = targetVersionIds.length > 0
-          ? targetVersionIds.filter((id) => currentVersionIds.has(id))
-          : Array.from(currentVersionIds);
-      }
-
-      if (targetVersionIds.length === 0) {
-        return respond(200, {
-          ok: true,
-          enqueued: 0,
-          recipe_version_ids: [],
-          note: "No matching recipe versions for requested scope",
-        });
-      }
-      targetVersionIds = targetVersionIds.slice(0, limit);
-
-      const { data: targetVersions, error: targetVersionsError } =
-        await serviceClient
-          .from("recipe_versions")
-          .select("id,recipe_id")
-          .in("id", targetVersionIds);
-      if (targetVersionsError) {
-        throw new ApiError(
-          500,
-          "metadata_recompute_scope_targets_fetch_failed",
-          "Could not resolve recompute scope targets",
-          targetVersionsError.message,
-        );
-      }
-
-      let enqueued = 0;
-      for (const version of targetVersions ?? []) {
-        await enqueueRecipeMetadataJob({
-          serviceClient,
-          recipeId: String(version.recipe_id),
-          recipeVersionId: String(version.id),
-        });
-        enqueued += 1;
-      }
-
-      if (enqueued > 0) {
-        scheduleMetadataQueueDrain({
-          serviceClient,
-          actorUserId: auth.userId,
-          requestId,
-          limit: Math.min(50, Math.max(5, enqueued)),
-        });
-      }
-
-      await logChangelog({
-        serviceClient,
-        actorUserId: auth.userId,
-        scope: "metadata",
-        entityType: "metadata_job",
-        action: "manual_recompute_scope",
-        requestId,
-        afterJson: {
-          enqueued,
-          leaked_only: leakedOnly,
-          current_versions_only: currentVersionsOnly,
-          recipe_version_ids: (targetVersions ?? []).map((row) => row.id),
-        },
-      });
-
-      return respond(200, {
-        ok: true,
-        enqueued,
-        recipe_version_ids: (targetVersions ?? []).map((row) => row.id),
-      });
-    }
-
-    if (
-      segments.length === 2 && segments[0] === "memory-jobs" &&
-      segments[1] === "process" && method === "POST"
-    ) {
-      const body = await requireJsonBody<{ limit?: number }>(request).catch(
-        () => ({ limit: 25 }),
-      );
-      const limit = Number.isFinite(Number(body.limit))
-        ? Math.max(1, Math.min(100, Number(body.limit)))
-        : 25;
-
-      const result = await processMemoryJobs({
-        userClient: client,
-        serviceClient,
-        actorUserId: auth.userId,
-        requestId,
-        limit,
-      });
-
-      await logChangelog({
-        serviceClient,
-        actorUserId: auth.userId,
-        scope: "memory",
-        entityType: "memory_job",
-        action: "process_batch",
-        requestId,
-        afterJson: {
-          processed: result.processed,
-          succeeded: result.succeeded,
-          failed: result.failed,
-          queue: result.queue,
-        },
-      });
-
-      return respond(200, result);
-    }
-
-    if (
-      segments.length === 2 && segments[0] === "memory-jobs" &&
-      segments[1] === "retry" && method === "POST"
-    ) {
-      const body = await requireJsonBody<{ job_id?: string }>(request);
-      const jobId = parseUuid(body.job_id ?? "");
-
-      const { data: retried, error: retryError } = await client
-        .from("memory_jobs")
-        .update({
-          status: "pending",
-          attempts: 0,
-          next_attempt_at: new Date().toISOString(),
-          locked_at: null,
-          locked_by: null,
-          last_error: null,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", jobId)
-        .select("id,status,attempts,next_attempt_at")
-        .maybeSingle();
-
-      if (retryError) {
-        throw new ApiError(
-          500,
-          "memory_job_retry_failed",
-          "Could not retry memory job",
-          retryError.message,
-        );
-      }
-      if (!retried) {
-        throw new ApiError(404, "memory_job_not_found", "Memory job not found");
-      }
-
-      await logChangelog({
-        serviceClient,
-        actorUserId: auth.userId,
-        scope: "memory",
-        entityType: "memory_job",
-        entityId: jobId,
-        action: "manual_retry",
-        requestId,
-      });
-
-      return respond(200, { ok: true, job: retried });
-    }
-
-    if (segments.length === 1 && segments[0] === "collections") {
-      if (method === "GET") {
-        const { data, error } = await client
-          .from("collections")
-          .select("id,name,created_at")
-          .order("created_at", { ascending: false });
-        if (error) {
-          throw new ApiError(
-            500,
-            "collections_fetch_failed",
-            "Could not fetch collections",
-            error.message,
-          );
-        }
-
-        return respond(200, { items: data ?? [] });
-      }
-
-      if (method === "POST") {
-        const body = await requireJsonBody<{ name: string }>(request);
-        const name = body.name?.trim();
-        if (!name) {
-          throw new ApiError(
-            400,
-            "invalid_collection_name",
-            "Collection name is required",
-          );
-        }
-
-        const { data, error } = await client
-          .from("collections")
-          .insert({ name, owner_user_id: auth.userId })
-          .select("id,name,created_at")
-          .single();
-
-        if (error || !data) {
-          throw new ApiError(
-            500,
-            "collection_create_failed",
-            "Could not create collection",
-            error?.message,
-          );
-        }
-
-        await logChangelog({
-          serviceClient,
-          actorUserId: auth.userId,
-          scope: "collections",
-          entityType: "collection",
-          entityId: data.id,
-          action: "created",
-          requestId,
-          afterJson: data as unknown as JsonValue,
-        });
-
-        return respond(200, data);
-      }
-    }
-
-    if (
-      segments.length === 3 && segments[0] === "collections" &&
-      segments[2] === "items" && method === "POST"
-    ) {
-      const collectionId = parseUuid(segments[1]);
-      const body = await requireJsonBody<{ recipe_id: string }>(request);
-      const recipeId = parseUuid(body.recipe_id);
-
-      const { error } = await client.from("collection_items").upsert({
-        collection_id: collectionId,
-        recipe_id: recipeId,
-      });
-
-      if (error) {
-        throw new ApiError(
-          500,
-          "collection_item_create_failed",
-          "Could not add recipe to collection",
-          error.message,
-        );
-      }
-
-      await logChangelog({
-        serviceClient,
-        actorUserId: auth.userId,
-        scope: "collections",
-        entityType: "collection_item",
-        entityId: `${collectionId}:${recipeId}`,
-        action: "added",
-        requestId,
-      });
-
-      return respond(200, { ok: true });
-    }
-
-    if (
-      segments.length === 2 && segments[0] === "recipes" &&
-      segments[1] === "cookbook" && method === "GET"
-    ) {
-      const items = await buildCookbookItems(client, auth.userId);
-      const cookbookInsight = buildCookbookInsightDeterministic(items);
-      return respond(200, { items, cookbook_insight: cookbookInsight });
-    }
-
-    if (
-      segments.length === 2 && segments[0] === "recipes" && method === "GET"
-    ) {
-      const recipeId = parseUuid(segments[1]);
-      const preferences = await getPreferences(client, auth.userId);
-      const viewOptions = resolvePresentationOptions({
-        query: url.searchParams,
-        presentationPreferences: preferences.presentation_preferences as Record<
-          string,
-          unknown
-        >,
-      });
-      const recipe = await fetchRecipeView(client, recipeId, true, viewOptions);
-      return respond(200, recipe);
-    }
-
-    if (
-      segments.length === 3 && segments[0] === "recipes" &&
-      segments[2] === "history" && method === "GET"
-    ) {
-      const recipeId = parseUuid(segments[1]);
-
-      const { data: recipe, error: recipeError } = await client
-        .from("recipes")
-        .select("id,source_chat_id")
-        .eq("id", recipeId)
-        .maybeSingle();
-
-      if (recipeError || !recipe) {
-        throw new ApiError(
-          404,
-          "recipe_not_found",
-          "Recipe not found",
-          recipeError?.message,
-        );
-      }
-
-      const { data: versions, error: versionsError } = await client
-        .from("recipe_versions")
-        .select(
-          "id,parent_version_id,diff_summary,created_at,payload,created_by",
-        )
-        .eq("recipe_id", recipeId)
-        .order("created_at", { ascending: true });
-
-      if (versionsError) {
-        throw new ApiError(
-          500,
-          "recipe_history_fetch_failed",
-          "Could not fetch recipe history",
-          versionsError.message,
-        );
-      }
-
-      const versionIds = (versions ?? []).map((version) => version.id);
-      let events: Array<Record<string, JsonValue>> = [];
-      if (versionIds.length > 0) {
-        const versionEventsResult = await client
-          .from("recipe_version_events")
-          .select(
-            "id,recipe_version_id,event_type,request_id,metadata,created_at",
-          )
-          .in("recipe_version_id", versionIds)
-          .order("created_at", { ascending: true });
-
-        if (versionEventsResult.error) {
-          if (!isSchemaMissingError(versionEventsResult.error)) {
-            throw new ApiError(
-              500,
-              "recipe_version_events_fetch_failed",
-              "Could not fetch recipe version events",
-              versionEventsResult.error.message,
-            );
-          }
-        } else {
-          events = (versionEventsResult.data ?? []) as unknown as Array<
-            Record<string, JsonValue>
-          >;
-        }
-      }
-
-      let chatMessages: ChatMessageView[] = [];
-      if (recipe.source_chat_id) {
-        chatMessages = await fetchChatMessages(
-          client,
-          recipe.source_chat_id,
-          160,
-        );
-      }
-
-      return respond(200, {
-        recipe_id: recipeId,
-        source_chat_id: recipe.source_chat_id,
-        versions: versions ?? [],
-        version_events: events,
-        chat_messages: chatMessages,
-      });
-    }
-
-    if (
-      segments.length === 3 && segments[0] === "recipes" &&
-      segments[2] === "attachments" && method === "POST"
-    ) {
-      const parentRecipeId = parseUuid(segments[1]);
-      const body = await requireJsonBody<{
-        relation_type: string;
-        position?: number;
-        prompt?: string;
-        recipe?: Omit<RecipePayload, "attachments">;
-      }>(request);
-
-      const relationType = body.relation_type?.trim().toLowerCase();
-      if (!relationType) {
-        throw new ApiError(
-          400,
-          "invalid_relation_type",
-          "relation_type is required",
-        );
-      }
-
-      let attachmentRecipePayload: RecipePayload;
-
-      const parentRecipe = await fetchRecipeView(client, parentRecipeId, false);
-      const contextPack = await buildContextPack({
-        userClient: client,
-        serviceClient,
-        userId: auth.userId,
-        requestId,
-        prompt: body.prompt?.trim() ?? `create ${relationType} attachment`,
-        context: {
-          parent_recipe: toJsonValue({
-            id: parentRecipe.id,
-            title: parentRecipe.title,
-            ingredients: parentRecipe.ingredients,
-            steps: parentRecipe.steps,
-            metadata: parentRecipe.metadata,
-          }),
-        },
-      });
-
-      if (body.recipe) {
-        attachmentRecipePayload = deriveAttachmentPayload(body.recipe);
-      } else if (body.prompt?.trim()) {
-        const attachmentGeneration = await llmGateway.generateRecipe({
-          client: serviceClient,
-          userId: auth.userId,
-          requestId,
-          prompt: body.prompt,
-          context: {
-            relation_type: relationType,
-            parent_recipe: toJsonValue({
-              id: parentRecipe.id,
-              title: parentRecipe.title,
-              ingredients: parentRecipe.ingredients,
-              steps: parentRecipe.steps,
-              metadata: parentRecipe.metadata,
-            }),
-            preferences: contextPack.preferences,
-            preferences_natural_language:
-              contextPack.preferencesNaturalLanguage,
-            memory_snapshot: contextPack.memorySnapshot,
-            selected_memories: contextPack.selectedMemories,
-          },
-        });
-        attachmentRecipePayload = attachmentGeneration.recipe;
-      } else {
-        throw new ApiError(
-          400,
-          "invalid_attachment_payload",
-          "Provide either prompt or recipe payload",
-        );
-      }
-
-      const saved = await persistRecipe({
-        client,
-        serviceClient,
-        userId: auth.userId,
-        requestId,
-        payload: attachmentRecipePayload,
-        diffSummary: `Attachment (${relationType})`,
-        selectedMemoryIds: contextPack.selectedMemoryIds,
-      });
-
-      const relationTypeId = await resolveRelationTypeId(client, relationType);
-      const { data: insertedLink, error: linkError } = await client
-        .from("recipe_links")
-        .insert({
-          parent_recipe_id: parentRecipeId,
-          child_recipe_id: saved.recipeId,
-          relation_type_id: relationTypeId,
-          position: Number.isFinite(Number(body.position))
-            ? Number(body.position)
-            : 0,
-          source: "user",
-        })
-        .select("id")
-        .single();
-
-      if (linkError || !insertedLink) {
-        throw new ApiError(
-          500,
-          "recipe_attachment_create_failed",
-          "Could not create attachment link",
-          linkError?.message,
-        );
-      }
-
-      await logChangelog({
-        serviceClient,
-        actorUserId: auth.userId,
-        scope: "attachments",
-        entityType: "recipe_link",
-        entityId: insertedLink.id,
-        action: "created",
-        requestId,
-        afterJson: {
-          parent_recipe_id: parentRecipeId,
-          child_recipe_id: saved.recipeId,
-          relation_type: relationType,
-        },
-      });
-
-      const recipe = await fetchRecipeView(client, parentRecipeId);
-      return respond(200, { recipe, attachment_id: insertedLink.id });
-    }
-
-    if (
-      segments.length === 4 && segments[0] === "recipes" &&
-      segments[2] === "attachments" && method === "PATCH"
-    ) {
-      const parentRecipeId = parseUuid(segments[1]);
-      const attachmentId = parseUuid(segments[3]);
-      const body = await requireJsonBody<
-        { relation_type?: string; position?: number }
-      >(request);
-
-      const updatePayload: Record<string, JsonValue> = {
-        updated_at: new Date().toISOString(),
-      };
-
-      if (
-        typeof body.position === "number" && Number.isInteger(body.position)
-      ) {
-        updatePayload.position = body.position;
-      }
-
-      if (body.relation_type?.trim()) {
-        updatePayload.relation_type_id = await resolveRelationTypeId(
-          client,
-          body.relation_type,
-        );
-      }
-
-      const { error } = await client
-        .from("recipe_links")
-        .update(updatePayload)
-        .eq("id", attachmentId)
-        .eq("parent_recipe_id", parentRecipeId);
-
-      if (error) {
-        throw new ApiError(
-          500,
-          "recipe_attachment_update_failed",
-          "Could not update attachment",
-          error.message,
-        );
-      }
-
-      await logChangelog({
-        serviceClient,
-        actorUserId: auth.userId,
-        scope: "attachments",
-        entityType: "recipe_link",
-        entityId: attachmentId,
-        action: "updated",
-        requestId,
-        afterJson: updatePayload as unknown as JsonValue,
-      });
-
-      const recipe = await fetchRecipeView(client, parentRecipeId);
-      return respond(200, { recipe });
-    }
-
-    if (
-      segments.length === 4 && segments[0] === "recipes" &&
-      segments[2] === "attachments" && method === "DELETE"
-    ) {
-      const parentRecipeId = parseUuid(segments[1]);
-      const attachmentId = parseUuid(segments[3]);
-
-      const { error } = await client
-        .from("recipe_links")
-        .delete()
-        .eq("id", attachmentId)
-        .eq("parent_recipe_id", parentRecipeId);
-
-      if (error) {
-        throw new ApiError(
-          500,
-          "recipe_attachment_delete_failed",
-          "Could not delete attachment",
-          error.message,
-        );
-      }
-
-      await logChangelog({
-        serviceClient,
-        actorUserId: auth.userId,
-        scope: "attachments",
-        entityType: "recipe_link",
-        entityId: attachmentId,
-        action: "deleted",
-        requestId,
-      });
-
-      const recipe = await fetchRecipeView(client, parentRecipeId);
-      return respond(200, { recipe });
-    }
-
-    if (
-      segments.length === 3 && segments[0] === "recipes" &&
-      segments[2] === "save"
-    ) {
-      const recipeId = parseUuid(segments[1]);
-      if (method === "POST") {
-        const { error } = await client
-          .from("recipe_saves")
-          .upsert({ user_id: auth.userId, recipe_id: recipeId }, {
-            onConflict: "user_id,recipe_id",
-          });
-
-        if (error) {
-          throw new ApiError(
-            500,
-            "recipe_save_failed",
-            "Could not save recipe",
-            error.message,
-          );
-        }
-
-        await logChangelog({
-          serviceClient,
-          actorUserId: auth.userId,
-          scope: "cookbook",
-          entityType: "recipe_save",
-          entityId: recipeId,
-          action: "saved",
-          requestId,
-        });
-
-        // Enqueue image generation now that the recipe is saved to cookbook
-        const { data: recipeImageCheck } = await client
-          .from("recipes")
-          .select("hero_image_url")
-          .eq("id", recipeId)
-          .maybeSingle();
-
-        if (!recipeImageCheck?.hero_image_url) {
-          await enqueueImageJob(client, recipeId);
-        }
-
-        return respond(200, { saved: true });
-      }
-
-      if (method === "DELETE") {
-        const { error } = await client
-          .from("recipe_saves")
-          .delete()
-          .eq("user_id", auth.userId)
-          .eq("recipe_id", recipeId);
-
-        if (error) {
-          throw new ApiError(
-            500,
-            "recipe_unsave_failed",
-            "Could not unsave recipe",
-            error.message,
-          );
-        }
-
-        await logChangelog({
-          serviceClient,
-          actorUserId: auth.userId,
-          scope: "cookbook",
-          entityType: "recipe_save",
-          entityId: recipeId,
-          action: "unsaved",
-          requestId,
-        });
-
-        return respond(200, { saved: false });
-      }
-    }
-
-    if (
-      segments.length === 4 && segments[0] === "recipes" &&
-      segments[2] === "categories" && segments[3] === "override"
-    ) {
-      const recipeId = parseUuid(segments[1]);
-      if (method === "POST") {
-        const body = await requireJsonBody<{ category: string }>(request);
-        const category = body.category?.trim();
-
-        if (!category) {
-          throw new ApiError(400, "invalid_category", "category is required");
-        }
-
-        const { error } = await client.from("recipe_user_categories").upsert({
-          user_id: auth.userId,
-          recipe_id: recipeId,
-          category,
-        });
-
-        if (error) {
-          throw new ApiError(
-            500,
-            "category_override_failed",
-            "Could not set category override",
-            error.message,
-          );
-        }
-
-        await logChangelog({
-          serviceClient,
-          actorUserId: auth.userId,
-          scope: "categories",
-          entityType: "recipe_user_category",
-          entityId: `${recipeId}:${category}`,
-          action: "override_set",
-          requestId,
-        });
-
-        return respond(200, { ok: true });
-      }
-    }
-
-    if (
-      segments.length === 5 && segments[0] === "recipes" &&
-      segments[2] === "categories" && segments[3] === "override"
-    ) {
-      const recipeId = parseUuid(segments[1]);
-      const category = decodeURIComponent(segments[4]);
-
-      if (method === "DELETE") {
-        const { error } = await client
-          .from("recipe_user_categories")
-          .delete()
-          .eq("user_id", auth.userId)
-          .eq("recipe_id", recipeId)
-          .eq("category", category);
-
-        if (error) {
-          throw new ApiError(
-            500,
-            "category_override_remove_failed",
-            "Could not remove category override",
-            error.message,
-          );
-        }
-
-        await logChangelog({
-          serviceClient,
-          actorUserId: auth.userId,
-          scope: "categories",
-          entityType: "recipe_user_category",
-          entityId: `${recipeId}:${category}`,
-          action: "override_removed",
-          requestId,
-        });
-
-        return respond(200, { ok: true });
-      }
-    }
-
-    if (
-      segments.length === 3 && segments[0] === "recipes" &&
-      segments[2] === "graph" && method === "GET"
-    ) {
-      const recipeId = parseUuid(segments[1]);
-      const minConfidence = Math.max(
-        0,
-        Math.min(
-          1,
-          Number(url.searchParams.get("min_confidence") ?? "0") || 0,
-        ),
-      );
-      const depth = Math.max(
-        1,
-        Math.min(2, Number(url.searchParams.get("depth") ?? "1") || 1),
-      );
-      const relationTypeFilter = new Set(
-        parseCsvParam(url.searchParams.get("relation_types")),
-      );
-      const entityTypeFilter = new Set(
-        parseCsvParam(url.searchParams.get("entity_types")),
-      );
-
-      const { data: recipe, error: recipeError } = await client
-        .from("recipes")
-        .select("current_version_id")
-        .eq("id", recipeId)
-        .maybeSingle();
-
-      if (recipeError || !recipe?.current_version_id) {
-        throw new ApiError(
-          404,
-          "recipe_or_version_not_found",
-          "Recipe graph source was not found",
-          recipeError?.message,
-        );
-      }
-
-      const { data: links, error: linksError } = await client
-        .from("recipe_graph_links")
-        .select("entity_id")
-        .eq("recipe_version_id", recipe.current_version_id);
-
-      if (linksError) {
-        throw new ApiError(
-          500,
-          "graph_links_fetch_failed",
-          "Could not fetch graph links",
-          linksError.message,
-        );
-      }
-
-      const entityIds = (links ?? []).map((item) => item.entity_id);
-      if (entityIds.length === 0) {
-        return respond(200, { entities: [], edges: [] });
-      }
-
-      const graph = await fetchGraphNeighborhood({
-        client,
-        seedEntityIds: entityIds,
-        depth,
-        minConfidence,
-        relationTypeFilter,
-        entityTypeFilter,
-      });
-
-      return respond(200, graph);
-    }
-
-    if (
-      segments.length === 3 && segments[0] === "ingredients" &&
-      segments[2] === "graph" && method === "GET"
-    ) {
-      const ingredientId = parseUuid(segments[1]);
-      const minConfidence = Math.max(
-        0,
-        Math.min(
-          1,
-          Number(url.searchParams.get("min_confidence") ?? "0") || 0,
-        ),
-      );
-      const depth = Math.max(
-        1,
-        Math.min(2, Number(url.searchParams.get("depth") ?? "1") || 1),
-      );
-      const relationTypeFilter = new Set(
-        parseCsvParam(url.searchParams.get("relation_types")),
-      );
-      const entityTypeFilter = new Set(
-        parseCsvParam(url.searchParams.get("entity_types")),
-      );
-
-      const { data: ingredient, error: ingredientError } = await client
-        .from("ingredients")
-        .select("id,canonical_name")
-        .eq("id", ingredientId)
-        .maybeSingle();
-
-      if (ingredientError || !ingredient) {
-        throw new ApiError(
-          404,
-          "ingredient_not_found",
-          "Ingredient graph source was not found",
-          ingredientError?.message,
-        );
-      }
-
-      const { data: entity, error: entityError } = await client
-        .from("graph_entities")
-        .select("id")
-        .eq("entity_type", "ingredient")
-        .ilike("label", ingredient.canonical_name)
-        .maybeSingle();
-
-      if (entityError || !entity?.id) {
-        return respond(200, { entities: [], edges: [] });
-      }
-
-      const graph = await fetchGraphNeighborhood({
-        client,
-        seedEntityIds: [entity.id],
-        depth,
-        minConfidence,
-        relationTypeFilter,
-        entityTypeFilter,
-      });
-
-      return respond(200, graph);
-    }
-
-    // ---------- GET /chat/greeting ----------
-    // Returns a dynamic, LLM-generated greeting for the Generate Recipe screen.
-    // Non-critical — always returns a usable text string, even on LLM failure.
-    if (
-      segments.length === 2 && segments[0] === "chat" &&
-      segments[1] === "greeting" && method === "GET"
-    ) {
-      const userName = auth.fullName;
-
-      // Determine time-of-day bucket from the server's current hour (UTC).
-      const hour = new Date().getUTCHours();
-      const timeOfDay = hour < 12 ? "morning" : hour < 17 ? "afternoon" : "evening";
-
-      // Fetch the user's most recent committed recipe title (best-effort).
-      const { data: recentRecipe } = await client
-        .from("recipes")
-        .select("title")
-        .eq("user_id", auth.userId)
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      const lastRecipeTitle: string | null =
-        recentRecipe && typeof recentRecipe.title === "string"
-          ? recentRecipe.title
-          : null;
-
-      const greeting = await llmGateway.generateGreeting({
-        client: createServiceClient(),
-        userId: auth.userId,
-        requestId,
-        userName,
-        timeOfDay,
-        lastRecipeTitle,
-      });
-
-      return respond(200, greeting);
-    }
-
-    if (segments.length === 1 && segments[0] === "chat" && method === "POST") {
-      const body = await requireJsonBody<{ message: string }>(request);
-      const message = body.message?.trim();
-      if (!message) {
-        throw new ApiError(400, "invalid_message", "message is required");
-      }
-
-      const contextPack = await buildContextPack({
-        userClient: client,
-        serviceClient,
-        userId: auth.userId,
-        requestId,
-        prompt: message,
-        context: {},
-        selectionMode: "fast",
-      });
-
-      const { data: chatSession, error: chatError } = await client
-        .from("chat_sessions")
-        .insert({
-          owner_user_id: auth.userId,
-          context: {
-            preferences: contextPack.preferences,
-            memory_snapshot: contextPack.memorySnapshot,
-            selected_memory_ids: contextPack.selectedMemoryIds,
-            loop_state: "ideation",
-            candidate_recipe_set: null,
-            candidate_revision: 0,
-            active_component_id: null,
-          },
-        })
-        .select("id,created_at,updated_at")
-        .single();
-
-      if (chatError || !chatSession) {
-        throw new ApiError(
-          500,
-          "chat_create_failed",
-          "Could not create chat session",
-          chatError?.message,
-        );
-      }
-
-      const { data: userMessage, error: userMessageError } = await client
-        .from("chat_messages")
-        .insert({
-          chat_id: chatSession.id,
-          role: "user",
-          content: message,
-        })
-        .select("id,created_at")
-        .single();
-
-      if (userMessageError || !userMessage) {
-        throw new ApiError(
-          500,
-          "chat_message_create_failed",
-          "Could not store chat message",
-          userMessageError?.message ?? "chat_message_insert_missing",
-        );
-      }
-
-      const threadMessages: ChatMessageView[] = [
-        {
-          id: userMessage.id,
-          role: "user",
-          content: message,
-          created_at: userMessage.created_at,
-        },
-      ];
-      const threadForPrompt = buildThreadForPrompt(threadMessages);
-      const initialContext: ChatSessionContext = {
-        preferences: contextPack.preferences,
-        memory_snapshot: contextPack.memorySnapshot,
-        selected_memory_ids: contextPack.selectedMemoryIds,
-        loop_state: "ideation",
-        candidate_recipe_set: null,
-        candidate_revision: 0,
-        active_component_id: null,
-      };
-      const orchestrated = await orchestrateChatTurn({
-        client,
-        serviceClient,
-        userId: auth.userId,
-        requestId,
-        message,
-        existingCandidate: null,
-        sessionContext: initialContext,
-        contextPack,
-        threadForPrompt,
-        modelOverrides,
-      });
-
-      await updateChatSessionLoopContext({
-        client,
-        chatId: chatSession.id,
-        context: orchestrated.nextContext,
-      });
-
-      const assistantEnvelope = {
-        assistant_reply: orchestrated.assistantChatResponse.assistant_reply,
-        trigger_recipe: orchestrated.assistantChatResponse.trigger_recipe ??
-          Boolean(orchestrated.nextCandidateSet),
-        candidate_recipe_set: orchestrated.nextCandidateSet,
-        recipe: orchestrated.assistantChatResponse.recipe,
-        response_context: orchestrated.responseContext,
-      };
-      const assistantMessageContent = resolveAssistantMessageContent(
-        orchestrated.assistantChatResponse.assistant_reply,
-      );
-      const assistantMetadata: Record<string, JsonValue> = {
-        format: "assistant_chat_envelope_v2",
-        loop_state: orchestrated.nextLoopState,
-        intent: orchestrated.responseContext?.intent ?? null,
-        envelope: assistantEnvelope as unknown as JsonValue,
-      };
-
-      const { data: assistantMessage, error: assistantMessageError } =
-        await client.from("chat_messages").insert({
-          chat_id: chatSession.id,
-          role: "assistant",
-          content: assistantMessageContent,
-          metadata: assistantMetadata,
-        }).select("id,created_at").single();
-
-      if (assistantMessageError || !assistantMessage) {
-        throw new ApiError(
-          500,
-          "chat_assistant_message_failed",
-          "Could not store assistant chat message",
-          assistantMessageError?.message ?? "assistant_message_insert_missing",
-        );
-      }
-
-      const interactionContext: Record<string, JsonValue> = {
-        prompt: message,
-        chat_id: chatSession.id,
-        assistant_reply: orchestrated.assistantChatResponse.assistant_reply,
-        preferences: orchestrated.effectivePreferences,
-        selected_memory_ids: contextPack.selectedMemoryIds,
-        loop_state: orchestrated.nextLoopState,
-        response_context: (orchestrated.responseContext ??
-          {}) as unknown as JsonValue,
-        thread_size: threadMessages.length,
-      };
-      if (orchestrated.nextCandidateSet) {
-        interactionContext.candidate_recipe_set = orchestrated
-          .nextCandidateSet as unknown as JsonValue;
-      } else if (orchestrated.assistantChatResponse.recipe) {
-        interactionContext.assistant_recipe = orchestrated.assistantChatResponse
-          .recipe as unknown as JsonValue;
-      }
-
-      await enqueueMemoryJob({
-        serviceClient,
-        userId: auth.userId,
-        chatId: chatSession.id,
-        messageId: userMessage.id,
-        interactionContext,
-      });
-
-      const messages: ChatMessageView[] = [
-        ...threadMessages,
-        {
-          id: assistantMessage.id,
-          role: "assistant",
-          content: assistantMessageContent,
-          metadata: assistantMetadata,
-          created_at: assistantMessage.created_at,
-        },
-      ];
-
-      await logChangelog({
-        serviceClient,
-        actorUserId: auth.userId,
-        scope: "chat",
-        entityType: "chat_session",
-        entityId: chatSession.id,
-        action: "created",
-        requestId,
-        afterJson: {
-          message_count: messages.length,
-        },
-      });
-
-      return respond(
-        200,
-        buildChatLoopResponse({
-          chatId: chatSession.id,
-          messages,
-          context: orchestrated.nextContext,
-          assistantReply: orchestrated.assistantChatResponse.assistant_reply,
-          responseContext: orchestrated.responseContext,
-          memoryContextIds: contextPack.selectedMemoryIds,
-          createdAt: chatSession.created_at,
-          updatedAt: new Date().toISOString(),
-          uiHints: orchestrated.nextCandidateSet
-            ? {
-              show_generation_animation: orchestrated.justGenerated,
-              focus_component_id:
-                orchestrated.nextCandidateSet.active_component_id,
-            }
-            : undefined,
-        }),
-      );
-    }
-
-    if (segments.length === 2 && segments[0] === "chat" && method === "GET") {
-      const chatId = parseUuid(segments[1]);
-
-      const { data: chatSession, error: chatError } = await client
-        .from("chat_sessions")
-        .select("id,created_at,updated_at,context")
-        .eq("id", chatId)
-        .maybeSingle();
-
-      if (chatError || !chatSession) {
-        throw new ApiError(
-          404,
-          "chat_not_found",
-          "Chat session not found",
-          chatError?.message,
-        );
-      }
-
-      const messages = await fetchChatMessages(client, chatId, 120);
-      const context = extractChatContext(chatSession.context);
-      const memoryContextIds = Array.isArray(context.selected_memory_ids)
-        ? context.selected_memory_ids.filter((item): item is string =>
-          typeof item === "string"
-        )
-        : [];
-
-      return respond(
-        200,
-        buildChatLoopResponse({
-          chatId: chatSession.id,
-          messages,
-          context,
-          assistantReply: extractLatestAssistantReply(messages),
-          memoryContextIds,
-          createdAt: chatSession.created_at,
-          updatedAt: chatSession.updated_at,
-        }),
-      );
-    }
-
-    if (
-      segments.length === 3 && segments[0] === "chat" &&
-      segments[2] === "messages" && method === "POST"
-    ) {
-      const chatId = parseUuid(segments[1]);
-      const body = await requireJsonBody<{ message: string }>(request);
-      const message = body.message?.trim();
-
-      if (!message) {
-        throw new ApiError(400, "invalid_message", "message is required");
-      }
-
-      const { data: chatSession, error: chatError } = await client
-        .from("chat_sessions")
-        .select("id,context,created_at,updated_at,status")
-        .eq("id", chatId)
-        .maybeSingle();
-
-      if (chatError || !chatSession) {
-        throw new ApiError(
-          404,
-          "chat_not_found",
-          "Chat session not found",
-          chatError?.message,
-        );
-      }
-      if (chatSession.status === "archived") {
-        throw new ApiError(
-          409,
-          "chat_not_open",
-          "Archived chat sessions cannot receive new messages",
-        );
-      }
-
-      const sessionContext = extractChatContext(chatSession.context);
-      const existingCandidate = normalizeCandidateRecipeSet(
-        sessionContext.candidate_recipe_set ?? null,
-      );
-
-      const contextPack = await buildContextPack({
-        userClient: client,
-        serviceClient,
-        userId: auth.userId,
-        requestId,
-        prompt: message,
-        context: {
-          chat_context: (chatSession.context as Record<string, JsonValue>) ??
-            {},
-          loop_state: deriveLoopState(sessionContext, existingCandidate),
-          candidate_recipe_set_outline: buildCandidateOutlineForPrompt(
-            existingCandidate,
-          ),
-        },
-        selectionMode: "fast",
-      });
-
-      const { data: userMessage, error: userMessageError } = await client
-        .from("chat_messages")
-        .insert({
-          chat_id: chatId,
-          role: "user",
-          content: message,
-        })
-        .select("id,created_at")
-        .single();
-
-      if (userMessageError || !userMessage) {
-        throw new ApiError(
-          500,
-          "chat_message_create_failed",
-          "Could not store chat message",
-          userMessageError?.message ?? "chat_message_insert_missing",
-        );
-      }
-
-      const threadMessages = await fetchChatMessages(client, chatId);
-      const threadForPrompt = buildThreadForPrompt(threadMessages);
-      const orchestrated = await orchestrateChatTurn({
-        client,
-        serviceClient,
-        userId: auth.userId,
-        requestId,
-        message,
-        existingCandidate,
-        sessionContext,
-        contextPack,
-        threadForPrompt,
-        modelOverrides,
-      });
-
-      await updateChatSessionLoopContext({
-        client,
-        chatId,
-        context: orchestrated.nextContext,
-      });
-
-      const assistantEnvelope = {
-        assistant_reply: orchestrated.assistantChatResponse.assistant_reply,
-        trigger_recipe: orchestrated.assistantChatResponse.trigger_recipe ??
-          Boolean(orchestrated.nextCandidateSet),
-        candidate_recipe_set: orchestrated.nextCandidateSet,
-        recipe: orchestrated.assistantChatResponse.recipe,
-        response_context: orchestrated.responseContext,
-      };
-      const assistantMessageContent = resolveAssistantMessageContent(
-        orchestrated.assistantChatResponse.assistant_reply,
-      );
-      const assistantMetadata: Record<string, JsonValue> = {
-        format: "assistant_chat_envelope_v2",
-        loop_state: orchestrated.nextLoopState,
-        intent: orchestrated.responseContext?.intent ?? null,
-        envelope: assistantEnvelope as unknown as JsonValue,
-      };
-      const { data: assistantMessage, error: assistantMessageError } =
-        await client.from("chat_messages").insert({
-          chat_id: chatId,
-          role: "assistant",
-          content: assistantMessageContent,
-          metadata: assistantMetadata,
-        }).select("id,created_at").single();
-
-      if (assistantMessageError || !assistantMessage) {
-        throw new ApiError(
-          500,
-          "chat_assistant_message_failed",
-          "Could not store assistant chat message",
-          assistantMessageError?.message ?? "assistant_message_insert_missing",
-        );
-      }
-
-      const interactionContext: Record<string, JsonValue> = {
-        prompt: message,
-        chat_id: chatId,
-        assistant_reply: orchestrated.assistantChatResponse.assistant_reply,
-        thread_size: threadMessages.length,
-        preferences: orchestrated.effectivePreferences,
-        selected_memory_ids: contextPack.selectedMemoryIds,
-        loop_state: orchestrated.nextLoopState,
-        response_context: (orchestrated.responseContext ??
-          {}) as unknown as JsonValue,
-      };
-      if (orchestrated.nextCandidateSet) {
-        interactionContext.candidate_recipe_set = orchestrated
-          .nextCandidateSet as unknown as JsonValue;
-      } else if (orchestrated.assistantChatResponse.recipe) {
-        interactionContext.assistant_recipe = orchestrated.assistantChatResponse
-          .recipe as unknown as JsonValue;
-      }
-
-      await enqueueMemoryJob({
-        serviceClient,
-        userId: auth.userId,
-        chatId,
-        messageId: userMessage.id,
-        interactionContext,
-      });
-
-      const messages: ChatMessageView[] = [
-        ...threadMessages,
-        {
-          id: assistantMessage.id,
-          role: "assistant",
-          content: assistantMessageContent,
-          metadata: assistantMetadata,
-          created_at: assistantMessage.created_at,
-        },
-      ];
-
-      return respond(
-        200,
-        buildChatLoopResponse({
-          chatId,
-          messages,
-          context: orchestrated.nextContext,
-          assistantReply: orchestrated.assistantChatResponse.assistant_reply,
-          responseContext: orchestrated.responseContext,
-          memoryContextIds: contextPack.selectedMemoryIds,
-          createdAt: chatSession.created_at,
-          updatedAt: new Date().toISOString(),
-          uiHints: orchestrated.justGenerated
-            ? {
-              show_generation_animation: true,
-              focus_component_id: orchestrated.nextCandidateSet
-                ?.active_component_id,
-            }
-            : orchestrated.nextCandidateSet
-            ? {
-              focus_component_id:
-                orchestrated.nextCandidateSet.active_component_id,
-            }
-            : undefined,
-        }),
-      );
-    }
-
-    if (
-      segments.length === 3 && segments[0] === "chat" &&
-      segments[2] === "candidate" && method === "PATCH"
-    ) {
-      const chatId = parseUuid(segments[1]);
-      const body = await requireJsonBody<{
-        action?:
-          | "set_active_component"
-          | "delete_component"
-          | "clear_candidate";
-        component_id?: string;
-      }>(request);
-
-      if (!body.action) {
-        throw new ApiError(
-          400,
-          "invalid_candidate_action",
-          "action is required",
-        );
-      }
-
-      const { data: chatSession, error: chatError } = await client
-        .from("chat_sessions")
-        .select("id,context,created_at,updated_at")
-        .eq("id", chatId)
-        .maybeSingle();
-
-      if (chatError || !chatSession) {
-        throw new ApiError(
-          404,
-          "chat_not_found",
-          "Chat session not found",
-          chatError?.message,
-        );
-      }
-
-      const context = extractChatContext(chatSession.context);
-      const candidateSet = normalizeCandidateRecipeSet(
-        context.candidate_recipe_set ?? null,
-      );
-      let nextCandidateSet = candidateSet;
-
-      if (body.action === "clear_candidate") {
-        nextCandidateSet = null;
-      }
-
-      if (body.action === "set_active_component") {
-        if (!candidateSet) {
-          throw new ApiError(
-            409,
-            "candidate_missing",
-            "No candidate recipe set exists for this chat",
-          );
-        }
-        if (!body.component_id) {
-          throw new ApiError(
-            400,
-            "invalid_component_id",
-            "component_id is required for set_active_component",
-          );
-        }
-        if (
-          !candidateSet.components.some((component) =>
-            component.component_id === body.component_id
-          )
-        ) {
-          throw new ApiError(
-            404,
-            "candidate_component_not_found",
-            "Candidate component not found",
-          );
-        }
-        nextCandidateSet = {
-          ...candidateSet,
-          revision: Math.max(1, candidateSet.revision + 1),
-          active_component_id: body.component_id,
-        };
-      }
-
-      if (body.action === "delete_component") {
-        if (!candidateSet) {
-          throw new ApiError(
-            409,
-            "candidate_missing",
-            "No candidate recipe set exists for this chat",
-          );
-        }
-        if (!body.component_id) {
-          throw new ApiError(
-            400,
-            "invalid_component_id",
-            "component_id is required for delete_component",
-          );
-        }
-        const remaining = candidateSet.components.filter((component) =>
-          component.component_id !== body.component_id
-        );
-        if (remaining.length === candidateSet.components.length) {
-          throw new ApiError(
-            404,
-            "candidate_component_not_found",
-            "Candidate component not found",
-          );
-        }
-        if (remaining.length === 0) {
-          throw new ApiError(
-            409,
-            "candidate_last_component",
-            "Cannot delete the final remaining component",
-          );
-        }
-
-        const nextActiveId =
-          candidateSet.active_component_id === body.component_id
-            ? remaining[0].component_id
-            : candidateSet.active_component_id;
-
-        nextCandidateSet = {
-          ...candidateSet,
-          revision: Math.max(1, candidateSet.revision + 1),
-          active_component_id: nextActiveId,
-          components: remaining,
-        };
-      }
-
-      const nextLoopState: ChatLoopState = nextCandidateSet
-        ? "candidate_presented"
-        : "ideation";
-      const memoryContextIds = Array.isArray(context.selected_memory_ids)
-        ? context.selected_memory_ids.filter((item): item is string =>
-          typeof item === "string"
-        )
-        : [];
-      const nextContext: ChatSessionContext = {
-        ...context,
-        loop_state: nextLoopState,
-        candidate_recipe_set: nextCandidateSet,
-        candidate_revision: nextCandidateSet?.revision ?? 0,
-        active_component_id: nextCandidateSet?.active_component_id ?? null,
-      };
-
-      await updateChatSessionLoopContext({
-        client,
-        chatId,
-        context: nextContext,
-      });
-
-      await logChangelog({
-        serviceClient,
-        actorUserId: auth.userId,
-        scope: "chat",
-        entityType: "chat_session",
-        entityId: chatId,
-        action: `candidate_${body.action}`,
-        requestId,
-        afterJson: {
-          candidate_id: nextCandidateSet?.candidate_id ?? null,
-          revision: nextCandidateSet?.revision ?? null,
-          active_component_id: nextCandidateSet?.active_component_id ?? null,
-        },
-      });
-
-      const messages = await fetchChatMessages(client, chatId, 120);
-      return respond(
-        200,
-        buildChatLoopResponse({
-          chatId,
-          messages,
-          context: nextContext,
-          memoryContextIds,
-          createdAt: chatSession.created_at,
-          updatedAt: new Date().toISOString(),
-          uiHints: nextCandidateSet
-            ? {
-              focus_component_id: nextCandidateSet.active_component_id,
-            }
-            : undefined,
-        }),
-      );
-    }
-
-    if (
-      segments.length === 3 && segments[0] === "chat" &&
-      segments[2] === "commit" && method === "POST"
-    ) {
-      const chatId = parseUuid(segments[1]);
-
-      const { data: chatSession, error: chatError } = await client
-        .from("chat_sessions")
-        .select("id,context,created_at,updated_at,status")
-        .eq("id", chatId)
-        .maybeSingle();
-
-      if (chatError || !chatSession) {
-        throw new ApiError(
-          404,
-          "chat_not_found",
-          "Chat session not found",
-          chatError?.message,
-        );
-      }
-      if (chatSession.status === "archived") {
-        throw new ApiError(
-          409,
-          "chat_not_open",
-          "Archived chat sessions cannot be committed",
-        );
-      }
-
-      const context = extractChatContext(chatSession.context);
-      const candidateSet = normalizeCandidateRecipeSet(
-        context.candidate_recipe_set ?? null,
-      );
-      if (!candidateSet || candidateSet.components.length === 0) {
-        throw new ApiError(
-          409,
-          "candidate_missing",
-          "No candidate recipe set is available to commit",
-        );
-      }
-
-      const selectedMemoryIds = Array.isArray(context.selected_memory_ids)
-        ? context.selected_memory_ids.filter((item): item is string =>
-          typeof item === "string"
-        )
-        : [];
-
-      const committedComponents = await Promise.all(
-        candidateSet.components.map(async (component) => {
-          const saved = await persistRecipe({
-            client,
-            serviceClient,
-            userId: auth.userId,
-            requestId,
-            payload: component.recipe,
-            sourceChatId: chatId,
-            diffSummary: `Committed from chat candidate (${component.role})`,
-            selectedMemoryIds,
-          });
-
-          const { error: saveError } = await client
-            .from("recipe_saves")
-            .upsert(
-              {
-                user_id: auth.userId,
-                recipe_id: saved.recipeId,
-              },
-              { onConflict: "user_id,recipe_id" },
-            );
-          if (saveError) {
-            throw new ApiError(
-              500,
-              "recipe_save_failed",
-              "Could not save committed recipe to cookbook",
-              saveError.message,
-            );
-          }
-
-          await enqueueImageJob(client, saved.recipeId);
-
-          return {
-            component_id: component.component_id,
-            role: component.role,
-            title: component.title,
-            recipe_id: saved.recipeId,
-            recipe_version_id: saved.versionId,
-          };
-        }),
-      );
-
-      const primary = committedComponents[0];
-      const links: Array<{
-        id: string;
-        parent_recipe_id: string;
-        child_recipe_id: string;
-        relation_type: string;
-        position: number;
-      }> = [];
-
-      if (primary) {
-        for (let index = 1; index < committedComponents.length; index += 1) {
-          const component = committedComponents[index];
-          const relationType = mapCandidateRoleToRelation(component.role);
-          const relationTypeId = await resolveRelationTypeId(
-            serviceClient,
-            relationType,
-          );
-          const { data: link, error: linkError } = await serviceClient
-            .from("recipe_links")
-            .insert({
-              parent_recipe_id: primary.recipe_id,
-              child_recipe_id: component.recipe_id,
-              relation_type_id: relationTypeId,
-              position: index,
-              source: "chat_commit",
-            })
-            .select("id,parent_recipe_id,child_recipe_id,position")
-            .single();
-
-          if (linkError || !link) {
-            throw new ApiError(
-              500,
-              "recipe_link_insert_failed",
-              "Could not link committed recipe components",
-              linkError?.message,
-            );
-          }
-
-          links.push({
-            id: String(link.id),
-            parent_recipe_id: String(link.parent_recipe_id),
-            child_recipe_id: String(link.child_recipe_id),
-            relation_type: relationType,
-            position: Number(link.position ?? index),
-          });
-        }
-      }
-
-      const nextContext: ChatSessionContext = {
-        ...context,
-        loop_state: "ideation",
-        candidate_recipe_set: null,
-        candidate_revision: candidateSet.revision,
-        active_component_id: null,
-      };
-
-      await updateChatSessionLoopContext({
-        client,
-        chatId,
-        context: nextContext,
-      });
-
-      await logChangelog({
-        serviceClient,
-        actorUserId: auth.userId,
-        scope: "chat",
-        entityType: "chat_session",
-        entityId: chatId,
-        action: "committed_candidate_set",
-        requestId,
-        afterJson: {
-          candidate_id: candidateSet.candidate_id,
-          revision: candidateSet.revision,
-          committed_components: committedComponents,
-          links,
-        },
-      });
-
-      const messages = await fetchChatMessages(client, chatId, 120);
-      const memoryContextIds = Array.isArray(nextContext.selected_memory_ids)
-        ? nextContext.selected_memory_ids.filter((item): item is string =>
-          typeof item === "string"
-        )
-        : [];
-      const loopResponse = buildChatLoopResponse({
-        chatId,
-        messages,
-        context: nextContext,
-        memoryContextIds,
-        createdAt: chatSession.created_at,
-        updatedAt: new Date().toISOString(),
-      });
-
-      return respond(200, {
-        ...loopResponse,
-        commit: {
-          candidate_id: candidateSet.candidate_id,
-          revision: candidateSet.revision,
-          committed_count: committedComponents.length,
-          recipes: committedComponents,
-          links,
-          post_save_options: [
-            "continue_chat",
-            "restart_chat",
-            "go_to_cookbook",
-          ],
-        },
-      });
+    const chatResponse = await handleChatRoutes(routeContext, {
+      buildContextPack,
+      buildThreadForPrompt,
+      orchestrateChatTurn,
+      updateChatSessionLoopContext,
+      resolveAssistantMessageContent,
+      enqueueMemoryJob,
+      logChangelog,
+      buildChatLoopResponse,
+      extractChatContext,
+      extractLatestAssistantReply,
+      normalizeCandidateRecipeSet,
+      deriveLoopState,
+      buildCandidateOutlineForPrompt,
+      parseUuid,
+      persistRecipe,
+      enqueueImageJob,
+      mapCandidateRoleToRelation,
+      resolveRelationTypeId,
+      fetchChatMessages,
+    });
+    if (chatResponse) {
+      return chatResponse;
     }
 
     throw new ApiError(

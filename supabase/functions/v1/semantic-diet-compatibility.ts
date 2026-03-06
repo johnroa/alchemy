@@ -1,3 +1,4 @@
+import { normalizeDelimitedToken } from "../../../packages/shared/src/text-normalization.ts";
 import type { JsonValue } from "../_shared/types.ts";
 
 export type SemanticDietIncompatibilityRule = {
@@ -14,13 +15,7 @@ type Signal = {
 };
 
 const normalizeToken = (value: string): string =>
-  value
-    .trim()
-    .toLocaleLowerCase()
-    .normalize("NFKD")
-    .replace(/[^a-z0-9\s:_-]/g, " ")
-    .replace(/\s+/g, "_")
-    .replace(/^_+|_+$/g, "");
+  normalizeDelimitedToken(value);
 
 const normalizeDietTag = (value: string): string =>
   normalizeToken(value).replace(/_/g, "");

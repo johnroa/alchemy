@@ -1,4 +1,7 @@
 {
+  "tasks": {
+    "test": "deno test --no-check --allow-env *.test.ts"
+  },
   "compilerOptions": {
     "strict": true,
     "lib": ["deno.window", "deno.ns", "dom"]

@@ -1,30 +1,11 @@
-export type LlmScopeMode =
-  | "ideation"
-  | "generation"
-  | "iteration"
-  | "classification"
-  | "image"
-  | "memory"
-  | "onboarding"
-  | "legacy";
-
-export type LlmFallbackPolicy = "none" | "deterministic_only";
-
-export type LlmRetryPolicy = {
-  max_attempts: number;
-  retryable_codes: readonly string[];
-};
-
-export type LlmScopeDefinition = {
-  output_contract: string;
-  mode: LlmScopeMode;
-  retry_policy: LlmRetryPolicy;
-  fallback_policy: LlmFallbackPolicy;
-  telemetry_tags: {
-    task: string;
-    criticality: "low" | "medium" | "high";
-  };
-};
+import { LEGACY_LLM_SCOPE_REGISTRY } from "./llm-legacy-scopes.ts";
+export type {
+  LlmFallbackPolicy,
+  LlmRetryPolicy,
+  LlmScopeDefinition,
+  LlmScopeMode,
+} from "./llm-scope-types.ts";
+import type { LlmScopeDefinition } from "./llm-scope-types.ts";
 
 const STRICT_JSON_RETRYABLE_CODES = [
   "llm_invalid_json",
@@ -40,16 +21,6 @@ const STANDARD_RETRYABLE_CODES = [
 ] as const;
 
 export const LLM_SCOPE_REGISTRY = {
-  chat: {
-    output_contract: "chat_legacy_v1",
-    mode: "legacy",
-    retry_policy: {
-      max_attempts: 1,
-      retryable_codes: [],
-    },
-    fallback_policy: "none",
-    telemetry_tags: { task: "chat_legacy", criticality: "low" },
-  },
   chat_greeting: {
     output_contract: "chat_greeting_v1",
     mode: "ideation",
@@ -89,26 +60,6 @@ export const LLM_SCOPE_REGISTRY = {
     },
     fallback_policy: "none",
     telemetry_tags: { task: "chat_iteration", criticality: "high" },
-  },
-  generate: {
-    output_contract: "recipe_envelope_v1",
-    mode: "legacy",
-    retry_policy: {
-      max_attempts: 2,
-      retryable_codes: STRICT_JSON_RETRYABLE_CODES,
-    },
-    fallback_policy: "deterministic_only",
-    telemetry_tags: { task: "generate", criticality: "medium" },
-  },
-  tweak: {
-    output_contract: "recipe_tweak_legacy_v1",
-    mode: "legacy",
-    retry_policy: {
-      max_attempts: 1,
-      retryable_codes: [],
-    },
-    fallback_policy: "none",
-    telemetry_tags: { task: "tweak_legacy", criticality: "low" },
   },
   classify: {
     output_contract: "classification_v1",
@@ -220,6 +171,16 @@ export const LLM_SCOPE_REGISTRY = {
     fallback_policy: "none",
     telemetry_tags: { task: "image", criticality: "medium" },
   },
+  image_quality_eval: {
+    output_contract: "image_quality_eval_v1",
+    mode: "classification",
+    retry_policy: {
+      max_attempts: 2,
+      retryable_codes: [...STRICT_JSON_RETRYABLE_CODES, ...STANDARD_RETRYABLE_CODES],
+    },
+    fallback_policy: "none",
+    telemetry_tags: { task: "image_quality_eval", criticality: "medium" },
+  },
   memory_extract: {
     output_contract: "memory_extract_v1",
     mode: "memory",
@@ -260,6 +221,7 @@ export const LLM_SCOPE_REGISTRY = {
     fallback_policy: "deterministic_only",
     telemetry_tags: { task: "memory_conflict_resolve", criticality: "medium" },
   },
+  ...LEGACY_LLM_SCOPE_REGISTRY,
 } as const satisfies Record<string, LlmScopeDefinition>;
 
 export type GatewayScope = keyof typeof LLM_SCOPE_REGISTRY;

@@ -244,6 +244,85 @@ const buildImageGenerationConfig = (
   return generationConfig;
 };
 
+const parseDataUrl = (
+  value: string,
+): { mimeType: string; data: string } | null => {
+  const match = value.match(/^data:([^;]+);base64,(.+)$/i);
+  if (!match) {
+    return null;
+  }
+
+  const mimeType = match[1].trim().toLowerCase();
+  const data = match[2].trim();
+  if (!mimeType.startsWith("image/") || data.length === 0) {
+    return null;
+  }
+
+  return { mimeType, data };
+};
+
+const bytesToBase64 = (bytes: Uint8Array): string => {
+  let binary = "";
+  const chunkSize = 0x8000;
+
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    const chunk = bytes.subarray(index, index + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+
+  return btoa(binary);
+};
+
+const resolveVisionImageData = async (
+  imageUrl: string,
+  timeoutMs: number,
+): Promise<{ mimeType: string; data: string }> => {
+  const parsedDataUrl = parseDataUrl(imageUrl);
+  if (parsedDataUrl) {
+    return parsedDataUrl;
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(imageUrl, {
+      signal: AbortSignal.timeout(Math.max(5_000, Math.min(timeoutMs, 20_000))),
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "TimeoutError") {
+      throw new ApiError(
+        504,
+        "vision_image_fetch_timeout",
+        "Timed out while fetching image for multimodal evaluation",
+      );
+    }
+    throw error;
+  }
+
+  if (!response.ok) {
+    throw new ApiError(
+      502,
+      "vision_image_fetch_failed",
+      "Could not fetch image for multimodal evaluation",
+      {
+        url: imageUrl,
+        status: response.status,
+      },
+    );
+  }
+
+  const mimeTypeCandidate = response.headers.get("content-type")?.split(";")[0]
+    ?.trim().toLowerCase() ?? "image/png";
+  const mimeType = mimeTypeCandidate.startsWith("image/")
+    ? mimeTypeCandidate
+    : "image/png";
+  const bytes = new Uint8Array(await response.arrayBuffer());
+
+  return {
+    mimeType,
+    data: bytesToBase64(bytes),
+  };
+};
+
 export const callGoogleJson = async <T>(params: {
   model: string;
   modelConfig: Record<string, JsonValue>;
@@ -280,6 +359,139 @@ export const callGoogleJson = async <T>(params: {
           {
             role: "user",
             parts: [{ text: JSON.stringify(params.userInput) }],
+          },
+        ],
+        generationConfig: buildTextGenerationConfig(params.modelConfig),
+      }),
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "TimeoutError") {
+      throw new ApiError(
+        504,
+        "llm_provider_timeout",
+        "LLM provider timed out",
+        {
+          endpoint,
+          model: params.model,
+          timeout_ms: timeoutMs,
+        },
+      );
+    }
+    throw error;
+  }
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new ApiError(
+      502,
+      "llm_provider_error",
+      "LLM provider returned an error",
+      body.slice(0, 1000),
+    );
+  }
+
+  const payload = (await response.json()) as GoogleGenerateContentPayload;
+  const outputText = extractCandidateText(payload);
+
+  if (!outputText) {
+    throw new ApiError(
+      502,
+      "llm_empty_output",
+      "LLM provider returned an empty output payload",
+    );
+  }
+
+  const parsed = parseJsonFromText(outputText);
+  if (!parsed) {
+    const finishReason = extractFinishReason(payload);
+    if (
+      typeof finishReason === "string" &&
+      finishReason.toUpperCase().includes("MAX_TOKENS")
+    ) {
+      throw new ApiError(
+        502,
+        "llm_json_truncated",
+        "Gemini output was truncated before JSON completed",
+        truncateErrorDetailText(outputText),
+      );
+    }
+
+    throw new ApiError(
+      502,
+      "llm_invalid_json",
+      "Gemini output is not valid JSON",
+      truncateErrorDetailText(outputText),
+    );
+  }
+
+  const { inputTokens, outputTokens } = getUsageTokens(payload);
+  return {
+    result: parsed as T,
+    inputTokens,
+    outputTokens,
+  };
+};
+
+export const callGoogleVisionJson = async <T>(params: {
+  model: string;
+  modelConfig: Record<string, JsonValue>;
+  systemPrompt: string;
+  userInput: Record<string, JsonValue>;
+  images: Array<{ label: string; imageUrl: string }>;
+}): Promise<ProviderResult<T>> => {
+  if (params.images.length === 0) {
+    throw new ApiError(
+      400,
+      "vision_input_missing",
+      "Multimodal JSON execution requires at least one image",
+    );
+  }
+
+  const endpoint = resolveGoogleEndpoint({
+    model: params.model,
+    endpointOverride: typeof params.modelConfig.endpoint === "string"
+      ? params.modelConfig.endpoint
+      : undefined,
+  });
+  const { apiKey } = resolveApiKey(params.modelConfig);
+
+  const timeoutCandidate = Number(params.modelConfig.timeout_ms);
+  const timeoutMs = Number.isFinite(timeoutCandidate)
+    ? Math.max(5_000, Math.min(120_000, timeoutCandidate))
+    : 45_000;
+
+  const parts: Array<Record<string, JsonValue>> = [{
+    text: JSON.stringify(params.userInput),
+  }];
+
+  for (const image of params.images) {
+    const inlineData = await resolveVisionImageData(image.imageUrl, timeoutMs);
+    parts.push({ text: `Image ${image.label}` });
+    parts.push({
+      inlineData: {
+        mimeType: inlineData.mimeType,
+        data: inlineData.data,
+      },
+    });
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "x-goog-api-key": apiKey,
+        "content-type": "application/json",
+      },
+      signal: AbortSignal.timeout(timeoutMs),
+      body: JSON.stringify({
+        systemInstruction: {
+          parts: [{ text: params.systemPrompt }],
+        },
+        contents: [
+          {
+            role: "user",
+            parts,
           },
         ],
         generationConfig: buildTextGenerationConfig(params.modelConfig),

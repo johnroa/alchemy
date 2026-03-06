@@ -1,3 +1,5 @@
+import { normalizeDelimitedToken } from "../../../packages/shared/src/text-normalization.ts";
+
 export type OntologyCatalogTerm = {
   term_type: string;
   term_key: string;
@@ -23,13 +25,7 @@ type CanonicalCatalogTerm = CanonicalOntologyTerm & {
 };
 
 const normalizeOntologyToken = (value: string): string =>
-  value
-    .trim()
-    .toLocaleLowerCase()
-    .normalize("NFKD")
-    .replace(/[^a-z0-9\s:_-]/g, " ")
-    .replace(/\s+/g, "_")
-    .replace(/^_+|_+$/g, "");
+  normalizeDelimitedToken(value);
 
 const normalizeLabelKey = (value: string): string =>
   normalizeOntologyToken(value).replace(/_+/g, "_");

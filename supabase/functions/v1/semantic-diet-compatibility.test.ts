@@ -66,3 +66,21 @@ Deno.test("uses ontology terms when food_group metadata is missing", () => {
 
   assertEqual(result.metadata.diet_compatibility, ["Vegetarian", "Pescatarian"], "dairy ontology signal should drop vegan");
 });
+
+Deno.test("normalizes diacritic variants in ontology diet signals", () => {
+  const metadata: Record<string, JsonValue> = {
+    diet_compatibility: ["Vegan", "Vegetarian"],
+  };
+
+  const result = applySemanticDietIncompatibilityRules({
+    metadata,
+    rules,
+    ontologyTerms: [{ term_type: "food_group", term_key: "dáiry" }],
+  });
+
+  assertEqual(
+    result.metadata.diet_compatibility,
+    ["Vegetarian"],
+    "diacritic variants should still match semantic diet incompatibility rules",
+  );
+});

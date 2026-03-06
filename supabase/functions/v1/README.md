@@ -34,6 +34,7 @@ Edge function implementing `/v1/*` routes.
 - `POST /v1/memory-jobs/process`
 - `POST /v1/memory-jobs/retry`
 - `POST /v1/image-jobs/process`
+- `POST /v1/image-simulations/compare`
 - `POST /v1/metadata-jobs/process`
 - `POST /v1/metadata-jobs/retry`
 - `POST /v1/metadata-jobs/recompute`
@@ -57,6 +58,7 @@ Edge function implementing `/v1/*` routes.
   - `memory_select`
   - `memory_summarize`
   - `memory_conflict_resolve`
+- Pairwise image quality evaluation uses active `scope = image_quality_eval` provider/model/prompt/rule records.
 - Metadata/normalization helper scopes are configured via:
   - `ingredient_alias_normalize`
   - `ingredient_phrase_split`
@@ -68,3 +70,11 @@ Edge function implementing `/v1/*` routes.
   - `equipment_filter`
 
 No route-level behavior should depend on hardcoded instruction logic.
+
+## Test command
+
+Use the Deno task so the Gemini adapter tests run with the required env access:
+
+```bash
+deno task test
+```

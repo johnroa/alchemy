@@ -334,6 +334,231 @@ export const callOpenAiJson = async <T>(params: {
   );
 };
 
+export const callOpenAiVisionJson = async <T>(params: {
+  model: string;
+  modelConfig: Record<string, JsonValue>;
+  systemPrompt: string;
+  userInput: Record<string, JsonValue>;
+  images: Array<{ label: string; imageUrl: string }>;
+}): Promise<ProviderResult<T>> => {
+  if (params.images.length === 0) {
+    throw new ApiError(
+      400,
+      "vision_input_missing",
+      "Multimodal JSON execution requires at least one image",
+    );
+  }
+
+  const modelConfig = normalizeOpenAiModelConfig({
+    model: params.model,
+    modelConfig: params.modelConfig,
+  });
+  const endpoint = (typeof modelConfig.endpoint === "string" &&
+    modelConfig.endpoint) ||
+    Deno.env.get("OPENAI_RESPONSES_ENDPOINT") ||
+    "https://api.openai.com/v1/responses";
+  const apiKeyEnv = (typeof modelConfig.api_key_env === "string" &&
+    modelConfig.api_key_env) || "OPENAI_API_KEY";
+  const apiKey = Deno.env.get(apiKeyEnv);
+
+  if (!apiKey) {
+    throw new ApiError(
+      500,
+      "llm_provider_key_missing",
+      `Missing provider API key env: ${apiKeyEnv}`,
+    );
+  }
+
+  const timeoutCandidate = Number(modelConfig.timeout_ms);
+  const timeoutMs = Number.isFinite(timeoutCandidate)
+    ? Math.max(5_000, Math.min(120_000, timeoutCandidate))
+    : 45_000;
+
+  const requestConfig: Record<string, JsonValue> = {};
+  const maxOutputTokens = Number(
+    modelConfig.max_output_tokens ?? modelConfig.max_tokens,
+  );
+  const temperature = Number(modelConfig.temperature);
+  const topP = Number(modelConfig.top_p);
+  const frequencyPenalty = Number(modelConfig.frequency_penalty);
+  const presencePenalty = Number(modelConfig.presence_penalty);
+  const reasoning = modelConfig.reasoning;
+
+  if (Number.isFinite(maxOutputTokens) && maxOutputTokens > 0) {
+    requestConfig.max_output_tokens = Math.trunc(maxOutputTokens);
+  }
+  if (Number.isFinite(temperature)) {
+    requestConfig.temperature = temperature;
+  }
+  if (Number.isFinite(topP)) {
+    requestConfig.top_p = topP;
+  }
+  if (Number.isFinite(frequencyPenalty)) {
+    requestConfig.frequency_penalty = frequencyPenalty;
+  }
+  if (Number.isFinite(presencePenalty)) {
+    requestConfig.presence_penalty = presencePenalty;
+  }
+  if (reasoning && typeof reasoning === "object" && !Array.isArray(reasoning)) {
+    requestConfig.reasoning = reasoning;
+  }
+
+  const userContent: JsonValue[] = [
+    {
+      type: "input_text",
+      text: JSON.stringify(params.userInput),
+    },
+  ];
+
+  for (const image of params.images) {
+    userContent.push({
+      type: "input_text",
+      text: `Image ${image.label}`,
+    });
+    userContent.push({
+      type: "input_image",
+      image_url: image.imageUrl,
+      detail: "auto",
+    });
+  }
+
+  let payload: unknown = null;
+  let lastErrorBody = "";
+  const adaptiveConfig: Record<string, JsonValue> = { ...requestConfig };
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    let response: Response;
+    try {
+      response = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "content-type": "application/json",
+        },
+        signal: AbortSignal.timeout(timeoutMs),
+        body: JSON.stringify({
+          model: params.model,
+          ...adaptiveConfig,
+          input: [
+            {
+              role: "system",
+              content: [{ type: "input_text", text: params.systemPrompt }],
+            },
+            {
+              role: "user",
+              content: userContent,
+            },
+          ],
+          text: { format: { type: "json_object" } },
+        }),
+      });
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "TimeoutError") {
+        throw new ApiError(
+          504,
+          "llm_provider_timeout",
+          "LLM provider timed out",
+          {
+            endpoint,
+            model: params.model,
+            timeout_ms: timeoutMs,
+          },
+        );
+      }
+      throw error;
+    }
+
+    if (response.ok) {
+      payload = (await response.json()) as unknown;
+      break;
+    }
+
+    const body = await response.text();
+    lastErrorBody = body;
+    const unsupportedMatch = body.match(
+      /(?:Unsupported|Unknown)\s+parameter:\s*['"]([^'"]+)['"]/i,
+    );
+    if (!unsupportedMatch) {
+      throw new ApiError(
+        502,
+        "llm_provider_error",
+        "LLM provider returned an error",
+        body.slice(0, 1000),
+      );
+    }
+
+    const unsupportedParam = unsupportedMatch[1];
+    const removableKeys = new Set<string>([unsupportedParam]);
+    if (unsupportedParam === "max_tokens") {
+      removableKeys.add("max_output_tokens");
+    }
+    if (unsupportedParam === "max_output_tokens") {
+      removableKeys.add("max_tokens");
+    }
+    if (unsupportedParam === "text") {
+      break;
+    }
+
+    let removed = false;
+    for (const key of removableKeys) {
+      if (Object.prototype.hasOwnProperty.call(adaptiveConfig, key)) {
+        delete adaptiveConfig[key];
+        removed = true;
+      }
+    }
+    if (!removed) {
+      throw new ApiError(
+        502,
+        "llm_provider_error",
+        "LLM provider returned an error",
+        body.slice(0, 1000),
+      );
+    }
+  }
+
+  if (!payload) {
+    throw new ApiError(
+      502,
+      "llm_provider_error",
+      "LLM provider returned an error",
+      lastErrorBody.slice(0, 1000),
+    );
+  }
+
+  const usageRaw = (payload as Record<string, unknown> | null)?.usage as
+    | { input_tokens?: number; output_tokens?: number }
+    | undefined;
+  const inputTokens = usageRaw?.input_tokens ?? 0;
+  const outputTokens = usageRaw?.output_tokens ?? 0;
+
+  const outputJson = parseResponseOutputJson(payload);
+  if (outputJson) {
+    return { result: outputJson as T, inputTokens, outputTokens };
+  }
+
+  const outputText = parseResponseOutputText(payload);
+
+  if (!outputText) {
+    throw new ApiError(
+      502,
+      "llm_empty_output",
+      "LLM provider returned an empty output payload",
+    );
+  }
+
+  const parsed = parseJsonFromText(outputText);
+  if (parsed) {
+    return { result: parsed as T, inputTokens, outputTokens };
+  }
+
+  throw new ApiError(
+    502,
+    "llm_invalid_json",
+    "LLM output is not valid JSON",
+    truncateErrorDetailText(outputText),
+  );
+};
+
 export const callOpenAiImage = async (params: {
   model: string;
   modelConfig: Record<string, JsonValue>;

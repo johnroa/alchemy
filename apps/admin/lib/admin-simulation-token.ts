@@ -1,55 +1,34 @@
-const SIM_USER_EMAIL = "sim-1772428603705@cookwithalchemy.com";
-const SIM_USER_PASSWORD = "AlchemySim2026";
+import { readJsonBody } from "@/lib/admin-http";
 
 const trimTrailingSlash = (value: string): string => value.replace(/\/+$/, "");
 
-const readJsonBody = async (response: Response): Promise<Record<string, unknown>> => {
-  const text = await response.text();
-  if (!text.trim()) {
+const toRecord = (value: unknown): Record<string, unknown> => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
     return {};
   }
-
-  try {
-    const parsed = JSON.parse(text) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return {};
-    }
-    return parsed as Record<string, unknown>;
-  } catch {
-    return {};
-  }
+  return value as Record<string, unknown>;
 };
 
-const signInSimulationUser = async (supabaseUrl: string, serviceKey: string): Promise<string> => {
-  const response = await fetch(`${supabaseUrl}/auth/v1/token?grant_type=password`, {
-    method: "POST",
-    headers: { apikey: serviceKey, "Content-Type": "application/json" },
-    body: JSON.stringify({ email: SIM_USER_EMAIL, password: SIM_USER_PASSWORD })
-  });
-
-  const payload = await readJsonBody(response);
-  const token = String(payload["access_token"] ?? "");
-
-  if (!response.ok || token.length === 0) {
-    throw new Error(`Password sign-in failed (${response.status})`);
-  }
-
-  return token;
+const extractMagicLinkOtp = (payload: unknown): string => {
+  const record = toRecord(payload);
+  const properties = toRecord(record["properties"]);
+  const otp = record["email_otp"] ?? properties["email_otp"];
+  return typeof otp === "string" ? otp.trim() : "";
 };
 
-const getMagicLinkToken = async (supabaseUrl: string, serviceKey: string): Promise<string> => {
+const getMagicLinkToken = async (
+  supabaseUrl: string,
+  serviceKey: string,
+  simulationUserEmail: string,
+): Promise<string> => {
   const generateRes = await fetch(`${supabaseUrl}/auth/v1/admin/generate_link`, {
     method: "POST",
     headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ type: "magiclink", email: SIM_USER_EMAIL })
+    body: JSON.stringify({ type: "magiclink", email: simulationUserEmail })
   });
 
   const generatePayload = await readJsonBody(generateRes);
-  const props = generatePayload["properties"];
-  const properties = props && typeof props === "object" && !Array.isArray(props)
-    ? (props as Record<string, unknown>)
-    : {};
-  const emailOtp = String(properties["email_otp"] ?? "");
+  const emailOtp = extractMagicLinkOtp(generatePayload);
 
   if (!generateRes.ok || emailOtp.length === 0) {
     throw new Error(`Magic link generation failed (${generateRes.status})`);
@@ -58,11 +37,11 @@ const getMagicLinkToken = async (supabaseUrl: string, serviceKey: string): Promi
   const verifyRes = await fetch(`${supabaseUrl}/auth/v1/verify`, {
     method: "POST",
     headers: { apikey: serviceKey, "Content-Type": "application/json" },
-    body: JSON.stringify({ type: "magiclink", token: emailOtp, email: SIM_USER_EMAIL })
+    body: JSON.stringify({ type: "magiclink", token: emailOtp, email: simulationUserEmail })
   });
 
   const verifyPayload = await readJsonBody(verifyRes);
-  const accessToken = String(verifyPayload["access_token"] ?? "");
+  const accessToken = String(toRecord(verifyPayload)["access_token"] ?? "");
   if (!verifyRes.ok || accessToken.length === 0) {
     throw new Error(`Magic link verify failed (${verifyRes.status})`);
   }
@@ -76,21 +55,18 @@ export const getAdminSimulationBearerToken = async (): Promise<string> => {
     return configured;
   }
 
+  const simulationUserEmail = process.env["ADMIN_SIMULATION_USER_EMAIL"]?.trim() ?? "";
   const supabaseUrlRaw = process.env["NEXT_PUBLIC_SUPABASE_URL"] ?? "";
   const serviceKey = (process.env["SUPABASE_SECRET_KEY"] ??
     process.env["SUPABASE_SERVICE_ROLE_KEY"] ??
     "").trim();
 
   const supabaseUrl = trimTrailingSlash(supabaseUrlRaw.trim());
-  if (!supabaseUrl || !serviceKey) {
+  if (!simulationUserEmail || !supabaseUrl || !serviceKey) {
     throw new Error(
-      "Provide ADMIN_SIMULATION_BEARER_TOKEN or configure NEXT_PUBLIC_SUPABASE_URL + SUPABASE_SECRET_KEY"
+      "Provide ADMIN_SIMULATION_BEARER_TOKEN or configure ADMIN_SIMULATION_USER_EMAIL + NEXT_PUBLIC_SUPABASE_URL + SUPABASE_SECRET_KEY"
     );
   }
 
-  try {
-    return await getMagicLinkToken(supabaseUrl, serviceKey);
-  } catch {
-    return await signInSimulationUser(supabaseUrl, serviceKey);
-  }
+  return await getMagicLinkToken(supabaseUrl, serviceKey, simulationUserEmail);
 };

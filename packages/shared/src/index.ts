@@ -24,3 +24,8 @@ export {
   INGREDIENT_SEMANTIC_ICON_INDEX,
   type IngredientSemanticIconEntry
 } from "./ingredient-semantic-icon-index";
+export {
+  IMAGE_SIMULATION_SCENARIOS,
+  getImageSimulationScenarioById,
+  type ImageSimulationScenario
+} from "./image-simulation-catalog";

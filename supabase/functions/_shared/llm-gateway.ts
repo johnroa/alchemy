@@ -1,12 +1,21 @@
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2";
+import {
+  normalizeDelimitedToken,
+} from "../../../packages/shared/src/text-normalization.ts";
 import { ApiError } from "./errors.ts";
 import {
   executeImageWithConfig,
   executeScope,
+  executeVisionScope,
   executeWithConfig,
   getActiveConfig as loadActiveConfig,
   type ModelOverrideMap as ExecutorModelOverrideMap,
 } from "./llm-executor.ts";
+import { estimateImageGenerationCostUsd } from "./image-billing.ts";
+import {
+  normalizeRecipeMetadata,
+  sumRecipeStepTimerSeconds,
+} from "./recipe-metadata-normalization.ts";
 import type {
   AssistantReply,
   ChatAssistantEnvelope,
@@ -138,6 +147,14 @@ export type ModelOverrideMap = ExecutorModelOverrideMap;
 
 type TokenAccum = { input: number; output: number; costUsd: number };
 
+type ImageQualityWinner = "A" | "B" | "tie";
+
+type ImageQualityEvaluationResult = {
+  winner: ImageQualityWinner;
+  rationale: string;
+  confidence: number | null;
+};
+
 type ConflictResolution = {
   actions: Array<{
     action: "keep" | "supersede" | "delete" | "merge";
@@ -161,18 +178,26 @@ const defaultChatPromptForScope = (
 ): string => {
   if (scope === "chat_generation") {
     return `You are Alchemy. Generate candidate recipes from conversation context.
+If an unresolved dietary restriction or aversion conflicts with the user's explicit dish request, ask for confirmation before generating.
+When asking for confirmation, set response_context.mode to "preference_conflict", trigger_recipe=false, and return no recipe or candidate_recipe_set.
+When you do generate, every recipe must include metadata.difficulty, metadata.health_score, metadata.time_minutes, metadata.items, metadata.timing.total_minutes, and metadata.quick_stats.
 Return one strict JSON object that matches the provided contract.
 Do not use markdown or code fences.`;
   }
 
   if (scope === "chat_iteration") {
     return `You are Alchemy. Update existing candidate recipes from the latest conversation turn.
+If an unresolved dietary restriction or aversion conflicts with the user's explicit ingredient or dish request, ask for confirmation before changing the recipe.
+When asking for confirmation, set response_context.mode to "preference_conflict", trigger_recipe=false, and return no new recipe or candidate_recipe_set.
+When you do return updated recipes, preserve the requested dish anchor and include canonical metadata quick stats on every recipe.
 Return one strict JSON object that matches the provided contract.
 Do not use markdown or code fences.`;
   }
 
   return `You are Alchemy in recipe chat ideation mode.
 If the user asks for a recipe or names a concrete dish to cook, set intent to "in_scope_generate" and trigger_recipe=true immediately.
+If the user explicitly requests a dish or ingredient that conflicts with dietary_restrictions or aversions, ask for confirmation before generating.
+In that conflict case, set response_context.mode to "preference_conflict", trigger_recipe=false, return no recipe or candidate_recipe_set, and use assistant_reply.suggested_next_actions for the obvious choices.
 Avoid unnecessary clarifying questions when the request is already actionable.
 Return one strict JSON object that matches the provided contract.
 Do not use markdown or code fences.`;
@@ -244,6 +269,70 @@ const callImageProvider = async (params: {
     modelConfig: params.modelConfig,
     prompt: params.prompt,
   });
+};
+
+const buildRecipeImagePrompt = (params: {
+  config: GatewayConfig;
+  recipe: RecipePayload;
+  context: Record<string, JsonValue>;
+}): string => {
+  return `${params.config.promptTemplate}\n\n${
+    JSON.stringify({
+      rule: params.config.rule,
+      recipe: params.recipe,
+      context: params.context,
+    })
+  }`;
+};
+
+const normalizeImageQualityWinner = (value: unknown): ImageQualityWinner | null => {
+  if (value === "A" || value === "B" || value === "tie") {
+    return value;
+  }
+
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "a") {
+    return "A";
+  }
+  if (normalized === "b") {
+    return "B";
+  }
+  if (normalized === "tie") {
+    return "tie";
+  }
+  return null;
+};
+
+const normalizeImageQualityEvaluation = (
+  value: unknown,
+): ImageQualityEvaluationResult | null => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  const winner = normalizeImageQualityWinner(record.winner);
+  const rationale = typeof record.rationale === "string"
+    ? record.rationale.trim()
+    : "";
+  const confidenceValue = Number(record.confidence);
+  const confidence = Number.isFinite(confidenceValue)
+    ? Math.max(0, Math.min(1, confidenceValue))
+    : null;
+
+  if (!winner || !rationale) {
+    return null;
+  }
+
+  return {
+    winner,
+    rationale,
+    confidence,
+  };
 };
 
 const classifyScope = async (
@@ -787,6 +876,17 @@ const normalizeRecipeShape = (candidate: unknown): RecipePayload | null => {
     };
   }
 
+  const { metadata: normalizedMetadata, issues } = normalizeRecipeMetadata({
+    metadata,
+    ingredientCount: ingredients.length,
+    stepTimerSecondsTotal: sumRecipeStepTimerSeconds(normalizedSteps),
+    requireModelSignals: true,
+  });
+  if (issues.length > 0) {
+    return null;
+  }
+  metadata = normalizedMetadata;
+
   return {
     title: normalizedTitle,
     description: typeof recipe.description === "string"
@@ -1211,6 +1311,21 @@ const normalizeResponseContext = (
       intent === "in_scope_generate" || intent === "out_of_scope"
     ? intent
     : undefined;
+  const rawPreferenceConflict = contextObject.preference_conflict &&
+      typeof contextObject.preference_conflict === "object" &&
+      !Array.isArray(contextObject.preference_conflict)
+    ? (contextObject.preference_conflict as Record<string, unknown>)
+    : undefined;
+  const preferenceConflictStatus =
+    rawPreferenceConflict && typeof rawPreferenceConflict.status === "string" &&
+        (
+          rawPreferenceConflict.status === "pending_confirmation" ||
+          rawPreferenceConflict.status === "adapt" ||
+          rawPreferenceConflict.status === "override" ||
+          rawPreferenceConflict.status === "cleared"
+        )
+      ? rawPreferenceConflict.status
+      : undefined;
 
   return {
     mode: typeof contextObject.mode === "string"
@@ -1228,6 +1343,30 @@ const normalizeResponseContext = (
       )
       : undefined,
     preference_updates: preferenceUpdates,
+    preference_conflict: preferenceConflictStatus || rawPreferenceConflict
+      ? {
+        status: preferenceConflictStatus,
+        conflicting_preferences: Array.isArray(
+            rawPreferenceConflict?.conflicting_preferences,
+          )
+          ? rawPreferenceConflict.conflicting_preferences.filter(
+            (item): item is string => typeof item === "string",
+          )
+          : undefined,
+        conflicting_aversions: Array.isArray(
+            rawPreferenceConflict?.conflicting_aversions,
+          )
+          ? rawPreferenceConflict.conflicting_aversions.filter(
+            (item): item is string => typeof item === "string",
+          )
+          : undefined,
+        requested_terms: Array.isArray(rawPreferenceConflict?.requested_terms)
+          ? rawPreferenceConflict.requested_terms.filter((item): item is string =>
+            typeof item === "string"
+          )
+          : undefined,
+      }
+      : undefined,
   };
 };
 
@@ -1444,6 +1583,10 @@ Return strict JSON only.`;
 - Required top-level keys: assistant_reply, recipe, response_context.
 - assistant_reply.text must be plain assistant text (never JSON).
 - recipe must be complete and practical (ingredients + steps required).
+- recipe.metadata must include difficulty, health_score, time_minutes, items, timing.total_minutes, and quick_stats.
+- recipe.metadata.quick_stats must include time_minutes, difficulty, health_score, and items.
+- difficulty must be exactly one of: easy, medium, complex.
+- health_score must be an integer from 1 to 100.
 - Do not enforce artificial ingredient, step, or token budgets.`;
   const runtimeSystemPrompt = `${runtimePromptTemplate}\n\n${runtimeConstraints}`;
   const recipeContract = {
@@ -1668,7 +1811,9 @@ const generateChatConversationPayload = async (
   const runtimeConstraints = `Runtime requirements:
 - Output one strict JSON object only.
 - Do not emit markdown or code fences.
-- Match the provided contract keys and schema exactly.`;
+- Match the provided contract keys and schema exactly.
+- If you return a recipe or candidate_recipe_set, every recipe must include metadata.difficulty, metadata.health_score, metadata.time_minutes, metadata.items, metadata.timing.total_minutes, and metadata.quick_stats.
+- If there is an unresolved conflict between an explicit dish request and dietary_restrictions or aversions, ask for confirmation instead of generating, set response_context.mode to "preference_conflict", and return no recipe or candidate_recipe_set.`;
 
   const runtimePromptTemplate = config.promptTemplate?.trim().length
     ? config.promptTemplate
@@ -1688,12 +1833,8 @@ const generateChatConversationPayload = async (
     }
     : {
       format: "json_object",
-      required_keys: [
-        "assistant_reply",
-        "candidate_recipe_set",
-        "response_context",
-      ],
-      optional_keys: ["response_context", "trigger_recipe"],
+      required_keys: ["assistant_reply", "response_context"],
+      optional_keys: ["candidate_recipe_set", "recipe", "trigger_recipe"],
     };
 
   const executeCall = async (
@@ -1726,6 +1867,11 @@ const generateChatConversationPayload = async (
   const validateEnvelopeForScope = (
     envelope: ChatAssistantEnvelope,
   ): ChatAssistantEnvelope => {
+    const isPreferenceConflict = envelope.response_context?.mode ===
+        "preference_conflict" ||
+      envelope.response_context?.preference_conflict?.status ===
+        "pending_confirmation";
+
     if (scope === "chat_ideation") {
       const intent = envelope.response_context?.intent;
       if (
@@ -1751,6 +1897,18 @@ const generateChatConversationPayload = async (
         };
       }
 
+      if (isPreferenceConflict) {
+        return {
+          assistant_reply: envelope.assistant_reply,
+          trigger_recipe: false,
+          response_context: {
+            ...(envelope.response_context ?? {}),
+            mode: "preference_conflict",
+            intent,
+          },
+        };
+      }
+
       return {
         assistant_reply: envelope.assistant_reply,
         trigger_recipe: intent === "in_scope_generate"
@@ -1761,6 +1919,18 @@ const generateChatConversationPayload = async (
         response_context: {
           ...(envelope.response_context ?? {}),
           intent,
+        },
+      };
+    }
+
+    if (isPreferenceConflict) {
+      return {
+        assistant_reply: envelope.assistant_reply,
+        trigger_recipe: false,
+        response_context: {
+          ...(envelope.response_context ?? {}),
+          mode: "preference_conflict",
+          intent: "in_scope_generate",
         },
       };
     }
@@ -1925,6 +2095,7 @@ const logLlmEvent = async (
   safetyState: string,
   payload?: Record<string, JsonValue>,
   tokens?: TokenAccum,
+  costUsdOverride?: number | null,
 ): Promise<void> => {
   const { error } = await client.from("events").insert({
     user_id: userId,
@@ -1935,7 +2106,9 @@ const logLlmEvent = async (
     token_input: tokens?.input ?? null,
     token_output: tokens?.output ?? null,
     token_total: tokens ? tokens.input + tokens.output : null,
-    cost_usd: tokens?.costUsd ?? null,
+    cost_usd: typeof costUsdOverride === "number"
+      ? costUsdOverride
+      : tokens?.costUsd ?? null,
     event_payload: { scope, ...(payload ?? {}) },
   });
 
@@ -2432,13 +2605,7 @@ export const llmGateway = {
     }
 
     const normalizeTermKey = (value: string): string =>
-      value
-        .trim()
-        .toLocaleLowerCase()
-        .normalize("NFKD")
-        .replace(/[^a-z0-9\\s:_-]/g, " ")
-        .replace(/\\s+/g, "_")
-        .replace(/^_+|_+$/g, "");
+      normalizeDelimitedToken(value);
 
     const allowedRoles = new Set([
       "primary",
@@ -3048,6 +3215,13 @@ export const llmGateway = {
           !Array.isArray(rawMetadata)
         ? rawMetadata as Record<string, JsonValue>
         : {};
+      const normalizedMetadata = normalizeRecipeMetadata({
+        metadata,
+        ingredientCount: Array.isArray(params.recipe.ingredients)
+          ? params.recipe.ingredients.length
+          : 0,
+        stepTimerSecondsTotal: sumRecipeStepTimerSeconds(params.recipe.steps),
+      }).metadata;
       const rawConfidence = Number(result.confidence);
       const confidence = Number.isFinite(rawConfidence)
         ? Math.max(0, Math.min(1, rawConfidence))
@@ -3067,7 +3241,7 @@ export const llmGateway = {
         accum,
       );
 
-      return { confidence, metadata };
+      return { confidence, metadata: normalizedMetadata };
     } catch (error) {
       const errorCode = error instanceof ApiError
         ? error.code
@@ -3491,18 +3665,40 @@ export const llmGateway = {
     requestId: string;
     recipe: RecipePayload;
     context: Record<string, JsonValue>;
+    modelOverride?: { provider: string; model: string };
+    eventPayload?: Record<string, JsonValue>;
   }): Promise<string> {
-    const startedAt = Date.now();
-    try {
-      const config = await getActiveConfig(params.client, "image");
+    const detailed = await llmGateway.generateRecipeImageDetailed(params);
+    return detailed.imageUrl;
+  },
 
-      const imagePrompt = `${config.promptTemplate}\n\n${
-        JSON.stringify({
-          rule: config.rule,
-          recipe: params.recipe,
-          context: params.context,
-        })
-      }`;
+  async generateRecipeImageDetailed(params: {
+    client: SupabaseClient;
+    userId: string;
+    requestId: string;
+    recipe: RecipePayload;
+    context: Record<string, JsonValue>;
+    modelOverride?: { provider: string; model: string };
+    eventPayload?: Record<string, JsonValue>;
+  }): Promise<{
+    imageUrl: string;
+    provider: string;
+    model: string;
+    latencyMs: number;
+    costUsd: number;
+    prompt: string;
+    config: GatewayConfig;
+  }> {
+    const startedAt = Date.now();
+    let config: GatewayConfig | null = null;
+    try {
+      config = await getActiveConfig(params.client, "image", params.modelOverride);
+      const imagePrompt = buildRecipeImagePrompt({
+        config,
+        recipe: params.recipe,
+        context: params.context,
+      });
+      const costUsd = estimateImageGenerationCostUsd(config);
 
       const imageUrl = await callImageProvider({
         provider: config.provider,
@@ -3518,8 +3714,25 @@ export const llmGateway = {
         "image",
         Date.now() - startedAt,
         "ok",
+        {
+          provider: config.provider,
+          model: config.model,
+          billing_mode: config.billingMode,
+          ...(params.eventPayload ?? {}),
+        },
+        undefined,
+        costUsd,
       );
-      return imageUrl;
+
+      return {
+        imageUrl,
+        provider: config.provider,
+        model: config.model,
+        latencyMs: Date.now() - startedAt,
+        costUsd,
+        prompt: imagePrompt,
+        config,
+      };
     } catch (error) {
       const errorCode = error instanceof ApiError
         ? error.code
@@ -3532,8 +3745,130 @@ export const llmGateway = {
         Date.now() - startedAt,
         "error",
         {
+          provider: config?.provider ?? null,
+          model: config?.model ?? null,
+          error_code: errorCode,
+          ...(params.eventPayload ?? {}),
+        },
+      );
+      throw error;
+    }
+  },
+
+  async evaluateImageQualityPair(params: {
+    client: SupabaseClient;
+    userId: string;
+    requestId: string;
+    scenario: {
+      id: string;
+      title: string;
+      description: string;
+      heroIngredients: string[];
+      visualBrief: string;
+    };
+    laneA: { imageUrl: string; provider: string; model: string };
+    laneB: { imageUrl: string; provider: string; model: string };
+  }): Promise<{
+    winner: ImageQualityWinner;
+    rationale: string;
+    confidence: number | null;
+    provider: string;
+    model: string;
+    latencyMs: number;
+  }> {
+    const startedAt = Date.now();
+    const accum: TokenAccum = { input: 0, output: 0, costUsd: 0 };
+    let config: GatewayConfig | null = null;
+
+    try {
+      const {
+        result,
+        inputTokens,
+        outputTokens,
+        config: resolvedConfig,
+      } = await executeVisionScope<ImageQualityEvaluationResult>({
+        client: params.client,
+        scope: "image_quality_eval",
+        userInput: {
+          scenario: {
+            id: params.scenario.id,
+            title: params.scenario.title,
+            description: params.scenario.description,
+            hero_ingredients: params.scenario.heroIngredients,
+            visual_brief: params.scenario.visualBrief,
+          },
+          comparison_focus: "visual_quality_only",
+          lane_a: {
+            label: "A",
+            provider: params.laneA.provider,
+            model: params.laneA.model,
+          },
+          lane_b: {
+            label: "B",
+            provider: params.laneB.provider,
+            model: params.laneB.model,
+          },
+        },
+        images: [
+          { label: "A", imageUrl: params.laneA.imageUrl },
+          { label: "B", imageUrl: params.laneB.imageUrl },
+        ],
+      });
+      config = resolvedConfig;
+      addTokens(accum, inputTokens, outputTokens, resolvedConfig);
+
+      const evaluation = normalizeImageQualityEvaluation(result);
+      if (!evaluation) {
+        throw new ApiError(
+          422,
+          "image_quality_eval_invalid",
+          "Image quality evaluation did not match required schema",
+        );
+      }
+
+      const latencyMs = Date.now() - startedAt;
+      await logLlmEvent(
+        params.client,
+        params.userId,
+        params.requestId,
+        "image_quality_eval",
+        latencyMs,
+        "ok",
+        {
+          provider: resolvedConfig.provider,
+          model: resolvedConfig.model,
+          scenario_id: params.scenario.id,
+          lane_a_model: `${params.laneA.provider}/${params.laneA.model}`,
+          lane_b_model: `${params.laneB.provider}/${params.laneB.model}`,
+          winner: evaluation.winner,
+        },
+        accum,
+      );
+
+      return {
+        ...evaluation,
+        provider: resolvedConfig.provider,
+        model: resolvedConfig.model,
+        latencyMs,
+      };
+    } catch (error) {
+      const errorCode = error instanceof ApiError
+        ? error.code
+        : "unknown_error";
+      await logLlmEvent(
+        params.client,
+        params.userId,
+        params.requestId,
+        "image_quality_eval",
+        Date.now() - startedAt,
+        "error",
+        {
+          provider: config?.provider ?? null,
+          model: config?.model ?? null,
+          scenario_id: params.scenario.id,
           error_code: errorCode,
         },
+        accum,
       );
       throw error;
     }

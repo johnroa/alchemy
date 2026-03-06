@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Alchemy API
-  version: 1.3.0
+  version: 1.4.0
   description: |
     API contract for Alchemy — an AI-driven recipe creation and management platform.
     Covers the user-facing v1 API at api.cookwithalchemy.com and the admin API at admin.cookwithalchemy.com.
@@ -521,6 +521,24 @@ paths:
                     type: integer
                   pending:
                     type: integer
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /image-simulations/compare:
+    post:
+      summary: Run an ephemeral two-lane image simulation compare
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ImageSimulationCompareRequest'
+      responses:
+        '200':
+          description: Image simulation compare response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImageSimulationCompareResponse'
         default:
           $ref: '#/components/responses/ErrorResponse'
   /metadata-jobs/process:
@@ -1278,7 +1296,7 @@ components:
         chat_ideation, chat_generation, chat_iteration, classify,
         ingredient_alias_normalize, ingredient_phrase_split, ingredient_enrich,
         recipe_metadata_enrich, ingredient_relation_infer, preference_normalize, equipment_filter,
-        onboarding, image, memory_extract, memory_select, memory_summarize, memory_conflict_resolve.
+        onboarding, image, image_quality_eval, memory_extract, memory_select, memory_summarize, memory_conflict_resolve.
         Not required for normal mobile clients.
   responses:
     ErrorResponse:
@@ -1292,12 +1310,10 @@ components:
       type: string
       description: Internal LLM pipeline scope key used for prompt/rule/model routing.
       enum:
-        - chat
         - chat_ideation
         - chat_generation
         - chat_iteration
         - generate
-        - tweak
         - classify
         - ingredient_alias_normalize
         - ingredient_phrase_split
@@ -1308,6 +1324,7 @@ components:
         - equipment_filter
         - onboarding
         - image
+        - image_quality_eval
         - memory_extract
         - memory_select
         - memory_summarize
@@ -1432,10 +1449,38 @@ components:
           $ref: '#/components/schemas/Nutrition'
         difficulty:
           type: string
+          enum: [easy, medium, complex]
         skill_level:
           type: string
         complexity_score:
           type: number
+        health_score:
+          type: integer
+          minimum: 1
+          maximum: 100
+        time_minutes:
+          type: integer
+          minimum: 1
+        items:
+          type: integer
+          minimum: 1
+        quick_stats:
+          type: object
+          required: [time_minutes, difficulty, health_score, items]
+          properties:
+            time_minutes:
+              type: integer
+              minimum: 1
+            difficulty:
+              type: string
+              enum: [easy, medium, complex]
+            health_score:
+              type: integer
+              minimum: 1
+              maximum: 100
+            items:
+              type: integer
+              minimum: 1
         allergens:
           type: array
           items:
@@ -1830,6 +1875,99 @@ components:
               type: integer
             failed:
               type: integer
+    ImageSimulationScenario:
+      type: object
+      required: [id, title, description, hero_ingredients, visual_brief]
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+        hero_ingredients:
+          type: array
+          items:
+            type: string
+        visual_brief:
+          type: string
+    ImageSimulationModelOverride:
+      type: object
+      required: [provider, model]
+      properties:
+        provider:
+          type: string
+        model:
+          type: string
+    ImageSimulationCompareRequest:
+      type: object
+      required: [scenario_id]
+      properties:
+        scenario_id:
+          type: string
+        lane_a_override:
+          $ref: '#/components/schemas/ImageSimulationModelOverride'
+        lane_b_override:
+          $ref: '#/components/schemas/ImageSimulationModelOverride'
+    ImageSimulationLaneResult:
+      type: object
+      required: [status, provider, model, image_url, latency_ms, cost_usd, error]
+      properties:
+        status:
+          type: string
+          enum: [ok, failed]
+        provider:
+          type: [string, 'null']
+        model:
+          type: [string, 'null']
+        image_url:
+          type: [string, 'null']
+        latency_ms:
+          type: [integer, 'null']
+        cost_usd:
+          type: [number, 'null']
+        error:
+          type: [string, 'null']
+    ImageSimulationJudgeResult:
+      type: object
+      required: [status, provider, model, latency_ms, winner, rationale, confidence, error]
+      properties:
+        status:
+          type: string
+          enum: [ok, skipped, failed]
+        provider:
+          type: [string, 'null']
+        model:
+          type: [string, 'null']
+        latency_ms:
+          type: [integer, 'null']
+        winner:
+          oneOf:
+            - type: string
+              enum: [A, B, tie]
+            - type: 'null'
+        rationale:
+          type: [string, 'null']
+        confidence:
+          type: [number, 'null']
+        error:
+          type: [string, 'null']
+    ImageSimulationCompareResponse:
+      type: object
+      required: [request_id, scenario, lane_a, lane_b, judge, completed]
+      properties:
+        request_id:
+          type: string
+        scenario:
+          $ref: '#/components/schemas/ImageSimulationScenario'
+        lane_a:
+          $ref: '#/components/schemas/ImageSimulationLaneResult'
+        lane_b:
+          $ref: '#/components/schemas/ImageSimulationLaneResult'
+        judge:
+          $ref: '#/components/schemas/ImageSimulationJudgeResult'
+        completed:
+          type: boolean
     PreferenceProfile:
       type: object
       required: [dietary_preferences, skill_level, equipment]
@@ -1959,6 +2097,26 @@ components:
         preference_updates:
           type: object
           additionalProperties: true
+        preference_conflict:
+          $ref: '#/components/schemas/PreferenceConflictContext'
+    PreferenceConflictContext:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [pending_confirmation, adapt, override, cleared]
+        conflicting_preferences:
+          type: array
+          items:
+            type: string
+        conflicting_aversions:
+          type: array
+          items:
+            type: string
+        requested_terms:
+          type: array
+          items:
+            type: string
     CandidateRecipeComponent:
       type: object
       required: [component_id, role, title, recipe]

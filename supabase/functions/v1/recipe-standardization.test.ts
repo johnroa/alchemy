@@ -2,6 +2,7 @@ import {
   buildIngredientGroups,
   canonicalizeIngredients,
   deriveCanonicalIngredientIdentity,
+  normalizeIngredientKey,
   parseAmountValue,
   projectIngredientsForOutput,
   projectInlineMeasurements,
@@ -51,6 +52,13 @@ Deno.test("deriveCanonicalIngredientIdentity title-cases canonical keys", () => 
 
   if (identity.canonicalName !== "Black Pepper") {
     throw new Error(`expected canonical name Black Pepper, received ${identity.canonicalName}`);
+  }
+});
+
+Deno.test("normalizeIngredientKey folds diacritics before punctuation stripping", () => {
+  const normalized = normalizeIngredientKey("Jalapeño");
+  if (normalized !== "jalapeno") {
+    throw new Error(`expected jalapeno, received ${normalized}`);
   }
 });
 

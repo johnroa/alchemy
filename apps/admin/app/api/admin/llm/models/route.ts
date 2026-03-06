@@ -8,10 +8,23 @@ type ModelRow = {
   display_name: string;
   input_cost_per_1m_tokens: number;
   output_cost_per_1m_tokens: number;
+  billing_mode: "token" | "image";
+  billing_metadata: Record<string, unknown>;
   context_window_tokens: number | null;
   max_output_tokens: number | null;
   is_available: boolean;
   notes: string | null;
+};
+
+const toRecord = (value: unknown): Record<string, unknown> => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  return value as Record<string, unknown>;
+};
+
+const normalizeBillingMode = (value: unknown): "token" | "image" => {
+  return value === "image" ? "image" : "token";
 };
 
 export async function GET(): Promise<NextResponse> {
@@ -19,7 +32,7 @@ export async function GET(): Promise<NextResponse> {
   const client = getAdminClient();
   const { data, error } = await client
     .from("llm_model_registry")
-    .select("id,provider,model,display_name,input_cost_per_1m_tokens,output_cost_per_1m_tokens,context_window_tokens,max_output_tokens,is_available,notes")
+    .select("id,provider,model,display_name,input_cost_per_1m_tokens,output_cost_per_1m_tokens,billing_mode,billing_metadata,context_window_tokens,max_output_tokens,is_available,notes")
     .order("provider")
     .order("display_name");
 
@@ -27,7 +40,13 @@ export async function GET(): Promise<NextResponse> {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  return NextResponse.json({ models: (data ?? []) as ModelRow[] });
+  return NextResponse.json({
+    models: (data ?? []).map((model) => ({
+      ...model,
+      billing_mode: normalizeBillingMode(model.billing_mode),
+      billing_metadata: toRecord(model.billing_metadata)
+    })) as ModelRow[]
+  });
 }
 
 export async function POST(request: Request): Promise<NextResponse> {
@@ -45,6 +64,8 @@ export async function POST(request: Request): Promise<NextResponse> {
     display_name: body.display_name.trim(),
     input_cost_per_1m_tokens: Number(body.input_cost_per_1m_tokens ?? 0),
     output_cost_per_1m_tokens: Number(body.output_cost_per_1m_tokens ?? 0),
+    billing_mode: normalizeBillingMode(body.billing_mode),
+    billing_metadata: toRecord(body.billing_metadata),
     context_window_tokens: body.context_window_tokens ?? null,
     max_output_tokens: body.max_output_tokens ?? null,
     is_available: body.is_available ?? true,
@@ -57,11 +78,17 @@ export async function POST(request: Request): Promise<NextResponse> {
 
   const { data } = await client
     .from("llm_model_registry")
-    .select("id,provider,model,display_name,input_cost_per_1m_tokens,output_cost_per_1m_tokens,context_window_tokens,max_output_tokens,is_available,notes")
+    .select("id,provider,model,display_name,input_cost_per_1m_tokens,output_cost_per_1m_tokens,billing_mode,billing_metadata,context_window_tokens,max_output_tokens,is_available,notes")
     .order("provider")
     .order("display_name");
 
-  return NextResponse.json({ models: (data ?? []) as ModelRow[] });
+  return NextResponse.json({
+    models: (data ?? []).map((model) => ({
+      ...model,
+      billing_mode: normalizeBillingMode(model.billing_mode),
+      billing_metadata: toRecord(model.billing_metadata)
+    })) as ModelRow[]
+  });
 }
 
 export async function PATCH(request: Request): Promise<NextResponse> {
@@ -90,6 +117,8 @@ export async function PATCH(request: Request): Promise<NextResponse> {
   }
   if (body.input_cost_per_1m_tokens !== undefined) update.input_cost_per_1m_tokens = Number(body.input_cost_per_1m_tokens);
   if (body.output_cost_per_1m_tokens !== undefined) update.output_cost_per_1m_tokens = Number(body.output_cost_per_1m_tokens);
+  if (body.billing_mode !== undefined) update.billing_mode = normalizeBillingMode(body.billing_mode);
+  if (body.billing_metadata !== undefined) update.billing_metadata = toRecord(body.billing_metadata);
   if (body.context_window_tokens !== undefined) update.context_window_tokens = body.context_window_tokens;
   if (body.max_output_tokens !== undefined) update.max_output_tokens = body.max_output_tokens;
   if (body.is_available !== undefined) update.is_available = body.is_available;
@@ -103,11 +132,17 @@ export async function PATCH(request: Request): Promise<NextResponse> {
 
   const { data } = await client
     .from("llm_model_registry")
-    .select("id,provider,model,display_name,input_cost_per_1m_tokens,output_cost_per_1m_tokens,context_window_tokens,max_output_tokens,is_available,notes")
+    .select("id,provider,model,display_name,input_cost_per_1m_tokens,output_cost_per_1m_tokens,billing_mode,billing_metadata,context_window_tokens,max_output_tokens,is_available,notes")
     .order("provider")
     .order("display_name");
 
-  return NextResponse.json({ models: (data ?? []) as ModelRow[] });
+  return NextResponse.json({
+    models: (data ?? []).map((model) => ({
+      ...model,
+      billing_mode: normalizeBillingMode(model.billing_mode),
+      billing_metadata: toRecord(model.billing_metadata)
+    })) as ModelRow[]
+  });
 }
 
 export async function DELETE(request: Request): Promise<NextResponse> {
@@ -128,9 +163,15 @@ export async function DELETE(request: Request): Promise<NextResponse> {
 
   const { data } = await client
     .from("llm_model_registry")
-    .select("id,provider,model,display_name,input_cost_per_1m_tokens,output_cost_per_1m_tokens,context_window_tokens,max_output_tokens,is_available,notes")
+    .select("id,provider,model,display_name,input_cost_per_1m_tokens,output_cost_per_1m_tokens,billing_mode,billing_metadata,context_window_tokens,max_output_tokens,is_available,notes")
     .order("provider")
     .order("display_name");
 
-  return NextResponse.json({ models: (data ?? []) as ModelRow[] });
+  return NextResponse.json({
+    models: (data ?? []).map((model) => ({
+      ...model,
+      billing_mode: normalizeBillingMode(model.billing_mode),
+      billing_metadata: toRecord(model.billing_metadata)
+    })) as ModelRow[]
+  });
 }

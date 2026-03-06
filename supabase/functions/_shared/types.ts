@@ -82,9 +82,18 @@ export type RecipeMetadataV2 = {
     sugar_g?: number;
     sodium_mg?: number;
   };
-  difficulty?: string;
+  difficulty?: "easy" | "medium" | "complex";
   skill_level?: string;
   complexity_score?: number;
+  health_score?: number;
+  time_minutes?: number;
+  items?: number;
+  quick_stats?: {
+    time_minutes: number;
+    difficulty: "easy" | "medium" | "complex";
+    health_score: number;
+    items: number;
+  };
   allergens?: string[];
   allergen_flags?: string[];
   diet_tags?: string[];
@@ -120,6 +129,28 @@ export type RecipeMetadataV2 = {
 };
 
 export type RecipeMetadata = RecipeMetadataV2;
+
+export type PreferenceConflictStatus =
+  | "pending_confirmation"
+  | "adapt"
+  | "override"
+  | "cleared";
+
+export type PreferenceConflictContext = {
+  status?: PreferenceConflictStatus;
+  conflicting_preferences?: string[];
+  conflicting_aversions?: string[];
+  requested_terms?: string[];
+};
+
+export type AssistantResponseContext = {
+  mode?: string;
+  intent?: "in_scope_ideation" | "in_scope_generate" | "out_of_scope";
+  changed_sections?: string[];
+  personalization_notes?: string[];
+  preference_updates?: Record<string, JsonValue>;
+  preference_conflict?: PreferenceConflictContext;
+};
 
 export type RecipePayload = {
   title: string;
@@ -158,13 +189,7 @@ export type RecipePayload = {
 export type RecipeAssistantEnvelope = {
   recipe: RecipePayload;
   assistant_reply: AssistantReply;
-  response_context?: {
-    mode?: string;
-    intent?: "in_scope_ideation" | "in_scope_generate" | "out_of_scope";
-    changed_sections?: string[];
-    personalization_notes?: string[];
-    preference_updates?: Record<string, JsonValue>;
-  };
+  response_context?: AssistantResponseContext;
 };
 
 export type ChatAssistantEnvelope = {
@@ -172,13 +197,7 @@ export type ChatAssistantEnvelope = {
   recipe?: RecipePayload;
   trigger_recipe?: boolean;
   candidate_recipe_set?: CandidateRecipeSet;
-  response_context?: {
-    mode?: string;
-    intent?: "in_scope_ideation" | "in_scope_generate" | "out_of_scope";
-    changed_sections?: string[];
-    personalization_notes?: string[];
-    preference_updates?: Record<string, JsonValue>;
-  };
+  response_context?: AssistantResponseContext;
 };
 
 export type ChatLoopState = "ideation" | "candidate_presented" | "iterating";
@@ -207,6 +226,8 @@ export type GatewayConfig = {
   modelConfig: Record<string, JsonValue>;
   inputCostPer1m: number;
   outputCostPer1m: number;
+  billingMode: "token" | "image";
+  billingMetadata: Record<string, JsonValue>;
 };
 
 export type MemoryRecord = {

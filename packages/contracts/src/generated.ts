@@ -822,6 +822,47 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/image-simulations/compare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Run an ephemeral two-lane image simulation compare */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["ImageSimulationCompareRequest"];
+                };
+            };
+            responses: {
+                /** @description Image simulation compare response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ImageSimulationCompareResponse"];
+                    };
+                };
+                default: components["responses"]["ErrorResponse"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/metadata-jobs/process": {
         parameters: {
             query?: never;
@@ -1149,7 +1190,7 @@ export interface paths {
                      *     chat_ideation, chat_generation, chat_iteration, classify,
                      *     ingredient_alias_normalize, ingredient_phrase_split, ingredient_enrich,
                      *     recipe_metadata_enrich, ingredient_relation_infer, preference_normalize, equipment_filter,
-                     *     onboarding, image, memory_extract, memory_select, memory_summarize, memory_conflict_resolve.
+                     *     onboarding, image, image_quality_eval, memory_extract, memory_select, memory_summarize, memory_conflict_resolve.
                      *     Not required for normal mobile clients.
                      */
                     "x-sim-model-overrides"?: components["parameters"]["SimModelOverrides"];
@@ -1247,7 +1288,7 @@ export interface paths {
                      *     chat_ideation, chat_generation, chat_iteration, classify,
                      *     ingredient_alias_normalize, ingredient_phrase_split, ingredient_enrich,
                      *     recipe_metadata_enrich, ingredient_relation_infer, preference_normalize, equipment_filter,
-                     *     onboarding, image, memory_extract, memory_select, memory_summarize, memory_conflict_resolve.
+                     *     onboarding, image, image_quality_eval, memory_extract, memory_select, memory_summarize, memory_conflict_resolve.
                      *     Not required for normal mobile clients.
                      */
                     "x-sim-model-overrides"?: components["parameters"]["SimModelOverrides"];
@@ -1320,7 +1361,7 @@ export interface paths {
                      *     chat_ideation, chat_generation, chat_iteration, classify,
                      *     ingredient_alias_normalize, ingredient_phrase_split, ingredient_enrich,
                      *     recipe_metadata_enrich, ingredient_relation_infer, preference_normalize, equipment_filter,
-                     *     onboarding, image, memory_extract, memory_select, memory_summarize, memory_conflict_resolve.
+                     *     onboarding, image, image_quality_eval, memory_extract, memory_select, memory_summarize, memory_conflict_resolve.
                      *     Not required for normal mobile clients.
                      */
                     "x-sim-model-overrides"?: components["parameters"]["SimModelOverrides"];
@@ -1375,7 +1416,7 @@ export interface paths {
                      *     chat_ideation, chat_generation, chat_iteration, classify,
                      *     ingredient_alias_normalize, ingredient_phrase_split, ingredient_enrich,
                      *     recipe_metadata_enrich, ingredient_relation_infer, preference_normalize, equipment_filter,
-                     *     onboarding, image, memory_extract, memory_select, memory_summarize, memory_conflict_resolve.
+                     *     onboarding, image, image_quality_eval, memory_extract, memory_select, memory_summarize, memory_conflict_resolve.
                      *     Not required for normal mobile clients.
                      */
                     "x-sim-model-overrides"?: components["parameters"]["SimModelOverrides"];
@@ -1604,7 +1645,7 @@ export interface components {
          * @description Internal LLM pipeline scope key used for prompt/rule/model routing.
          * @enum {string}
          */
-        LlmScope: "chat" | "chat_ideation" | "chat_generation" | "chat_iteration" | "generate" | "tweak" | "classify" | "ingredient_alias_normalize" | "ingredient_phrase_split" | "ingredient_enrich" | "recipe_metadata_enrich" | "ingredient_relation_infer" | "preference_normalize" | "equipment_filter" | "onboarding" | "image" | "memory_extract" | "memory_select" | "memory_summarize" | "memory_conflict_resolve";
+        LlmScope: "chat_ideation" | "chat_generation" | "chat_iteration" | "generate" | "classify" | "ingredient_alias_normalize" | "ingredient_phrase_split" | "ingredient_enrich" | "recipe_metadata_enrich" | "ingredient_relation_infer" | "preference_normalize" | "equipment_filter" | "onboarding" | "image" | "image_quality_eval" | "memory_extract" | "memory_select" | "memory_summarize" | "memory_conflict_resolve";
         ErrorEnvelope: {
             code: string;
             message: string;
@@ -1663,9 +1704,20 @@ export interface components {
             };
             spice_level?: string;
             nutrition?: components["schemas"]["Nutrition"];
-            difficulty?: string;
+            /** @enum {string} */
+            difficulty?: "easy" | "medium" | "complex";
             skill_level?: string;
             complexity_score?: number;
+            health_score?: number;
+            time_minutes?: number;
+            items?: number;
+            quick_stats?: {
+                time_minutes: number;
+                /** @enum {string} */
+                difficulty: "easy" | "medium" | "complex";
+                health_score: number;
+                items: number;
+            };
             allergens?: string[];
             allergen_flags?: string[];
             diet_tags?: string[];
@@ -1857,6 +1909,51 @@ export interface components {
                 failed: number;
             };
         };
+        ImageSimulationScenario: {
+            id: string;
+            title: string;
+            description: string;
+            hero_ingredients: string[];
+            visual_brief: string;
+        };
+        ImageSimulationModelOverride: {
+            provider: string;
+            model: string;
+        };
+        ImageSimulationCompareRequest: {
+            scenario_id: string;
+            lane_a_override?: components["schemas"]["ImageSimulationModelOverride"];
+            lane_b_override?: components["schemas"]["ImageSimulationModelOverride"];
+        };
+        ImageSimulationLaneResult: {
+            /** @enum {string} */
+            status: "ok" | "failed";
+            provider: string | null;
+            model: string | null;
+            image_url: string | null;
+            latency_ms: number | null;
+            cost_usd: number | null;
+            error: string | null;
+        };
+        ImageSimulationJudgeResult: {
+            /** @enum {string} */
+            status: "ok" | "skipped" | "failed";
+            provider: string | null;
+            model: string | null;
+            latency_ms: number | null;
+            winner: ("A" | "B" | "tie") | null;
+            rationale: string | null;
+            confidence: number | null;
+            error: string | null;
+        };
+        ImageSimulationCompareResponse: {
+            request_id: string;
+            scenario: components["schemas"]["ImageSimulationScenario"];
+            lane_a: components["schemas"]["ImageSimulationLaneResult"];
+            lane_b: components["schemas"]["ImageSimulationLaneResult"];
+            judge: components["schemas"]["ImageSimulationJudgeResult"];
+            completed: boolean;
+        };
         PreferenceProfile: {
             free_form?: string;
             dietary_preferences: string[];
@@ -1918,6 +2015,14 @@ export interface components {
             preference_updates?: {
                 [key: string]: unknown;
             };
+            preference_conflict?: components["schemas"]["PreferenceConflictContext"];
+        };
+        PreferenceConflictContext: {
+            /** @enum {string} */
+            status?: "pending_confirmation" | "adapt" | "override" | "cleared";
+            conflicting_preferences?: string[];
+            conflicting_aversions?: string[];
+            requested_terms?: string[];
         };
         CandidateRecipeComponent: {
             component_id: string;
@@ -2082,7 +2187,7 @@ export interface components {
          *     chat_ideation, chat_generation, chat_iteration, classify,
          *     ingredient_alias_normalize, ingredient_phrase_split, ingredient_enrich,
          *     recipe_metadata_enrich, ingredient_relation_infer, preference_normalize, equipment_filter,
-         *     onboarding, image, memory_extract, memory_select, memory_summarize, memory_conflict_resolve.
+         *     onboarding, image, image_quality_eval, memory_extract, memory_select, memory_summarize, memory_conflict_resolve.
          *     Not required for normal mobile clients.
          */
         SimModelOverrides: string;

@@ -121,6 +121,34 @@ Deno.test("keeps exact key when no better canonical match exists", () => {
   );
 });
 
+Deno.test("canonicalizes diacritic variants to the normalized ontology key", () => {
+  const catalog = buildOntologyCanonicalizationCatalog({
+    terms: [
+      { term_type: "ingredient", term_key: "jalapeno", label: "Jalapeno", usage_count: 4 },
+    ],
+  });
+
+  const canonical = canonicalizeOntologyTerm({
+    term: {
+      term_type: "ingredient",
+      term_key: "jalapeño",
+      label: "Jalapeño",
+      relation_type: "classified_as",
+    },
+    catalog,
+  });
+
+  assertEqual(
+    canonical,
+    {
+      term_type: "ingredient",
+      term_key: "jalapeno",
+      label: "Jalapeno",
+    },
+    "diacritic variants should normalize to the canonical ontology key",
+  );
+});
+
 Deno.test("preserves broader and narrower taxonomy terms as distinct concepts", () => {
   const catalog = buildOntologyCanonicalizationCatalog({
     terms: [

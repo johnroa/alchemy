@@ -17,7 +17,6 @@ import {
   Network,
   Radar,
   ScrollText,
-  ShieldAlert,
   Sparkles,
   Wrench,
   Users
@@ -30,8 +29,8 @@ const navGroups = [
     items: [
       { href: "/dashboard", label: "Dashboard", icon: Home },
       { href: "/users", label: "Users", icon: Users },
-      { href: "/moderation", label: "Moderation", icon: ShieldAlert },
-      { href: "/simulations", label: "Simulations", icon: Activity },
+      { href: "/simulation-recipe", label: "Recipe Simulations", icon: Activity },
+      { href: "/simulation-image", label: "Image Simulations", icon: Image },
       { href: "/development", label: "Development", icon: Wrench }
     ]
   },

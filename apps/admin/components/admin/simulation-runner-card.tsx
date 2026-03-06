@@ -1039,7 +1039,7 @@ function ComparisonTable({ a, b }: { a: SimResult; b: SimResult }): React.JSX.El
   );
 }
 
-export function SimulationRunnerCard({ registryModels }: { registryModels: RegistryModel[] }): React.JSX.Element {
+export function RecipeSimulationRunnerCard({ registryModels }: { registryModels: RegistryModel[] }): React.JSX.Element {
   const [runningA, setRunningA] = useState(false);
   const [runningB, setRunningB] = useState(false);
   const [resultA, setResultA] = useState<SimResult | null>(null);
@@ -1272,7 +1272,7 @@ export function SimulationRunnerCard({ registryModels }: { registryModels: Regis
       <CardHeader className="pb-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
-            <CardTitle className="text-base">Simulation Runner — Single or A/B Concurrent</CardTitle>
+            <CardTitle className="text-base">Recipe Simulation Runner — Single or A/B Concurrent</CardTitle>
             <CardDescription>
               Runs against live <code className="rounded bg-muted px-1 text-xs">/v1</code> with full real-time trace.
               Every run uses fresh seeded prompts, and concurrent A/B lanes share the same seed for fair comparison.
@@ -1339,3 +1339,5 @@ export function SimulationRunnerCard({ registryModels }: { registryModels: Regis
     </Card>
   );
 }
+
+export { RecipeSimulationRunnerCard as SimulationRunnerCard };
