@@ -35,6 +35,11 @@ import {
   type SemanticDietIncompatibilityRule,
 } from "./semantic-diet-compatibility.ts";
 import { sanitizeModelPreferencePatch } from "./preference-auto-update.ts";
+import {
+  buildOntologyCanonicalizationCatalog,
+  canonicalizeOntologyTerm,
+  type OntologyCatalogTerm,
+} from "./ontology-canonicalization.ts";
 
 type PreferenceContext = {
   free_form: string | null;
@@ -1128,6 +1133,66 @@ const loadSemanticDietIncompatibilityRules = async (
     row.source_term_type.length > 0 &&
     row.source_term_key.length > 0 &&
     row.blocked_diet_tag.length > 0
+  );
+};
+
+const loadOntologyCatalogTerms = async (
+  client: SupabaseClient,
+): Promise<OntologyCatalogTerm[]> => {
+  const { data: terms, error: termsError } = await client
+    .from("ontology_terms")
+    .select("term_type,term_key,label");
+
+  if (termsError) {
+    if (isSchemaMissingError(termsError) || isRlsError(termsError)) {
+      return [];
+    }
+    throw new ApiError(
+      500,
+      "ontology_catalog_fetch_failed",
+      "Could not fetch ontology catalog terms",
+      termsError.message,
+    );
+  }
+
+  return (terms ?? []).map((row) => ({
+      term_type: String(row.term_type ?? ""),
+      term_key: String(row.term_key ?? ""),
+      label: String(row.label ?? ""),
+      usage_count: 0,
+    })).filter((row) =>
+    row.term_type.length > 0 &&
+    row.term_key.length > 0 &&
+    row.label.length > 0
+  );
+};
+
+const loadCanonicalDietTags = async (
+  client: SupabaseClient,
+): Promise<string[]> => {
+  const { data, error } = await client
+    .from("graph_entities")
+    .select("label")
+    .eq("entity_type", "diet_tag");
+
+  if (error) {
+    if (isSchemaMissingError(error) || isRlsError(error)) {
+      return [];
+    }
+    throw new ApiError(
+      500,
+      "diet_tags_fetch_failed",
+      "Could not fetch canonical diet tags",
+      error.message,
+    );
+  }
+
+  return Array.from(
+    new Set(
+      (data ?? [])
+        .map((row) => normalizeTermKey(String(row.label ?? "")))
+        .filter((value) => value.length > 0),
+    ),
   );
 };
 
@@ -2352,6 +2417,15 @@ const upsertIngredientEnrichment = async (params: {
   let rejectedCount = 0;
   let dietGuardRemovalCount = 0;
   try {
+    const [ontologyCatalogTerms, canonicalDietTags] = await Promise.all([
+      loadOntologyCatalogTerms(params.serviceClient),
+      loadCanonicalDietTags(params.serviceClient),
+    ]);
+    const ontologyCanonicalizationCatalog = buildOntologyCanonicalizationCatalog({
+      terms: ontologyCatalogTerms,
+      dietTags: canonicalDietTags,
+    });
+
     const enrichment = await llmGateway.enrichIngredients({
       client: params.serviceClient,
       userId: params.userId,
@@ -2386,6 +2460,7 @@ const upsertIngredientEnrichment = async (params: {
       confidence: number;
     };
     const ontologyUpserts: OntologyUpsertRow[] = [];
+    const enrichedIngredientIds = new Set<string>();
 
     for (const row of ingredientRows ?? []) {
       const key = String(row.canonical_name ?? "").toLocaleLowerCase();
@@ -2393,6 +2468,50 @@ const upsertIngredientEnrichment = async (params: {
       if (!candidate || !shouldPersistEnrichment(candidate.confidence)) {
         rejectedCount += 1;
         continue;
+      }
+
+      const canonicalizedOntologyTerms: Array<{
+        term_type: string;
+        term_key: string;
+        label: string;
+        relation_type: string;
+        confidence: number;
+      }> = [];
+      for (const term of candidate.ontology_terms ?? []) {
+        if (!shouldPersistEnrichment(term.confidence)) {
+          rejectedCount += 1;
+          continue;
+        }
+
+        const relationType = normalizeTermKey(
+          String(term.relation_type ?? "classified_as"),
+        );
+        if (!relationType) {
+          rejectedCount += 1;
+          continue;
+        }
+
+        const canonicalized = canonicalizeOntologyTerm({
+          term: {
+            term_type: String(term.term_type ?? ""),
+            term_key: term.term_key || term.label,
+            label: String(term.label ?? ""),
+            relation_type: relationType,
+          },
+          catalog: ontologyCanonicalizationCatalog,
+        });
+        if (!canonicalized) {
+          rejectedCount += 1;
+          continue;
+        }
+
+        canonicalizedOntologyTerms.push({
+          term_type: canonicalized.term_type,
+          term_key: canonicalized.term_key,
+          label: canonicalized.label,
+          relation_type: relationType,
+          confidence: clampConfidence(term.confidence, candidate.confidence),
+        });
       }
 
       const existingMetadata =
@@ -2404,10 +2523,10 @@ const upsertIngredientEnrichment = async (params: {
       const guarded = applySemanticDietIncompatibilityRules({
         metadata: candidate.metadata,
         rules: params.dietIncompatibilityRules,
-        ontologyTerms: candidate.ontology_terms.map((term) => ({
-          term_type: String(term.term_type ?? ""),
-          term_key: String(term.term_key ?? ""),
-          label: String(term.label ?? ""),
+        ontologyTerms: canonicalizedOntologyTerms.map((term) => ({
+          term_type: term.term_type,
+          term_key: term.term_key,
+          label: term.label,
         })),
       });
       dietGuardRemovalCount += guarded.removedDietTags.length;
@@ -2445,30 +2564,41 @@ const upsertIngredientEnrichment = async (params: {
         );
       }
 
-      for (const term of candidate.ontology_terms ?? []) {
-        if (!shouldPersistEnrichment(term.confidence)) {
-          rejectedCount += 1;
-          continue;
+      enrichedIngredientIds.add(row.id);
+      const dedupedOntologyByKey = new Map<string, OntologyUpsertRow>();
+      for (const term of canonicalizedOntologyTerms) {
+        const dedupeKey = `${row.id}:${term.term_type}:${term.term_key}:${term.relation_type}`;
+        const existing = dedupedOntologyByKey.get(dedupeKey);
+        if (!existing || term.confidence > existing.confidence) {
+          dedupedOntologyByKey.set(dedupeKey, {
+            ingredient_id: row.id,
+            term_type: term.term_type,
+            term_key: term.term_key,
+            label: term.label,
+            relation_type: term.relation_type,
+            confidence: term.confidence,
+          });
         }
-        const normalizedKey = normalizeTermKey(term.term_key || term.label);
-        const normalizedType = normalizeTermKey(String(term.term_type ?? ""));
-        if (!normalizedKey) {
-          rejectedCount += 1;
-          continue;
-        }
-        if (!normalizedType) {
-          rejectedCount += 1;
-          continue;
-        }
-        ontologyUpserts.push({
-          ingredient_id: row.id,
-          term_type: normalizedType,
-          term_key: normalizedKey,
-          label: String(term.label ?? "").trim(),
-          relation_type: String(term.relation_type ?? "classified_as").trim()
-            .toLocaleLowerCase(),
-          confidence: clampConfidence(term.confidence, candidate.confidence),
-        });
+      }
+      ontologyUpserts.push(...dedupedOntologyByKey.values());
+    }
+
+    if (enrichedIngredientIds.size > 0) {
+      const { error: clearLinksError } = await params.serviceClient
+        .from("ingredient_ontology_links")
+        .delete()
+        .in("ingredient_id", Array.from(enrichedIngredientIds))
+        .eq("source", "llm");
+      if (
+        clearLinksError && !isSchemaMissingError(clearLinksError) &&
+        !isRlsError(clearLinksError)
+      ) {
+        throw new ApiError(
+          500,
+          "ingredient_ontology_links_clear_failed",
+          "Could not clear stale ingredient ontology links",
+          clearLinksError.message,
+        );
       }
     }
 
