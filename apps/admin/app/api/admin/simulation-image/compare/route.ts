@@ -20,11 +20,13 @@ type CompareResponse = {
   scenario: {
     id: string;
     title: string;
+    description?: string;
   };
   lane_a: {
     status: string;
     provider: string | null;
     model: string | null;
+    image_url: string | null;
     latency_ms: number | null;
     cost_usd: number | null;
     error: string | null;
@@ -33,6 +35,7 @@ type CompareResponse = {
     status: string;
     provider: string | null;
     model: string | null;
+    image_url: string | null;
     latency_ms: number | null;
     cost_usd: number | null;
     error: string | null;
@@ -48,6 +51,33 @@ type CompareResponse = {
   };
   completed: boolean;
 };
+
+type CompareStreamEvent =
+  | {
+    type: "compare_started";
+    request_id: string;
+    scenario: CompareResponse["scenario"];
+    lane_a: { provider: string | null; model: string | null };
+    lane_b: { provider: string | null; model: string | null };
+    at: string;
+  }
+  | {
+    type: "lane_completed";
+    request_id: string;
+    lane: "A" | "B";
+    result: CompareResponse["lane_a"];
+    at: string;
+  }
+  | {
+    type: "judge_completed";
+    request_id: string;
+    result: CompareResponse["judge"];
+    at: string;
+  }
+  | {
+    type: "result";
+    payload: CompareResponse;
+  };
 
 const summarizeCompareResponse = (payload: CompareResponse): Record<string, unknown> => ({
   upstream_request_id: payload.request_id,
@@ -86,6 +116,8 @@ const summarizeCompareResponse = (payload: CompareResponse): Record<string, unkn
 export async function POST(request: Request): Promise<NextResponse> {
   const identity = await requireCloudflareAccess();
   const client = getAdminClient();
+  const url = new URL(request.url);
+  const stream = url.searchParams.get("stream") === "1";
   const body = (await request.json().catch(() => ({}))) as Body;
   const scenarioId = typeof body.scenario_id === "string" ? body.scenario_id.trim() : "";
   if (!scenarioId) {
@@ -130,7 +162,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   const startedAt = Date.now();
   let response: Response;
   try {
-    response = await fetch(`${apiBase}/image-simulations/compare`, {
+    response = await fetch(`${apiBase}/image-simulations/compare${stream ? "?stream=1" : ""}`, {
       method: "POST",
       headers: {
         authorization: `Bearer ${token}`,
@@ -161,6 +193,145 @@ export async function POST(request: Request): Promise<NextResponse> {
       },
       { status: 502 }
     );
+  }
+
+  if (stream) {
+    if (!response.ok) {
+      const payload = await readJsonBody(response);
+      await client.from("events").insert({
+        user_id: actor?.id ?? null,
+        event_type: "image_simulation_run_failed",
+        request_id: adminRequestId,
+        latency_ms: Date.now() - startedAt,
+        event_payload: {
+          scenario_id: scenarioId,
+          details: payload,
+        },
+      });
+
+      return NextResponse.json(
+        {
+          error: "Image simulation compare failed",
+          details: payload,
+        },
+        { status: response.status }
+      );
+    }
+
+    if (!response.body) {
+      await client.from("events").insert({
+        user_id: actor?.id ?? null,
+        event_type: "image_simulation_run_failed",
+        request_id: adminRequestId,
+        latency_ms: Date.now() - startedAt,
+        event_payload: {
+          scenario_id: scenarioId,
+          error: "missing_upstream_stream_body",
+        },
+      });
+
+      return NextResponse.json(
+        {
+          error: "Image simulation compare failed",
+          details: "Upstream stream body missing",
+        },
+        { status: 502 }
+      );
+    }
+
+    const encoder = new TextEncoder();
+    const decoder = new TextDecoder();
+    const streamPair = new TransformStream<Uint8Array, Uint8Array>();
+    const writer = streamPair.writable.getWriter();
+    const reader = response.body.getReader();
+    let finalResult: CompareResponse | null = null;
+
+    void (async () => {
+      let buffer = "";
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) {
+            buffer += decoder.decode();
+            break;
+          }
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed) {
+              continue;
+            }
+            await writer.write(encoder.encode(`${trimmed}\n`));
+            try {
+              const event = JSON.parse(trimmed) as CompareStreamEvent;
+              if (event.type === "result") {
+                finalResult = event.payload;
+              }
+            } catch {
+              // Best-effort parsing for admin event logging. Preserve stream regardless.
+            }
+          }
+        }
+
+        const lastLine = buffer.trim();
+        if (lastLine) {
+          await writer.write(encoder.encode(`${lastLine}\n`));
+          try {
+            const event = JSON.parse(lastLine) as CompareStreamEvent;
+            if (event.type === "result") {
+              finalResult = event.payload;
+            }
+          } catch {
+            // Ignore malformed trailing lines and preserve the proxied stream.
+          }
+        }
+
+        if (finalResult) {
+          await client.from("events").insert({
+            user_id: actor?.id ?? null,
+            event_type: "image_simulation_run_completed",
+            request_id: adminRequestId,
+            latency_ms: Date.now() - startedAt,
+            event_payload: summarizeCompareResponse(finalResult),
+          });
+        } else {
+          await client.from("events").insert({
+            user_id: actor?.id ?? null,
+            event_type: "image_simulation_run_failed",
+            request_id: adminRequestId,
+            latency_ms: Date.now() - startedAt,
+            event_payload: {
+              scenario_id: scenarioId,
+              error: "image_simulation_stream_ended_without_result",
+            },
+          });
+        }
+      } catch (error) {
+        await client.from("events").insert({
+          user_id: actor?.id ?? null,
+          event_type: "image_simulation_run_failed",
+          request_id: adminRequestId,
+          latency_ms: Date.now() - startedAt,
+          event_payload: {
+            scenario_id: scenarioId,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        });
+      } finally {
+        await writer.close();
+      }
+    })();
+
+    return new NextResponse(streamPair.readable, {
+      headers: {
+        "content-type": "application/x-ndjson; charset=utf-8",
+        "cache-control": "no-store",
+      },
+    });
   }
 
   const payload = await readJsonBody(response);

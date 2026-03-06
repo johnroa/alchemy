@@ -46,6 +46,7 @@ import {
 } from "./ontology-canonicalization.ts";
 import {
   runImageSimulationCompare,
+  streamImageSimulationCompare,
   type ImageSimulationCompareRequest,
 } from "./image-simulations.ts";
 import {
@@ -7352,6 +7353,15 @@ Deno.serve(async (request) => {
       segments[1] === "compare" && method === "POST"
     ) {
       const body = await requireJsonBody<ImageSimulationCompareRequest>(request);
+      const stream = new URL(request.url).searchParams.get("stream") === "1";
+      if (stream) {
+        return streamImageSimulationCompare({
+          client: serviceClient,
+          userId: auth.userId,
+          requestId,
+          body,
+        });
+      }
       const response = await runImageSimulationCompare({
         client: serviceClient,
         userId: auth.userId,

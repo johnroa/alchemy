@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Alchemy API",
-    "version": "2.0.0",
+    "version": "2.0.1",
     "description": "API contract for Alchemy — an AI-driven recipe creation and management platform.\nCovers the user-facing v1 API at api.cookwithalchemy.com and the admin API at admin.cookwithalchemy.com.\n"
   },
   "servers": [
@@ -929,6 +929,20 @@
     "/image-simulations/compare": {
       "post": {
         "summary": "Run an ephemeral two-lane image simulation compare",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "stream",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "enum": [
+                1
+              ]
+            },
+            "description": "When set to `1`, returns `application/x-ndjson` stream events as each lane completes,\nfollowed by a final `result` event. Omit for the normal JSON response.\n"
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -946,6 +960,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ImageSimulationCompareResponse"
+                }
+              },
+              "application/x-ndjson": {
+                "schema": {
+                  "type": "string"
+                },
+                "examples": {
+                  "streamed_compare": {
+                    "value": "{\"type\":\"compare_started\",\"request_id\":\"req_123\"}\n{\"type\":\"lane_completed\",\"lane\":\"B\"}\n{\"type\":\"lane_completed\",\"lane\":\"A\"}\n{\"type\":\"judge_completed\"}\n{\"type\":\"result\",\"payload\":{\"request_id\":\"req_123\",\"completed\":true}}\n"
+                  }
                 }
               }
             }

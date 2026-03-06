@@ -880,7 +880,13 @@ export interface paths {
         /** Run an ephemeral two-lane image simulation compare */
         post: {
             parameters: {
-                query?: never;
+                query?: {
+                    /**
+                     * @description When set to `1`, returns `application/x-ndjson` stream events as each lane completes,
+                     *     followed by a final `result` event. Omit for the normal JSON response.
+                     */
+                    stream?: 1;
+                };
                 header?: never;
                 path?: never;
                 cookie?: never;
@@ -898,6 +904,7 @@ export interface paths {
                     };
                     content: {
                         "application/json": components["schemas"]["ImageSimulationCompareResponse"];
+                        "application/x-ndjson": string;
                     };
                 };
                 default: components["responses"]["ErrorResponse"];

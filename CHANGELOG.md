@@ -33,6 +33,7 @@
 - Added `/simulations` redirect to `/simulation-recipe`
 - Added new **Image Simulations** page at `/simulation-image` for curated recipe-title A/B image compares
 - Added `POST /v1/image-simulations/compare` and `POST /api/admin/simulation-image/compare`
+- Added optional NDJSON streaming for image compares so lane results can render as soon as each model finishes
 - Added new `image_quality_eval` LLM scope for server-side pairwise image judging
 - Added `image_simulation_run_started`, `image_simulation_run_completed`, and `image_simulation_run_failed` admin events
 - Extended `llm_model_registry` with explicit billing metadata for image-priced models and now write image `cost_usd` into `llm_call` events

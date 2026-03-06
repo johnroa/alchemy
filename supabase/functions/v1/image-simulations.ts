@@ -53,6 +53,33 @@ export type ImageSimulationCompareResponse = {
   completed: boolean;
 };
 
+export type ImageSimulationCompareStreamEvent =
+  | {
+    type: "compare_started";
+    request_id: string;
+    scenario: ImageSimulationScenario;
+    lane_a: { provider: string | null; model: string | null };
+    lane_b: { provider: string | null; model: string | null };
+    at: string;
+  }
+  | {
+    type: "lane_completed";
+    request_id: string;
+    lane: "A" | "B";
+    result: ImageSimulationLaneResult;
+    at: string;
+  }
+  | {
+    type: "judge_completed";
+    request_id: string;
+    result: ImageSimulationJudgeResult;
+    at: string;
+  }
+  | {
+    type: "result";
+    payload: ImageSimulationCompareResponse;
+  };
+
 const normalizeModelOverride = (
   value: ImageSimulationModelOverride | undefined,
 ): ImageSimulationModelOverride | undefined => {
@@ -185,14 +212,15 @@ const runLane = async (params: {
   }
 };
 
-export const runImageSimulationCompare = async (params: {
-  client: SupabaseClient;
-  userId: string;
-  requestId: string;
-  body: ImageSimulationCompareRequest;
-}): Promise<ImageSimulationCompareResponse> => {
-  const scenarioId = typeof params.body.scenario_id === "string"
-    ? params.body.scenario_id.trim()
+const resolveCompareInputs = (body: ImageSimulationCompareRequest): {
+  scenario: ImageSimulationScenario;
+  laneAOverride: ImageSimulationModelOverride | undefined;
+  laneBOverride: ImageSimulationModelOverride | undefined;
+  recipe: RecipePayload;
+  context: Record<string, JsonValue>;
+} => {
+  const scenarioId = typeof body.scenario_id === "string"
+    ? body.scenario_id.trim()
     : "";
   if (!scenarioId) {
     throw new ApiError(
@@ -211,10 +239,107 @@ export const runImageSimulationCompare = async (params: {
     );
   }
 
-  const laneAOverride = normalizeModelOverride(params.body.lane_a_override);
-  const laneBOverride = normalizeModelOverride(params.body.lane_b_override);
+  const laneAOverride = normalizeModelOverride(body.lane_a_override);
+  const laneBOverride = normalizeModelOverride(body.lane_b_override);
   const recipe = buildImageSimulationRecipe(scenario);
   const context = buildImageSimulationContext(scenario);
+
+  return {
+    scenario,
+    laneAOverride,
+    laneBOverride,
+    recipe,
+    context,
+  };
+};
+
+const runJudge = async (params: {
+  client: SupabaseClient;
+  userId: string;
+  requestId: string;
+  scenario: ImageSimulationScenario;
+  laneA: ImageSimulationLaneResult;
+  laneB: ImageSimulationLaneResult;
+}): Promise<ImageSimulationJudgeResult> => {
+  const completed = params.laneA.status === "ok" &&
+    params.laneB.status === "ok" &&
+    !!params.laneA.image_url &&
+    !!params.laneB.image_url;
+
+  if (!completed) {
+    return {
+      status: "skipped",
+      provider: null,
+      model: null,
+      latency_ms: null,
+      winner: null,
+      rationale: null,
+      confidence: null,
+      error: "judge_skipped_due_to_lane_failure",
+    };
+  }
+
+  try {
+    const result = await llmGateway.evaluateImageQualityPair({
+      client: params.client,
+      userId: params.userId,
+      requestId: params.requestId,
+      scenario: {
+        id: params.scenario.id,
+        title: params.scenario.title,
+        description: params.scenario.description,
+        heroIngredients: [...params.scenario.hero_ingredients],
+        visualBrief: params.scenario.visual_brief,
+      },
+      laneA: {
+        imageUrl: params.laneA.image_url ?? "",
+        provider: params.laneA.provider ?? "unknown",
+        model: params.laneA.model ?? "unknown",
+      },
+      laneB: {
+        imageUrl: params.laneB.image_url ?? "",
+        provider: params.laneB.provider ?? "unknown",
+        model: params.laneB.model ?? "unknown",
+      },
+    });
+
+    return {
+      status: "ok",
+      provider: result.provider,
+      model: result.model,
+      latency_ms: result.latencyMs,
+      winner: result.winner,
+      rationale: result.rationale,
+      confidence: result.confidence,
+      error: null,
+    };
+  } catch (error) {
+    return {
+      status: "failed",
+      provider: null,
+      model: null,
+      latency_ms: null,
+      winner: null,
+      rationale: null,
+      confidence: null,
+      error: toErrorMessage(error),
+    };
+  }
+};
+
+export const runImageSimulationCompare = async (params: {
+  client: SupabaseClient;
+  userId: string;
+  requestId: string;
+  body: ImageSimulationCompareRequest;
+}): Promise<ImageSimulationCompareResponse> => {
+  const {
+    scenario,
+    laneAOverride,
+    laneBOverride,
+    recipe,
+    context,
+  } = resolveCompareInputs(params.body);
 
   const [laneA, laneB] = await Promise.all([
     runLane({
@@ -239,68 +364,15 @@ export const runImageSimulationCompare = async (params: {
     }),
   ]);
 
+  const judge = await runJudge({
+    client: params.client,
+    userId: params.userId,
+    requestId: params.requestId,
+    scenario,
+    laneA,
+    laneB,
+  });
   const completed = laneA.status === "ok" && laneB.status === "ok";
-  let judge: ImageSimulationJudgeResult;
-
-  if (!completed || !laneA.image_url || !laneB.image_url) {
-    judge = {
-      status: "skipped",
-      provider: null,
-      model: null,
-      latency_ms: null,
-      winner: null,
-      rationale: null,
-      confidence: null,
-      error: "judge_skipped_due_to_lane_failure",
-    };
-  } else {
-    try {
-      const result = await llmGateway.evaluateImageQualityPair({
-        client: params.client,
-        userId: params.userId,
-        requestId: params.requestId,
-        scenario: {
-          id: scenario.id,
-          title: scenario.title,
-          description: scenario.description,
-          heroIngredients: [...scenario.hero_ingredients],
-          visualBrief: scenario.visual_brief,
-        },
-        laneA: {
-          imageUrl: laneA.image_url,
-          provider: laneA.provider ?? "unknown",
-          model: laneA.model ?? "unknown",
-        },
-        laneB: {
-          imageUrl: laneB.image_url,
-          provider: laneB.provider ?? "unknown",
-          model: laneB.model ?? "unknown",
-        },
-      });
-
-      judge = {
-        status: "ok",
-        provider: result.provider,
-        model: result.model,
-        latency_ms: result.latencyMs,
-        winner: result.winner,
-        rationale: result.rationale,
-        confidence: result.confidence,
-        error: null,
-      };
-    } catch (error) {
-      judge = {
-        status: "failed",
-        provider: null,
-        model: null,
-        latency_ms: null,
-        winner: null,
-        rationale: null,
-        confidence: null,
-        error: toErrorMessage(error),
-      };
-    }
-  }
 
   return {
     request_id: params.requestId,
@@ -310,4 +382,128 @@ export const runImageSimulationCompare = async (params: {
     judge,
     completed,
   };
+};
+
+export const streamImageSimulationCompare = (params: {
+  client: SupabaseClient;
+  userId: string;
+  requestId: string;
+  body: ImageSimulationCompareRequest;
+}): Response => {
+  const {
+    scenario,
+    laneAOverride,
+    laneBOverride,
+    recipe,
+    context,
+  } = resolveCompareInputs(params.body);
+
+  const encoder = new TextEncoder();
+  const streamPair = new TransformStream<Uint8Array, Uint8Array>();
+  const writer = streamPair.writable.getWriter();
+  let writeQueue = Promise.resolve();
+
+  const writeEvent = (event: ImageSimulationCompareStreamEvent): Promise<void> => {
+    const line = `${JSON.stringify(event)}\n`;
+    writeQueue = writeQueue.then(() => writer.write(encoder.encode(line)));
+    return writeQueue;
+  };
+
+  void (async () => {
+    try {
+      await writeEvent({
+        type: "compare_started",
+        request_id: params.requestId,
+        scenario,
+        lane_a: {
+          provider: laneAOverride?.provider ?? null,
+          model: laneAOverride?.model ?? null,
+        },
+        lane_b: {
+          provider: laneBOverride?.provider ?? null,
+          model: laneBOverride?.model ?? null,
+        },
+        at: new Date().toISOString(),
+      });
+
+      const laneAPromise = runLane({
+        client: params.client,
+        userId: params.userId,
+        requestId: params.requestId,
+        recipe,
+        context,
+        lane: "A",
+        override: laneAOverride,
+        scenario,
+      }).then(async (result) => {
+        await writeEvent({
+          type: "lane_completed",
+          request_id: params.requestId,
+          lane: "A",
+          result,
+          at: new Date().toISOString(),
+        });
+        return result;
+      });
+
+      const laneBPromise = runLane({
+        client: params.client,
+        userId: params.userId,
+        requestId: params.requestId,
+        recipe,
+        context,
+        lane: "B",
+        override: laneBOverride,
+        scenario,
+      }).then(async (result) => {
+        await writeEvent({
+          type: "lane_completed",
+          request_id: params.requestId,
+          lane: "B",
+          result,
+          at: new Date().toISOString(),
+        });
+        return result;
+      });
+
+      const [laneA, laneB] = await Promise.all([laneAPromise, laneBPromise]);
+      const judge = await runJudge({
+        client: params.client,
+        userId: params.userId,
+        requestId: params.requestId,
+        scenario,
+        laneA,
+        laneB,
+      });
+
+      await writeEvent({
+        type: "judge_completed",
+        request_id: params.requestId,
+        result: judge,
+        at: new Date().toISOString(),
+      });
+
+      await writeEvent({
+        type: "result",
+        payload: {
+          request_id: params.requestId,
+          scenario,
+          lane_a: laneA,
+          lane_b: laneB,
+          judge,
+          completed: laneA.status === "ok" && laneB.status === "ok",
+        },
+      });
+    } finally {
+      await writeQueue;
+      await writer.close();
+    }
+  })();
+
+  return new Response(streamPair.readable, {
+    headers: {
+      "content-type": "application/x-ndjson; charset=utf-8",
+      "cache-control": "no-store",
+    },
+  });
 };

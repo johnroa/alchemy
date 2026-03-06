@@ -18,8 +18,10 @@ type RegistryModel = {
   billing_mode: "token" | "image";
 };
 
+type ImageSimulationLaneStatus = "pending" | "ok" | "failed";
+
 type ImageSimulationLaneResult = {
-  status: "ok" | "failed";
+  status: ImageSimulationLaneStatus;
   provider: string | null;
   model: string | null;
   image_url: string | null;
@@ -28,8 +30,10 @@ type ImageSimulationLaneResult = {
   error: string | null;
 };
 
+type ImageSimulationJudgeStatus = "pending" | "ok" | "skipped" | "failed";
+
 type ImageSimulationJudgeResult = {
-  status: "ok" | "skipped" | "failed";
+  status: ImageSimulationJudgeStatus;
   provider: string | null;
   model: string | null;
   latency_ms: number | null;
@@ -48,6 +52,33 @@ type ImageSimulationCompareResponse = {
   completed: boolean;
 };
 
+type ImageSimulationCompareStreamEvent =
+  | {
+    type: "compare_started";
+    request_id: string;
+    scenario: ImageSimulationScenario;
+    lane_a: { provider: string | null; model: string | null };
+    lane_b: { provider: string | null; model: string | null };
+    at: string;
+  }
+  | {
+    type: "lane_completed";
+    request_id: string;
+    lane: "A" | "B";
+    result: ImageSimulationLaneResult;
+    at: string;
+  }
+  | {
+    type: "judge_completed";
+    request_id: string;
+    result: ImageSimulationJudgeResult;
+    at: string;
+  }
+  | {
+    type: "result";
+    payload: ImageSimulationCompareResponse;
+  };
+
 type ManualPick = "A" | "B" | "tie" | null;
 
 const modelValue = (model: { provider: string; model: string }): string =>
@@ -64,6 +95,75 @@ const extractModel = (
   value: string,
 ): RegistryModel | null => {
   return models.find((model) => modelValue(model) === value) ?? null;
+};
+
+const buildPendingLane = (model: RegistryModel | null): ImageSimulationLaneResult => ({
+  status: "pending",
+  provider: model?.provider ?? null,
+  model: model?.model ?? null,
+  image_url: null,
+  latency_ms: null,
+  cost_usd: null,
+  error: null,
+});
+
+const buildPendingResult = (
+  scenario: ImageSimulationScenario,
+  laneAModel: RegistryModel | null,
+  laneBModel: RegistryModel | null,
+): ImageSimulationCompareResponse => ({
+  request_id: "",
+  scenario,
+  lane_a: buildPendingLane(laneAModel),
+  lane_b: buildPendingLane(laneBModel),
+  judge: {
+    status: "pending",
+    provider: null,
+    model: null,
+    latency_ms: null,
+    winner: null,
+    rationale: null,
+    confidence: null,
+    error: null,
+  },
+  completed: false,
+});
+
+const applyCompareStreamEvent = (
+  current: ImageSimulationCompareResponse,
+  event: ImageSimulationCompareStreamEvent,
+): ImageSimulationCompareResponse => {
+  switch (event.type) {
+    case "compare_started":
+      return {
+        ...current,
+        request_id: event.request_id,
+        scenario: event.scenario,
+        lane_a: {
+          ...current.lane_a,
+          provider: event.lane_a.provider,
+          model: event.lane_a.model,
+        },
+        lane_b: {
+          ...current.lane_b,
+          provider: event.lane_b.provider,
+          model: event.lane_b.model,
+        },
+      };
+    case "lane_completed":
+      return event.lane === "A"
+        ? { ...current, lane_a: event.result }
+        : { ...current, lane_b: event.result };
+    case "judge_completed":
+      return {
+        ...current,
+        judge: event.result,
+      };
+    case "result":
+      return event.payload;
+    default:
+      return current;
+  }
 };
 
 export function ImageSimulationRunnerCard(props: {
@@ -106,8 +206,9 @@ export function ImageSimulationRunnerCard(props: {
 
     setRunning(true);
     setManualPick(null);
+    setResult(buildPendingResult(scenario, laneAModel, laneBModel));
     try {
-      const response = await fetch("/api/admin/simulation-image/compare", {
+      const response = await fetch("/api/admin/simulation-image/compare?stream=1", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -117,14 +218,68 @@ export function ImageSimulationRunnerCard(props: {
         }),
       });
 
-      const payload = (await response.json().catch(() => null)) as ImageSimulationCompareResponse | { error?: string } | null;
-      if (!response.ok || !payload || !("request_id" in payload)) {
-        const message = payload && "error" in payload && payload.error ? payload.error : "Compare request failed";
-        throw new Error(message);
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(payload?.error ?? "Compare request failed");
       }
 
-      setResult(payload);
-      toast.success(payload.completed ? "Image simulation completed" : "Image simulation finished with lane failures");
+      if (!response.body) {
+        throw new Error("Streaming response body missing");
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let finalPayload: ImageSimulationCompareResponse | null = null;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          buffer += decoder.decode();
+          break;
+        }
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) {
+            continue;
+          }
+          const event = JSON.parse(trimmed) as ImageSimulationCompareStreamEvent;
+          if (event.type === "result") {
+            finalPayload = event.payload;
+          }
+          setResult((current) => {
+            return applyCompareStreamEvent(
+              current ?? buildPendingResult(scenario, laneAModel, laneBModel),
+              event,
+            );
+          });
+        }
+      }
+
+      const trailing = buffer.trim();
+      if (trailing) {
+        const event = JSON.parse(trailing) as ImageSimulationCompareStreamEvent;
+        if (event.type === "result") {
+          finalPayload = event.payload;
+        }
+        setResult((current) => {
+          return applyCompareStreamEvent(
+            current ?? buildPendingResult(scenario, laneAModel, laneBModel),
+            event,
+          );
+        });
+      }
+
+      if (!finalPayload) {
+        throw new Error("Image simulation stream ended before final result");
+      }
+
+      toast.success(finalPayload.completed ? "Image simulation completed" : "Image simulation finished with lane failures");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Image simulation failed");
     } finally {
@@ -237,8 +392,8 @@ export function ImageSimulationRunnerCard(props: {
               </CardHeader>
               <CardContent className="space-y-3 pt-0">
                 <div className="flex flex-wrap items-center gap-2">
-                  <Badge variant={result.judge.status === "ok" ? "default" : "outline"}>
-                    {result.judge.status}
+                  <Badge variant={result.judge.status === "ok" ? "default" : result.judge.status === "failed" ? "destructive" : "outline"}>
+                    {result.judge.status === "pending" ? "waiting" : result.judge.status}
                   </Badge>
                   {result.judge.winner ? (
                     <Badge variant="secondary">Winner: {result.judge.winner}</Badge>
@@ -251,7 +406,9 @@ export function ImageSimulationRunnerCard(props: {
                   ) : null}
                 </div>
                 <p className="text-sm text-muted-foreground">
-                  {result.judge.rationale ?? result.judge.error ?? "Judge unavailable for this run."}
+                  {result.judge.status === "pending"
+                    ? "Waiting for both lanes to finish before judging."
+                    : result.judge.rationale ?? result.judge.error ?? "Judge unavailable for this run."}
                 </p>
               </CardContent>
             </Card>
@@ -292,7 +449,7 @@ function LaneResultCard({
   lane: ImageSimulationLaneResult;
 }): React.JSX.Element {
   return (
-    <Card className={lane.status === "ok" ? undefined : "border-red-200"}>
+    <Card className={lane.status === "failed" ? "border-red-200" : undefined}>
       <CardHeader className="pb-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
@@ -302,7 +459,9 @@ function LaneResultCard({
             </CardDescription>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Badge variant={lane.status === "ok" ? "default" : "destructive"}>{lane.status}</Badge>
+            <Badge variant={lane.status === "ok" ? "default" : lane.status === "failed" ? "destructive" : "outline"}>
+              {lane.status === "pending" ? "rendering" : lane.status}
+            </Badge>
             <Badge variant="outline">{formatLatency(lane.latency_ms)}</Badge>
             <Badge variant="outline">{formatCost(lane.cost_usd)}</Badge>
           </div>
@@ -318,7 +477,7 @@ function LaneResultCard({
           />
         ) : (
           <div className="flex aspect-[4/3] items-center justify-center rounded-lg border border-dashed bg-zinc-50 text-sm text-muted-foreground">
-            {lane.error ?? "No image generated"}
+            {lane.status === "pending" ? "Rendering image..." : lane.error ?? "No image generated"}
           </div>
         )}
         {lane.error ? (

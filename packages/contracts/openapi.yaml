@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Alchemy API
-  version: 2.0.0
+  version: 2.0.1
   description: |
     API contract for Alchemy — an AI-driven recipe creation and management platform.
     Covers the user-facing v1 API at api.cookwithalchemy.com and the admin API at admin.cookwithalchemy.com.
@@ -549,6 +549,16 @@ paths:
   /image-simulations/compare:
     post:
       summary: Run an ephemeral two-lane image simulation compare
+      parameters:
+        - in: query
+          name: stream
+          required: false
+          schema:
+            type: integer
+            enum: [1]
+          description: |
+            When set to `1`, returns `application/x-ndjson` stream events as each lane completes,
+            followed by a final `result` event. Omit for the normal JSON response.
       requestBody:
         required: true
         content:
@@ -562,6 +572,17 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ImageSimulationCompareResponse'
+            application/x-ndjson:
+              schema:
+                type: string
+              examples:
+                streamed_compare:
+                  value: |
+                    {"type":"compare_started","request_id":"req_123"}
+                    {"type":"lane_completed","lane":"B"}
+                    {"type":"lane_completed","lane":"A"}
+                    {"type":"judge_completed"}
+                    {"type":"result","payload":{"request_id":"req_123","completed":true}}
         default:
           $ref: '#/components/responses/ErrorResponse'
   /metadata-jobs/process:
