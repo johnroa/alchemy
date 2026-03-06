@@ -141,6 +141,135 @@ const normalizeOntologyTerm = (
   return Array.isArray(value) ? value[0] ?? null : value;
 };
 
+const normalizeOntologyToken = (value: string): string =>
+  value
+    .trim()
+    .toLocaleLowerCase()
+    .normalize("NFKD")
+    .replace(/[^a-z0-9\s:_-]/g, " ")
+    .replace(/\s+/g, "_")
+    .replace(/^_+|_+$/g, "");
+
+const singularizeToken = (value: string): string => {
+  if (value.length <= 3) {
+    return value;
+  }
+
+  if (value.endsWith("ies") && value.length > 4) {
+    return `${value.slice(0, -3)}y`;
+  }
+
+  if (
+    value.endsWith("s") &&
+    !value.endsWith("ss") &&
+    !value.endsWith("us") &&
+    !value.endsWith("is")
+  ) {
+    return value.slice(0, -1);
+  }
+
+  return value;
+};
+
+const singularizeOntologyKey = (value: string): string =>
+  normalizeOntologyToken(value)
+    .split("_")
+    .map((token) => singularizeToken(token))
+    .join("_");
+
+const humanizeOntologyKey = (value: string): string =>
+  value
+    .split("_")
+    .filter((token) => token.length > 0)
+    .map((token) => token.charAt(0).toUpperCase() + token.slice(1))
+    .join(" ");
+
+const canonicalizeOntologyDisplayKey = (params: {
+  termType: string;
+  termKey: string;
+  relationType: string;
+}): string => {
+  const type = normalizeOntologyToken(params.termType);
+  const relation = normalizeOntologyToken(params.relationType);
+  const key = normalizeOntologyToken(params.termKey);
+  if (!key) {
+    return "";
+  }
+
+  if (type === "diet" || relation === "compatible_with_diet") {
+    return key.replace(/_(friendly|compatible|compatibility|safe)$/g, "") || key;
+  }
+
+  return singularizeOntologyKey(key) || key;
+};
+
+const collapseOntologyLinksForDisplay = (links: OntologyLinkRow[]): OntologyLinkRow[] => {
+  const deduped = new Map<string, { row: OntologyLinkRow; count: number }>();
+
+  for (const link of links) {
+    const term = normalizeOntologyTerm(link.ontology_term);
+    if (!term) {
+      continue;
+    }
+
+    const canonicalKey = canonicalizeOntologyDisplayKey({
+      termType: String(term.term_type ?? ""),
+      termKey: String(term.term_key ?? term.label ?? ""),
+      relationType: String(link.relation_type ?? ""),
+    });
+    const normalizedType = normalizeOntologyToken(String(term.term_type ?? ""));
+    const normalizedRelation = normalizeOntologyToken(String(link.relation_type ?? ""));
+    if (!canonicalKey || !normalizedType || !normalizedRelation) {
+      continue;
+    }
+
+    const dedupeKey = `${normalizedType}:${canonicalKey}:${normalizedRelation}`;
+    const normalizedTerm = {
+      ...term,
+      term_type: normalizedType,
+      term_key: canonicalKey,
+      label: humanizeOntologyKey(canonicalKey),
+      metadata:
+        term.metadata && typeof term.metadata === "object" && !Array.isArray(term.metadata)
+          ? term.metadata
+          : {}
+    };
+    const normalizedLink: OntologyLinkRow = {
+      ...link,
+      relation_type: normalizedRelation,
+      ontology_term: normalizedTerm
+    };
+
+    const existing = deduped.get(dedupeKey);
+    if (!existing) {
+      deduped.set(dedupeKey, { row: normalizedLink, count: 1 });
+      continue;
+    }
+
+    const existingConfidence = Number(existing.row.confidence ?? 0);
+    const nextConfidence = Number(normalizedLink.confidence ?? 0);
+    const keepNext =
+      nextConfidence > existingConfidence ||
+      (nextConfidence === existingConfidence &&
+        new Date(normalizedLink.updated_at) > new Date(existing.row.updated_at));
+
+    deduped.set(dedupeKey, {
+      row: keepNext ? normalizedLink : existing.row,
+      count: existing.count + 1
+    });
+  }
+
+  return Array.from(deduped.values())
+    .map((entry) => ({
+      ...entry.row,
+      metadata: {
+        ...(entry.row.metadata ?? {}),
+        collapsed_occurrence_count: entry.count
+      }
+    }))
+    .sort((a, b) => Number(b.confidence ?? 0) - Number(a.confidence ?? 0));
+};
+
 export async function GET(
   _: Request,
   context: { params: Promise<{ id: string }> }
@@ -289,6 +418,8 @@ export async function GET(
       }))
       .sort((a, b) => Number(b.confidence ?? 0) - Number(a.confidence ?? 0));
   }
+
+  ontologyLinks = collapseOntologyLinksForDisplay(ontologyLinks);
 
   const pairedIngredientIds = Array.from(
     new Set(
