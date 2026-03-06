@@ -85,8 +85,7 @@ on conflict (scope, route_name) do update
 set provider = excluded.provider,
     model = excluded.model,
     config = excluded.config,
-    is_active = excluded.is_active,
-    updated_at = now();
+    is_active = excluded.is_active;
 
 update public.llm_prompts
 set is_active = false
