@@ -120,3 +120,52 @@ Deno.test("keeps exact key when no better canonical match exists", () => {
     "exact canonical key should be preserved",
   );
 });
+
+Deno.test("preserves broader and narrower taxonomy terms as distinct concepts", () => {
+  const catalog = buildOntologyCanonicalizationCatalog({
+    terms: [
+      { term_type: "category", term_key: "fruit", label: "Fruit", usage_count: 12 },
+      { term_type: "category", term_key: "citrus_fruit", label: "Citrus Fruit", usage_count: 8 },
+    ],
+  });
+
+  const broader = canonicalizeOntologyTerm({
+    term: {
+      term_type: "category",
+      term_key: "fruit",
+      label: "Fruit",
+      relation_type: "classified_as",
+    },
+    catalog,
+  });
+
+  const narrower = canonicalizeOntologyTerm({
+    term: {
+      term_type: "category",
+      term_key: "citrus_fruit",
+      label: "Citrus Fruit",
+      relation_type: "classified_as",
+    },
+    catalog,
+  });
+
+  assertEqual(
+    broader,
+    {
+      term_type: "category",
+      term_key: "fruit",
+      label: "Fruit",
+    },
+    "broader taxonomy term should remain distinct",
+  );
+
+  assertEqual(
+    narrower,
+    {
+      term_type: "category",
+      term_key: "citrus_fruit",
+      label: "Citrus Fruit",
+    },
+    "narrower taxonomy term should remain distinct",
+  );
+});
