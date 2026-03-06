@@ -25,3 +25,4 @@ supabase/.temp
 
 # Local browser automation traces
 .playwright-cli
+supabase/functions/v1/deno.lock
