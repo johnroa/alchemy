@@ -586,10 +586,27 @@ export const callOpenAiImage = async (params: {
   const quality = typeof params.modelConfig.quality === "string"
     ? params.modelConfig.quality
     : "high";
+  const requestedResponseFormat = typeof params.modelConfig.response_format === "string"
+    ? params.modelConfig.response_format
+    : null;
+  const isDallEModel = params.model.toLowerCase().startsWith("dall-e");
   const timeoutCandidate = Number(params.modelConfig.timeout_ms);
   const timeoutMs = Number.isFinite(timeoutCandidate)
     ? Math.max(5_000, Math.min(180_000, timeoutCandidate))
     : 40_000;
+
+  const requestBody: Record<string, JsonValue> = {
+    model: params.model,
+    prompt: params.prompt,
+    size,
+    quality,
+  };
+
+  // OpenAI's current GPT image models return base64 image data by default and do
+  // not accept response_format=url. DALL-E models still support explicit formats.
+  if (isDallEModel) {
+    requestBody.response_format = requestedResponseFormat ?? "url";
+  }
 
   let response: Response;
   try {
@@ -600,13 +617,7 @@ export const callOpenAiImage = async (params: {
         "content-type": "application/json",
       },
       signal: AbortSignal.timeout(timeoutMs),
-      body: JSON.stringify({
-        model: params.model,
-        prompt: params.prompt,
-        size,
-        quality,
-        response_format: "url",
-      }),
+      body: JSON.stringify(requestBody),
     });
   } catch (error) {
     if (error instanceof DOMException && error.name === "TimeoutError") {
