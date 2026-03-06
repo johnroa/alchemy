@@ -1,7 +1,93 @@
 import { ApiError } from "../_shared/errors.ts";
-import { executeEmbeddingWithConfig } from "../_shared/llm-executor.ts";
+import {
+  executeEmbeddingWithConfig,
+  getActiveConfig,
+} from "../_shared/llm-executor.ts";
+import type { SupabaseClient } from "npm:@supabase/supabase-js@2";
 
 const OPENAI_API_KEY = "test-openai-key";
+
+const buildConfigClient = (
+  tables: Record<string, unknown>,
+): SupabaseClient => {
+  return {
+    from(table: string) {
+      return {
+        select(_columns: string) {
+          return this;
+        },
+        eq(_column: string, _value: unknown) {
+          return this;
+        },
+        maybeSingle: async () => ({
+          data: tables[table] ?? null,
+          error: null,
+        }),
+      };
+    },
+  } as unknown as SupabaseClient;
+};
+
+Deno.test("getActiveConfig allows empty prompts for embedding scopes", async () => {
+  const config = await getActiveConfig(
+    buildConfigClient({
+      llm_prompts: { template: "" },
+      llm_rules: { rule: { response_contract: "recipe_search_embedding_v1" } },
+      llm_model_routes: {
+        provider: "openai",
+        model: "text-embedding-3-small",
+        config: { dimensions: 1536, normalize: "unit" },
+      },
+      llm_model_registry: {
+        input_cost_per_1m_tokens: 0.02,
+        output_cost_per_1m_tokens: 0,
+        billing_mode: "token",
+        billing_metadata: {},
+      },
+    }),
+    "recipe_search_embed",
+  );
+
+  if (config.promptTemplate !== "") {
+    throw new Error("expected embedding prompt to remain empty");
+  }
+});
+
+Deno.test("getActiveConfig still rejects empty prompts for non-embedding scopes", async () => {
+  let thrown: unknown = null;
+
+  try {
+    await getActiveConfig(
+      buildConfigClient({
+        llm_prompts: { template: "" },
+        llm_rules: {
+          rule: { response_contract: "recipe_search_interpret_v1" },
+        },
+        llm_model_routes: {
+          provider: "openai",
+          model: "gpt-5-mini",
+          config: { temperature: 0.1 },
+        },
+        llm_model_registry: {
+          input_cost_per_1m_tokens: 0.25,
+          output_cost_per_1m_tokens: 2,
+          billing_mode: "token",
+          billing_metadata: {},
+        },
+      }),
+      "recipe_search_interpret",
+    );
+  } catch (error) {
+    thrown = error;
+  }
+
+  if (!(thrown instanceof ApiError)) {
+    throw new Error("expected ApiError");
+  }
+  if (thrown.code !== "gateway_prompt_missing") {
+    throw new Error(`unexpected error code: ${thrown.code}`);
+  }
+});
 
 Deno.test("executeEmbeddingWithConfig routes OpenAI embeddings and normalizes the vector", async () => {
   const previousFetch = globalThis.fetch;

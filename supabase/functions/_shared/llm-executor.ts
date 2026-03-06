@@ -65,6 +65,7 @@ export const getActiveConfig = async (
   scope: GatewayScope,
   modelOverride?: { provider: string; model: string },
 ): Promise<GatewayConfig> => {
+  const scopeDefinition = getLlmScopeDefinition(scope);
   const [
     { data: prompt, error: promptError },
     { data: rule, error: ruleError },
@@ -79,7 +80,16 @@ export const getActiveConfig = async (
     ).maybeSingle(),
   ]);
 
-  if (promptError || !prompt?.template) {
+  const promptTemplate = typeof prompt?.template === "string"
+    ? prompt.template
+    : null;
+  const promptRequired = scopeDefinition.mode !== "embedding";
+
+  if (
+    promptError || !prompt ||
+    (promptRequired && (!promptTemplate || promptTemplate.length === 0)) ||
+    (!promptRequired && promptTemplate === null)
+  ) {
     throw new ApiError(
       500,
       "gateway_prompt_missing",
@@ -133,7 +143,7 @@ export const getActiveConfig = async (
     .maybeSingle();
 
   return {
-    promptTemplate: prompt.template,
+    promptTemplate: promptTemplate ?? "",
     rule: rule.rule as Record<string, JsonValue>,
     provider,
     model,
