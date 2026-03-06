@@ -3,14 +3,15 @@ import {
   decodeSearchCursor,
   encodeSearchCursor,
 } from "./recipe-search.ts";
+import { TEMP_RECIPE_PLACEHOLDER_IMAGE_URL } from "./recipe-images.ts";
 
-Deno.test("buildRecipeSearchDocument produces search text and explore eligibility", () => {
+Deno.test("buildRecipeSearchDocument injects the temporary placeholder image", () => {
   const document = buildRecipeSearchDocument({
     recipeId: "11111111-1111-1111-1111-111111111111",
     recipeVersionId: "22222222-2222-2222-2222-222222222222",
     visibility: "public",
-    imageUrl: "https://cdn.example.com/recipe.png",
-    imageStatus: "ready",
+    imageUrl: null,
+    imageStatus: "pending",
     canonicalIngredientIds: [
       "33333333-3333-3333-3333-333333333333",
       "44444444-4444-4444-4444-444444444444",
@@ -42,7 +43,13 @@ Deno.test("buildRecipeSearchDocument produces search text and explore eligibilit
   });
 
   if (!document.explore_eligible) {
-    throw new Error("expected ready images to be explore eligible");
+    throw new Error("expected placeholder images to be explore eligible");
+  }
+  if (document.image_url !== TEMP_RECIPE_PLACEHOLDER_IMAGE_URL) {
+    throw new Error("expected placeholder image URL to be injected");
+  }
+  if (document.image_status !== "ready") {
+    throw new Error("expected placeholder image to surface as ready");
   }
   if (document.time_minutes !== 35 || document.health_score !== 72) {
     throw new Error("expected quick stats to flow into the search document");

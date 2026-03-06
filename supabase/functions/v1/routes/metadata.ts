@@ -43,6 +43,22 @@ type MetadataDeps = {
     pending: number;
     queue: Record<string, JsonValue>;
   }>;
+  backfillRecipeSearchDocuments: (input: {
+    serviceClient: RouteContext["serviceClient"];
+    userId: string;
+    requestId: string;
+    recipeIds?: string[];
+    recipeVersionIds?: string[];
+    publicOnly?: boolean;
+    currentVersionsOnly?: boolean;
+    missingOnly?: boolean;
+    limit?: number;
+  }) => Promise<{
+    processed: number;
+    failed: number;
+    recipe_version_ids: string[];
+    failures: Array<{ recipe_version_id: string; error: string }>;
+  }>;
   enqueueRecipeMetadataJob: (input: {
     serviceClient: RouteContext["serviceClient"];
     recipeId: string;
@@ -75,9 +91,75 @@ export const handleMetadataRoutes = async (
     logChangelog,
     processImageJobs,
     processMetadataJobs,
+    backfillRecipeSearchDocuments,
     enqueueRecipeMetadataJob,
     scheduleMetadataQueueDrain,
   } = deps;
+
+  if (
+    segments.length === 3 &&
+    segments[0] === "metadata-jobs" &&
+    segments[1] === "search-index" &&
+    segments[2] === "backfill" &&
+    method === "POST"
+  ) {
+    const parsedBody = await requireJsonBody<{
+      recipe_ids?: string[];
+      recipe_version_ids?: string[];
+      public_only?: boolean;
+      current_versions_only?: boolean;
+      missing_only?: boolean;
+      limit?: number;
+    }>(request).catch(() => ({}));
+    const body: {
+      recipe_ids?: string[];
+      recipe_version_ids?: string[];
+      public_only?: boolean;
+      current_versions_only?: boolean;
+      missing_only?: boolean;
+      limit?: number;
+    } = parsedBody;
+
+    const result = await backfillRecipeSearchDocuments({
+      serviceClient,
+      userId: auth.userId,
+      requestId,
+      recipeIds: Array.isArray(body.recipe_ids)
+        ? body.recipe_ids
+            .filter((value: string): value is string =>
+              typeof value === "string" && value.trim().length > 0
+            )
+            .map((value: string) => parseUuid(value))
+        : undefined,
+      recipeVersionIds: Array.isArray(body.recipe_version_ids)
+        ? body.recipe_version_ids
+            .filter((value: string): value is string =>
+              typeof value === "string" && value.trim().length > 0
+            )
+            .map((value: string) => parseUuid(value))
+        : undefined,
+      publicOnly: body.public_only,
+      currentVersionsOnly: body.current_versions_only,
+      missingOnly: body.missing_only,
+      limit: body.limit,
+    });
+
+    await logChangelog({
+      serviceClient,
+      actorUserId: auth.userId,
+      scope: "metadata",
+      entityType: "recipe_search_document",
+      action: "manual_backfill",
+      requestId,
+      afterJson: {
+        processed: result.processed,
+        failed: result.failed,
+        recipe_version_ids: result.recipe_version_ids,
+      },
+    });
+
+    return respond(200, { ok: true, ...result });
+  }
 
   if (
     segments.length === 2 &&

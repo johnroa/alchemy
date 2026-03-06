@@ -2,6 +2,10 @@ import type { SupabaseClient } from "npm:@supabase/supabase-js@2";
 import { ApiError } from "../_shared/errors.ts";
 import { llmGateway, type ModelOverrideMap } from "../_shared/llm-gateway.ts";
 import type { JsonValue, RecipePayload } from "../_shared/types.ts";
+import {
+  resolveRecipeImageStatus,
+  resolveRecipeImageUrl,
+} from "./recipe-images.ts";
 
 export type RecipeSearchSurface = "explore" | "chat";
 export type RecipeSearchAppliedContext = "all" | "preset" | "query";
@@ -124,6 +128,11 @@ type SearchDocumentSource = {
   canonicalIngredientIds: string[];
   canonicalIngredientNames: string[];
   ontologyTermKeys: string[];
+};
+
+type SearchBackfillTarget = {
+  recipe_id: string;
+  recipe_version_id: string;
 };
 
 type SearchSessionCreateInput = {
@@ -522,6 +531,11 @@ export const buildRecipeSearchDocument = (
     ? params.payload.metadata as Record<string, JsonValue>
     : undefined;
 
+  const resolvedImageUrl = resolveRecipeImageUrl(params.imageUrl);
+  const resolvedImageStatus = resolveRecipeImageStatus(
+    params.imageUrl,
+    params.imageStatus,
+  );
   const title = normalizeScalarText(params.payload.title) ?? "Untitled Recipe";
   const summary = buildSearchDocumentSummary(params.payload);
   const ingredientCount = Array.isArray(params.payload.ingredients)
@@ -567,9 +581,10 @@ export const buildRecipeSearchDocument = (
     recipe_id: params.recipeId,
     recipe_version_id: params.recipeVersionId,
     visibility: params.visibility,
-    image_url: params.imageUrl,
-    image_status: params.imageStatus,
-    explore_eligible: params.imageStatus === "ready",
+    image_url: resolvedImageUrl,
+    image_status: resolvedImageStatus,
+    explore_eligible: params.visibility === "public" &&
+      resolvedImageUrl.length > 0,
     title,
     summary,
     time_minutes: normalizeFiniteInteger(metadata?.time_minutes),
@@ -585,6 +600,146 @@ export const buildRecipeSearchDocument = (
     technique_tags: techniqueTags,
     keyword_terms: keywordTerms,
     search_text: searchTextParts.join("\n"),
+  };
+};
+
+const loadRecipeSearchDocumentSource = async (params: {
+  serviceClient: SupabaseClient;
+  recipeId: string;
+  recipeVersionId: string;
+}): Promise<SearchDocumentSource> => {
+  const [
+    { data: recipeRow, error: recipeError },
+    { data: versionRow, error: versionError },
+    { data: ingredientRows, error: ingredientRowsError },
+  ] = await Promise.all([
+    params.serviceClient
+      .from("recipes")
+      .select("id,visibility,hero_image_url,image_status")
+      .eq("id", params.recipeId)
+      .maybeSingle(),
+    params.serviceClient
+      .from("recipe_versions")
+      .select("id,payload")
+      .eq("id", params.recipeVersionId)
+      .maybeSingle(),
+    params.serviceClient
+      .from("recipe_ingredients")
+      .select("ingredient_id,source_name,metadata")
+      .eq("recipe_version_id", params.recipeVersionId)
+      .order("position", { ascending: true }),
+  ]);
+
+  if (recipeError || !recipeRow) {
+    throw new ApiError(
+      404,
+      "recipe_search_source_recipe_not_found",
+      "Recipe was not found for search backfill",
+      recipeError?.message,
+    );
+  }
+
+  if (versionError || !versionRow?.payload) {
+    throw new ApiError(
+      404,
+      "recipe_search_source_version_not_found",
+      "Recipe version was not found for search backfill",
+      versionError?.message,
+    );
+  }
+
+  if (ingredientRowsError) {
+    throw new ApiError(
+      500,
+      "recipe_search_source_ingredients_failed",
+      "Could not load recipe ingredients for search backfill",
+      ingredientRowsError.message,
+    );
+  }
+
+  const canonicalIngredientIds = Array.from(
+    new Set(
+      (ingredientRows ?? []).flatMap((row) =>
+        typeof row.ingredient_id === "string" && row.ingredient_id.length > 0
+          ? [row.ingredient_id]
+          : []
+      ),
+    ),
+  );
+
+  let ingredientMetadataRows: Array<{
+    id: string;
+    canonical_name: string;
+    metadata: JsonValue;
+  }> = [];
+
+  if (canonicalIngredientIds.length > 0) {
+    const { data, error } = await params.serviceClient
+      .from("ingredients")
+      .select("id,canonical_name,metadata")
+      .in("id", canonicalIngredientIds);
+
+    if (error) {
+      throw new ApiError(
+        500,
+        "recipe_search_source_ingredient_metadata_failed",
+        "Could not load canonical ingredient metadata for search backfill",
+        error.message,
+      );
+    }
+
+    ingredientMetadataRows = (data ?? []) as Array<{
+      id: string;
+      canonical_name: string;
+      metadata: JsonValue;
+    }>;
+  }
+
+  const ingredientNameById = new Map(
+    ingredientMetadataRows.map((row) => [row.id, row.canonical_name]),
+  );
+  const canonicalIngredientNames = Array.from(
+    new Set(
+      (ingredientRows ?? []).flatMap((row) => {
+        if (typeof row.ingredient_id === "string") {
+          const canonicalName = ingredientNameById.get(row.ingredient_id);
+          if (canonicalName && canonicalName.trim().length > 0) {
+            return [canonicalName];
+          }
+        }
+
+        const metadata = asRecord(row.metadata);
+        const fallbackName = normalizeScalarText(metadata?.canonical_name) ??
+          normalizeScalarText(row.source_name);
+        return fallbackName ? [fallbackName] : [];
+      }),
+    ),
+  );
+
+  const ontologyTermKeys = Array.from(
+    new Set(
+      ingredientMetadataRows.flatMap((row) => {
+        const metadata = asRecord(row.metadata);
+        const ontologyIds = asRecord(metadata?.ontology_ids);
+        return Array.isArray(ontologyIds?.internal_term_keys)
+          ? ontologyIds.internal_term_keys.filter((value): value is string =>
+            typeof value === "string" && value.trim().length > 0
+          )
+          : [];
+      }),
+    ),
+  );
+
+  return {
+    recipeId: params.recipeId,
+    recipeVersionId: params.recipeVersionId,
+    visibility: String(recipeRow.visibility ?? "private"),
+    imageUrl: normalizeScalarText(recipeRow.hero_image_url),
+    imageStatus: normalizeScalarText(recipeRow.image_status) ?? "pending",
+    payload: versionRow.payload as RecipePayload,
+    canonicalIngredientIds,
+    canonicalIngredientNames,
+    ontologyTermKeys,
   };
 };
 
@@ -621,6 +776,204 @@ export const upsertRecipeSearchDocument = async (params: {
       error.message,
     );
   }
+};
+
+export const backfillRecipeSearchDocuments = async (params: {
+  serviceClient: SupabaseClient;
+  userId: string;
+  requestId: string;
+  recipeIds?: string[];
+  recipeVersionIds?: string[];
+  publicOnly?: boolean;
+  currentVersionsOnly?: boolean;
+  missingOnly?: boolean;
+  limit?: number;
+  modelOverrides?: ModelOverrideMap;
+}): Promise<{
+  processed: number;
+  failed: number;
+  recipe_version_ids: string[];
+  failures: Array<{ recipe_version_id: string; error: string }>;
+}> => {
+  const limit = Math.max(
+    1,
+    Math.min(100, Math.trunc(Number(params.limit ?? 25))),
+  );
+  const recipeIds = Array.from(new Set(params.recipeIds ?? []));
+  const recipeVersionIds = Array.from(new Set(params.recipeVersionIds ?? []));
+  const publicOnly = params.publicOnly === true;
+  const currentVersionsOnly = params.currentVersionsOnly !== false;
+  const missingOnly = params.missingOnly !== false;
+
+  let targetVersions: SearchBackfillTarget[] = [];
+
+  if (recipeVersionIds.length > 0) {
+    const { data, error } = await params.serviceClient
+      .from("recipe_versions")
+      .select("id,recipe_id")
+      .in("id", recipeVersionIds);
+
+    if (error) {
+      throw new ApiError(
+        500,
+        "recipe_search_backfill_targets_failed",
+        "Could not resolve recipe versions for search backfill",
+        error.message,
+      );
+    }
+
+    targetVersions = (data ?? []).map((row) => ({
+      recipe_id: String(row.recipe_id),
+      recipe_version_id: String(row.id),
+    }));
+  } else if (!currentVersionsOnly && recipeIds.length > 0) {
+    const { data, error } = await params.serviceClient
+      .from("recipe_versions")
+      .select("id,recipe_id")
+      .in("recipe_id", recipeIds);
+
+    if (error) {
+      throw new ApiError(
+        500,
+        "recipe_search_backfill_targets_failed",
+        "Could not resolve recipe versions for search backfill",
+        error.message,
+      );
+    }
+
+    targetVersions = (data ?? []).map((row) => ({
+      recipe_id: String(row.recipe_id),
+      recipe_version_id: String(row.id),
+    }));
+  } else {
+    let recipesQuery = params.serviceClient
+      .from("recipes")
+      .select("id,current_version_id,visibility")
+      .not("current_version_id", "is", null);
+
+    if (publicOnly) {
+      recipesQuery = recipesQuery.eq("visibility", "public");
+    }
+    if (recipeIds.length > 0) {
+      recipesQuery = recipesQuery.in("id", recipeIds);
+    }
+
+    const { data, error } = await recipesQuery;
+    if (error) {
+      throw new ApiError(
+        500,
+        "recipe_search_backfill_recipes_failed",
+        "Could not resolve recipes for search backfill",
+        error.message,
+      );
+    }
+
+    targetVersions = (data ?? [])
+      .filter((row) => typeof row.current_version_id === "string")
+      .map((row) => ({
+        recipe_id: String(row.id),
+        recipe_version_id: String(row.current_version_id),
+      }));
+  }
+
+  if (publicOnly && recipeVersionIds.length > 0) {
+    const targetRecipeIds = Array.from(
+      new Set(targetVersions.map((target) => target.recipe_id)),
+    );
+    if (targetRecipeIds.length > 0) {
+      const { data, error } = await params.serviceClient
+        .from("recipes")
+        .select("id,visibility")
+        .in("id", targetRecipeIds);
+
+      if (error) {
+        throw new ApiError(
+          500,
+          "recipe_search_backfill_recipe_visibility_failed",
+          "Could not filter recipe visibility for search backfill",
+          error.message,
+        );
+      }
+
+      const publicRecipeIds = new Set(
+        (data ?? [])
+          .filter((row) => row.visibility === "public")
+          .map((row) => String(row.id)),
+      );
+      targetVersions = targetVersions.filter((target) =>
+        publicRecipeIds.has(target.recipe_id)
+      );
+    }
+  }
+
+  targetVersions = Array.from(
+    new Map(
+      targetVersions.map((target) => [target.recipe_version_id, target]),
+    ).values(),
+  );
+
+  if (missingOnly && targetVersions.length > 0) {
+    const { data, error } = await params.serviceClient
+      .from("recipe_search_documents")
+      .select("recipe_version_id")
+      .in(
+        "recipe_version_id",
+        targetVersions.map((target) => target.recipe_version_id),
+      );
+
+    if (error) {
+      throw new ApiError(
+        500,
+        "recipe_search_backfill_existing_docs_failed",
+        "Could not fetch existing search documents",
+        error.message,
+      );
+    }
+
+    const existingVersionIds = new Set(
+      (data ?? []).map((row) => String(row.recipe_version_id)),
+    );
+    targetVersions = targetVersions.filter((target) =>
+      !existingVersionIds.has(target.recipe_version_id)
+    );
+  }
+
+  targetVersions = targetVersions.slice(0, limit);
+
+  let processed = 0;
+  let failed = 0;
+  const failures: Array<{ recipe_version_id: string; error: string }> = [];
+
+  for (const target of targetVersions) {
+    try {
+      const source = await loadRecipeSearchDocumentSource({
+        serviceClient: params.serviceClient,
+        recipeId: target.recipe_id,
+        recipeVersionId: target.recipe_version_id,
+      });
+      await upsertRecipeSearchDocument({
+        serviceClient: params.serviceClient,
+        userId: params.userId,
+        requestId: params.requestId,
+        source,
+        modelOverrides: params.modelOverrides,
+      });
+      processed += 1;
+    } catch (error) {
+      failed += 1;
+      failures.push({
+        recipe_version_id: target.recipe_version_id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  return {
+    processed,
+    failed,
+    recipe_version_ids: targetVersions.map((target) => target.recipe_version_id),
+    failures,
+  };
 };
 
 const createSearchSession = async (

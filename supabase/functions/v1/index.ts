@@ -55,7 +55,13 @@ import {
 import {
   searchRecipes,
   upsertRecipeSearchDocument,
+  backfillRecipeSearchDocuments,
 } from "./recipe-search.ts";
+import { buildRecipePreview, type RecipePreview } from "./recipe-preview.ts";
+import {
+  resolveRecipeImageStatus,
+  resolveRecipeImageUrl,
+} from "./recipe-images.ts";
 import {
   applyThreadPreferenceOverrides,
   derivePendingPreferenceConflictFromResponse,
@@ -4839,8 +4845,11 @@ const fetchRecipeView = async (
     pairings: payload.pairings ?? [],
     metadata: canonicalMetadata ? toJsonValue(canonicalMetadata) : undefined,
     emoji: payload.emoji ?? [],
-    image_url: recipe.hero_image_url,
-    image_status: recipe.image_status,
+    image_url: resolveRecipeImageUrl(recipe.hero_image_url),
+    image_status: resolveRecipeImageStatus(
+      recipe.hero_image_url,
+      recipe.image_status,
+    ),
     visibility: recipe.visibility,
     updated_at: recipe.updated_at,
     version: {
@@ -6373,7 +6382,7 @@ const mergeRecipeIntoCandidate = (
 const buildCookbookItems = async (
   client: SupabaseClient,
   userId: string,
-): Promise<Array<Record<string, JsonValue>>> => {
+): Promise<RecipePreview[]> => {
   const { data: saves, error: savesError } = await client
     .from("recipe_saves")
     .select("recipe_id")
@@ -6487,16 +6496,23 @@ const buildCookbookItems = async (
     const userCategory = userCategoryByRecipe.get(recipe.id);
     const autoCategory = autoCategoryByRecipe.get(recipe.id);
 
-    return {
+    return buildRecipePreview({
       id: recipe.id,
       title: payload?.title ?? recipe.title,
       summary: payload?.description ?? payload?.notes ?? "",
-      image_url: recipe.hero_image_url,
-      image_status: recipe.image_status,
+      image_url: resolveRecipeImageUrl(recipe.hero_image_url),
+      image_status: resolveRecipeImageStatus(
+        recipe.hero_image_url,
+        recipe.image_status,
+      ),
       category: userCategory ?? autoCategory ?? "Auto Organized",
       visibility: recipe.visibility,
       updated_at: recipe.updated_at,
-    };
+      time_minutes: payload?.metadata?.time_minutes,
+      difficulty: payload?.metadata?.difficulty,
+      health_score: payload?.metadata?.health_score,
+      items: Array.isArray(payload?.ingredients) ? payload.ingredients.length : null,
+    });
   });
 };
 
@@ -7342,6 +7358,19 @@ Deno.serve(async (request) => {
       logChangelog,
       processImageJobs,
       processMetadataJobs,
+      backfillRecipeSearchDocuments: async (input) => {
+        return await backfillRecipeSearchDocuments({
+          serviceClient: input.serviceClient,
+          userId: input.userId,
+          requestId: input.requestId,
+          recipeIds: input.recipeIds,
+          recipeVersionIds: input.recipeVersionIds,
+          publicOnly: input.publicOnly,
+          currentVersionsOnly: input.currentVersionsOnly,
+          missingOnly: input.missingOnly,
+          limit: input.limit,
+        });
+      },
       enqueueRecipeMetadataJob,
       scheduleMetadataQueueDrain,
     });
@@ -7376,8 +7405,10 @@ Deno.serve(async (request) => {
         });
 
         return {
-          ...response,
+          search_id: response.search_id,
+          applied_context: response.applied_context,
           items: response.items.map((item) => item as unknown as Record<string, JsonValue>),
+          next_cursor: response.next_cursor,
           no_match: response.no_match as unknown as Record<string, JsonValue> | null,
         };
       },
