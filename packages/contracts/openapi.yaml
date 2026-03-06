@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Alchemy API
-  version: 1.4.0
+  version: 1.5.0
   description: |
     API contract for Alchemy — an AI-driven recipe creation and management platform.
     Covers the user-facing v1 API at api.cookwithalchemy.com and the admin API at admin.cookwithalchemy.com.
@@ -158,6 +158,24 @@ paths:
                     type: array
                     items:
                       $ref: '#/components/schemas/RecipeCard'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /recipes/search:
+    post:
+      summary: Search public recipes for Explore and shared retrieval
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecipeSearchRequest'
+      responses:
+        '200':
+          description: Search response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecipeSearchResponse'
         default:
           $ref: '#/components/responses/ErrorResponse'
   /recipes/{id}/save:
@@ -1709,6 +1727,76 @@ components:
         updated_at:
           type: string
           format: date-time
+    RecipeSearchRequest:
+      type: object
+      properties:
+        query:
+          type: string
+        preset_id:
+          type: string
+        cursor:
+          type: string
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 20
+    RecipeSearchCard:
+      type: object
+      required:
+        [id, title, summary, image_status, ingredient_count]
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        summary:
+          type: string
+        image_url:
+          type: [string, 'null']
+          format: uri
+        image_status:
+          type: string
+          enum: [pending, ready, failed]
+        time_minutes:
+          type: [integer, 'null']
+        difficulty:
+          type: [string, 'null']
+          enum: [easy, medium, complex, null]
+        health_score:
+          type: [integer, 'null']
+        ingredient_count:
+          type: integer
+    RecipeSearchNoMatch:
+      type: object
+      required: [code, message, suggested_action]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        suggested_action:
+          type: string
+    RecipeSearchResponse:
+      type: object
+      required: [search_id, applied_context, items, next_cursor, no_match]
+      properties:
+        search_id:
+          type: string
+          format: uuid
+        applied_context:
+          type: string
+          enum: [all, preset, query]
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/RecipeSearchCard'
+        next_cursor:
+          type: [string, 'null']
+        no_match:
+          oneOf:
+            - $ref: '#/components/schemas/RecipeSearchNoMatch'
+            - type: 'null'
     RecipeVersion:
       type: object
       required: [version_id, recipe_id, created_at]

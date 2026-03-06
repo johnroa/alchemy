@@ -87,6 +87,22 @@ type RecipesDeps = {
     client: RouteContext["client"],
     recipeId: string,
   ) => Promise<void>;
+  searchRecipes: (input: {
+    serviceClient: RouteContext["serviceClient"];
+    userId: string;
+    requestId: string;
+    surface: "explore" | "chat";
+    query?: string | null;
+    presetId?: string | null;
+    cursor?: string | null;
+    limit?: number | null;
+  }) => Promise<{
+    search_id: string;
+    applied_context: "all" | "preset" | "query";
+    items: Array<Record<string, JsonValue>>;
+    next_cursor: string | null;
+    no_match: Record<string, JsonValue> | null;
+  }>;
   toJsonValue: (value: unknown) => JsonValue;
 };
 
@@ -119,6 +135,7 @@ export const handleRecipeRoutes = async (
     buildCookbookItems,
     buildCookbookInsightDeterministic,
     enqueueImageJob,
+    searchRecipes,
     toJsonValue,
   } = deps;
 
@@ -216,6 +233,33 @@ export const handleRecipeRoutes = async (
     });
 
     return respond(200, { ok: true });
+  }
+
+  if (
+    segments.length === 2 &&
+    segments[0] === "recipes" &&
+    segments[1] === "search" &&
+    method === "POST"
+  ) {
+    const body = await requireJsonBody<{
+      query?: string;
+      preset_id?: string;
+      cursor?: string;
+      limit?: number;
+    }>(request);
+
+    const response = await searchRecipes({
+      serviceClient,
+      userId: auth.userId,
+      requestId,
+      surface: "explore",
+      query: body.query ?? null,
+      presetId: body.preset_id ?? null,
+      cursor: body.cursor ?? null,
+      limit: typeof body.limit === "number" ? body.limit : null,
+    });
+
+    return respond(200, response);
   }
 
   if (

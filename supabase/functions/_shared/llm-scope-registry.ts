@@ -121,6 +121,36 @@ export const LLM_SCOPE_REGISTRY = {
     fallback_policy: "none",
     telemetry_tags: { task: "recipe_metadata_enrich", criticality: "medium" },
   },
+  recipe_search_embed: {
+    output_contract: "recipe_search_embedding_v1",
+    mode: "embedding",
+    retry_policy: {
+      max_attempts: 2,
+      retryable_codes: STANDARD_RETRYABLE_CODES,
+    },
+    fallback_policy: "none",
+    telemetry_tags: { task: "recipe_search_embed", criticality: "medium" },
+  },
+  recipe_search_interpret: {
+    output_contract: "recipe_search_interpret_v1",
+    mode: "classification",
+    retry_policy: {
+      max_attempts: 2,
+      retryable_codes: [...STRICT_JSON_RETRYABLE_CODES, ...STANDARD_RETRYABLE_CODES],
+    },
+    fallback_policy: "none",
+    telemetry_tags: { task: "recipe_search_interpret", criticality: "medium" },
+  },
+  recipe_search_rerank: {
+    output_contract: "recipe_search_rerank_v1",
+    mode: "classification",
+    retry_policy: {
+      max_attempts: 2,
+      retryable_codes: [...STRICT_JSON_RETRYABLE_CODES, ...STANDARD_RETRYABLE_CODES],
+    },
+    fallback_policy: "none",
+    telemetry_tags: { task: "recipe_search_rerank", criticality: "medium" },
+  },
   ingredient_relation_infer: {
     output_contract: "ingredient_relation_infer_v1",
     mode: "classification",

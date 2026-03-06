@@ -14,6 +14,12 @@ type ProviderResult<T> = {
   outputTokens: number;
 };
 
+export type EmbeddingProviderResult = {
+  vector: number[];
+  dimensions: number;
+  inputTokens: number;
+};
+
 export const normalizeOpenAiModelConfig = (params: {
   model: string;
   modelConfig: Record<string, JsonValue>;
@@ -663,4 +669,100 @@ export const callOpenAiImage = async (params: {
     "image_empty_output",
     "Image provider returned no image output",
   );
+};
+
+export const callOpenAiEmbedding = async (params: {
+  model: string;
+  modelConfig: Record<string, JsonValue>;
+  inputText: string;
+}): Promise<EmbeddingProviderResult> => {
+  const endpoint = (typeof params.modelConfig.embedding_endpoint === "string" &&
+    params.modelConfig.embedding_endpoint) ||
+    Deno.env.get("OPENAI_EMBEDDINGS_ENDPOINT") ||
+    "https://api.openai.com/v1/embeddings";
+  const apiKeyEnv = (typeof params.modelConfig.api_key_env === "string" &&
+    params.modelConfig.api_key_env) || "OPENAI_API_KEY";
+  const apiKey = Deno.env.get(apiKeyEnv);
+
+  if (!apiKey) {
+    throw new ApiError(
+      500,
+      "llm_provider_key_missing",
+      `Missing provider API key env: ${apiKeyEnv}`,
+    );
+  }
+
+  const timeoutCandidate = Number(params.modelConfig.timeout_ms);
+  const timeoutMs = Number.isFinite(timeoutCandidate)
+    ? Math.max(5_000, Math.min(120_000, timeoutCandidate))
+    : 45_000;
+
+  const dimensionsCandidate = Number(params.modelConfig.dimensions);
+  const requestBody: Record<string, JsonValue> = {
+    model: params.model,
+    input: params.inputText,
+  };
+  if (Number.isInteger(dimensionsCandidate) && dimensionsCandidate > 0) {
+    requestBody.dimensions = dimensionsCandidate;
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "content-type": "application/json",
+      },
+      signal: AbortSignal.timeout(timeoutMs),
+      body: JSON.stringify(requestBody),
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "TimeoutError") {
+      throw new ApiError(
+        504,
+        "llm_provider_timeout",
+        "LLM provider timed out",
+        {
+          endpoint,
+          model: params.model,
+          timeout_ms: timeoutMs,
+        },
+      );
+    }
+    throw error;
+  }
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new ApiError(
+      502,
+      "llm_provider_error",
+      "LLM provider returned an error",
+      body.slice(0, 1000),
+    );
+  }
+
+  const payload = (await response.json()) as {
+    data?: Array<{ embedding?: number[] }>;
+    usage?: { prompt_tokens?: number };
+  };
+  const rawVector = payload.data?.[0]?.embedding;
+  const vector = Array.isArray(rawVector)
+    ? rawVector.filter((value) => Number.isFinite(value))
+    : null;
+
+  if (!vector || vector.length === 0) {
+    throw new ApiError(
+      502,
+      "llm_empty_output",
+      "LLM provider returned an empty embedding payload",
+    );
+  }
+
+  return {
+    vector,
+    dimensions: vector.length,
+    inputTokens: payload.usage?.prompt_tokens ?? 0,
+  };
 };

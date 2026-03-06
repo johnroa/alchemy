@@ -172,6 +172,47 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/recipes/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Search public recipes for Explore and shared retrieval */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["RecipeSearchRequest"];
+                };
+            };
+            responses: {
+                /** @description Search response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RecipeSearchResponse"];
+                    };
+                };
+                default: components["responses"]["ErrorResponse"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/recipes/{id}/save": {
         parameters: {
             query?: never;
@@ -1816,6 +1857,41 @@ export interface components {
             category?: string;
             /** Format: date-time */
             updated_at: string;
+        };
+        RecipeSearchRequest: {
+            query?: string;
+            preset_id?: string;
+            cursor?: string;
+            limit?: number;
+        };
+        RecipeSearchCard: {
+            /** Format: uuid */
+            id: string;
+            title: string;
+            summary: string;
+            /** Format: uri */
+            image_url?: string | null;
+            /** @enum {string} */
+            image_status: "pending" | "ready" | "failed";
+            time_minutes?: number | null;
+            /** @enum {string|null} */
+            difficulty?: "easy" | "medium" | "complex" | null;
+            health_score?: number | null;
+            ingredient_count: number;
+        };
+        RecipeSearchNoMatch: {
+            code: string;
+            message: string;
+            suggested_action: string;
+        };
+        RecipeSearchResponse: {
+            /** Format: uuid */
+            search_id: string;
+            /** @enum {string} */
+            applied_context: "all" | "preset" | "query";
+            items: components["schemas"]["RecipeSearchCard"][];
+            next_cursor: string | null;
+            no_match: components["schemas"]["RecipeSearchNoMatch"] | null;
         };
         RecipeVersion: {
             /** Format: uuid */

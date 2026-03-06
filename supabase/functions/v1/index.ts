@@ -53,6 +53,10 @@ import {
   type ImageSimulationCompareRequest,
 } from "./image-simulations.ts";
 import {
+  searchRecipes,
+  upsertRecipeSearchDocument,
+} from "./recipe-search.ts";
+import {
   applyThreadPreferenceOverrides,
   derivePendingPreferenceConflictFromResponse,
   mergeThreadPreferenceOverrides,
@@ -1481,6 +1485,7 @@ type EnrichmentStage =
   | "ingredient_enrichment"
   | "recipe_enrichment"
   | "edge_inference"
+  | "search_index"
   | "finalize";
 
 const startEnrichmentRun = async (params: {
@@ -3156,12 +3161,20 @@ const upsertMetadataGraph = async (params: {
     }
   }
 
-  const entityPayload: Array<
-    { entity_type: string; label: string; metadata: Record<string, JsonValue> }
-  > = [
+  const entityLookupKey = (entityType: string, value: string): string =>
+    `${entityType}|${value.toLowerCase()}`;
+  const recipeEntityKey = (recipeId: string): string => `recipe:${recipeId}`;
+
+  const entityPayload: Array<{
+    entity_type: string;
+    label: string;
+    entity_key: string | null;
+    metadata: Record<string, JsonValue>;
+  }> = [
     {
       entity_type: "recipe",
       label: recipeLabel,
+      entity_key: recipeEntityKey(params.recipeId),
       metadata: {
         recipe_id: params.recipeId,
       },
@@ -3169,79 +3182,94 @@ const upsertMetadataGraph = async (params: {
     ...ingredientNames.map((label) => ({
       entity_type: "ingredient",
       label,
+      entity_key: label.toLowerCase(),
       metadata: {},
     })),
     ...categoryNames.map((label) => ({
       entity_type: "category",
       label,
+      entity_key: label.toLowerCase(),
       metadata: {},
     })),
     ...keywordNames.map((label) => ({
       entity_type: "keyword",
       label,
+      entity_key: label.toLowerCase(),
       metadata: {},
     })),
     ...dietTags.map((label) => ({
       entity_type: "diet_tag",
       label,
+      entity_key: label.toLowerCase(),
       metadata: {},
     })),
     ...allergenFlags.map((label) => ({
       entity_type: "allergen",
       label,
+      entity_key: label.toLowerCase(),
       metadata: {},
     })),
     ...techniques.map((label) => ({
       entity_type: "technique",
       label,
+      entity_key: label.toLowerCase(),
       metadata: {},
     })),
     ...equipments.map((label) => ({
       entity_type: "equipment",
       label,
+      entity_key: label.toLowerCase(),
       metadata: {},
     })),
     ...cuisines.map((label) => ({
       entity_type: "cuisine",
       label,
+      entity_key: label.toLowerCase(),
       metadata: {},
     })),
     ...occasions.map((label) => ({
       entity_type: "occasion",
       label,
+      entity_key: label.toLowerCase(),
       metadata: {},
     })),
     ...spiceLevels.map((label) => ({
       entity_type: "spice_level",
       label,
+      entity_key: label.toLowerCase(),
       metadata: {},
     })),
     ...difficultyValues.map((label) => ({
       entity_type: "difficulty_level",
       label,
+      entity_key: label.toLowerCase(),
       metadata: {},
     })),
     ...Array.from(relatedRecipeLabelById.entries()).map(([id, label]) => ({
       entity_type: "recipe",
       label,
+      entity_key: recipeEntityKey(id),
       metadata: { recipe_id: id },
     })),
   ];
 
   const uniqueEntityPayload = Array.from(
     new Map(
-      entityPayload.map((
+      entityPayload.map((entity) => [
+        entity.entity_key
+          ? entityLookupKey(entity.entity_type, entity.entity_key)
+          : entityLookupKey(entity.entity_type, entity.label),
         entity,
-      ) => [`${entity.entity_type}:${entity.label.toLowerCase()}`, entity]),
+      ]),
     ).values(),
   );
 
-  const { data: entities, error: entityError } = await params.serviceClient
+  const { data: entityRows, error: entityError } = await params.serviceClient
     .from("graph_entities")
-    .upsert(uniqueEntityPayload, { onConflict: "entity_type,label" })
-    .select("id,entity_type,label");
+    .upsert(uniqueEntityPayload, { onConflict: "entity_type,entity_key" })
+    .select("id,entity_type,label,entity_key");
 
-  if (entityError || !entities) {
+  if (entityError || !entityRows) {
     throw new ApiError(
       500,
       "metadata_entity_upsert_failed",
@@ -3251,16 +3279,22 @@ const upsertMetadataGraph = async (params: {
   }
 
   const entityByKey = new Map(
-    entities.map((
-      entity,
-    ) => [`${entity.entity_type}:${entity.label.toLowerCase()}`, entity.id]),
+    entityRows.map((entity) => [
+      entityLookupKey(
+        entity.entity_type,
+        entity.entity_key ?? entity.label,
+      ),
+      entity.id,
+    ]),
   );
-  const recipeEntityId = entityByKey.get(`recipe:${recipeLabel.toLowerCase()}`);
+  const recipeEntityId = entityByKey.get(
+    entityLookupKey("recipe", recipeEntityKey(params.recipeId)),
+  );
   if (!recipeEntityId) {
     return;
   }
 
-  const linkPayload = entities.map((entity) => ({
+  const linkPayload = entityRows.map((entity) => ({
     recipe_version_id: params.recipeVersionId,
     entity_id: entity.id,
   }));
@@ -3356,7 +3390,7 @@ const upsertMetadataGraph = async (params: {
   if (containsIngredientRelation) {
     for (const ingredientName of ingredientNames) {
       const entityId = entityByKey.get(
-        `ingredient:${ingredientName.toLowerCase()}`,
+        entityLookupKey("ingredient", ingredientName),
       );
       if (!entityId) {
         continue;
@@ -3379,7 +3413,7 @@ const upsertMetadataGraph = async (params: {
   ) {
     for (const assignment of ingredientRoleAssignments) {
       const ingredientEntityId = entityByKey.get(
-        `ingredient:${assignment.canonical_name.toLowerCase()}`,
+        entityLookupKey("ingredient", assignment.canonical_name),
       );
       if (!ingredientEntityId) continue;
 
@@ -3441,10 +3475,10 @@ const upsertMetadataGraph = async (params: {
           const left = deduped[i]!;
           const right = deduped[j]!;
           const leftEntity = entityByKey.get(
-            `ingredient:${left.canonical_name.toLowerCase()}`,
+            entityLookupKey("ingredient", left.canonical_name),
           );
           const rightEntity = entityByKey.get(
-            `ingredient:${right.canonical_name.toLowerCase()}`,
+            entityLookupKey("ingredient", right.canonical_name),
           );
           if (!leftEntity || !rightEntity) continue;
 
@@ -3473,9 +3507,9 @@ const upsertMetadataGraph = async (params: {
       for (let j = i + 1; j < ingredientNames.length; j += 1) {
         const left = ingredientNames[i]!;
         const right = ingredientNames[j]!;
-        const leftEntity = entityByKey.get(`ingredient:${left.toLowerCase()}`);
+        const leftEntity = entityByKey.get(entityLookupKey("ingredient", left));
         const rightEntity = entityByKey.get(
-          `ingredient:${right.toLowerCase()}`,
+          entityLookupKey("ingredient", right),
         );
         if (!leftEntity || !rightEntity) {
           continue;
@@ -3499,7 +3533,7 @@ const upsertMetadataGraph = async (params: {
   if (hasCategoryRelation) {
     for (const categoryName of categoryNames) {
       const entityId = entityByKey.get(
-        `category:${categoryName.toLowerCase()}`,
+        entityLookupKey("category", categoryName),
       );
       if (!entityId) {
         continue;
@@ -3517,7 +3551,7 @@ const upsertMetadataGraph = async (params: {
 
   if (hasKeywordRelation) {
     for (const keywordName of keywordNames) {
-      const entityId = entityByKey.get(`keyword:${keywordName.toLowerCase()}`);
+      const entityId = entityByKey.get(entityLookupKey("keyword", keywordName));
       if (!entityId) {
         continue;
       }
@@ -3534,7 +3568,7 @@ const upsertMetadataGraph = async (params: {
 
   if (dietRelation) {
     for (const value of dietTags) {
-      const entityId = entityByKey.get(`diet_tag:${value.toLowerCase()}`);
+      const entityId = entityByKey.get(entityLookupKey("diet_tag", value));
       if (!entityId) continue;
       edgePayload.push({
         from_entity_id: recipeEntityId,
@@ -3549,7 +3583,7 @@ const upsertMetadataGraph = async (params: {
 
   if (allergenRelation) {
     for (const value of allergenFlags) {
-      const entityId = entityByKey.get(`allergen:${value.toLowerCase()}`);
+      const entityId = entityByKey.get(entityLookupKey("allergen", value));
       if (!entityId) continue;
       edgePayload.push({
         from_entity_id: recipeEntityId,
@@ -3564,7 +3598,7 @@ const upsertMetadataGraph = async (params: {
 
   if (techniqueRelation) {
     for (const value of techniques) {
-      const entityId = entityByKey.get(`technique:${value.toLowerCase()}`);
+      const entityId = entityByKey.get(entityLookupKey("technique", value));
       if (!entityId) continue;
       edgePayload.push({
         from_entity_id: recipeEntityId,
@@ -3579,7 +3613,7 @@ const upsertMetadataGraph = async (params: {
 
   if (equipmentRelation) {
     for (const value of equipments) {
-      const entityId = entityByKey.get(`equipment:${value.toLowerCase()}`);
+      const entityId = entityByKey.get(entityLookupKey("equipment", value));
       if (!entityId) continue;
       edgePayload.push({
         from_entity_id: recipeEntityId,
@@ -3594,7 +3628,7 @@ const upsertMetadataGraph = async (params: {
 
   if (cuisineRelation) {
     for (const value of cuisines) {
-      const entityId = entityByKey.get(`cuisine:${value.toLowerCase()}`);
+      const entityId = entityByKey.get(entityLookupKey("cuisine", value));
       if (!entityId) continue;
       edgePayload.push({
         from_entity_id: recipeEntityId,
@@ -3609,7 +3643,7 @@ const upsertMetadataGraph = async (params: {
 
   if (occasionRelation) {
     for (const value of occasions) {
-      const entityId = entityByKey.get(`occasion:${value.toLowerCase()}`);
+      const entityId = entityByKey.get(entityLookupKey("occasion", value));
       if (!entityId) continue;
       edgePayload.push({
         from_entity_id: recipeEntityId,
@@ -3624,7 +3658,7 @@ const upsertMetadataGraph = async (params: {
 
   if (spiceRelation) {
     for (const value of spiceLevels) {
-      const entityId = entityByKey.get(`spice_level:${value.toLowerCase()}`);
+      const entityId = entityByKey.get(entityLookupKey("spice_level", value));
       if (!entityId) continue;
       edgePayload.push({
         from_entity_id: recipeEntityId,
@@ -3640,7 +3674,7 @@ const upsertMetadataGraph = async (params: {
   if (difficultyRelation) {
     for (const value of difficultyValues) {
       const entityId = entityByKey.get(
-        `difficulty_level:${value.toLowerCase()}`,
+        entityLookupKey("difficulty_level", value),
       );
       if (!entityId) continue;
       edgePayload.push({
@@ -3659,8 +3693,10 @@ const upsertMetadataGraph = async (params: {
     recipeLabelById.set(id, label);
   }
   const recipeEntityIdByRecipeId = new Map<string, string>();
-  for (const [id, label] of recipeLabelById.entries()) {
-    const entityId = entityByKey.get(`recipe:${label.toLowerCase()}`);
+  for (const [id] of recipeLabelById.entries()) {
+    const entityId = entityByKey.get(
+      entityLookupKey("recipe", recipeEntityKey(id)),
+    );
     if (entityId) {
       recipeEntityIdByRecipeId.set(id, entityId);
     }
@@ -3711,10 +3747,10 @@ const upsertMetadataGraph = async (params: {
 
   for (const relation of params.ingredientRelations ?? []) {
     const fromEntityId = entityByKey.get(
-      `ingredient:${relation.from_canonical_name.toLowerCase()}`,
+      entityLookupKey("ingredient", relation.from_canonical_name),
     );
     const toEntityId = entityByKey.get(
-      `ingredient:${relation.to_canonical_name.toLowerCase()}`,
+      entityLookupKey("ingredient", relation.to_canonical_name),
     );
     const relationTypeId = relationTypeByName.get(relation.relation_type);
     if (!fromEntityId || !toEntityId || !relationTypeId) {
@@ -4210,6 +4246,79 @@ const processMetadataJobs = async (params: {
         ingredientRelations: ingredientRelationInference.relations,
       });
 
+      await updateMetadataJobState({
+        serviceClient: params.serviceClient,
+        jobId: job.id,
+        patch: {
+          stage: "search_index",
+          last_stage_error: null,
+        },
+      });
+
+      const { data: searchRecipeRow, error: searchRecipeError } = await params
+        .serviceClient
+        .from("recipes")
+        .select("id,visibility,hero_image_url,image_status")
+        .eq("id", job.recipe_id)
+        .maybeSingle();
+
+      if (searchRecipeError || !searchRecipeRow) {
+        throw new Error(
+          searchRecipeError?.message ?? "recipe_search_source_missing",
+        );
+      }
+
+      let ontologyTermKeys: string[] = [];
+      if (ingredientIds.length > 0) {
+        const { data: ingredientMetadataRows, error: ingredientMetadataError } =
+          await params.serviceClient
+            .from("ingredients")
+            .select("id,metadata")
+            .in("id", ingredientIds);
+
+        if (ingredientMetadataError) {
+          throw new Error(ingredientMetadataError.message);
+        }
+
+        ontologyTermKeys = Array.from(
+          new Set(
+            (ingredientMetadataRows ?? []).flatMap((row) => {
+              const metadata = row.metadata &&
+                  typeof row.metadata === "object" && !Array.isArray(row.metadata)
+                ? row.metadata as Record<string, JsonValue>
+                : null;
+              const ontologyIds = metadata?.ontology_ids &&
+                  typeof metadata.ontology_ids === "object" &&
+                  !Array.isArray(metadata.ontology_ids)
+                ? metadata.ontology_ids as Record<string, JsonValue>
+                : null;
+              return Array.isArray(ontologyIds?.internal_term_keys)
+                ? ontologyIds.internal_term_keys.filter((value): value is string =>
+                  typeof value === "string" && value.trim().length > 0
+                )
+                : [];
+            }),
+          ),
+        );
+      }
+
+      await upsertRecipeSearchDocument({
+        serviceClient: params.serviceClient,
+        userId: params.actorUserId,
+        requestId: params.requestId,
+        source: {
+          recipeId: job.recipe_id,
+          recipeVersionId: job.recipe_version_id,
+          visibility: searchRecipeRow.visibility,
+          imageUrl: searchRecipeRow.hero_image_url,
+          imageStatus: searchRecipeRow.image_status,
+          payload,
+          canonicalIngredientIds: ingredientIds,
+          canonicalIngredientNames: ingredientNames,
+          ontologyTermKeys,
+        },
+      });
+
       const readyMetadata = {
         categories,
         keywords,
@@ -4222,6 +4331,7 @@ const processMetadataJobs = async (params: {
           edge_inference: ingredientRelationInference.rejectedCount,
         },
         confidence_threshold: ENRICHMENT_PERSIST_CONFIDENCE,
+        search_indexed_at: new Date().toISOString(),
         processed_at: new Date().toISOString(),
       };
 
@@ -7253,6 +7363,24 @@ Deno.serve(async (request) => {
       buildCookbookItems,
       buildCookbookInsightDeterministic,
       enqueueImageJob,
+      searchRecipes: async (input) => {
+        const response = await searchRecipes({
+          serviceClient: input.serviceClient,
+          userId: input.userId,
+          requestId: input.requestId,
+          surface: input.surface,
+          query: input.query,
+          presetId: input.presetId,
+          cursor: input.cursor,
+          limit: input.limit,
+        });
+
+        return {
+          ...response,
+          items: response.items.map((item) => item as unknown as Record<string, JsonValue>),
+          no_match: response.no_match as unknown as Record<string, JsonValue> | null,
+        };
+      },
       toJsonValue,
     });
     if (recipeResponse) {

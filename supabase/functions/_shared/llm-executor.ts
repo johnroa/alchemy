@@ -12,9 +12,11 @@ import {
   callGoogleVisionJson,
 } from "./llm-adapters/google.ts";
 import {
+  callOpenAiEmbedding,
   callOpenAiImage,
   callOpenAiJson,
   callOpenAiVisionJson,
+  type EmbeddingProviderResult,
 } from "./llm-adapters/openai.ts";
 import type { GatewayConfig, JsonValue } from "./types.ts";
 
@@ -27,6 +29,12 @@ export type ProviderResult<T> = {
   result: T;
   inputTokens: number;
   outputTokens: number;
+};
+
+export type EmbeddingResult = {
+  vector: number[];
+  dimensions: number;
+  inputTokens: number;
 };
 
 export type VisionInputImage = {
@@ -272,6 +280,67 @@ export const executeVisionWithConfig = async <T>(params: {
   );
 };
 
+export const executeEmbeddingWithConfig = async (params: {
+  provider: string;
+  model: string;
+  modelConfig: Record<string, JsonValue>;
+  inputText: string;
+}): Promise<EmbeddingResult> => {
+  let result: EmbeddingProviderResult;
+
+  if (params.provider === "openai") {
+    result = await callOpenAiEmbedding({
+      model: params.model,
+      modelConfig: params.modelConfig,
+      inputText: params.inputText,
+    });
+  } else {
+    throw new ApiError(
+      500,
+      "llm_provider_not_supported",
+      `Provider adapter not configured for embeddings: ${params.provider}`,
+    );
+  }
+
+  const expectedDimensions = Number(params.modelConfig.dimensions);
+  if (
+    Number.isInteger(expectedDimensions) && expectedDimensions > 0 &&
+    result.dimensions !== expectedDimensions
+  ) {
+    throw new ApiError(
+      502,
+      "embedding_dimension_mismatch",
+      "Embedding provider returned an unexpected vector size",
+      {
+        expected_dimensions: expectedDimensions,
+        actual_dimensions: result.dimensions,
+        model: params.model,
+      },
+    );
+  }
+
+  const shouldNormalize = params.modelConfig.normalize === "unit";
+  if (!shouldNormalize) {
+    return result;
+  }
+
+  const magnitude = Math.sqrt(
+    result.vector.reduce((sum, value) => sum + (value * value), 0),
+  );
+  if (!Number.isFinite(magnitude) || magnitude <= 0) {
+    throw new ApiError(
+      502,
+      "embedding_vector_invalid",
+      "Embedding vector magnitude is invalid",
+    );
+  }
+
+  return {
+    ...result,
+    vector: result.vector.map((value) => value / magnitude),
+  };
+};
+
 export const executeVisionScope = async <T>(params: {
   client: SupabaseClient;
   scope: GatewayScope;
@@ -334,6 +403,64 @@ export const executeVisionScope = async <T>(params: {
       502,
       "llm_execution_failed",
       "LLM multimodal scope execution failed",
+    );
+};
+
+export const executeEmbeddingScope = async (params: {
+  client: SupabaseClient;
+  scope: GatewayScope;
+  inputText: string;
+  modelOverride?: { provider: string; model: string };
+  modelConfigOverride?: Record<string, JsonValue>;
+  retryPolicyOverride?: LlmRetryPolicy;
+}): Promise<EmbeddingResult & { config: GatewayConfig; attempts: number }> => {
+  const config = await getActiveConfig(
+    params.client,
+    params.scope,
+    params.modelOverride,
+  );
+  const definition = getLlmScopeDefinition(params.scope);
+  const retryPolicy = params.retryPolicyOverride ?? definition.retry_policy;
+
+  let attempts = 0;
+  let lastError: unknown = null;
+
+  while (attempts < retryPolicy.max_attempts) {
+    attempts += 1;
+    try {
+      const result = await executeEmbeddingWithConfig({
+        provider: config.provider,
+        model: config.model,
+        modelConfig: {
+          ...config.modelConfig,
+          ...(config.rule ?? {}),
+          ...(params.modelConfigOverride ?? {}),
+        },
+        inputText: params.inputText,
+      });
+
+      return {
+        ...result,
+        config,
+        attempts,
+      };
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableErrorCode(error, retryPolicy)) {
+        throw error;
+      }
+      if (attempts >= retryPolicy.max_attempts) {
+        throw error;
+      }
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new ApiError(
+      502,
+      "llm_execution_failed",
+      "LLM embedding scope execution failed",
     );
 };
 

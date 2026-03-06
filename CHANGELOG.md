@@ -2,6 +2,20 @@
 
 ## [Unreleased] — 2026-03-05
 
+### Recipe Search / RAG Backend
+
+- Added `POST /v1/recipes/search` for shared Explore/chat recipe retrieval
+- Added hybrid recipe search backend storage:
+  - `recipe_search_documents`
+  - `recipe_search_sessions`
+  - Postgres full-text + pgvector retrieval functions
+- Added graph entity identity hardening with `graph_entities.entity_key` so recipe graph nodes key off stable recipe ids instead of titles
+- Extended the metadata pipeline with a `search_index` stage that rebuilds search documents after enrichment completes
+- Added new LLM scopes for search:
+  - `recipe_search_embed`
+  - `recipe_search_interpret`
+  - `recipe_search_rerank`
+
 ### Admin Console + API — Recipe and Image Simulations
 
 - Renamed the existing admin simulation page to **Recipe Simulations** at `/simulation-recipe`

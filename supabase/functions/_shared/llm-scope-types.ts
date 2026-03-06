@@ -3,6 +3,7 @@ export type LlmScopeMode =
   | "generation"
   | "iteration"
   | "classification"
+  | "embedding"
   | "image"
   | "memory"
   | "onboarding"
