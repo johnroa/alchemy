@@ -53,7 +53,6 @@ import {
   upsertRecipeSearchDocument,
   backfillRecipeSearchDocuments,
 } from "./recipe-search.ts";
-import { buildRecipePreview, type RecipePreview } from "./recipe-preview.ts";
 import {
   resolveRecipeImageStatus,
   resolveRecipeImageUrl,
