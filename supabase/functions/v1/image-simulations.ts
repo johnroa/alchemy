@@ -7,6 +7,11 @@ import { ApiError } from "../_shared/errors.ts";
 import { llmGateway } from "../_shared/llm-gateway.ts";
 import type { JsonValue, RecipePayload } from "../_shared/types.ts";
 
+const IMAGE_SIMULATION_MODEL_CONFIG_OVERRIDE: Record<string, JsonValue> = {
+  size: "1024x1024",
+  quality: "medium",
+};
+
 export type ImageSimulationModelOverride = {
   provider: string;
   model: string;
@@ -150,6 +155,7 @@ const runLane = async (params: {
       recipe: params.recipe,
       context: params.context,
       modelOverride: params.override,
+      modelConfigOverride: IMAGE_SIMULATION_MODEL_CONFIG_OVERRIDE,
       eventPayload: {
         simulation_type: "image",
         simulation_lane: params.lane,

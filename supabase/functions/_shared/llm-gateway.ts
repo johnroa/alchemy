@@ -3869,6 +3869,7 @@ export const llmGateway = {
     recipe: RecipePayload;
     context: Record<string, JsonValue>;
     modelOverride?: { provider: string; model: string };
+    modelConfigOverride?: Record<string, JsonValue>;
     eventPayload?: Record<string, JsonValue>;
   }): Promise<string> {
     const detailed = await llmGateway.generateRecipeImageDetailed(params);
@@ -3882,6 +3883,7 @@ export const llmGateway = {
     recipe: RecipePayload;
     context: Record<string, JsonValue>;
     modelOverride?: { provider: string; model: string };
+    modelConfigOverride?: Record<string, JsonValue>;
     eventPayload?: Record<string, JsonValue>;
   }): Promise<{
     imageUrl: string;
@@ -3896,17 +3898,25 @@ export const llmGateway = {
     let config: GatewayConfig | null = null;
     try {
       config = await getActiveConfig(params.client, "image", params.modelOverride);
+      const runtimeModelConfig = {
+        ...config.modelConfig,
+        ...(params.modelConfigOverride ?? {}),
+      };
+      const runtimeConfig: GatewayConfig = {
+        ...config,
+        modelConfig: runtimeModelConfig,
+      };
       const imagePrompt = buildRecipeImagePrompt({
-        config,
+        config: runtimeConfig,
         recipe: params.recipe,
         context: params.context,
       });
-      const costUsd = estimateImageGenerationCostUsd(config);
+      const costUsd = estimateImageGenerationCostUsd(runtimeConfig);
 
       const imageUrl = await callImageProvider({
-        provider: config.provider,
-        model: config.model,
-        modelConfig: config.modelConfig,
+        provider: runtimeConfig.provider,
+        model: runtimeConfig.model,
+        modelConfig: runtimeConfig.modelConfig,
         prompt: imagePrompt,
       });
 
@@ -3918,9 +3928,9 @@ export const llmGateway = {
         Date.now() - startedAt,
         "ok",
         {
-          provider: config.provider,
-          model: config.model,
-          billing_mode: config.billingMode,
+          provider: runtimeConfig.provider,
+          model: runtimeConfig.model,
+          billing_mode: runtimeConfig.billingMode,
           ...(params.eventPayload ?? {}),
         },
         undefined,
@@ -3929,12 +3939,12 @@ export const llmGateway = {
 
       return {
         imageUrl,
-        provider: config.provider,
-        model: config.model,
+        provider: runtimeConfig.provider,
+        model: runtimeConfig.model,
         latencyMs: Date.now() - startedAt,
         costUsd,
         prompt: imagePrompt,
-        config,
+        config: runtimeConfig,
       };
     } catch (error) {
       const errorCode = error instanceof ApiError

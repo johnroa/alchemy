@@ -41,9 +41,11 @@ Deno.test("buildImageSimulationContext preserves scenario metadata", () => {
 Deno.test("runImageSimulationCompare returns judge output when both lanes succeed", async () => {
   const originalGenerateDetailed = llmGateway.generateRecipeImageDetailed;
   const originalEvaluatePair = llmGateway.evaluateImageQualityPair;
+  const seenOverrides: Array<Record<string, unknown> | undefined> = [];
 
   try {
     llmGateway.generateRecipeImageDetailed = ((params) => {
+      seenOverrides.push(params.modelConfigOverride);
       const lane = String(params.eventPayload?.simulation_lane ?? "A");
       return Promise.resolve({
         imageUrl: `data:image/png;base64,${lane}`,
@@ -94,6 +96,11 @@ Deno.test("runImageSimulationCompare returns judge output when both lanes succee
     }
     if (response.judge.status !== "ok" || response.judge.winner !== "B") {
       throw new Error("expected judge winner");
+    }
+    for (const override of seenOverrides) {
+      if (!override || override.size !== "1024x1024" || override.quality !== "medium") {
+        throw new Error("expected image simulation model config override");
+      }
     }
   } finally {
     llmGateway.generateRecipeImageDetailed = originalGenerateDetailed;

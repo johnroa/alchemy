@@ -40,6 +40,29 @@ Deno.test("estimateImageGenerationCostUsd resolves OpenAI size and quality matri
   }
 });
 
+Deno.test("estimateImageGenerationCostUsd resolves medium 1024 square pricing", () => {
+  const cost = estimateImageGenerationCostUsd(
+    buildImageConfig({
+      modelConfig: {
+        quality: "medium",
+        size: "1024x1024",
+      },
+      billingMetadata: {
+        pricing_type: "openai_image_quality_size",
+        image_rates_usd: {
+          medium: {
+            "1024x1024": 0.042,
+          },
+        },
+      },
+    }),
+  );
+
+  if (cost !== 0.042) {
+    throw new Error(`unexpected image cost: ${String(cost)}`);
+  }
+});
+
 Deno.test("estimateImageGenerationCostUsd resolves flat image pricing", () => {
   const cost = estimateImageGenerationCostUsd(
     buildImageConfig({
