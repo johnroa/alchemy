@@ -32,6 +32,32 @@ const OPENAI_IMAGE_BILLING = {
   }
 };
 
+const OPENAI_IMAGE_MINI_BILLING = {
+  billing_mode: "image" as const,
+  billing_metadata: {
+    pricing_type: "openai_image_quality_size",
+    default_quality: "high",
+    default_size: "1536x1024",
+    image_rates_usd: {
+      low: {
+        "1024x1024": 0.005,
+        "1536x1024": 0.006,
+        "1024x1536": 0.006
+      },
+      medium: {
+        "1024x1024": 0.011,
+        "1536x1024": 0.015,
+        "1024x1536": 0.015
+      },
+      high: {
+        "1024x1024": 0.036,
+        "1536x1024": 0.052,
+        "1024x1536": 0.052
+      }
+    }
+  }
+};
+
 const GOOGLE_IMAGE_BILLING = {
   billing_mode: "image" as const,
   billing_metadata: {
@@ -49,6 +75,7 @@ const DEFAULT_MODELS = [
   { provider: "openai",    model: "gpt-4.1-mini",        display_name: "GPT-4.1 Mini",     input_cost_per_1m_tokens: 0.40,  output_cost_per_1m_tokens: 1.60,  context_window_tokens: 1000000, max_output_tokens: 32768,  notes: "Cost-efficient GPT-4.1 variant", ...TOKEN_BILLING },
   { provider: "openai",    model: "gpt-image-1.5",       display_name: "GPT Image 1.5",    input_cost_per_1m_tokens: 5.00,  output_cost_per_1m_tokens: 0.00,  context_window_tokens: null,    max_output_tokens: null,   notes: "Latest OpenAI image generation model", ...OPENAI_IMAGE_BILLING },
   { provider: "openai",    model: "gpt-image-1",         display_name: "GPT Image 1",      input_cost_per_1m_tokens: 5.00,  output_cost_per_1m_tokens: 0.00,  context_window_tokens: null,    max_output_tokens: null,   notes: "Legacy OpenAI image generation model", ...OPENAI_IMAGE_BILLING },
+  { provider: "openai",    model: "gpt-image-1-mini",    display_name: "GPT Image 1 Mini", input_cost_per_1m_tokens: 2.50,  output_cost_per_1m_tokens: 8.00,  context_window_tokens: null,    max_output_tokens: null,   notes: "Cost-efficient OpenAI image generation model", ...OPENAI_IMAGE_MINI_BILLING },
   { provider: "anthropic", model: "claude-opus-4-6",     display_name: "Claude Opus 4.6",  input_cost_per_1m_tokens: 15.00, output_cost_per_1m_tokens: 75.00, context_window_tokens: 200000,  max_output_tokens: 32000,  notes: "Most capable Claude model", ...TOKEN_BILLING },
   { provider: "anthropic", model: "claude-sonnet-4-6",   display_name: "Claude Sonnet 4.6",input_cost_per_1m_tokens: 3.00,  output_cost_per_1m_tokens: 15.00, context_window_tokens: 200000,  max_output_tokens: 64000,  notes: "Balanced Claude Sonnet", ...TOKEN_BILLING },
   { provider: "anthropic", model: "claude-haiku-4-5",    display_name: "Claude Haiku 4.5", input_cost_per_1m_tokens: 0.80,  output_cost_per_1m_tokens: 4.00,  context_window_tokens: 200000,  max_output_tokens: 16000,  notes: "Fast Claude Haiku", ...TOKEN_BILLING },
