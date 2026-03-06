@@ -716,7 +716,12 @@ function ModelsPanel({
     let parsedBillingMetadata: Record<string, unknown> = {};
     if (newBillingMode === "image") {
       try {
-        parsedBillingMetadata = JSON.parse(newBillingMetadata) as Record<string, unknown>;
+        const parsed = JSON.parse(newBillingMetadata) as unknown;
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+          toast.error("Billing metadata must be a JSON object");
+          return;
+        }
+        parsedBillingMetadata = parsed as Record<string, unknown>;
       } catch {
         toast.error("Billing metadata must be valid JSON");
         return;
@@ -741,7 +746,11 @@ function ModelsPanel({
       })
     });
     setAdding(false);
-    if (!res.ok) { toast.error("Failed to add model"); return; }
+    if (!res.ok) {
+      const payload = (await res.json().catch(() => null)) as { error?: string } | null;
+      toast.error(payload?.error ?? "Failed to add model");
+      return;
+    }
     const payload = (await res.json()) as { models: RegistryModel[] };
     onModelsChange(payload.models);
     setShowAddForm(false);
@@ -777,11 +786,27 @@ function ModelsPanel({
     displayName: string,
     modelId: string,
     inputCost: string,
-    outputCost: string
+    outputCost: string,
+    billingMode: "token" | "image",
+    billingMetadata: string
   ): Promise<void> => {
     if (!displayName.trim() || !modelId.trim()) {
       toast.error("Display name and model ID are required");
       return;
+    }
+    let parsedBillingMetadata: Record<string, unknown> = {};
+    if (billingMode === "image") {
+      try {
+        const parsed = JSON.parse(billingMetadata) as unknown;
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+          toast.error("Billing metadata must be a JSON object");
+          return;
+        }
+        parsedBillingMetadata = parsed as Record<string, unknown>;
+      } catch {
+        toast.error("Billing metadata must be valid JSON");
+        return;
+      }
     }
     const res = await fetch("/api/admin/llm/models", {
       method: "PATCH",
@@ -791,7 +816,9 @@ function ModelsPanel({
         display_name: displayName.trim(),
         model: modelId.trim(),
         input_cost_per_1m_tokens: Number(inputCost),
-        output_cost_per_1m_tokens: Number(outputCost)
+        output_cost_per_1m_tokens: Number(outputCost),
+        billing_mode: billingMode,
+        billing_metadata: parsedBillingMetadata
       })
     });
     if (!res.ok) {
@@ -900,6 +927,9 @@ function ModelsPanel({
                     <SelectItem value="image">Image</SelectItem>
                   </SelectContent>
                 </Select>
+                <p className="text-[11px] text-muted-foreground">
+                  Image simulations only include models marked with <span className="font-mono">image</span> billing.
+                </p>
               </div>
             </div>
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -962,7 +992,9 @@ function ModelRow({
     displayName: string,
     modelId: string,
     inputCost: string,
-    outputCost: string
+    outputCost: string,
+    billingMode: "token" | "image",
+    billingMetadata: string
   ) => Promise<void>;
   onToggleAvailable: () => void;
   onDelete: () => void;
@@ -971,6 +1003,10 @@ function ModelRow({
   const [modelId, setModelId] = useState(model.model);
   const [inputCost, setInputCost] = useState(String(model.input_cost_per_1m_tokens));
   const [outputCost, setOutputCost] = useState(String(model.output_cost_per_1m_tokens));
+  const [billingMode, setBillingMode] = useState<"token" | "image">(model.billing_mode);
+  const [billingMetadata, setBillingMetadata] = useState(
+    JSON.stringify(model.billing_metadata, null, 2)
+  );
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -979,66 +1015,103 @@ function ModelRow({
     setModelId(model.model);
     setInputCost(String(model.input_cost_per_1m_tokens));
     setOutputCost(String(model.output_cost_per_1m_tokens));
-  }, [isEditing, model.display_name, model.model, model.input_cost_per_1m_tokens, model.output_cost_per_1m_tokens]);
+    setBillingMode(model.billing_mode);
+    setBillingMetadata(JSON.stringify(model.billing_metadata, null, 2));
+  }, [
+    isEditing,
+    model.display_name,
+    model.model,
+    model.input_cost_per_1m_tokens,
+    model.output_cost_per_1m_tokens,
+    model.billing_mode,
+    model.billing_metadata
+  ]);
 
   if (isEditing) {
     return (
-      <TableRow>
-        <TableCell className="font-medium text-sm">
-          <Input
-            value={displayName}
-            onChange={(e) => setDisplayName(e.target.value)}
-            className="h-7 text-xs"
-          />
-        </TableCell>
-        <TableCell className="font-mono text-xs text-muted-foreground">
-          <Input
-            value={modelId}
-            onChange={(e) => setModelId(e.target.value)}
-            className="h-7 font-mono text-xs"
-          />
-        </TableCell>
-        <TableCell className="text-center">
-          <Badge variant="outline" className="text-xs">
-            {model.billing_mode}
-          </Badge>
-        </TableCell>
-        <TableCell className="text-right">
-          <Input
-            value={inputCost}
-            onChange={(e) => setInputCost(e.target.value)}
-            type="number"
-            step="0.01"
-            className="h-7 w-28 text-right text-xs ml-auto"
-          />
-        </TableCell>
-        <TableCell className="text-right">
-          <Input
-            value={outputCost}
-            onChange={(e) => setOutputCost(e.target.value)}
-            type="number"
-            step="0.01"
-            className="h-7 w-28 text-right text-xs ml-auto"
-          />
-        </TableCell>
-        <TableCell className="text-center">
-          <Badge variant={model.is_available ? "default" : "secondary"} className="text-xs">
-            {model.is_available ? "Yes" : "No"}
-          </Badge>
-        </TableCell>
-        <TableCell className="text-right">
-          <div className="flex items-center justify-end gap-1">
-            <Button variant="outline" size="sm" className="h-7 text-xs" onClick={onCancelEdit}>Cancel</Button>
-            <Button size="sm" className="h-7 text-xs" disabled={saving} onClick={async () => {
-              setSaving(true);
-              await onSaveModel(model, displayName, modelId, inputCost, outputCost);
-              setSaving(false);
-            }}>
-              {saving ? "…" : "Save"}
-            </Button>
-          </div>
-        </TableCell>
-      </TableRow>
+      <>
+        <TableRow>
+          <TableCell className="font-medium text-sm">
+            <Input
+              value={displayName}
+              onChange={(e) => setDisplayName(e.target.value)}
+              className="h-7 text-xs"
+            />
+          </TableCell>
+          <TableCell className="font-mono text-xs text-muted-foreground">
+            <Input
+              value={modelId}
+              onChange={(e) => setModelId(e.target.value)}
+              className="h-7 font-mono text-xs"
+            />
+          </TableCell>
+          <TableCell className="text-center">
+            <Select value={billingMode} onValueChange={(value) => setBillingMode(value === "image" ? "image" : "token")}>
+              <SelectTrigger className="ml-auto h-7 w-24 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="token">Token</SelectItem>
+                <SelectItem value="image">Image</SelectItem>
+              </SelectContent>
+            </Select>
+          </TableCell>
+          <TableCell className="text-right">
+            <Input
+              value={inputCost}
+              onChange={(e) => setInputCost(e.target.value)}
+              type="number"
+              step="0.01"
+              className="h-7 w-28 text-right text-xs ml-auto"
+            />
+          </TableCell>
+          <TableCell className="text-right">
+            <Input
+              value={outputCost}
+              onChange={(e) => setOutputCost(e.target.value)}
+              type="number"
+              step="0.01"
+              className="h-7 w-28 text-right text-xs ml-auto"
+            />
+          </TableCell>
+          <TableCell className="text-center">
+            <Badge variant={model.is_available ? "default" : "secondary"} className="text-xs">
+              {model.is_available ? "Yes" : "No"}
+            </Badge>
+          </TableCell>
+          <TableCell className="text-right">
+            <div className="flex items-center justify-end gap-1">
+              <Button variant="outline" size="sm" className="h-7 text-xs" onClick={onCancelEdit}>Cancel</Button>
+              <Button size="sm" className="h-7 text-xs" disabled={saving} onClick={async () => {
+                setSaving(true);
+                await onSaveModel(model, displayName, modelId, inputCost, outputCost, billingMode, billingMetadata);
+                setSaving(false);
+              }}>
+                {saving ? "…" : "Save"}
+              </Button>
+            </div>
+          </TableCell>
+        </TableRow>
+        {billingMode === "image" ? (
+          <TableRow>
+            <TableCell colSpan={7} className="bg-zinc-50/60">
+              <div className="space-y-1 py-1">
+                <label className="text-xs font-medium text-muted-foreground">
+                  Billing metadata (JSON)
+                </label>
+                <Textarea
+                  value={billingMetadata}
+                  onChange={(e) => setBillingMetadata(e.target.value)}
+                  className="min-h-[96px] font-mono text-xs"
+                />
+                <p className="text-[11px] text-muted-foreground">
+                  Required for image cost estimates and image simulation dropdowns.
+                </p>
+              </div>
+            </TableCell>
+          </TableRow>
+        ) : null}
+      </>
     );
   }
 
