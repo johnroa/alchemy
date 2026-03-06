@@ -29,6 +29,7 @@ struct TabShell: View {
         }
         .tabViewStyle(.tabBarOnly)
         .tabBarMinimizeBehavior(.onScrollDown)
+        .tint(AlchemyColors.textPrimary)
         .sheet(isPresented: $showPreferences) {
             PreferencesView()
         }

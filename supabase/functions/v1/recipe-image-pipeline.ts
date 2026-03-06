@@ -14,6 +14,53 @@ const ZERO_UUID = "00000000-0000-0000-0000-000000000000";
 const IMAGE_JOB_LOCK_ID = "v1_image_jobs_process";
 const IMAGE_JOB_LOCK_STALE_MS = 10 * 60 * 1000;
 const IMAGE_JOB_RETRY_BACKOFF_MS = 15 * 1000;
+const RECIPE_IMAGES_BUCKET = "recipe-images";
+
+/**
+ * If the image URL is a base64 data URI, upload it to Supabase Storage
+ * and return the public HTTPS URL. Pass-through for regular URLs.
+ */
+const persistImageToStorage = async (
+  serviceClient: SupabaseClient,
+  imageUrl: string,
+  imageRequestId: string,
+): Promise<string> => {
+  if (!imageUrl.startsWith("data:")) {
+    return imageUrl;
+  }
+
+  const match = imageUrl.match(/^data:image\/(\w+);base64,(.+)$/);
+  if (!match) {
+    return imageUrl;
+  }
+
+  const extension = match[1] === "jpeg" ? "jpg" : match[1];
+  const base64Data = match[2];
+  const binaryData = Uint8Array.from(atob(base64Data), (c) => c.charCodeAt(0));
+  const filePath = `${imageRequestId}.${extension}`;
+
+  const { error: uploadError } = await serviceClient.storage
+    .from(RECIPE_IMAGES_BUCKET)
+    .upload(filePath, binaryData, {
+      contentType: `image/${match[1]}`,
+      upsert: true,
+    });
+
+  if (uploadError) {
+    throw new ApiError(
+      500,
+      "image_storage_upload_failed",
+      "Could not upload image to storage",
+      uploadError.message,
+    );
+  }
+
+  const { data: publicUrlData } = serviceClient.storage
+    .from(RECIPE_IMAGES_BUCKET)
+    .getPublicUrl(filePath);
+
+  return publicUrlData.publicUrl;
+};
 
 type ImageRequestStatus = "pending" | "processing" | "ready" | "failed";
 type ResolutionSource = "generated" | "reused";
@@ -1428,9 +1475,17 @@ export const processImageJobs = async (params: {
           },
         });
 
+        // Upload base64 data URIs to Supabase Storage so the client
+        // receives a lightweight HTTPS URL instead of a 2MB inline blob.
+        const storedImageUrl = await persistImageToStorage(
+          params.serviceClient,
+          generated.imageUrl,
+          imageRequest.id,
+        );
+
         const asset = await createRecipeImageAsset({
           serviceClient: params.serviceClient,
-          imageUrl: generated.imageUrl,
+          imageUrl: storedImageUrl,
           provider: generated.provider,
           model: generated.model,
           generationPrompt: generated.prompt,

@@ -472,10 +472,12 @@ struct GenerateView: View {
     /// Fetches a personalized greeting from GET /chat/greeting.
     /// Shows a chef loading bubble immediately so the screen is never blank,
     /// then swaps it for the real greeting once the API responds.
-    private func loadGreeting() async {
+    /// - Parameter focusAfter: Whether to focus the input field after the
+    ///   greeting loads. On Start Over the keyboard is raised immediately
+    ///   so we skip the deferred focus to avoid a double-trigger.
+    private func loadGreeting(focusAfter: Bool = true) async {
         let loadingId = "greeting-loading"
 
-        // Show the loading bubble right away so the user sees activity
         withAnimation {
             messages = [ChatMessage(
                 id: loadingId,
@@ -494,11 +496,10 @@ struct GenerateView: View {
             greetingText = "Hey Chef, what are we making today?"
         }
 
-        // Replace loading bubble with the actual greeting
         withAnimation {
             if let idx = messages.firstIndex(where: { $0.id == loadingId }) {
                 messages[idx] = ChatMessage(
-                    id: "greeting",
+                    id: UUID().uuidString,
                     role: .assistant,
                     content: greetingText,
                     createdAt: .now
@@ -506,8 +507,10 @@ struct GenerateView: View {
             }
         }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-            inputFocused = true
+        if focusAfter {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                inputFocused = true
+            }
         }
     }
 
@@ -751,7 +754,9 @@ struct GenerateView: View {
             loopState = .ideation
             candidateSet = nil
         }
-        Task { await loadGreeting() }
+        // Focus keyboard immediately so user can type while greeting loads
+        inputFocused = true
+        Task { await loadGreeting(focusAfter: false) }
     }
 }
 
