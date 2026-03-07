@@ -21,12 +21,13 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { getDashboardData, getImportData } from "@/lib/admin-data";
+import { STATUS_TONES } from "@/lib/admin-tones";
 import { formatCost } from "@/lib/format";
 
 const actionColor = (action: string): string => {
-  if (action === "create") return "border-emerald-300 bg-emerald-50 text-emerald-700";
-  if (action === "update" || action === "activate") return "border-blue-300/60 bg-blue-50 text-blue-700";
-  if (action === "delete") return "border-red-300 bg-red-50 text-red-700";
+  if (action === "create") return STATUS_TONES.success;
+  if (action === "update" || action === "activate") return STATUS_TONES.info;
+  if (action === "delete") return STATUS_TONES.danger;
   return "";
 };
 
@@ -49,17 +50,17 @@ export default async function OverviewPage(): Promise<React.JSX.Element> {
         description="Command center for platform health, recent mutations, and the operational hotspots that need attention first."
         actions={
           systemStatus === "healthy" ? (
-            <Badge className="gap-1.5 border-emerald-300 bg-emerald-50 text-emerald-700">
+            <Badge className={`gap-1.5 ${STATUS_TONES.success}`}>
               <CheckCircle2 className="h-3 w-3" />
               All systems healthy
             </Badge>
           ) : systemStatus === "warnings" ? (
-            <Badge className="gap-1.5 border-amber-300 bg-amber-50 text-amber-700">
+            <Badge className={`gap-1.5 ${STATUS_TONES.warning}`}>
               <Clock className="h-3 w-3" />
               Warnings detected
             </Badge>
           ) : (
-            <Badge className="gap-1.5 border-red-300 bg-red-50 text-red-700">
+            <Badge className={`gap-1.5 ${STATUS_TONES.danger}`}>
               <XCircle className="h-3 w-3" />
               Issues detected
             </Badge>
@@ -222,7 +223,7 @@ export default async function OverviewPage(): Promise<React.JSX.Element> {
                 </CardDescription>
               </div>
               <Link href="/operations/images">
-                <Badge variant="outline" className="gap-1 text-xs hover:bg-zinc-50 cursor-pointer">
+                <Badge variant="outline" className="cursor-pointer gap-1 text-xs hover:bg-muted/60">
                   View all <ArrowRight className="h-3 w-3" />
                 </Badge>
               </Link>
@@ -233,26 +234,26 @@ export default async function OverviewPage(): Promise<React.JSX.Element> {
               <p className="py-4 text-center text-sm text-muted-foreground">No image jobs recorded.</p>
             ) : (
               <>
-                <div className="flex h-3 w-full overflow-hidden rounded-full bg-zinc-100">
+                <div className="flex h-3 w-full overflow-hidden rounded-full bg-muted/70">
                   {data.imagePendingCount > 0 && (
-                    <div style={{ width: `${(data.imagePendingCount / imageTotal) * 100}%` }} className="bg-amber-400" />
+                    <div style={{ width: `${(data.imagePendingCount / imageTotal) * 100}%` }} className="bg-amber-400/90" />
                   )}
                   {data.imageProcessingCount > 0 && (
-                    <div style={{ width: `${(data.imageProcessingCount / imageTotal) * 100}%` }} className="bg-blue-400" />
+                    <div style={{ width: `${(data.imageProcessingCount / imageTotal) * 100}%` }} className="bg-sky-400/90" />
                   )}
                   {data.imageReadyCount > 0 && (
-                    <div style={{ width: `${(data.imageReadyCount / imageTotal) * 100}%` }} className="bg-emerald-400" />
+                    <div style={{ width: `${(data.imageReadyCount / imageTotal) * 100}%` }} className="bg-emerald-400/90" />
                   )}
                   {data.imageFailedCount > 0 && (
-                    <div style={{ width: `${(data.imageFailedCount / imageTotal) * 100}%` }} className="bg-red-400" />
+                    <div style={{ width: `${(data.imageFailedCount / imageTotal) * 100}%` }} className="bg-red-400/90" />
                   )}
                 </div>
                 <div className="grid grid-cols-2 gap-x-6 gap-y-2">
                   {[
-                    { label: "Pending", count: data.imagePendingCount, color: "bg-amber-400" },
-                    { label: "Processing", count: data.imageProcessingCount, color: "bg-blue-400" },
-                    { label: "Ready", count: data.imageReadyCount, color: "bg-emerald-400" },
-                    { label: "Failed", count: data.imageFailedCount, color: "bg-red-400" }
+                    { label: "Pending", count: data.imagePendingCount, color: "bg-amber-400/90" },
+                    { label: "Processing", count: data.imageProcessingCount, color: "bg-sky-400/90" },
+                    { label: "Ready", count: data.imageReadyCount, color: "bg-emerald-400/90" },
+                    { label: "Failed", count: data.imageFailedCount, color: "bg-red-400/90" }
                   ].map(({ label, count, color }) => (
                     <div key={label} className="flex items-center justify-between">
                       <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -272,9 +273,9 @@ export default async function OverviewPage(): Promise<React.JSX.Element> {
                         {Math.round((data.imageReadyCount / imageTotal) * 100)}%
                       </span>
                     </div>
-                    <div className="h-1.5 w-full overflow-hidden rounded-full bg-zinc-100">
+                    <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted/70">
                       <div
-                        className="h-full rounded-full bg-emerald-400 transition-all"
+                        className="h-full rounded-full bg-emerald-400/90 transition-all"
                         style={{ width: `${(data.imageReadyCount / imageTotal) * 100}%` }}
                       />
                     </div>
@@ -297,7 +298,7 @@ export default async function OverviewPage(): Promise<React.JSX.Element> {
                 <CardDescription className="mt-0.5">Latest platform mutations</CardDescription>
               </div>
               <Link href="/system/changelog">
-                <Badge variant="outline" className="gap-1 text-xs hover:bg-zinc-50 cursor-pointer">
+                <Badge variant="outline" className="cursor-pointer gap-1 text-xs hover:bg-muted/60">
                   Full log <ArrowRight className="h-3 w-3" />
                 </Badge>
               </Link>
@@ -306,8 +307,8 @@ export default async function OverviewPage(): Promise<React.JSX.Element> {
           <CardContent className="pt-0">
             {data.recentActivity.length === 0 ? (
               <div className="flex flex-col items-center gap-2 py-8 text-center">
-                <CheckCircle2 className="h-8 w-8 text-emerald-400" />
-                <p className="text-sm font-medium text-emerald-700">No recent mutations</p>
+                <CheckCircle2 className="h-8 w-8 text-emerald-300" />
+                <p className="text-sm font-medium text-emerald-200">No recent mutations</p>
                 <p className="text-xs text-muted-foreground">Platform is idle.</p>
               </div>
             ) : (
@@ -349,8 +350,8 @@ export default async function OverviewPage(): Promise<React.JSX.Element> {
         <CardContent className="pt-0">
           {data.recentErrors.length === 0 ? (
             <div className="flex flex-col items-center gap-2 py-8 text-center">
-              <CheckCircle2 className="h-8 w-8 text-emerald-400" />
-              <p className="text-sm font-medium text-emerald-700">No safety events in current window</p>
+              <CheckCircle2 className="h-8 w-8 text-emerald-300" />
+              <p className="text-sm font-medium text-emerald-200">No safety events in current window</p>
               <p className="text-xs text-muted-foreground">All requests are passing safety checks.</p>
             </div>
           ) : (
@@ -372,7 +373,7 @@ export default async function OverviewPage(): Promise<React.JSX.Element> {
                       <Badge variant="outline">{event.scope}</Badge>
                     </TableCell>
                     <TableCell>
-                      <span className="text-sm font-medium text-red-600">{event.reason}</span>
+                      <span className="text-sm font-medium text-red-300">{event.reason}</span>
                     </TableCell>
                   </TableRow>
                 ))}

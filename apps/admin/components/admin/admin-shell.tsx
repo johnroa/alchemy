@@ -8,7 +8,6 @@ import { AccountMenu } from "@/components/admin/account-menu";
 import {
   ADMIN_SECTIONS,
   getBreadcrumbsForPathname,
-  getLandingCardsForSection,
   getPageForPathname,
   getSectionForPathname,
   getSectionPages,
@@ -41,7 +40,6 @@ export function AdminShell({ email, children }: { email: string; children: React
   const page = getPageForPathname(pathname);
   const section = getSectionForPathname(pathname);
   const sectionPages = getSectionPages(section.key);
-  const landingCards = getLandingCardsForSection(section.key);
   const breadcrumbs = getBreadcrumbsForPathname(pathname);
 
   return (
@@ -108,7 +106,7 @@ export function AdminShell({ email, children }: { email: string; children: React
         <SidebarRail />
       </Sidebar>
 
-      <SidebarInset className="min-w-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.96)_0%,rgba(244,247,244,0.9)_100%)]">
+      <SidebarInset className="min-w-0 bg-[linear-gradient(180deg,rgba(8,12,20,0.98)_0%,rgba(13,19,31,0.96)_100%)]">
         <header className="sticky top-0 z-20 border-b border-border/60 bg-background/85 backdrop-blur">
           <div className="px-4 py-3 sm:px-6 md:px-8">
             <div className="flex items-start justify-between gap-4">
@@ -153,19 +151,6 @@ export function AdminShell({ email, children }: { email: string; children: React
                 </div>
               </div>
 
-              {landingCards.length > 0 ? (
-                <div className="hidden max-w-sm flex-wrap justify-end gap-2 xl:flex">
-                  {landingCards.slice(0, 3).map((item) => (
-                    <Link
-                      key={item.key}
-                      href={item.href}
-                      className="rounded-full border border-border/60 bg-background/90 px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
-                    >
-                      {item.title}
-                    </Link>
-                  ))}
-                </div>
-              ) : null}
             </div>
 
             {section.key !== "overview" ? (

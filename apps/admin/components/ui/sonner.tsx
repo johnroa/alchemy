@@ -3,5 +3,5 @@
 import { Toaster } from "sonner";
 
 export function Sonner(): React.JSX.Element {
-  return <Toaster richColors closeButton position="top-right" />;
+  return <Toaster richColors closeButton position="top-right" theme="dark" />;
 }

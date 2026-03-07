@@ -16,6 +16,7 @@ import {
   confirmTextForPreset,
   type DevelopmentResetPresetKey,
 } from "@/lib/development-reset";
+import { STATUS_TONES } from "@/lib/admin-tones";
 import { cn } from "@/lib/utils";
 
 type PreviewPayload = {
@@ -67,9 +68,9 @@ const toDuration = (start: string, end: string | null): string => {
 };
 
 const statusBadgeClass = (status: string): string => {
-  if (status === "succeeded" || status === "dry_run") return "border-emerald-300 bg-emerald-50 text-emerald-700";
-  if (status === "failed") return "border-red-300 bg-red-50 text-red-700";
-  return "border-amber-300 bg-amber-50 text-amber-700";
+  if (status === "succeeded" || status === "dry_run") return STATUS_TONES.success;
+  if (status === "failed") return STATUS_TONES.danger;
+  return STATUS_TONES.warning;
 };
 
 export function DevelopmentResetPanel(): React.JSX.Element {
@@ -180,10 +181,10 @@ export function DevelopmentResetPanel(): React.JSX.Element {
         }
       />
 
-      <Alert className="border-amber-300 bg-amber-50">
-        <AlertTriangle className="h-4 w-4 text-amber-700" />
-        <AlertTitle className="text-amber-800">Destructive Operations</AlertTitle>
-        <AlertDescription className="text-amber-700">
+      <Alert className="border-amber-500/30 bg-amber-500/10">
+        <AlertTriangle className="h-4 w-4 text-amber-300" />
+        <AlertTitle className="text-amber-200">Destructive Operations</AlertTitle>
+        <AlertDescription className="text-amber-300">
           Execute only with explicit intent. These actions wipe food-domain tables and cannot be undone.
         </AlertDescription>
       </Alert>
@@ -194,7 +195,7 @@ export function DevelopmentResetPanel(): React.JSX.Element {
             key={preset.key}
             className={cn(
               "cursor-pointer border transition-colors",
-              selectedPreset === preset.key ? "border-red-300 bg-red-50" : "border-zinc-200",
+              selectedPreset === preset.key ? "border-red-500/30 bg-red-500/10" : "border-border/80 bg-card/60",
             )}
             onClick={() => setSelectedPreset(preset.key)}
           >
@@ -231,7 +232,7 @@ export function DevelopmentResetPanel(): React.JSX.Element {
 
             {preview ? (
               <>
-                <div className="rounded-md border bg-zinc-50 p-3">
+                <div className="rounded-md border border-border/80 bg-muted/40 p-3">
                   <p className="text-xs uppercase tracking-wider text-muted-foreground">Total rows affected</p>
                   <p className="mt-1 text-2xl font-semibold tabular-nums">{preview.total_rows.toLocaleString()}</p>
                 </div>
@@ -268,36 +269,36 @@ export function DevelopmentResetPanel(): React.JSX.Element {
           </CardContent>
         </Card>
 
-        <Card className="border-red-200 bg-red-50">
+        <Card className="border-red-500/30 bg-red-500/10">
           <CardHeader className="pb-3">
-            <CardTitle className="text-base text-red-800">Execute Reset</CardTitle>
-            <CardDescription className="text-red-700">
+            <CardTitle className="text-base text-red-200">Execute Reset</CardTitle>
+            <CardDescription className="text-red-300">
               Requires exact confirmation phrase. This executes a single transactional wipe RPC.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="space-y-1">
-              <p className="text-xs uppercase tracking-wider text-red-700/80">Expected confirmation text</p>
-              <p className="rounded-md border border-red-300 bg-white px-3 py-2 font-mono text-xs">{expectedConfirmText}</p>
+              <p className="text-xs uppercase tracking-wider text-red-300/80">Expected confirmation text</p>
+              <p className="rounded-md border border-red-500/30 bg-background/70 px-3 py-2 font-mono text-xs">{expectedConfirmText}</p>
             </div>
 
             <div className="space-y-1">
-              <p className="text-xs uppercase tracking-wider text-red-700/80">Type confirmation text</p>
+              <p className="text-xs uppercase tracking-wider text-red-300/80">Type confirmation text</p>
               <Input
                 value={confirmText}
                 onChange={(event) => setConfirmText(event.target.value)}
                 placeholder={expectedConfirmText}
-                className="bg-white"
+                className="bg-background/70"
               />
             </div>
 
             <div className="space-y-1">
-              <p className="text-xs uppercase tracking-wider text-red-700/80">Reason</p>
+              <p className="text-xs uppercase tracking-wider text-red-300/80">Reason</p>
               <Textarea
                 value={reason}
                 onChange={(event) => setReason(event.target.value)}
                 placeholder="Why this reset is being executed"
-                className="min-h-[96px] bg-white"
+                className="min-h-[96px] bg-background/70"
               />
             </div>
 
@@ -356,7 +357,7 @@ export function DevelopmentResetPanel(): React.JSX.Element {
                     <TableCell className="text-xs text-muted-foreground">
                       {toDuration(run.created_at, run.completed_at)}
                     </TableCell>
-                    <TableCell className="max-w-[340px] truncate text-xs text-red-700">
+                    <TableCell className="max-w-[340px] truncate text-xs text-red-300">
                       {run.error ?? "—"}
                     </TableCell>
                   </TableRow>

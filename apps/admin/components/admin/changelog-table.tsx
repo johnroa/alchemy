@@ -5,6 +5,7 @@ import { Search } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { STATUS_TONES } from "@/lib/admin-tones";
 
 type ChangelogItem = {
   id: string;
@@ -18,11 +19,11 @@ type ChangelogItem = {
 };
 
 const actionColors: Record<string, string> = {
-  create: "border-emerald-300 bg-emerald-50 text-emerald-700",
-  update: "border-blue-300 bg-blue-50 text-blue-700",
-  delete: "border-red-300 bg-red-50 text-red-700",
-  activate: "border-violet-300 bg-violet-50 text-violet-700",
-  deactivate: "border-zinc-300 bg-zinc-50 text-zinc-700"
+  create: STATUS_TONES.success,
+  update: STATUS_TONES.info,
+  delete: STATUS_TONES.danger,
+  activate: STATUS_TONES.accent,
+  deactivate: STATUS_TONES.neutral,
 };
 
 function actionVariantClass(action: string): string {

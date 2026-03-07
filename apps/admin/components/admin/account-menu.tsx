@@ -14,7 +14,7 @@ export function AccountMenu({ email }: { email: string }): React.JSX.Element {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" className="h-auto w-full justify-start gap-2.5 px-2 py-2 hover:bg-zinc-100">
+        <Button variant="ghost" className="h-auto w-full justify-start gap-2.5 px-2 py-2 hover:bg-sidebar-accent">
           <div className="flex h-7 w-7 flex-none items-center justify-center rounded-full bg-primary/10">
             <UserCircle2 className="h-4 w-4 text-primary" />
           </div>

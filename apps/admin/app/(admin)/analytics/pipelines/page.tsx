@@ -82,7 +82,7 @@ export default async function AnalyticsPipelinesPage({
                       </Badge>
                     </TableCell>
                     <TableCell className="text-sm font-medium">{row.label}</TableCell>
-                    <TableCell className="max-w-[420px] truncate text-sm text-red-700">{row.reason}</TableCell>
+                    <TableCell className="max-w-[420px] truncate text-sm text-red-300">{row.reason}</TableCell>
                     <TableCell className="text-right text-xs text-muted-foreground">
                       <div className="inline-flex items-center gap-1">
                         <Clock3 className="h-3.5 w-3.5" />

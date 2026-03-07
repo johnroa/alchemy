@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { STATUS_TONES } from "@/lib/admin-tones";
 import { cn } from "@/lib/utils";
 
 type MetadataJob = {
@@ -24,14 +25,14 @@ type MetadataJob = {
 };
 
 const statusConfig: Record<string, { badge: string; dot: string }> = {
-  ready: { badge: "border-emerald-300 bg-emerald-50 text-emerald-700", dot: "bg-emerald-400" },
-  processing: { badge: "border-blue-300 bg-blue-50 text-blue-700", dot: "bg-blue-400" },
-  pending: { badge: "border-amber-300 bg-amber-50 text-amber-700", dot: "bg-amber-400" },
-  failed: { badge: "border-red-300 bg-red-50 text-red-700", dot: "bg-red-400" }
+  ready: { badge: STATUS_TONES.success, dot: "bg-emerald-400" },
+  processing: { badge: STATUS_TONES.info, dot: "bg-sky-400" },
+  pending: { badge: STATUS_TONES.warning, dot: "bg-amber-400" },
+  failed: { badge: STATUS_TONES.danger, dot: "bg-red-400" }
 };
 
 const statusStyle = (status: string): { badge: string; dot: string } => {
-  return statusConfig[status] ?? { badge: "", dot: "bg-zinc-400" };
+  return statusConfig[status] ?? { badge: STATUS_TONES.neutral, dot: "bg-muted-foreground" };
 };
 
 export function MetadataJobsTable({ jobs }: { jobs: MetadataJob[] }): React.JSX.Element {
@@ -108,7 +109,7 @@ export function MetadataJobsTable({ jobs }: { jobs: MetadataJob[] }): React.JSX.
                   "—"
                 )}
               </TableCell>
-              <TableCell className="max-w-[240px] truncate text-xs text-red-600">
+              <TableCell className="max-w-[240px] truncate text-xs text-red-300">
                 {job.last_error ?? <span className="text-muted-foreground">—</span>}
               </TableCell>
               <TableCell className="text-right">

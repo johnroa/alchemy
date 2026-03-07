@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { STATUS_TONES } from "@/lib/admin-tones";
 import { cn } from "@/lib/utils";
 
 type IngredientRow = {
@@ -532,7 +533,7 @@ export function IngredientsRegistryExplorer({
             </div>
           ) : (
             <div className="space-y-3">
-              <div className="rounded-lg border bg-zinc-50 p-3">
+              <div className="rounded-lg border border-border/80 bg-muted/40 p-3">
                 <div className="flex items-start justify-between gap-2">
                   <div>
                     <p className="inline-flex items-center gap-1.5 text-sm font-semibold">
@@ -702,8 +703,8 @@ export function IngredientsRegistryExplorer({
                                 className={cn(
                                   "text-[10px]",
                                   usage.normalized_status === "normalized"
-                                    ? "border-emerald-300 bg-emerald-50 text-emerald-700"
-                                    : "border-amber-300 bg-amber-50 text-amber-700"
+                                    ? STATUS_TONES.success
+                                    : STATUS_TONES.warning
                                 )}
                               >
                                 {usage.normalized_status}

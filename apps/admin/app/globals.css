@@ -65,7 +65,9 @@ body {
   @apply bg-background text-foreground antialiased;
 }
 
-
+html.dark {
+  color-scheme: dark;
+}
 
 @layer base {
   :root {

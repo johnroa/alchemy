@@ -115,9 +115,9 @@ export default async function ModelUsagePage({
                         {formatPercent(row.callShare)} calls
                       </Badge>
                     </div>
-                    <div className="h-1.5 w-full overflow-hidden rounded-full bg-zinc-100">
+                    <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted/70">
                       <div
-                        className="h-full rounded-full bg-emerald-400"
+                        className="h-full rounded-full bg-emerald-400/90"
                         style={{ width: `${Math.max(2, (row.totalTokens / maxActionTokens) * 100)}%` }}
                       />
                     </div>
