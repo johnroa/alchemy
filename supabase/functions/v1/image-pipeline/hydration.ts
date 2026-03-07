@@ -17,6 +17,7 @@ import type {
   RecipePayload,
 } from "../../_shared/types.ts";
 import {
+  buildImageRequestDescriptor,
   type CandidateBindingRow,
   ensureImageRequestForRecipe,
   hydrateStatusFromRequest,
@@ -24,6 +25,7 @@ import {
   loadImageRequestById,
   mapImageRequestRow,
   parseReuseMetadata,
+  reconcileImageRequestDescriptor,
 } from "./types.ts";
 import { refreshPersistedRecipeImagesForRequest } from "./generation.ts";
 import { enqueueImageRequestJob } from "./queue.ts";
@@ -403,6 +405,22 @@ export const ensurePersistedRecipeImageRequest = async (params: {
   recipeId: string;
   recipeVersionId: string;
 }): Promise<void> => {
+  const { data: version, error: versionError } = await params.serviceClient
+    .from("recipe_versions")
+    .select("payload")
+    .eq("id", params.recipeVersionId)
+    .maybeSingle();
+
+  if (versionError || !version?.payload) {
+    throw new ApiError(
+      404,
+      "recipe_version_not_found",
+      "Recipe version was not found for image fallback",
+      versionError?.message,
+    );
+  }
+
+  const recipePayload = version.payload as RecipePayload;
   const existingAssignment = await params.serviceClient
     .from("recipe_image_assignments")
     .select("image_request_id")
@@ -419,35 +437,52 @@ export const ensurePersistedRecipeImageRequest = async (params: {
   }
 
   if (existingAssignment.data?.image_request_id) {
+    const existingRequest = await loadImageRequestById(
+      params.serviceClient,
+      String(existingAssignment.data.image_request_id),
+    );
+    let requestToAttach = existingRequest;
+    if (existingRequest) {
+      const descriptor = await buildImageRequestDescriptor(recipePayload);
+      requestToAttach = await reconcileImageRequestDescriptor({
+        serviceClient: params.serviceClient,
+        existing: existingRequest,
+        descriptor,
+      });
+    }
+
+    if (
+      existingRequest &&
+      requestToAttach &&
+      existingRequest.status === "ready" &&
+      requestToAttach.status !== "ready"
+    ) {
+      await refreshPersistedRecipeImagesForRequest({
+        serviceClient: params.serviceClient,
+        userId: params.userId,
+        requestId: params.requestId,
+        imageRequest: requestToAttach,
+        asset: null,
+      });
+    }
+
     await attachRecipeVersionToImageRequest({
       serviceClient: params.serviceClient,
       userId: params.userId,
       requestId: params.requestId,
       recipeId: params.recipeId,
       recipeVersionId: params.recipeVersionId,
-      imageRequestId: String(existingAssignment.data.image_request_id),
+      imageRequestId: requestToAttach?.id ?? String(existingAssignment.data.image_request_id),
     });
+    if (requestToAttach && requestToAttach.status !== "ready") {
+      await enqueueImageRequestJob(params.serviceClient, requestToAttach.id);
+    }
     return;
-  }
-
-  const { data: version, error: versionError } = await params.serviceClient
-    .from("recipe_versions")
-    .select("payload")
-    .eq("id", params.recipeVersionId)
-    .maybeSingle();
-
-  if (versionError || !version?.payload) {
-    throw new ApiError(
-      404,
-      "recipe_version_not_found",
-      "Recipe version was not found for image fallback",
-      versionError?.message,
-    );
   }
 
   const imageRequest = await ensureImageRequestForRecipe({
     serviceClient: params.serviceClient,
-    recipe: version.payload as RecipePayload,
+    recipe: recipePayload,
   });
   await attachRecipeVersionToImageRequest({
     serviceClient: params.serviceClient,

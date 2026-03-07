@@ -84,6 +84,8 @@ export type ReuseCandidateRow = {
   usage_count: number | null;
 };
 
+type ImageRequestDescriptor = Awaited<ReturnType<typeof buildImageRequestDescriptor>>;
+
 // ─── Utility Functions ───────────────────────────────────────────────────────
 
 export const asRecord = (value: unknown): Record<string, JsonValue> | null => {
@@ -310,6 +312,62 @@ export const buildImageRequestDescriptor = async (
   };
 };
 
+const hasImageRequestDescriptorMismatch = (
+  existing: ImageRequestRow,
+  descriptor: ImageRequestDescriptor,
+): boolean =>
+  existing.normalized_title !== descriptor.normalizedTitle ||
+  existing.normalized_search_text !== descriptor.normalizedSearchText;
+
+export const shouldResetReusedReadyImageRequest = (
+  existing: ImageRequestRow,
+  descriptor: ImageRequestDescriptor,
+): boolean =>
+  existing.status === "ready" &&
+  existing.resolution_source === "reused" &&
+  hasImageRequestDescriptorMismatch(existing, descriptor);
+
+export const reconcileImageRequestDescriptor = async (params: {
+  serviceClient: SupabaseClient;
+  existing: ImageRequestRow;
+  descriptor: ImageRequestDescriptor;
+}): Promise<ImageRequestRow> => {
+  if (!hasImageRequestDescriptorMismatch(params.existing, params.descriptor)) {
+    return params.existing;
+  }
+
+  const resetForFreshEvaluation = shouldResetReusedReadyImageRequest(
+    params.existing,
+    params.descriptor,
+  );
+  const now = new Date().toISOString();
+  const updatePayload: Record<string, unknown> = {
+    normalized_title: params.descriptor.normalizedTitle,
+    normalized_search_text: params.descriptor.normalizedSearchText,
+    recipe_payload: params.descriptor.recipePayload,
+    updated_at: now,
+  };
+
+  if (resetForFreshEvaluation) {
+    Object.assign(updatePayload, {
+      asset_id: null,
+      status: "pending",
+      resolution_source: null,
+      reuse_evaluation: {},
+      last_error: null,
+      attempt: 0,
+    });
+  }
+
+  await params.serviceClient.from("image_requests").update(updatePayload).eq(
+    "id",
+    params.existing.id,
+  );
+
+  return await loadImageRequestById(params.serviceClient, params.existing.id) ??
+    params.existing;
+};
+
 // ─── Row Mappers ─────────────────────────────────────────────────────────────
 
 export const mapImageRequestRow = (row: Record<string, unknown>): ImageRequestRow => {
@@ -509,20 +567,15 @@ export const ensureImageRequestForRecipe = async (params: {
   );
   if (existing) {
     if (
-      (existing.status === "pending" || existing.status === "failed") &&
-      (existing.normalized_title !== descriptor.normalizedTitle ||
-        existing.normalized_search_text !== descriptor.normalizedSearchText)
+      existing.status === "pending" ||
+      existing.status === "failed" ||
+      shouldResetReusedReadyImageRequest(existing, descriptor)
     ) {
-      await params.serviceClient.from("image_requests").update({
-        normalized_title: descriptor.normalizedTitle,
-        normalized_search_text: descriptor.normalizedSearchText,
-        recipe_payload: descriptor.recipePayload,
-        updated_at: new Date().toISOString(),
-      }).eq("id", existing.id);
-      const refreshed = await loadImageRequestById(params.serviceClient, existing.id);
-      if (refreshed) {
-        return refreshed;
-      }
+      return await reconcileImageRequestDescriptor({
+        serviceClient: params.serviceClient,
+        existing,
+        descriptor,
+      });
     }
     return existing;
   }
