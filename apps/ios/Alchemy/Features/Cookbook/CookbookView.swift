@@ -4,8 +4,8 @@ import NukeUI
 /// Cookbook screen — saved recipes displayed in a staggered masonry 2-column grid.
 ///
 /// Data source: GET /recipes/cookbook. Falls back to empty state when no
-/// recipes are saved. Supports pull-to-refresh and multi-dimensional filtering
-/// (cuisine, dietary, difficulty, time, key ingredients) plus text search.
+/// recipes are saved. Supports pull-to-refresh, intelligent horizontal
+/// filter chips (derived from actual cookbook content), and text search.
 struct CookbookView: View {
     @State private var previews: [CookbookEntryItem] = []
     @State private var isLoading = true
@@ -17,90 +17,29 @@ struct CookbookView: View {
     @State private var searchText = ""
     @State private var showFullScreenPreview = false
 
-    // MARK: - Multi-Dimensional Filter State
+    // MARK: - Smart Filter State
 
-    /// Active filter selections across dimensions. Empty sets = no filter
-    /// applied for that dimension.
-    @State private var selectedCuisines: Set<String> = []
-    @State private var selectedDietary: Set<String> = []
-    @State private var selectedDifficulty: String?
-    @State private var selectedMaxTime: Int?
-    @State private var showFilterPanel = false
+    /// Currently selected filter chip. nil = "All".
+    @State private var activeFilter: CookbookChip?
 
-    /// Whether any non-trivial filter is active (controls badge + clear button).
-    private var hasActiveFilters: Bool {
-        !selectedCuisines.isEmpty ||
-        !selectedDietary.isEmpty ||
-        selectedDifficulty != nil ||
-        selectedMaxTime != nil
+    /// Intelligently derived filter chips from actual cookbook content.
+    /// Recomputed whenever `previews` changes. Ranked by usefulness:
+    /// chips that create meaningful subsets (not too broad, not too few)
+    /// are surfaced first.
+    private var smartChips: [CookbookChip] {
+        CookbookChip.generate(from: previews)
     }
 
-    /// Number of active filter dimensions for the badge count.
-    private var activeFilterCount: Int {
-        var count = 0
-        if !selectedCuisines.isEmpty { count += 1 }
-        if !selectedDietary.isEmpty { count += 1 }
-        if selectedDifficulty != nil { count += 1 }
-        if selectedMaxTime != nil { count += 1 }
-        return count
-    }
-
-    /// System-generated placeholder categories that shouldn't surface as
-    /// user-facing filter chips. These appear when the auto-categorization
-    /// pipeline hasn't run yet or produced no real category.
-    private static let systemCategories: Set<String> = [
-        "auto organized", "uncategorized",
-    ]
-
-    /// All unique cuisine tags across cookbook entries (from variant tags
-    /// when available, falling back to recipe metadata).
-    private var availableCuisines: [String] {
-        let all = previews.compactMap { $0.variantTags?.cuisine }.flatMap { $0 }
-        return Array(Set(all)).sorted()
-    }
-
-    /// All unique dietary tags across cookbook entries.
-    private var availableDietary: [String] {
-        let all = previews.compactMap { $0.variantTags?.dietary }.flatMap { $0 }
-        return Array(Set(all)).sorted()
-    }
-
-    /// Available time range buckets for filtering.
-    private static let timeBuckets: [(label: String, maxMinutes: Int)] = [
-        ("15 min", 15),
-        ("30 min", 30),
-        ("60 min", 60),
-    ]
-
-    /// Filtered previews based on all active filter dimensions and search text.
+    /// Filtered previews based on the active chip and search text.
     private var filteredPreviews: [CookbookEntryItem] {
         previews.filter { entry in
             let matchesSearch = searchText.isEmpty
                 || entry.title.localizedCaseInsensitiveContains(searchText)
                 || entry.summary.localizedCaseInsensitiveContains(searchText)
 
-            let matchesCuisine = selectedCuisines.isEmpty
-                || !(entry.variantTags?.cuisine ?? [])
-                    .filter { selectedCuisines.contains($0) }.isEmpty
+            let matchesChip = activeFilter?.matches(entry) ?? true
 
-            let matchesDietary = selectedDietary.isEmpty
-                || !(entry.variantTags?.dietary ?? [])
-                    .filter { selectedDietary.contains($0) }.isEmpty
-
-            let matchesDifficulty: Bool = {
-                guard let selected = selectedDifficulty else { return true }
-                let effective = entry.effectiveDifficulty ?? "medium"
-                return effective.lowercased() == selected.lowercased()
-            }()
-
-            let matchesTime: Bool = {
-                guard let maxTime = selectedMaxTime else { return true }
-                let effective = entry.effectiveTimeMinutes ?? Int.max
-                return effective <= maxTime
-            }()
-
-            return matchesSearch && matchesCuisine && matchesDietary
-                && matchesDifficulty && matchesTime
+            return matchesSearch && matchesChip
         }
     }
 
@@ -125,12 +64,9 @@ struct CookbookView: View {
                 } else {
                     ScrollView {
                         VStack(spacing: AlchemySpacing.md) {
-                            searchAndFilterBar
-                            if showFilterPanel {
-                                filterPanel
-                            }
-                            if hasActiveFilters {
-                                activeFilterSummary
+                            cookbookSearchBar
+                            if !smartChips.isEmpty {
+                                smartFilterChips
                             }
                             masonryGrid
                         }
@@ -187,6 +123,8 @@ struct CookbookView: View {
 
             Spacer()
 
+            ImportMenu()
+
             ProfileMenu(
                 onPreferences: { showPreferences = true },
                 onSettings: { showSettings = true }
@@ -196,224 +134,68 @@ struct CookbookView: View {
         .padding(.vertical, AlchemySpacing.md)
     }
 
-    // MARK: - Search + Filter Bar
+    // MARK: - Search Bar
 
-    /// Combined search field with a filter toggle button. The filter button
-    /// shows a badge count when filters are active.
-    private var searchAndFilterBar: some View {
+    private var cookbookSearchBar: some View {
         HStack(spacing: AlchemySpacing.sm) {
-            HStack(spacing: AlchemySpacing.sm) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(AlchemyColors.textTertiary)
-
-                TextField("Search recipes...", text: $searchText)
-                    .font(AlchemyTypography.body)
-                    .foregroundStyle(AlchemyColors.textPrimary)
-            }
-            .padding(.horizontal, AlchemySpacing.md)
-            .padding(.vertical, AlchemySpacing.sm + 2)
-            .background(AlchemyColors.surface)
-            .clipShape(RoundedRectangle(cornerRadius: AlchemySpacing.buttonRadius))
-
-            Button {
-                withAnimation(.easeInOut(duration: 0.25)) {
-                    showFilterPanel.toggle()
-                }
-            } label: {
-                ZStack(alignment: .topTrailing) {
-                    Image(systemName: showFilterPanel ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
-                        .font(.system(size: 22))
-                        .foregroundStyle(hasActiveFilters ? AlchemyColors.accent : AlchemyColors.textSecondary)
-
-                    if activeFilterCount > 0 {
-                        Text("\(activeFilterCount)")
-                            .font(.system(size: 9, weight: .bold))
-                            .foregroundStyle(.white)
-                            .padding(3)
-                            .background(AlchemyColors.accent)
-                            .clipShape(Circle())
-                            .offset(x: 4, y: -4)
-                    }
-                }
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(.horizontal, AlchemySpacing.screenHorizontal)
-    }
-
-    // MARK: - Filter Panel
-
-    /// Expandable multi-dimensional filter panel. Each dimension is a
-    /// horizontal scrolling chip row. Dimensions only appear when the
-    /// cookbook has items with tags in that category.
-    private var filterPanel: some View {
-        VStack(alignment: .leading, spacing: AlchemySpacing.md) {
-
-            if !availableCuisines.isEmpty {
-                filterRow(title: "Cuisine", options: availableCuisines, selected: $selectedCuisines)
-            }
-
-            if !availableDietary.isEmpty {
-                filterRow(title: "Dietary", options: availableDietary, selected: $selectedDietary)
-            }
-
-            HStack(spacing: AlchemySpacing.md) {
-                difficultyFilter
-                timeFilter
-            }
-
-            if hasActiveFilters {
-                Button {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        clearAllFilters()
-                    }
-                } label: {
-                    Label("Clear All", systemImage: "xmark.circle")
-                        .font(AlchemyTypography.caption)
-                        .foregroundStyle(AlchemyColors.accent)
-                }
-            }
-        }
-        .padding(AlchemySpacing.md)
-        .background(AlchemyColors.surface.opacity(0.6))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .padding(.horizontal, AlchemySpacing.screenHorizontal)
-        .transition(.opacity.combined(with: .move(edge: .top)))
-    }
-
-    /// A single tag-based filter dimension rendered as a horizontal chip row.
-    private func filterRow(title: String, options: [String], selected: Binding<Set<String>>) -> some View {
-        VStack(alignment: .leading, spacing: AlchemySpacing.xs) {
-            Text(title)
-                .font(AlchemyTypography.captionBold)
-                .foregroundStyle(AlchemyColors.textSecondary)
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: AlchemySpacing.sm) {
-                    ForEach(options, id: \.self) { option in
-                        let isSelected = selected.wrappedValue.contains(option)
-                        Button {
-                            withAnimation(.easeInOut(duration: 0.15)) {
-                                if isSelected {
-                                    selected.wrappedValue.remove(option)
-                                } else {
-                                    selected.wrappedValue.insert(option)
-                                }
-                            }
-                        } label: {
-                            Text(option)
-                                .font(AlchemyTypography.caption)
-                                .foregroundStyle(isSelected ? .white : AlchemyColors.textPrimary)
-                                .padding(.horizontal, AlchemySpacing.sm + 2)
-                                .padding(.vertical, AlchemySpacing.xs + 1)
-                                .background(isSelected ? AlchemyColors.accent : AlchemyColors.surface)
-                                .clipShape(Capsule())
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            }
-        }
-    }
-
-    /// Difficulty filter — three-way toggle (easy / medium / complex).
-    private var difficultyFilter: some View {
-        VStack(alignment: .leading, spacing: AlchemySpacing.xs) {
-            Text("Difficulty")
-                .font(AlchemyTypography.captionBold)
-                .foregroundStyle(AlchemyColors.textSecondary)
-
-            HStack(spacing: AlchemySpacing.xs) {
-                ForEach(["easy", "medium", "complex"], id: \.self) { level in
-                    let isSelected = selectedDifficulty == level
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.15)) {
-                            selectedDifficulty = isSelected ? nil : level
-                        }
-                    } label: {
-                        Text(level.capitalized)
-                            .font(AlchemyTypography.caption)
-                            .foregroundStyle(isSelected ? .white : AlchemyColors.textPrimary)
-                            .padding(.horizontal, AlchemySpacing.sm)
-                            .padding(.vertical, AlchemySpacing.xs + 1)
-                            .background(isSelected ? AlchemyColors.accent : AlchemyColors.surface)
-                            .clipShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-        }
-    }
-
-    /// Max time filter — preset buckets (15min, 30min, 60min).
-    private var timeFilter: some View {
-        VStack(alignment: .leading, spacing: AlchemySpacing.xs) {
-            Text("Max Time")
-                .font(AlchemyTypography.captionBold)
-                .foregroundStyle(AlchemyColors.textSecondary)
-
-            HStack(spacing: AlchemySpacing.xs) {
-                ForEach(Self.timeBuckets, id: \.maxMinutes) { bucket in
-                    let isSelected = selectedMaxTime == bucket.maxMinutes
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.15)) {
-                            selectedMaxTime = isSelected ? nil : bucket.maxMinutes
-                        }
-                    } label: {
-                        Text(bucket.label)
-                            .font(AlchemyTypography.caption)
-                            .foregroundStyle(isSelected ? .white : AlchemyColors.textPrimary)
-                            .padding(.horizontal, AlchemySpacing.sm)
-                            .padding(.vertical, AlchemySpacing.xs + 1)
-                            .background(isSelected ? AlchemyColors.accent : AlchemyColors.surface)
-                            .clipShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-        }
-    }
-
-    /// Inline summary of active filters shown below the filter panel.
-    private var activeFilterSummary: some View {
-        let parts: [String] = {
-            var result: [String] = []
-            if !selectedCuisines.isEmpty {
-                result.append(selectedCuisines.sorted().joined(separator: ", "))
-            }
-            if !selectedDietary.isEmpty {
-                result.append(selectedDietary.sorted().joined(separator: ", "))
-            }
-            if let diff = selectedDifficulty {
-                result.append(diff.capitalized)
-            }
-            if let maxTime = selectedMaxTime {
-                result.append("≤ \(maxTime) min")
-            }
-            return result
-        }()
-
-        return HStack {
-            Image(systemName: "line.3.horizontal.decrease")
-                .font(.system(size: 11))
+            Image(systemName: "magnifyingglass")
                 .foregroundStyle(AlchemyColors.textTertiary)
-            Text(parts.joined(separator: " · "))
-                .font(AlchemyTypography.caption)
-                .foregroundStyle(AlchemyColors.textSecondary)
-                .lineLimit(1)
-            Spacer()
-            Text("\(filteredPreviews.count)")
-                .font(AlchemyTypography.captionBold)
-                .foregroundStyle(AlchemyColors.accent)
+
+            TextField("Search recipes...", text: $searchText)
+                .font(AlchemyTypography.body)
+                .foregroundStyle(AlchemyColors.textPrimary)
+
+            if !searchText.isEmpty {
+                Button {
+                    searchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(AlchemyColors.textTertiary)
+                }
+                .buttonStyle(.plain)
+            }
         }
+        .padding(.horizontal, AlchemySpacing.md)
+        .padding(.vertical, AlchemySpacing.sm + 2)
+        .background(AlchemyColors.surface)
+        .clipShape(RoundedRectangle(cornerRadius: AlchemySpacing.buttonRadius))
         .padding(.horizontal, AlchemySpacing.screenHorizontal)
     }
 
-    private func clearAllFilters() {
-        selectedCuisines.removeAll()
-        selectedDietary.removeAll()
-        selectedDifficulty = nil
-        selectedMaxTime = nil
+    // MARK: - Smart Filter Chips
+
+    /// Horizontal scroll strip of intelligently derived filter chips.
+    /// Matches the Explore page style: clean white text labels, bold when
+    /// selected, dimmed when inactive. No backgrounds or icons.
+    private var smartFilterChips: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: AlchemySpacing.lg) {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) { activeFilter = nil }
+                } label: {
+                    Text("All")
+                        .font(.system(size: 18, weight: activeFilter == nil ? .bold : .regular))
+                        .foregroundStyle(AlchemyColors.textPrimary.opacity(activeFilter == nil ? 1.0 : 0.4))
+                }
+                .buttonStyle(.plain)
+
+                ForEach(smartChips) { chip in
+                    let isSelected = activeFilter == chip
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            activeFilter = isSelected ? nil : chip
+                        }
+                    } label: {
+                        Text(chip.label)
+                            .font(.system(size: 18, weight: isSelected ? .bold : .regular))
+                            .foregroundStyle(AlchemyColors.textPrimary.opacity(isSelected ? 1.0 : 0.4))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, AlchemySpacing.screenHorizontal)
+            .padding(.vertical, AlchemySpacing.sm)
+        }
     }
 
     // MARK: - Masonry Grid
@@ -707,6 +489,254 @@ struct CookbookFullScreenPreview: View {
                 .ignoresSafeArea(edges: .bottom)
             }
         }
+    }
+}
+
+// MARK: - Smart Filter Chip Model
+
+/// A filter chip intelligently derived from actual cookbook content.
+///
+/// The `generate(from:)` factory scans all entries, tallies tag values
+/// across every dimension (cuisine, dietary, difficulty, time, occasion,
+/// technique, category, personalization, recency), and ranks them by
+/// "usefulness" — a chip is more useful when it selects a meaningful
+/// subset (roughly 15–80% of items) rather than everything or nearly nothing.
+///
+/// Chips are deduplicated across dimensions: if "Italian" appears in both
+/// `category` and `variantTags.cuisine`, only one chip surfaces.
+enum CookbookChip: Identifiable, Hashable {
+    case cuisine(String)
+    case dietary(String)
+    case difficulty(String)
+    case quickUnder(Int)
+    case occasion(String)
+    case technique(String)
+    case category(String)
+    case personalized
+    case recent
+
+    var id: String {
+        switch self {
+        case .cuisine(let v):    return "cuisine:\(v)"
+        case .dietary(let v):    return "dietary:\(v)"
+        case .difficulty(let v): return "diff:\(v)"
+        case .quickUnder(let m): return "quick:\(m)"
+        case .occasion(let v):   return "occ:\(v)"
+        case .technique(let v):  return "tech:\(v)"
+        case .category(let v):   return "cat:\(v)"
+        case .personalized:      return "meta:personalized"
+        case .recent:            return "meta:recent"
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .cuisine(let v):    return v
+        case .dietary(let v):    return v
+        case .difficulty(let v): return v.capitalized
+        case .quickUnder(let m): return "Under \(m) min"
+        case .occasion(let v):   return v
+        case .technique(let v):  return v
+        case .category(let v):   return v
+        case .personalized:      return "Personalized"
+        case .recent:            return "Recent"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .cuisine:      return "globe"
+        case .dietary:      return "leaf"
+        case .difficulty:   return "flame"
+        case .quickUnder:   return "clock"
+        case .occasion:     return "calendar"
+        case .technique:    return "frying.pan"
+        case .category:     return "tag"
+        case .personalized: return "sparkles"
+        case .recent:       return "clock.badge"
+        }
+    }
+
+    /// Whether a cookbook entry matches this chip.
+    func matches(_ entry: CookbookEntryItem) -> Bool {
+        switch self {
+        case .cuisine(let v):
+            return (entry.variantTags?.cuisine ?? []).contains(where: {
+                $0.caseInsensitiveCompare(v) == .orderedSame
+            })
+        case .dietary(let v):
+            return (entry.variantTags?.dietary ?? []).contains(where: {
+                $0.caseInsensitiveCompare(v) == .orderedSame
+            })
+        case .difficulty(let v):
+            let effective = entry.effectiveDifficulty ?? "medium"
+            return effective.caseInsensitiveCompare(v) == .orderedSame
+        case .quickUnder(let maxMin):
+            return (entry.effectiveTimeMinutes ?? Int.max) <= maxMin
+        case .occasion(let v):
+            return (entry.variantTags?.occasion ?? []).contains(where: {
+                $0.caseInsensitiveCompare(v) == .orderedSame
+            })
+        case .technique(let v):
+            return (entry.variantTags?.technique ?? []).contains(where: {
+                $0.caseInsensitiveCompare(v) == .orderedSame
+            })
+        case .category(let v):
+            return entry.category?.caseInsensitiveCompare(v) == .orderedSame
+        case .personalized:
+            return entry.hasVariant
+        case .recent:
+            guard let date = ISO8601DateFormatter().date(from: entry.savedAt) else {
+                return false
+            }
+            let daysAgo = Calendar.current.dateComponents(
+                [.day], from: date, to: .now
+            ).day ?? Int.max
+            return daysAgo <= 14
+        }
+    }
+
+    // MARK: - Intelligent Generation
+
+    /// Placeholder categories excluded from chip generation.
+    private static let excludedCategories: Set<String> = [
+        "auto organized", "uncategorized",
+    ]
+
+    /// Max chips to surface — keeps the strip scannable.
+    private static let maxChips = 10
+
+    /// Minimum number of matching recipes for a chip to be worth showing.
+    /// Below this threshold the filter is too narrow to be useful.
+    private static let minMatchCount = 2
+
+    /// Scans all cookbook entries and produces a ranked list of filter chips.
+    ///
+    /// Scoring heuristic: a chip is most useful when it selects 20–60% of
+    /// the cookbook. Chips selecting everything (100%) or nearly nothing (<2)
+    /// are excluded. Within the useful range, chips closer to 40% of total
+    /// score highest — they create the most meaningful splits.
+    static func generate(from entries: [CookbookEntryItem]) -> [CookbookChip] {
+        guard entries.count >= 2 else { return [] }
+        let total = Double(entries.count)
+
+        var candidates: [(chip: CookbookChip, count: Int)] = []
+        var seen = Set<String>()
+
+        // -- Cuisine -------------------------------------------------------
+        var cuisineCounts: [String: Int] = [:]
+        for entry in entries {
+            for c in entry.variantTags?.cuisine ?? [] {
+                cuisineCounts[c, default: 0] += 1
+            }
+        }
+        for (value, count) in cuisineCounts where count >= minMatchCount {
+            let key = value.lowercased()
+            guard !seen.contains(key) else { continue }
+            seen.insert(key)
+            candidates.append((.cuisine(value), count))
+        }
+
+        // -- Category (deduplicated against cuisine) -----------------------
+        var categoryCounts: [String: Int] = [:]
+        for entry in entries {
+            if let cat = entry.category,
+               !excludedCategories.contains(cat.lowercased()) {
+                categoryCounts[cat, default: 0] += 1
+            }
+        }
+        for (value, count) in categoryCounts where count >= minMatchCount {
+            let key = value.lowercased()
+            guard !seen.contains(key) else { continue }
+            seen.insert(key)
+            candidates.append((.category(value), count))
+        }
+
+        // -- Dietary -------------------------------------------------------
+        var dietaryCounts: [String: Int] = [:]
+        for entry in entries {
+            for d in entry.variantTags?.dietary ?? [] {
+                dietaryCounts[d, default: 0] += 1
+            }
+        }
+        for (value, count) in dietaryCounts where count >= minMatchCount {
+            candidates.append((.dietary(value), count))
+        }
+
+        // -- Occasion ------------------------------------------------------
+        var occasionCounts: [String: Int] = [:]
+        for entry in entries {
+            for o in entry.variantTags?.occasion ?? [] {
+                occasionCounts[o, default: 0] += 1
+            }
+        }
+        for (value, count) in occasionCounts where count >= minMatchCount {
+            candidates.append((.occasion(value), count))
+        }
+
+        // -- Technique -----------------------------------------------------
+        var techniqueCounts: [String: Int] = [:]
+        for entry in entries {
+            for t in entry.variantTags?.technique ?? [] {
+                techniqueCounts[t, default: 0] += 1
+            }
+        }
+        for (value, count) in techniqueCounts where count >= minMatchCount {
+            candidates.append((.technique(value), count))
+        }
+
+        // -- Difficulty (only surface if there's meaningful variety) --------
+        var diffCounts: [String: Int] = [:]
+        for entry in entries {
+            let d = entry.effectiveDifficulty ?? "medium"
+            diffCounts[d.lowercased(), default: 0] += 1
+        }
+        if diffCounts.keys.count >= 2 {
+            if let easyCount = diffCounts["easy"], easyCount >= minMatchCount {
+                candidates.append((.difficulty("easy"), easyCount))
+            }
+            if let complexCount = diffCounts["complex"], complexCount >= minMatchCount {
+                candidates.append((.difficulty("complex"), complexCount))
+            }
+        }
+
+        // -- Quick (time-based) --------------------------------------------
+        let quickCount = entries.filter {
+            ($0.effectiveTimeMinutes ?? Int.max) <= 30
+        }.count
+        if quickCount >= minMatchCount && quickCount < entries.count {
+            candidates.append((.quickUnder(30), quickCount))
+        }
+
+        // -- Personalized --------------------------------------------------
+        let personalizedCount = entries.filter { $0.hasVariant }.count
+        if personalizedCount >= minMatchCount && personalizedCount < entries.count {
+            candidates.append((.personalized, personalizedCount))
+        }
+
+        // -- Recent (saved in last 14 days) --------------------------------
+        let formatter = ISO8601DateFormatter()
+        let recentCount = entries.filter { entry in
+            guard let date = formatter.date(from: entry.savedAt) else { return false }
+            let days = Calendar.current.dateComponents([.day], from: date, to: .now).day ?? Int.max
+            return days <= 14
+        }.count
+        if recentCount >= minMatchCount && recentCount < entries.count {
+            candidates.append((.recent, recentCount))
+        }
+
+        // -- Score and rank ------------------------------------------------
+        // Best score at ~40% coverage; falls off toward 0% and 100%.
+        let scored = candidates.map { (chip, count) -> (CookbookChip, Double) in
+            let ratio = Double(count) / total
+            let score = 1.0 - abs(ratio - 0.4) * 2.0
+            return (chip, max(score, 0.05))
+        }
+
+        return scored
+            .sorted { $0.1 > $1.1 }
+            .prefix(maxChips)
+            .map(\.0)
     }
 }
 

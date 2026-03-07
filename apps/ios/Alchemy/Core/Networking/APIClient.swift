@@ -20,9 +20,14 @@ final class APIClient {
     private let encoder: JSONEncoder
 
     private init() {
-        self.session = URLSession.shared
+        // LLM-backed chat endpoints can take 30–90s on cold starts or
+        // complex generations. Default URLSession timeout of 60s is too
+        // aggressive; 120s gives the backend room to finish.
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 120
 
-        // API_BASE_URL is set in xcconfig and injected via Info.plist
+        self.session = URLSession(configuration: config)
+
         self.baseURL = Bundle.main.infoDictionary?["API_BASE_URL"] as? String
             ?? "https://api.cookwithalchemy.com/v1"
 

@@ -1075,15 +1075,37 @@ export function RecipeSimulationRunnerCard({ registryModels }: { registryModels:
     "fetch_cookbook"
   ] as const;
 
+  const fetchSharedSimulationToken = async (): Promise<string> => {
+    const response = await fetch("/api/admin/simulations/run", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "token" })
+    });
+
+    if (!response.ok) {
+      const text = await response.text().catch(() => "Failed to acquire shared simulation token");
+      throw new Error(text);
+    }
+
+    const payload = await response.json() as { token?: string };
+    const token = payload.token?.trim() ?? "";
+    if (!token) {
+      throw new Error("Simulation token response missing token");
+    }
+
+    return token;
+  };
+
   const runLane = async (
     variant: "A" | "B",
-    options?: { seed?: number; runGroupId?: string }
+    options?: { seed?: number; runGroupId?: string; sharedToken?: string }
   ): Promise<void> => {
     const setRunning = variant === "A" ? setRunningA : setRunningB;
     const setResult = variant === "A" ? setResultA : setResultB;
     const overrides = variant === "A" ? overridesA : overridesB;
     const seed = options?.seed ?? Math.max(1, Math.floor(Date.now() % 2_147_483_647));
     const runGroupId = options?.runGroupId ?? crypto.randomUUID();
+    const sharedToken = options?.sharedToken?.trim() ?? "";
 
     setRunning(true);
     let current = emptyResult();
@@ -1101,7 +1123,8 @@ export function RecipeSimulationRunnerCard({ registryModels }: { registryModels:
           variant,
           seed,
           run_group_id: runGroupId,
-          model_overrides: buildOverridePayload(overrides)
+          model_overrides: buildOverridePayload(overrides),
+          token: sharedToken || undefined
         })
       });
 
@@ -1259,12 +1282,24 @@ export function RecipeSimulationRunnerCard({ registryModels }: { registryModels:
       return;
     }
 
-    const seed = Math.max(1, Math.floor(Date.now() % 2_147_483_647));
-    const runGroupId = crypto.randomUUID();
-    void Promise.all([
-      runLane("A", { seed, runGroupId }),
-      runLane("B", { seed, runGroupId })
-    ]);
+    void (async () => {
+      const seed = Math.max(1, Math.floor(Date.now() % 2_147_483_647));
+      const runGroupId = crypto.randomUUID();
+
+      let sharedToken: string;
+      try {
+        sharedToken = await fetchSharedSimulationToken();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        toast.error(message || "Failed to acquire shared simulation token");
+        return;
+      }
+
+      await Promise.all([
+        runLane("A", { seed, runGroupId, sharedToken }),
+        runLane("B", { seed, runGroupId, sharedToken })
+      ]);
+    })();
   };
 
   return (

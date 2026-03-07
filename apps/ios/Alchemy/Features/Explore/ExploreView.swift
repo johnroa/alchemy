@@ -66,6 +66,7 @@ struct ExploreView: View {
                                 .shadow(color: .black.opacity(0.5), radius: 4)
                             Spacer()
                             sortPicker
+                            ImportMenu()
                             ProfileMenu(
                                 onPreferences: { showPreferences = true },
                                 onSettings: { showSettings = true }
@@ -395,14 +396,7 @@ private struct ExploreCardView: View {
 
                     Spacer(minLength: 0)
 
-                    if let stats = preview.quickStats {
-                        VStack(spacing: AlchemySpacing.lg) {
-                            CompactGauge.time(minutes: stats.timeMinutes)
-                            CompactGauge.difficulty(stats.difficultyNormalized)
-                            CompactGauge.health(stats.healthNormalized)
-                            CompactGauge.ingredients(count: stats.items)
-                        }
-                    }
+                    ExploreRail(preview: preview)
                 }
                 .padding(.horizontal, AlchemySpacing.screenHorizontal)
                 .padding(.bottom, 180)

@@ -888,14 +888,17 @@ const handleSimInit = async (body: Body): Promise<Response> => {
 
   const apiBase = normalizeApiBase(process.env["API_BASE_URL"]);
 
-  let token: string;
-  try {
-    token = await getAdminSimulationBearerToken();
-  } catch (error) {
-    return NextResponse.json(
-      { error: `Failed to acquire simulation token: ${error instanceof Error ? error.message : String(error)}` },
-      { status: 500 }
-    );
+  const providedToken = typeof body.token === "string" ? body.token.trim() : "";
+  let token = providedToken;
+  if (!token) {
+    try {
+      token = await getAdminSimulationBearerToken();
+    } catch (error) {
+      return NextResponse.json(
+        { error: `Failed to acquire simulation token: ${error instanceof Error ? error.message : String(error)}` },
+        { status: 500 }
+      );
+    }
   }
 
   const requestId = crypto.randomUUID();
@@ -912,6 +915,20 @@ const handleSimInit = async (body: Body): Promise<Response> => {
   });
 
   return NextResponse.json({ request_id: requestId, token, api_base: apiBase, prompts, actor_id: actor?.id ?? null });
+};
+
+const handleSimToken = async (): Promise<Response> => {
+  await requireCloudflareAccess();
+
+  try {
+    const token = await getAdminSimulationBearerToken();
+    return NextResponse.json({ token });
+  } catch (error) {
+    return NextResponse.json(
+      { error: `Failed to acquire simulation token: ${error instanceof Error ? error.message : String(error)}` },
+      { status: 500 }
+    );
+  }
 };
 
 /**
@@ -1677,6 +1694,9 @@ export async function POST(request: Request): Promise<Response> {
   /* ---- Step-by-step mode: each step is its own short-lived request ---- */
   if (action === "init") {
     return handleSimInit(body);
+  }
+  if (action === "token") {
+    return handleSimToken();
   }
   if (action === "step") {
     return handleSimStep(body);

@@ -515,6 +515,10 @@ struct GenerateView: View {
         }
 
         ToolbarItem(placement: .topBarTrailing) {
+            ImportMenu()
+        }
+
+        ToolbarItem(placement: .topBarTrailing) {
             ProfileMenu(
                 onPreferences: { showPreferences = true },
                 onSettings: { showSettings = true }
@@ -636,14 +640,13 @@ struct GenerateView: View {
         )
         messages.append(userMsg)
         isSending = true
-        // Clear chips immediately so they disappear when the user sends
         withAnimation { iterationSuggestions = [] }
 
-        // Deferred clear: multi-line TextField (axis: .vertical) has a known
-        // SwiftUI issue where setting the binding to "" while focused doesn't
-        // visually update. Deferring to the next runloop tick lets the view
-        // cycle complete first, ensuring the field actually clears.
-        Task { @MainActor in inputText = "" }
+        // Unfocus the TextField BEFORE clearing — SwiftUI's multi-line
+        // TextField ignores binding updates while it holds editing focus.
+        // Dropping focus first lets the "" assignment actually take effect.
+        inputFocused = false
+        inputText = ""
 
         if !chatHasStarted {
             withAnimation { chatHasStarted = true }
@@ -666,14 +669,12 @@ struct GenerateView: View {
                 let response: ChatSessionResponse
 
                 if let sessionId = chatSessionId {
-                    // Continue existing session
                     response = try await APIClient.shared.request(
                         "/chat/\(sessionId)/messages",
                         method: .post,
                         body: ChatMessageRequest(message: text)
                     )
                 } else {
-                    // Create new session with first message
                     response = try await APIClient.shared.request(
                         "/chat",
                         method: .post,
@@ -696,8 +697,6 @@ struct GenerateView: View {
                         )
                     }
                 }
-                // Re-populate the input so the user can retry without retyping
-                inputText = text
                 print("[GenerateView] sendMessage error: \(error)")
             }
         }

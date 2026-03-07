@@ -72,3 +72,107 @@ extension CompactGauge {
         )
     }
 }
+
+// MARK: - Recipe Badge
+
+/// Pill badge for contextual signals (New, Trending, Popular) shown in the
+/// explore card right-side rail alongside CompactGauges.
+struct RecipeBadge: View {
+    let label: String
+    let icon: String
+    let tint: Color
+
+    var body: some View {
+        VStack(spacing: 4) {
+            ZStack {
+                Circle()
+                    .fill(tint.opacity(0.3))
+
+                Circle()
+                    .stroke(tint.opacity(0.6), lineWidth: 1.5)
+
+                Image(systemName: icon)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(tint)
+            }
+            .frame(width: 36, height: 36)
+            .shadow(color: tint.opacity(0.4), radius: 4)
+
+            Text(label)
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(tint)
+                .shadow(color: .black.opacity(0.4), radius: 3)
+        }
+    }
+}
+
+extension RecipeBadge {
+    static var trending: RecipeBadge {
+        RecipeBadge(label: "Hot", icon: "flame.fill", tint: .orange)
+    }
+
+    static var popular: RecipeBadge {
+        RecipeBadge(label: "Popular", icon: "heart.fill", tint: .pink)
+    }
+
+    static var new: RecipeBadge {
+        RecipeBadge(label: "New", icon: "sparkles", tint: .cyan)
+    }
+}
+
+// MARK: - Explore Rail
+
+/// Vertical right-edge rail for Explore cards combining contextual badges
+/// (New, Trending, Popular) and stat gauges (time, difficulty, health, items).
+///
+/// Badges are derived from the RecipePreview's save/variant counts and recency.
+/// Gauges show when quickStats is available on the preview.
+struct ExploreRail: View {
+    let preview: RecipePreview
+
+    /// Threshold: recipes updated within this many days are considered "New".
+    private static let newThresholdDays = 7
+    /// Threshold: save count above this marks a recipe as "Popular".
+    private static let popularThreshold = 5
+
+    var body: some View {
+        VStack(spacing: AlchemySpacing.md) {
+            ForEach(badges, id: \.label) { badge in
+                badge
+            }
+
+            if let stats = preview.quickStats {
+                CompactGauge.time(minutes: stats.timeMinutes)
+                CompactGauge.difficulty(stats.difficultyNormalized)
+                CompactGauge.health(stats.healthNormalized)
+                CompactGauge.ingredients(count: stats.items)
+            }
+        }
+    }
+
+    /// Derives which contextual badges to show. A recipe can earn
+    /// multiple badges but we cap at 2 to keep the rail compact.
+    private var badges: [RecipeBadge] {
+        var result: [RecipeBadge] = []
+
+        if isNew { result.append(.new) }
+        if isPopular { result.append(.popular) }
+
+        return Array(result.prefix(2))
+    }
+
+    /// A recipe is "new" if updatedAt is within the last N days.
+    private var isNew: Bool {
+        guard let date = ISO8601DateFormatter().date(from: preview.updatedAt) else {
+            return false
+        }
+        let daysAgo = Calendar.current.dateComponents(
+            [.day], from: date, to: .now
+        ).day ?? Int.max
+        return daysAgo <= Self.newThresholdDays
+    }
+
+    private var isPopular: Bool {
+        (preview.saveCount ?? 0) >= Self.popularThreshold
+    }
+}
