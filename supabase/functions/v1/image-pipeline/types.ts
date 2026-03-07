@@ -14,11 +14,9 @@ import type {
   RecipePayload,
 } from "../../_shared/types.ts";
 import { canonicalizeRecipePayloadMetadata } from "../recipe-preview.ts";
-import { buildRecipeSearchDocument } from "../recipe-search.ts";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-export const ZERO_UUID = "00000000-0000-0000-0000-000000000000";
 export const IMAGE_JOB_LOCK_ID = "v1_image_jobs_process";
 export const IMAGE_JOB_LOCK_STALE_MS = 10 * 60 * 1000;
 export const IMAGE_JOB_RETRY_BACKOFF_MS = 15 * 1000;
@@ -237,6 +235,47 @@ export const buildRecipeImageFingerprintPayload = (
   };
 };
 
+/**
+ * Reuse matching should focus on dish identity and appearance, not discovery
+ * text like pairings or optional serving suggestions that can mention other
+ * recipes and contaminate nearest-neighbor search.
+ */
+export const buildImageReuseSearchText = (
+  recipe: RecipePayload,
+  titleOverride?: string | null,
+): string => {
+  const metadata = canonicalizeRecipePayloadMetadata(recipe) ?? {};
+  const lines = [
+    normalizeText(titleOverride) ?? normalizeText(recipe.title) ?? "Untitled Recipe",
+    normalizeText(recipe.description),
+    ...Array.from(
+      new Set(
+        (recipe.ingredients ?? []).flatMap((ingredient) => {
+          const normalized = normalizeText(ingredient.name);
+          return normalized ? [normalized] : [];
+        }),
+      ),
+    ),
+    ...normalizeStringList(metadata.cuisine_tags),
+    ...normalizeStringList(metadata.techniques),
+    ...normalizeStringList(metadata.serving_notes),
+    normalizeText(metadata.vibe),
+  ];
+
+  const seen = new Set<string>();
+  return lines.flatMap((line) => {
+    if (!line) {
+      return [];
+    }
+    const key = line.toLowerCase();
+    if (seen.has(key)) {
+      return [];
+    }
+    seen.add(key);
+    return [line];
+  }).join("\n");
+};
+
 export const buildImageRequestDescriptor = async (
   recipe: RecipePayload,
   titleOverride?: string | null,
@@ -258,39 +297,16 @@ export const buildImageRequestDescriptor = async (
       new TextEncoder().encode(stableStringify(fingerprintPayload)),
     ),
   );
-  const canonicalIngredientNames = Array.from(
-    new Set(
-      (recipe.ingredients ?? []).flatMap((ingredient) => {
-        const normalized = normalizeText(ingredient.name);
-        return normalized ? [normalized] : [];
-      }),
-    ),
-  );
-  const searchDocument = buildRecipeSearchDocument({
-    recipeId: ZERO_UUID,
-    recipeVersionId: ZERO_UUID,
-    category: null,
-    visibility: "private",
-    updatedAt: new Date(0).toISOString(),
-    imageUrl: null,
-    imageStatus: "pending",
-    payload: {
-      ...recipe,
-      title: normalizedTitle,
-    },
-    canonicalIngredientIds: [],
-    canonicalIngredientNames,
-    ontologyTermKeys: [],
-  });
+  const recipePayload = {
+    ...recipe,
+    title: normalizedTitle,
+  };
 
   return {
     fingerprint,
     normalizedTitle,
-    normalizedSearchText: searchDocument.search_text,
-    recipePayload: {
-      ...recipe,
-      title: normalizedTitle,
-    },
+    normalizedSearchText: buildImageReuseSearchText(recipePayload, normalizedTitle),
+    recipePayload,
   };
 };
 
