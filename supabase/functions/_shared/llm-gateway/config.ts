@@ -1,0 +1,168 @@
+/**
+ * llm-gateway/config.ts
+ *
+ * Configuration helpers, provider call wrappers, and utility functions
+ * used across the LLM gateway. Includes default prompt/rule factories
+ * for chat scopes, active-config loading, provider dispatch (text and
+ * image), recipe image prompt building, legacy model-config cleanup,
+ * and numeric-to-display-fraction conversion.
+ */
+
+import type { SupabaseClient } from "npm:@supabase/supabase-js@2";
+import type { GatewayConfig, GatewayScope, JsonValue, RecipePayload } from "../types.ts";
+import {
+  executeImageWithConfig,
+  executeWithConfig,
+  getActiveConfig as loadActiveConfig,
+} from "../llm-executor.ts";
+import type { ChatConversationScope, ModelOverrideMap } from "./types.ts";
+
+export const DEFAULT_OUT_OF_SCOPE_FALLBACK_TEXT =
+  "I'm here to help with recipes. What are you in the mood for?";
+
+export const defaultChatPromptForScope = (
+  scope: ChatConversationScope,
+): string => {
+  if (scope === "chat_generation") {
+    return `You are Alchemy. Generate candidate recipes from conversation context.
+If an unresolved dietary restriction or aversion conflicts with the user's explicit dish request, ask for confirmation before generating.
+When asking for confirmation, set response_context.mode to "preference_conflict", trigger_recipe=false, and return no recipe or candidate_recipe_set.
+When you do generate, every recipe must include metadata.difficulty, metadata.health_score, metadata.time_minutes, metadata.items, metadata.timing.total_minutes, and metadata.quick_stats.
+Return one strict JSON object that matches the provided contract.
+Do not use markdown or code fences.`;
+  }
+
+  if (scope === "chat_iteration") {
+    return `You are Alchemy. Update existing candidate recipes from the latest conversation turn.
+If an unresolved dietary restriction or aversion conflicts with the user's explicit ingredient or dish request, ask for confirmation before changing the recipe.
+When asking for confirmation, set response_context.mode to "preference_conflict", trigger_recipe=false, and return no new recipe or candidate_recipe_set.
+When you do return updated recipes, preserve the requested dish anchor and include canonical metadata quick stats on every recipe.
+Return one strict JSON object that matches the provided contract.
+Do not use markdown or code fences.`;
+  }
+
+  return `You are Alchemy in recipe chat ideation mode.
+If the user asks for a recipe or names a concrete dish to cook, set intent to "in_scope_generate" and trigger_recipe=true immediately.
+If the user explicitly requests a dish or ingredient that conflicts with dietary_restrictions or aversions, ask for confirmation before generating.
+In that conflict case, set response_context.mode to "preference_conflict", trigger_recipe=false, return no recipe or candidate_recipe_set, and use assistant_reply.suggested_next_actions for the obvious choices.
+Avoid unnecessary clarifying questions when the request is already actionable.
+Return one strict JSON object that matches the provided contract.
+Do not use markdown or code fences.`;
+};
+
+export const defaultChatRuleForScope = (
+  scope: ChatConversationScope,
+): Record<string, JsonValue> => {
+  if (scope === "chat_generation") {
+    return {
+      response_contract: "chat_generation_v1",
+      strict_json_only: true,
+    };
+  }
+
+  if (scope === "chat_iteration") {
+    return {
+      response_contract: "chat_iteration_v1",
+      strict_json_only: true,
+    };
+  }
+
+  return {
+    response_contract: "chat_ideation_v1",
+    strict_json_only: true,
+  };
+};
+
+export const getActiveConfig = async (
+  client: SupabaseClient,
+  scope: GatewayScope,
+  modelOverride?: { provider: string; model: string },
+): Promise<GatewayConfig> => {
+  return await loadActiveConfig(client, scope, modelOverride);
+};
+
+export type ProviderResult<T> = {
+  result: T;
+  inputTokens: number;
+  outputTokens: number;
+};
+
+export const callProvider = async <T>(params: {
+  provider: string;
+  model: string;
+  modelConfig: Record<string, JsonValue>;
+  systemPrompt: string;
+  userInput: Record<string, JsonValue>;
+}): Promise<ProviderResult<T>> => {
+  return await executeWithConfig<T>({
+    provider: params.provider,
+    model: params.model,
+    modelConfig: params.modelConfig,
+    systemPrompt: params.systemPrompt,
+    userInput: params.userInput,
+  });
+};
+
+export const callImageProvider = async (params: {
+  provider: string;
+  model: string;
+  modelConfig: Record<string, JsonValue>;
+  prompt: string;
+}): Promise<string> => {
+  return await executeImageWithConfig({
+    provider: params.provider,
+    model: params.model,
+    modelConfig: params.modelConfig,
+    prompt: params.prompt,
+  });
+};
+
+export const buildRecipeImagePrompt = (params: {
+  config: GatewayConfig;
+  recipe: RecipePayload;
+  context: Record<string, JsonValue>;
+}): string => {
+  return `${params.config.promptTemplate}\n\n${
+    JSON.stringify({
+      rule: params.config.rule,
+      recipe: params.recipe,
+      context: params.context,
+    })
+  }`;
+};
+
+export const LEGACY_MODEL_CONFIG_KEYS = [
+  "token_budget",
+  "ingredient_budget",
+  "max_ingredients",
+  "max_steps",
+] as const;
+
+export const cleanLegacyModelConfig = (
+  modelConfig: Record<string, JsonValue>,
+): Record<string, JsonValue> => {
+  const cleaned: Record<string, JsonValue> = { ...modelConfig };
+  for (const key of LEGACY_MODEL_CONFIG_KEYS) {
+    delete cleaned[key];
+  }
+  return cleaned;
+};
+
+export const numericToDisplayFraction = (value: number): string => {
+  if (!Number.isFinite(value) || value <= 0) return "1";
+  const whole = Math.floor(value);
+  const frac = value - whole;
+  const fractionMap: Array<[number, string]> = [
+    [0, ""], [1 / 8, "1/8"], [1 / 6, "1/6"], [1 / 4, "1/4"], [1 / 3, "1/3"],
+    [3 / 8, "3/8"], [1 / 2, "1/2"], [5 / 8, "5/8"], [2 / 3, "2/3"],
+    [3 / 4, "3/4"], [5 / 6, "5/6"], [7 / 8, "7/8"],
+  ];
+  let closest = fractionMap[0];
+  let minDist = Infinity;
+  for (const entry of fractionMap) {
+    const dist = Math.abs(frac - entry[0]);
+    if (dist < minDist) { minDist = dist; closest = entry; }
+  }
+  if (!closest[1]) return whole > 0 ? String(whole) : "1";
+  return whole > 0 ? `${whole} ${closest[1]}` : closest[1];
+};
