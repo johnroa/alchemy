@@ -3,6 +3,7 @@ import {
   requireJsonBody,
 } from "../../_shared/errors.ts";
 import { llmGateway } from "../../_shared/llm-gateway.ts";
+import { getInstallIdFromHeaders, logBehaviorEvents } from "../lib/behavior-events.ts";
 import type {
   JsonValue,
   OnboardingState,
@@ -258,6 +259,46 @@ export const handleOnboardingRoutes = async (
         persistedPreferencesError.message,
       );
     }
+
+    const installId = getInstallIdFromHeaders(request);
+    const { data: acquisitionProfile } = await serviceClient
+      .from("user_acquisition_profiles")
+      .select("onboarding_started_at, onboarding_completed_at")
+      .eq("user_id", auth.userId)
+      .maybeSingle();
+
+    const milestoneEvents = [];
+    if (!acquisitionProfile?.onboarding_started_at) {
+      milestoneEvents.push({
+        eventId: crypto.randomUUID(),
+        userId: auth.userId,
+        installId,
+        eventType: "onboarding_started" as const,
+        entityType: "user",
+        entityId: auth.userId,
+        payload: {
+          workflow: "onboarding",
+        },
+      });
+    }
+    if (onboardingState.completed && !acquisitionProfile?.onboarding_completed_at) {
+      milestoneEvents.push({
+        eventId: crypto.randomUUID(),
+        userId: auth.userId,
+        installId,
+        eventType: "onboarding_completed" as const,
+        entityType: "user",
+        entityId: auth.userId,
+        payload: {
+          workflow: "onboarding",
+        },
+      });
+    }
+
+    await logBehaviorEvents({
+      serviceClient,
+      events: milestoneEvents,
+    });
 
     void (async () => {
       try {

@@ -2,7 +2,7 @@ import {
   ApiError,
   requireJsonBody,
 } from "../../../_shared/errors.ts";
-import { logBehaviorEvents } from "../../lib/behavior-events.ts";
+import { getInstallIdFromHeaders, logBehaviorEvents } from "../../lib/behavior-events.ts";
 import type {
   ChatLoopState,
   ChatSessionContext,
@@ -46,6 +46,7 @@ export const handleCandidatePatch = async (
   } = deps;
 
   const chatId = parseUuid(segments[1]);
+  const installId = getInstallIdFromHeaders(request);
   const body = await requireJsonBody<{
     action?: "set_active_component" | "delete_component" | "clear_candidate";
     component_id?: string;
@@ -224,6 +225,7 @@ export const handleCandidatePatch = async (
       events: [{
         eventId: crypto.randomUUID(),
         userId: auth.userId,
+        installId,
         eventType: "chat_candidate_selected",
         sessionId: chatId,
         entityType: "candidate_set",

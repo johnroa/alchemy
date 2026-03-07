@@ -135,6 +135,7 @@ Next.js 15 App Router. All pages under `app/(admin)/`:
 | `/metadata-pipeline` | Metadata enrichment pipeline queue |
 | `/pipeline-health` | LLM pipeline observability — per-scope stats, variant health, graph activity |
 | `/boards` | Executive board landing page with curated KPI drill-downs |
+| `/boards/acquisition` | Install funnels, sign-in/onboarding conversion, first recipe/save/cook milestones, and install-week returning-cook retention |
 | `/boards/engagement` | North-star cooking, acceptance, cookbook revisit, and repeat-cook KPIs |
 | `/boards/operations` | Generation latency, defect rate, queue pressure, failure backlog, and cost KPIs |
 | `/boards/personalization` | Placeholder for ranking lift and preference-learning metrics as rollups mature |
@@ -150,9 +151,12 @@ Next.js 15 App Router. All pages under `app/(admin)/`:
 ### Executive boards and first-party telemetry
 
 - Boards are intentionally distinct from Analytics pages. Boards are fixed executive KPI surfaces; Analytics remains the drill-down layer.
-- The first shipped board set is `/boards/engagement` and `/boards/operations`, with `/boards/personalization` reserved until ranking-ready rollups stabilize.
+- The shipped executive board set is `/boards/acquisition`, `/boards/engagement`, and `/boards/operations`, with `/boards/personalization` reserved until ranking-ready rollups stabilize.
 - First-party product behavior is stored in append-only `behavior_events` and `behavior_semantic_facts` tables.
-- The client ingestion endpoint for batched product events is `POST /telemetry/behavior`.
+- Launch attribution and install cohorts are stored in `install_profiles` and `user_acquisition_profiles`.
+- The authenticated client ingestion endpoint for batched product events is `POST /telemetry/behavior`.
+- The anonymous pre-auth install ingestion endpoint is `POST /telemetry/install`.
+- iOS generates a stable local `install_id` on first launch and propagates it through both telemetry endpoints plus the `X-Install-Id` request header for authenticated API calls.
 
 ---
 

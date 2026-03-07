@@ -266,7 +266,35 @@ export interface paths {
                 default: components["responses"]["ErrorResponse"];
             };
         };
-        delete?: never;
+        /**
+         * Remove recipe from cookbook
+         * @description Deletes the cookbook entry and associated variant data for this recipe.
+         */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["parameters"]["RecipeId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Save status */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            saved: boolean;
+                        };
+                    };
+                };
+                default: components["responses"]["ErrorResponse"];
+            };
+        };
         options?: never;
         head?: never;
         patch?: never;
@@ -312,35 +340,53 @@ export interface paths {
                 default: components["responses"]["ErrorResponse"];
             };
         };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/telemetry/install": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
         /**
-         * Remove recipe from cookbook
-         * @description Deletes the cookbook entry and associated variant data for this recipe.
+         * Ingest anonymous install telemetry
+         * @description Narrow install-scoped telemetry sink used before auth. Accepts only
+         *     acquisition and app-open events keyed by a local install_id so Alchemy
+         *     can stitch first-open activity to the authenticated user later.
          */
-        delete: {
+        post: {
             parameters: {
                 query?: never;
                 header?: never;
-                path: {
-                    id: components["parameters"]["RecipeId"];
-                };
+                path?: never;
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["InstallTelemetryBatchRequest"];
+                };
+            };
             responses: {
-                /** @description Save status */
-                200: {
+                /** @description Batch accepted */
+                202: {
                     headers: {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": {
-                            saved: boolean;
-                        };
+                        "application/json": components["schemas"]["BehaviorTelemetryBatchResponse"];
                     };
                 };
                 default: components["responses"]["ErrorResponse"];
             };
         };
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -2769,12 +2815,12 @@ export interface components {
             /** @description Client-generated idempotency key for the behavior event. */
             event_id: string;
             /** @enum {string} */
-            event_type: "explore_impression" | "explore_opened_recipe" | "explore_saved_recipe" | "chat_session_started" | "chat_turn_submitted" | "chat_turn_resolved" | "chat_iteration_requested" | "chat_candidate_selected" | "chat_commit_completed" | "cookbook_viewed" | "cookbook_search_applied" | "cookbook_chip_applied" | "cookbook_recipe_opened" | "cookbook_recipe_unsaved" | "recipe_detail_opened" | "recipe_detail_heartbeat" | "recipe_detail_closed" | "recipe_saved" | "recipe_unsaved" | "recipe_cooked_inferred" | "ingredient_substitution_applied";
+            event_type: "app_first_open" | "app_session_started" | "auth_completed" | "onboarding_started" | "onboarding_completed" | "explore_impression" | "explore_opened_recipe" | "explore_saved_recipe" | "chat_session_started" | "chat_turn_submitted" | "chat_turn_resolved" | "chat_iteration_requested" | "chat_candidate_selected" | "chat_commit_completed" | "cookbook_viewed" | "cookbook_search_applied" | "cookbook_chip_applied" | "cookbook_recipe_opened" | "cookbook_recipe_unsaved" | "recipe_detail_opened" | "recipe_detail_heartbeat" | "recipe_detail_closed" | "recipe_saved" | "recipe_unsaved" | "recipe_cooked_inferred" | "ingredient_substitution_applied";
             /**
              * @description Optional explicit surface override. When omitted, the API applies the canonical surface for the event type.
              * @enum {string}
              */
-            surface?: "explore" | "chat" | "cookbook" | "recipe_detail";
+            surface?: "app" | "explore" | "chat" | "cookbook" | "recipe_detail" | "system";
             /** Format: date-time */
             occurred_at?: string;
             session_id?: string | null;
@@ -2787,7 +2833,30 @@ export interface components {
             };
         };
         BehaviorTelemetryBatchRequest: {
+            /** @description Stable local install identifier used to stitch post-auth events back to the acquisition install. */
+            install_id: string;
             events: components["schemas"]["BehaviorTelemetryEvent"][];
+        };
+        InstallTelemetryEvent: {
+            /** @description Client-generated idempotency key for the install event. */
+            event_id: string;
+            /** @enum {string} */
+            event_type: "app_first_open" | "app_session_started";
+            /** Format: date-time */
+            occurred_at?: string;
+            /**
+             * @description Coarse source context only. May include acquisition_channel,
+             *     campaign_token, provider_token, app_version, os_version, locale,
+             *     and timezone when known.
+             */
+            payload?: {
+                [key: string]: unknown;
+            };
+        };
+        InstallTelemetryBatchRequest: {
+            /** @description Stable local install identifier generated on first launch. */
+            install_id: string;
+            events: components["schemas"]["InstallTelemetryEvent"][];
         };
         BehaviorTelemetryBatchResponse: {
             accepted: number;

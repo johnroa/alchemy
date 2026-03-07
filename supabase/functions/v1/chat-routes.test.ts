@@ -207,6 +207,32 @@ const createRouteContext = (input: {
         };
       }
 
+      if (table === "user_acquisition_profiles") {
+        return {
+          select(_columns: string) {
+            return {
+              eq(_column: string, _value: string) {
+                return {
+                  async maybeSingle() {
+                    return { data: null, error: null };
+                  },
+                };
+              },
+            };
+          },
+          async insert(_payload: unknown) {
+            return { error: null };
+          },
+          update(_payload: unknown) {
+            return {
+              async eq(_column: string, _value: string) {
+                return { error: null };
+              },
+            };
+          },
+        };
+      }
+
       throw new Error(`unexpected service table: ${table}`);
     },
   };

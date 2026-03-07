@@ -8,11 +8,36 @@ import { getDashboardData } from "./overview";
 type BehaviorEventRow = {
   event_type: string | null;
   occurred_at: string | null;
+  install_id: string | null;
   user_id: string | null;
   entity_id: string | null;
   session_id: string | null;
   source_surface: string | null;
   payload: unknown;
+};
+
+type InstallProfileRow = {
+  install_id: string;
+  acquisition_channel: string | null;
+  campaign_token: string | null;
+  provider_token: string | null;
+  first_opened_at: string | null;
+  last_seen_at: string | null;
+  snapshot: unknown;
+};
+
+type UserAcquisitionProfileRow = {
+  user_id: string;
+  install_id: string | null;
+  acquisition_channel: string | null;
+  lifecycle_stage: string | null;
+  signed_in_at: string | null;
+  onboarding_started_at: string | null;
+  onboarding_completed_at: string | null;
+  first_generation_at: string | null;
+  first_save_at: string | null;
+  first_cook_at: string | null;
+  last_seen_at: string | null;
 };
 
 type LlmEventRow = {
@@ -31,6 +56,8 @@ type BoardTimeBucket = {
 
 const BEHAVIOR_EVENTS_PAGE_SIZE = 1000;
 const LLM_EVENTS_PAGE_SIZE = 1000;
+const INSTALL_PROFILE_PAGE_SIZE = 1000;
+const ACQUISITION_PROFILE_PAGE_SIZE = 1000;
 
 const startOfHour = (date: Date): Date => {
   const next = new Date(date);
@@ -141,6 +168,59 @@ const percentile = (values: number[], pct: number): number => {
 };
 
 const median = (values: number[]): number => percentile(values, 50);
+const medianOrNull = (values: number[]): number | null => values.length === 0 ? null : median(values);
+
+const chunkArray = <T>(values: T[], chunkSize: number): T[][] => {
+  if (values.length === 0) return [];
+
+  const chunks: T[][] = [];
+  for (let index = 0; index < values.length; index += chunkSize) {
+    chunks.push(values.slice(index, index + chunkSize));
+  }
+  return chunks;
+};
+
+const parseTimestamp = (timestamp: string | null | undefined): number | null => {
+  if (!timestamp) return null;
+  const value = Date.parse(timestamp);
+  return Number.isFinite(value) ? value : null;
+};
+
+const secondsBetween = (
+  startTimestamp: string | null | undefined,
+  endTimestamp: string | null | undefined,
+): number | null => {
+  const startMs = parseTimestamp(startTimestamp);
+  const endMs = parseTimestamp(endTimestamp);
+  if (startMs == null || endMs == null || endMs < startMs) return null;
+  return (endMs - startMs) / 1000;
+};
+
+const normalizeAcquisitionChannel = (value: string | null | undefined): string => {
+  switch (value) {
+    case "organic":
+      return "organic";
+    case "waitlist":
+      return "waitlist";
+    case "friend_share":
+      return "friend_share";
+    default:
+      return "unknown";
+  }
+};
+
+const acquisitionChannelLabel = (value: string): string => {
+  switch (value) {
+    case "friend_share":
+      return "Friend share";
+    case "waitlist":
+      return "Waitlist";
+    case "organic":
+      return "Organic";
+    default:
+      return "Unknown";
+  }
+};
 
 const uniqueUsers = (rows: Array<{ user_id: string | null }>): Set<string> =>
   new Set(rows.map((row) => row.user_id).filter((value): value is string => typeof value === "string" && value.length > 0));
@@ -175,7 +255,7 @@ const loadBehaviorEvents = async (query: AnalyticsQueryState): Promise<BehaviorE
     const to = Math.min((pageIndex + 1) * BEHAVIOR_EVENTS_PAGE_SIZE, count ?? 0) - 1;
     const { data, error } = await client
       .from("behavior_events")
-      .select("event_type,occurred_at,user_id,entity_id,session_id,source_surface,payload")
+      .select("event_type,occurred_at,install_id,user_id,entity_id,session_id,source_surface,payload")
       .gte("occurred_at", windowStart.toISOString())
       .order("occurred_at", { ascending: false })
       .range(from, to);
@@ -185,6 +265,147 @@ const loadBehaviorEvents = async (query: AnalyticsQueryState): Promise<BehaviorE
     }
 
     rows.push(...((data ?? []) as BehaviorEventRow[]));
+  }
+
+  return rows;
+};
+
+const loadInstallProfiles = async (query: AnalyticsQueryState): Promise<InstallProfileRow[]> => {
+  const client = getAdminClient();
+  const windowStart = new Date(Date.now() - getHoursForRange(query.range) * 60 * 60 * 1000);
+
+  const { count, error: countError } = await client
+    .from("install_profiles")
+    .select("install_id", { count: "exact", head: true })
+    .gte("first_opened_at", windowStart.toISOString());
+
+  if (countError) {
+    throw new Error(countError.message);
+  }
+
+  const rows: InstallProfileRow[] = [];
+  const pageCount = Math.ceil((count ?? 0) / INSTALL_PROFILE_PAGE_SIZE);
+  for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
+    const from = pageIndex * INSTALL_PROFILE_PAGE_SIZE;
+    const to = Math.min((pageIndex + 1) * INSTALL_PROFILE_PAGE_SIZE, count ?? 0) - 1;
+    const { data, error } = await client
+      .from("install_profiles")
+      .select("install_id,acquisition_channel,campaign_token,provider_token,first_opened_at,last_seen_at,snapshot")
+      .gte("first_opened_at", windowStart.toISOString())
+      .order("first_opened_at", { ascending: false })
+      .range(from, to);
+
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    rows.push(...((data ?? []) as unknown as InstallProfileRow[]));
+  }
+
+  return rows;
+};
+
+const loadUserAcquisitionProfiles = async (installIds: string[]): Promise<UserAcquisitionProfileRow[]> => {
+  if (installIds.length === 0) return [];
+
+  const client = getAdminClient();
+  const rows: UserAcquisitionProfileRow[] = [];
+
+  for (const installIdChunk of chunkArray(installIds, 200)) {
+    const { count, error: countError } = await client
+      .from("user_acquisition_profiles")
+      .select("user_id", { count: "exact", head: true })
+      .in("install_id", installIdChunk);
+
+    if (countError) {
+      throw new Error(countError.message);
+    }
+
+    const pageCount = Math.ceil((count ?? 0) / ACQUISITION_PROFILE_PAGE_SIZE);
+    for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
+      const from = pageIndex * ACQUISITION_PROFILE_PAGE_SIZE;
+      const to = Math.min((pageIndex + 1) * ACQUISITION_PROFILE_PAGE_SIZE, count ?? 0) - 1;
+      const { data, error } = await client
+        .from("user_acquisition_profiles")
+        .select(
+          [
+            "user_id",
+            "install_id",
+            "acquisition_channel",
+            "lifecycle_stage",
+            "signed_in_at",
+            "onboarding_started_at",
+            "onboarding_completed_at",
+            "first_generation_at",
+            "first_save_at",
+            "first_cook_at",
+            "last_seen_at",
+          ].join(","),
+        )
+        .in("install_id", installIdChunk)
+        .order("signed_in_at", { ascending: false, nullsFirst: false })
+        .range(from, to);
+
+      if (error) {
+        throw new Error(error.message);
+      }
+
+      rows.push(...((data ?? []) as unknown as UserAcquisitionProfileRow[]));
+    }
+  }
+
+  return rows;
+};
+
+const loadCookBehaviorEventsForInstalls = async (
+  installIds: string[],
+  occurredAfter: string | null,
+): Promise<BehaviorEventRow[]> => {
+  if (installIds.length === 0) return [];
+
+  const client = getAdminClient();
+  const rows: BehaviorEventRow[] = [];
+
+  for (const installIdChunk of chunkArray(installIds, 200)) {
+    let countQuery = client
+      .from("behavior_events")
+      .select("event_id", { count: "exact", head: true })
+      .eq("event_type", "recipe_cooked_inferred")
+      .in("install_id", installIdChunk);
+
+    if (occurredAfter) {
+      countQuery = countQuery.gte("occurred_at", occurredAfter);
+    }
+
+    const { count, error: countError } = await countQuery;
+    if (countError) {
+      throw new Error(countError.message);
+    }
+
+    const pageCount = Math.ceil((count ?? 0) / BEHAVIOR_EVENTS_PAGE_SIZE);
+    for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
+      const from = pageIndex * BEHAVIOR_EVENTS_PAGE_SIZE;
+      const to = Math.min((pageIndex + 1) * BEHAVIOR_EVENTS_PAGE_SIZE, count ?? 0) - 1;
+      let queryBuilder = client
+        .from("behavior_events")
+        .select("event_type,occurred_at,install_id,user_id,entity_id,session_id,source_surface,payload")
+        .eq("event_type", "recipe_cooked_inferred")
+        .in("install_id", installIdChunk);
+
+      if (occurredAfter) {
+        queryBuilder = queryBuilder.gte("occurred_at", occurredAfter);
+      }
+
+      const { data, error } = await queryBuilder
+        .order("occurred_at", { ascending: false })
+        .range(from, to);
+
+      if (error) {
+        throw new Error(error.message);
+      }
+
+      rows.push(...((data ?? []) as unknown as BehaviorEventRow[]));
+    }
   }
 
   return rows;
@@ -487,6 +708,223 @@ export const buildOperationsBoardSnapshot = (
   };
 };
 
+export const buildAcquisitionBoardSnapshot = (
+  installRows: InstallProfileRow[],
+  acquisitionRows: UserAcquisitionProfileRow[],
+  cookRows: BehaviorEventRow[],
+  query: AnalyticsQueryState,
+): {
+  summary: {
+    firstOpens: number;
+    signInRate: number;
+    onboardingCompletionRate: number;
+    firstGenerationRate: number;
+    firstSaveRate: number;
+    firstCookWithin7dRate: number;
+    medianTimeToSignInSeconds: number | null;
+    medianTimeToFirstRecipeSeconds: number | null;
+    medianTimeToFirstSaveSeconds: number | null;
+    medianTimeToFirstCookSeconds: number | null;
+    returningCooks7dRate: number;
+  };
+  totals: {
+    signIns: number;
+    onboardingCompleted: number;
+    firstGenerations: number;
+    firstSaves: number;
+    firstCooksWithin7d: number;
+    eligibleReturningInstalls: number;
+    returningCookInstalls: number;
+  };
+  series: Array<Record<string, number | string>>;
+  sourceMix: Array<{ channel: string; label: string; installs: number; signIns: number; firstCooksWithin7d: number }>;
+  cohortRetention: Array<{ cohortLabel: string; installs: number; returningCookInstalls: number; returningCookRate: number }>;
+} => {
+  const { buckets } = buildBoardBuckets(query);
+  const series = createSeries(buckets, [
+    "firstOpens",
+    "signIns",
+    "onboardingCompleted",
+    "firstRecipes",
+    "firstSaves",
+    "firstCooks",
+  ]);
+  const nowMs = Date.now();
+  const installById = new Map(installRows.map((row) => [row.install_id, row]));
+  const acquisitionByInstallId = new Map<string, UserAcquisitionProfileRow>();
+
+  for (const row of acquisitionRows) {
+    if (row.install_id && !acquisitionByInstallId.has(row.install_id)) {
+      acquisitionByInstallId.set(row.install_id, row);
+    }
+  }
+
+  for (const row of installRows) {
+    incrementSeriesField(series, buckets, row.first_opened_at, "firstOpens");
+  }
+  for (const row of acquisitionRows) {
+    incrementSeriesField(series, buckets, row.signed_in_at, "signIns");
+    incrementSeriesField(series, buckets, row.onboarding_completed_at, "onboardingCompleted");
+    incrementSeriesField(series, buckets, row.first_generation_at, "firstRecipes");
+    incrementSeriesField(series, buckets, row.first_save_at, "firstSaves");
+    incrementSeriesField(series, buckets, row.first_cook_at, "firstCooks");
+  }
+
+  const signInDurations: number[] = [];
+  const firstRecipeDurations: number[] = [];
+  const firstSaveDurations: number[] = [];
+  const firstCookDurations: number[] = [];
+  let signIns = 0;
+  let onboardingCompleted = 0;
+  let firstGenerations = 0;
+  let firstSaves = 0;
+  let firstCooksWithin7d = 0;
+
+  const sourceMix = new Map<string, { channel: string; label: string; installs: number; signIns: number; firstCooksWithin7d: number }>();
+
+  for (const install of installRows) {
+    const channel = normalizeAcquisitionChannel(
+      acquisitionByInstallId.get(install.install_id)?.acquisition_channel ?? install.acquisition_channel,
+    );
+    const sourceEntry = sourceMix.get(channel) ?? {
+      channel,
+      label: acquisitionChannelLabel(channel),
+      installs: 0,
+      signIns: 0,
+      firstCooksWithin7d: 0,
+    };
+    sourceEntry.installs += 1;
+    sourceMix.set(channel, sourceEntry);
+
+    const profile = acquisitionByInstallId.get(install.install_id);
+    if (!profile) continue;
+
+    if (profile.signed_in_at) {
+      signIns += 1;
+      sourceEntry.signIns += 1;
+    }
+    if (profile.onboarding_completed_at) {
+      onboardingCompleted += 1;
+    }
+    if (profile.first_generation_at) {
+      firstGenerations += 1;
+    }
+    if (profile.first_save_at) {
+      firstSaves += 1;
+    }
+
+    const signInSeconds = secondsBetween(install.first_opened_at, profile.signed_in_at);
+    if (signInSeconds != null) {
+      signInDurations.push(signInSeconds);
+    }
+
+    const firstRecipeSeconds = secondsBetween(install.first_opened_at, profile.first_generation_at);
+    if (firstRecipeSeconds != null) {
+      firstRecipeDurations.push(firstRecipeSeconds);
+    }
+
+    const firstSaveSeconds = secondsBetween(install.first_opened_at, profile.first_save_at);
+    if (firstSaveSeconds != null) {
+      firstSaveDurations.push(firstSaveSeconds);
+    }
+
+    const firstCookSeconds = secondsBetween(install.first_opened_at, profile.first_cook_at);
+    if (firstCookSeconds != null) {
+      firstCookDurations.push(firstCookSeconds);
+    }
+
+    const firstOpenMs = parseTimestamp(install.first_opened_at);
+    const firstCookMs = parseTimestamp(profile.first_cook_at);
+    if (firstOpenMs != null && firstCookMs != null && firstCookMs <= firstOpenMs + 7 * 24 * 60 * 60 * 1000) {
+      firstCooksWithin7d += 1;
+      sourceEntry.firstCooksWithin7d += 1;
+    }
+  }
+
+  const cookTimestampsByInstallId = new Map<string, number[]>();
+  for (const row of cookRows) {
+    if (!row.install_id) continue;
+    const occurredAtMs = parseTimestamp(row.occurred_at);
+    if (occurredAtMs == null) continue;
+    const timestamps = cookTimestampsByInstallId.get(row.install_id) ?? [];
+    timestamps.push(occurredAtMs);
+    cookTimestampsByInstallId.set(row.install_id, timestamps);
+  }
+
+  const cohortRetention = new Map<string, { cohortKey: string; cohortLabel: string; installs: number; returningCookInstalls: number }>();
+  let eligibleReturningInstalls = 0;
+  let returningCookInstalls = 0;
+
+  for (const install of installRows) {
+    const firstOpenMs = parseTimestamp(install.first_opened_at);
+    if (firstOpenMs == null) continue;
+
+    if (firstOpenMs > nowMs - 14 * 24 * 60 * 60 * 1000) {
+      continue;
+    }
+
+    const cohortStart = startOfWeek(new Date(firstOpenMs));
+    const cohortKey = cohortStart.toISOString();
+    const cohortLabel = cohortStart.toLocaleDateString([], { month: "short", day: "numeric" });
+    const cohortEntry = cohortRetention.get(cohortKey) ?? {
+      cohortKey,
+      cohortLabel,
+      installs: 0,
+      returningCookInstalls: 0,
+    };
+    cohortEntry.installs += 1;
+    cohortRetention.set(cohortKey, cohortEntry);
+
+    eligibleReturningInstalls += 1;
+    const cookTimestamps = cookTimestampsByInstallId.get(install.install_id) ?? [];
+    const hasReturningCook = cookTimestamps.some((timestamp) =>
+      timestamp >= firstOpenMs + 7 * 24 * 60 * 60 * 1000 &&
+      timestamp < firstOpenMs + 14 * 24 * 60 * 60 * 1000
+    );
+
+    if (hasReturningCook) {
+      returningCookInstalls += 1;
+      cohortEntry.returningCookInstalls += 1;
+    }
+  }
+
+  return {
+    summary: {
+      firstOpens: installRows.length,
+      signInRate: installRows.length > 0 ? signIns / installRows.length : 0,
+      onboardingCompletionRate: installRows.length > 0 ? onboardingCompleted / installRows.length : 0,
+      firstGenerationRate: installRows.length > 0 ? firstGenerations / installRows.length : 0,
+      firstSaveRate: installRows.length > 0 ? firstSaves / installRows.length : 0,
+      firstCookWithin7dRate: installRows.length > 0 ? firstCooksWithin7d / installRows.length : 0,
+      medianTimeToSignInSeconds: medianOrNull(signInDurations),
+      medianTimeToFirstRecipeSeconds: medianOrNull(firstRecipeDurations),
+      medianTimeToFirstSaveSeconds: medianOrNull(firstSaveDurations),
+      medianTimeToFirstCookSeconds: medianOrNull(firstCookDurations),
+      returningCooks7dRate: eligibleReturningInstalls > 0 ? returningCookInstalls / eligibleReturningInstalls : 0,
+    },
+    totals: {
+      signIns,
+      onboardingCompleted,
+      firstGenerations,
+      firstSaves,
+      firstCooksWithin7d,
+      eligibleReturningInstalls,
+      returningCookInstalls,
+    },
+    series,
+    sourceMix: [...sourceMix.values()]
+      .sort((left, right) => right.installs - left.installs || left.channel.localeCompare(right.channel)),
+    cohortRetention: [...cohortRetention.values()]
+      .sort((left, right) => left.cohortKey.localeCompare(right.cohortKey))
+      .map((entry) => ({
+        cohortLabel: entry.cohortLabel,
+        installs: entry.installs,
+        returningCookInstalls: entry.returningCookInstalls,
+        returningCookRate: entry.installs > 0 ? entry.returningCookInstalls / entry.installs : 0,
+      })),
+  };
+};
+
 export const getEngagementBoardData = async (query: AnalyticsQueryState): Promise<{
   snapshot: ReturnType<typeof buildEngagementBoardSnapshot>;
 }> => {
@@ -515,5 +953,25 @@ export const getOperationsBoardData = async (query: AnalyticsQueryState): Promis
     llmDaily: llmUsage.daily,
     byAction: llmUsage.byAction,
     recentErrors: dashboard.recentErrors,
+  };
+};
+
+export const getAcquisitionBoardData = async (query: AnalyticsQueryState): Promise<{
+  snapshot: ReturnType<typeof buildAcquisitionBoardSnapshot>;
+}> => {
+  const installRows = await loadInstallProfiles(query);
+  const installIds = installRows.map((row) => row.install_id);
+  const earliestFirstOpenAt = installRows
+    .map((row) => row.first_opened_at)
+    .filter((value): value is string => typeof value === "string" && value.length > 0)
+    .sort()[0] ?? null;
+
+  const [acquisitionRows, cookRows] = await Promise.all([
+    loadUserAcquisitionProfiles(installIds),
+    loadCookBehaviorEventsForInstalls(installIds, earliestFirstOpenAt),
+  ]);
+
+  return {
+    snapshot: buildAcquisitionBoardSnapshot(installRows, acquisitionRows, cookRows, query),
   };
 };

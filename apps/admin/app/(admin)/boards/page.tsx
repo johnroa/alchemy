@@ -1,9 +1,15 @@
 import Link from "next/link";
-import { Activity, ArrowUpRight, Sparkles, Target } from "lucide-react";
+import { Activity, ArrowDownToLine, ArrowUpRight, Sparkles, Target } from "lucide-react";
 import { BoardPageHeader } from "@/components/admin/board-kit";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
 const BOARD_LINKS = [
+  {
+    href: "/boards/acquisition",
+    title: "Acquisition",
+    description: "Install cohorts, sign-in conversion, onboarding completion, and first-cook momentum.",
+    icon: ArrowDownToLine,
+  },
   {
     href: "/boards/engagement",
     title: "Engagement",
@@ -34,7 +40,7 @@ export default function BoardsLandingPage(): React.JSX.Element {
         badges={["Executive KPIs", "Curated drill-downs", "First-party telemetry"]}
       />
 
-      <section className="grid gap-4 xl:grid-cols-3">
+      <section className="grid gap-4 xl:grid-cols-4">
         {BOARD_LINKS.map((board) => {
           const Icon = board.icon;
           return (

@@ -52,7 +52,7 @@ export const ADMIN_SECTIONS: AdminSectionMeta[] = [
   {
     key: "boards",
     title: "Boards",
-    description: "Executive KPI boards for engagement, operations, and personalization.",
+    description: "Executive KPI boards for acquisition, engagement, operations, and personalization.",
     href: "/boards",
     icon: Radar,
   },
@@ -113,6 +113,15 @@ export const ADMIN_PAGES: AdminPageMeta[] = [
     href: "/boards",
     icon: Radar,
     isSectionRoot: true,
+  },
+  {
+    key: "boards-acquisition",
+    section: "boards",
+    title: "Acquisition",
+    navLabel: "Acquisition",
+    description: "Install, sign-in, onboarding, first recipe, and first cook conversion.",
+    href: "/boards/acquisition",
+    icon: ArrowDownToLine,
   },
   {
     key: "boards-engagement",

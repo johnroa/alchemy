@@ -95,6 +95,14 @@ Core architecture: canonical (public, immutable) recipes + per-user private vari
 - `GET /observability/pipeline?hours=N` — per-scope LLM stats, variant health, graph activity.
 - Admin `/pipeline-health` dashboard with configurable time window.
 
+## Acquisition Telemetry
+
+- Pre-auth install telemetry uses `POST /telemetry/install` and is intentionally narrow: install-scoped first-open/session events only.
+- Product behavior after auth continues to use `POST /telemetry/behavior`.
+- iOS must generate a stable local `install_id` on first launch, propagate it in behavior batches, and send it as `X-Install-Id` on authenticated requests so server-side behavior logs can stitch back to the install cohort.
+- Launch attribution stays coarse and first-party: `organic`, `waitlist`, `friend_share`, `unknown`.
+- Store-side attribution remains Apple/App Store Connect truth; do not invent user-level App Store attribution without a deliberate MMP decision.
+
 ## Recipe Import Pipeline
 - **Endpoint:** `POST /chat/import` — accepts url/text/photo kind, returns seeded ChatSession.
 - **LLM scopes:** `recipe_import_transform`, `recipe_import_vision_extract`. Prompts/rules managed via admin API only (not migration-seeded).

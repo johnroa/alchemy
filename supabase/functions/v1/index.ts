@@ -43,6 +43,7 @@ import { handleMemoryRoutes } from "./routes/memory.ts";
 import { handleMetadataRoutes } from "./routes/metadata.ts";
 import { handleOnboardingRoutes } from "./routes/onboarding.ts";
 import { handleImportRoutes } from "./routes/import.ts";
+import { handleInstallTelemetryRoutes } from "./routes/install-telemetry.ts";
 import { handleRecipeRoutes } from "./routes/recipes.ts";
 import { handleTelemetryRoutes } from "./routes/telemetry.ts";
 
@@ -135,6 +136,24 @@ Deno.serve(async (request) => {
         timestamp: new Date().toISOString(),
         request_id: requestId,
       });
+    }
+
+    if (
+      segments.length === 2 &&
+      segments[0] === "telemetry" &&
+      segments[1] === "install"
+    ) {
+      const serviceClient = createServiceClient();
+      const installTelemetryResponse = await handleInstallTelemetryRoutes({
+        request,
+        segments,
+        method,
+        serviceClient,
+        respond,
+      });
+      if (installTelemetryResponse) {
+        return installTelemetryResponse;
+      }
     }
 
     const auth = await requireAuth(request);

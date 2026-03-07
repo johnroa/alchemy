@@ -15,6 +15,7 @@ export const handleTelemetryRoutes = async (
     method === "POST"
   ) {
     const body = await requireJsonBody<{
+      install_id?: string;
       events?: Array<{
         event_id?: string;
         event_type: string;
@@ -33,6 +34,7 @@ export const handleTelemetryRoutes = async (
       .map((event) =>
         normalizeBehaviorEventInput({
           eventId: event.event_id,
+          installId: body.install_id,
           eventType: event.event_type,
           surface: event.surface,
           occurredAt: event.occurred_at,

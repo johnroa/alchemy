@@ -727,12 +727,25 @@ struct BehaviorTelemetryEventRequest: Encodable {
 }
 
 struct BehaviorTelemetryBatchRequest: Encodable {
+    let installId: String
     let events: [BehaviorTelemetryEventRequest]
 }
 
 struct BehaviorTelemetryBatchResponse: Decodable {
     let accepted: Int
     let rejected: Int
+}
+
+struct InstallTelemetryEventRequest: Encodable {
+    let eventId: String
+    let eventType: String
+    let occurredAt: String
+    let payload: [String: AnyCodableValue]?
+}
+
+struct InstallTelemetryBatchRequest: Encodable {
+    let installId: String
+    let events: [InstallTelemetryEventRequest]
 }
 
 struct SaveRecipeRequest: Encodable {

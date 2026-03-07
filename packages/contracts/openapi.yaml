@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Alchemy API
-  version: 3.5.2
+  version: 3.6.0
   description: |
     API contract for Alchemy — an AI-driven recipe creation and management platform.
     Covers the user-facing v1 API at api.cookwithalchemy.com and the admin API at admin.cookwithalchemy.com.
@@ -216,6 +216,24 @@ paths:
                 $ref: '#/components/schemas/SaveRecipeResponse'
         default:
           $ref: '#/components/responses/ErrorResponse'
+    delete:
+      summary: Remove recipe from cookbook
+      description: Deletes the cookbook entry and associated variant data for this recipe.
+      parameters:
+        - $ref: '#/components/parameters/RecipeId'
+      responses:
+        '200':
+          description: Save status
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [saved]
+                properties:
+                  saved:
+                    type: boolean
+        default:
+          $ref: '#/components/responses/ErrorResponse'
   /telemetry/behavior:
     post:
       summary: Ingest first-party product behavior telemetry
@@ -238,22 +256,27 @@ paths:
                 $ref: '#/components/schemas/BehaviorTelemetryBatchResponse'
         default:
           $ref: '#/components/responses/ErrorResponse'
-    delete:
-      summary: Remove recipe from cookbook
-      description: Deletes the cookbook entry and associated variant data for this recipe.
-      parameters:
-        - $ref: '#/components/parameters/RecipeId'
+  /telemetry/install:
+    post:
+      summary: Ingest anonymous install telemetry
+      security: []
+      description: |
+        Narrow install-scoped telemetry sink used before auth. Accepts only
+        acquisition and app-open events keyed by a local install_id so Alchemy
+        can stitch first-open activity to the authenticated user later.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InstallTelemetryBatchRequest'
       responses:
-        '200':
-          description: Save status
+        '202':
+          description: Batch accepted
           content:
             application/json:
               schema:
-                type: object
-                required: [saved]
-                properties:
-                  saved:
-                    type: boolean
+                $ref: '#/components/schemas/BehaviorTelemetryBatchResponse'
         default:
           $ref: '#/components/responses/ErrorResponse'
   /recipes/{id}/attachments:
@@ -2975,6 +2998,11 @@ components:
         event_type:
           type: string
           enum:
+            - app_first_open
+            - app_session_started
+            - auth_completed
+            - onboarding_started
+            - onboarding_completed
             - explore_impression
             - explore_opened_recipe
             - explore_saved_recipe
@@ -2998,7 +3026,7 @@ components:
             - ingredient_substitution_applied
         surface:
           type: string
-          enum: [explore, chat, cookbook, recipe_detail]
+          enum: [app, explore, chat, cookbook, recipe_detail, system]
           description: Optional explicit surface override. When omitted, the API applies the canonical surface for the event type.
         occurred_at:
           type: string
@@ -3018,12 +3046,48 @@ components:
           additionalProperties: true
     BehaviorTelemetryBatchRequest:
       type: object
-      required: [events]
+      required: [install_id, events]
       properties:
+        install_id:
+          type: string
+          description: Stable local install identifier used to stitch post-auth events back to the acquisition install.
         events:
           type: array
           items:
             $ref: '#/components/schemas/BehaviorTelemetryEvent'
+    InstallTelemetryEvent:
+      type: object
+      required: [event_id, event_type]
+      properties:
+        event_id:
+          type: string
+          description: Client-generated idempotency key for the install event.
+        event_type:
+          type: string
+          enum:
+            - app_first_open
+            - app_session_started
+        occurred_at:
+          type: string
+          format: date-time
+        payload:
+          type: object
+          additionalProperties: true
+          description: |
+            Coarse source context only. May include acquisition_channel,
+            campaign_token, provider_token, app_version, os_version, locale,
+            and timezone when known.
+    InstallTelemetryBatchRequest:
+      type: object
+      required: [install_id, events]
+      properties:
+        install_id:
+          type: string
+          description: Stable local install identifier generated on first launch.
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/InstallTelemetryEvent'
     BehaviorTelemetryBatchResponse:
       type: object
       required: [accepted, rejected]

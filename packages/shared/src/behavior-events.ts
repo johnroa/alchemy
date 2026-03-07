@@ -10,6 +10,11 @@ export const BEHAVIOR_SURFACES = [
 export type BehaviorSurface = (typeof BEHAVIOR_SURFACES)[number];
 
 export const BEHAVIOR_EVENT_DEFINITIONS = {
+  app_first_open: { surface: "app", label: "App First Open" },
+  app_session_started: { surface: "app", label: "App Session Started" },
+  auth_completed: { surface: "app", label: "Auth Completed" },
+  onboarding_started: { surface: "app", label: "Onboarding Started" },
+  onboarding_completed: { surface: "app", label: "Onboarding Completed" },
   explore_impression: { surface: "explore", label: "Explore Impression" },
   explore_opened_recipe: { surface: "explore", label: "Explore Opened Recipe" },
   explore_saved_recipe: { surface: "explore", label: "Explore Saved Recipe" },

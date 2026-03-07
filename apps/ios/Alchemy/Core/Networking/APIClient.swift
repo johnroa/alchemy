@@ -55,7 +55,17 @@ final class APIClient {
         body: (any Encodable)? = nil,
         queryItems: [URLQueryItem]? = nil
     ) async throws -> T {
-        let data = try await rawRequest(path, method: method, body: body, queryItems: queryItems)
+        guard let token = AuthManager.shared.accessToken else {
+            throw NetworkError.noAccessToken
+        }
+
+        let data = try await rawRequest(
+            path,
+            method: method,
+            body: body,
+            queryItems: queryItems,
+            authToken: token
+        )
         do {
             return try decoder.decode(T.self, from: data)
         } catch {
@@ -71,7 +81,38 @@ final class APIClient {
         body: (any Encodable)? = nil,
         queryItems: [URLQueryItem]? = nil
     ) async throws {
-        _ = try await rawRequest(path, method: method, body: body, queryItems: queryItems)
+        guard let token = AuthManager.shared.accessToken else {
+            throw NetworkError.noAccessToken
+        }
+
+        _ = try await rawRequest(
+            path,
+            method: method,
+            body: body,
+            queryItems: queryItems,
+            authToken: token
+        )
+    }
+
+    func requestWithoutAuth<T: Decodable>(
+        _ path: String,
+        method: HTTPMethod = .get,
+        body: (any Encodable)? = nil,
+        queryItems: [URLQueryItem]? = nil
+    ) async throws -> T {
+        let data = try await rawRequest(
+            path,
+            method: method,
+            body: body,
+            queryItems: queryItems,
+            authToken: nil
+        )
+
+        do {
+            return try decoder.decode(T.self, from: data)
+        } catch {
+            throw NetworkError.decodingFailed(error)
+        }
     }
 
     // MARK: - Raw Request
@@ -80,12 +121,9 @@ final class APIClient {
         _ path: String,
         method: HTTPMethod,
         body: (any Encodable)?,
-        queryItems: [URLQueryItem]?
+        queryItems: [URLQueryItem]?,
+        authToken: String?
     ) async throws -> Data {
-        guard let token = AuthManager.shared.accessToken else {
-            throw NetworkError.noAccessToken
-        }
-
         var components = URLComponents(string: baseURL + path)
         if let queryItems, !queryItems.isEmpty {
             components?.queryItems = queryItems
@@ -97,9 +135,12 @@ final class APIClient {
 
         var urlRequest = URLRequest(url: url)
         urlRequest.httpMethod = method.rawValue
-        urlRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        if let authToken {
+            urlRequest.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
+        }
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
         urlRequest.setValue(TimeZone.current.identifier, forHTTPHeaderField: "X-Timezone")
+        urlRequest.setValue(InstallIdentity.shared.installId, forHTTPHeaderField: "X-Install-Id")
 
         if let body {
             urlRequest.httpBody = try encoder.encode(body)
@@ -198,7 +239,10 @@ final class BehaviorTelemetry {
             let _: BehaviorTelemetryBatchResponse = try await APIClient.shared.request(
                 "/telemetry/behavior",
                 method: .post,
-                body: BehaviorTelemetryBatchRequest(events: batch)
+                body: BehaviorTelemetryBatchRequest(
+                    installId: InstallIdentity.shared.installId,
+                    events: batch
+                )
             )
         } catch {
             queue.insert(contentsOf: batch, at: 0)
@@ -218,5 +262,165 @@ final class BehaviorTelemetry {
             try? await Task.sleep(nanoseconds: flushDelayNs)
             await flush()
         }
+    }
+}
+
+// MARK: - Install Identity
+
+@MainActor
+final class InstallIdentity {
+
+    static let shared = InstallIdentity()
+
+    private let installIdKey = "alchemy.install_id"
+    private let defaults = UserDefaults.standard
+
+    private init() {}
+
+    var installId: String {
+        if let existing = defaults.string(forKey: installIdKey), !existing.isEmpty {
+            return existing
+        }
+
+        let created = UUID().uuidString.lowercased()
+        defaults.set(created, forKey: installIdKey)
+        return created
+    }
+}
+
+// MARK: - Anonymous Install Telemetry
+
+@MainActor
+final class InstallTelemetry {
+
+    static let shared = InstallTelemetry()
+
+    private let maxBatchSize = 10
+    private let flushDelayNs: UInt64 = 5_000_000_000
+    private let firstOpenTrackedKey = "alchemy.install.first_open_tracked"
+    private let formatter: ISO8601DateFormatter
+
+    private var queue: [InstallTelemetryEventRequest] = []
+    private var scheduledFlushTask: Task<Void, Never>?
+
+    private init() {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        self.formatter = formatter
+    }
+
+    func trackFirstOpenIfNeeded(
+        acquisitionChannel: String = "unknown",
+        campaignToken: String? = nil,
+        providerToken: String? = nil
+    ) {
+        guard !UserDefaults.standard.bool(forKey: firstOpenTrackedKey) else { return }
+
+        UserDefaults.standard.set(true, forKey: firstOpenTrackedKey)
+        enqueue(
+            eventType: "app_first_open",
+            payload: defaultPayload(
+                acquisitionChannel: acquisitionChannel,
+                campaignToken: campaignToken,
+                providerToken: providerToken
+            )
+        )
+
+        Task { await flush() }
+    }
+
+    func trackSessionStarted(acquisitionChannel: String = "unknown") {
+        enqueue(
+            eventType: "app_session_started",
+            payload: defaultPayload(acquisitionChannel: acquisitionChannel)
+        )
+    }
+
+    func flush() async {
+        scheduledFlushTask?.cancel()
+        scheduledFlushTask = nil
+
+        guard !queue.isEmpty else { return }
+
+        let batch = Array(queue.prefix(maxBatchSize))
+        queue.removeFirst(batch.count)
+
+        do {
+            let _: BehaviorTelemetryBatchResponse = try await APIClient.shared.requestWithoutAuth(
+                "/telemetry/install",
+                method: .post,
+                body: InstallTelemetryBatchRequest(
+                    installId: InstallIdentity.shared.installId,
+                    events: batch
+                )
+            )
+        } catch {
+            queue.insert(contentsOf: batch, at: 0)
+            scheduleFlush()
+            return
+        }
+
+        if !queue.isEmpty {
+            scheduleFlush()
+        }
+    }
+
+    private func enqueue(
+        eventType: String,
+        payload: [String: AnyCodableValue]?
+    ) {
+        queue.append(
+            InstallTelemetryEventRequest(
+                eventId: UUID().uuidString,
+                eventType: eventType,
+                occurredAt: formatter.string(from: .now),
+                payload: payload
+            )
+        )
+
+        if queue.count >= maxBatchSize {
+            Task { await flush() }
+        } else {
+            scheduleFlush()
+        }
+    }
+
+    private func scheduleFlush() {
+        guard scheduledFlushTask == nil else { return }
+
+        scheduledFlushTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: flushDelayNs)
+            await flush()
+        }
+    }
+
+    private func defaultPayload(
+        acquisitionChannel: String,
+        campaignToken: String? = nil,
+        providerToken: String? = nil
+    ) -> [String: AnyCodableValue] {
+        var payload: [String: AnyCodableValue] = [
+            "acquisition_channel": .string(acquisitionChannel),
+            "app_version": .string(bundleString("CFBundleShortVersionString") ?? "unknown"),
+            "build_number": .string(bundleString("CFBundleVersion") ?? "unknown"),
+            "os_version": .string(ProcessInfo.processInfo.operatingSystemVersionString),
+            "locale": .string(Locale.current.identifier),
+            "timezone": .string(TimeZone.current.identifier),
+        ]
+
+        if let campaignToken, !campaignToken.isEmpty {
+            payload["campaign_token"] = .string(campaignToken)
+        }
+
+        if let providerToken, !providerToken.isEmpty {
+            payload["provider_token"] = .string(providerToken)
+        }
+
+        return payload
+    }
+
+    private func bundleString(_ key: String) -> String? {
+        (Bundle.main.object(forInfoDictionaryKey: key) as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

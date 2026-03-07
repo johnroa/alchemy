@@ -2,6 +2,17 @@
 
 ## [Unreleased] — 2026-03-07
 
+### Acquisition-Ready Telemetry + Acquisition Board (v3.6.0)
+
+- Added anonymous install-scoped telemetry via `POST /telemetry/install` for `app_first_open` and `app_session_started` before auth.
+- Added `install_id` stitching on authenticated `POST /telemetry/behavior` batches and propagated `X-Install-Id` from the iOS client on authenticated API requests.
+- Added `install_profiles` and `user_acquisition_profiles` tables for coarse launch attribution, first-open snapshots, and first milestone timestamps (`signed_in_at`, onboarding, first generation, first save, first cook).
+- Added `auth_completed`, `onboarding_started`, and `onboarding_completed` behavior milestones to the canonical event catalog.
+- Added iOS install identity persistence, anonymous install telemetry batching, first-open/session-start events, and Sign in with Apple acquisition logging.
+- Added Admin `/boards/acquisition` with install cohort KPIs: first opens, sign-in rate, onboarding completion rate, first recipe rate, first save rate, first cook within 7 days, source mix, and install-week returning-cook retention.
+- Updated OpenAPI to `3.6.0`, regenerated contracts/admin API docs, and refreshed board/admin route inventory.
+- Added deterministic board snapshot tests plus install telemetry route tests.
+
 ### Recipe Payload Summary + Long Description (v3.5.2)
 
 - Added optional `summary` to `RecipePayload` for short preview/share copy while keeping `description` as long-form detail copy.

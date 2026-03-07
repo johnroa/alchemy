@@ -106,6 +106,15 @@ final class AuthManager {
             )
             self.currentSession = session
             self.isAuthenticated = true
+            BehaviorTelemetry.shared.track(
+                eventType: "auth_completed",
+                surface: "app",
+                payload: [
+                    "provider": .string("apple"),
+                    "has_email": .bool(session.user.email?.isEmpty == false),
+                ]
+            )
+            Task { await BehaviorTelemetry.shared.flush() }
         } catch {
             self.errorMessage = "Sign in failed. Please try again."
             print("[AuthManager] signInWithApple error: \(error)")

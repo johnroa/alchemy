@@ -7,7 +7,7 @@ import type {
   JsonValue,
   RecipePayload,
 } from "../../../_shared/types.ts";
-import { logBehaviorEvents } from "../../lib/behavior-events.ts";
+import { getInstallIdFromHeaders, logBehaviorEvents } from "../../lib/behavior-events.ts";
 import type { RouteContext, VariantStatus } from "../shared.ts";
 import type { RecipesDeps } from "./types.ts";
 
@@ -37,6 +37,7 @@ export const handleSaveRoutes = async (
     segments[2] === "save"
   ) {
     const recipeId = parseUuid(segments[1]);
+    const installId = getInstallIdFromHeaders(request);
     if (method === "POST") {
       // Parse optional body for autopersonalize flag (defaults to true).
       let autopersonalize = true;
@@ -95,6 +96,7 @@ export const handleSaveRoutes = async (
         events: [{
           eventId: crypto.randomUUID(),
           userId: auth.userId,
+          installId,
           eventType: "recipe_saved",
           entityType: "recipe",
           entityId: recipeId,
@@ -328,6 +330,7 @@ export const handleSaveRoutes = async (
         events: [{
           eventId: crypto.randomUUID(),
           userId: auth.userId,
+          installId,
           eventType: "recipe_unsaved",
           entityType: "recipe",
           entityId: recipeId,

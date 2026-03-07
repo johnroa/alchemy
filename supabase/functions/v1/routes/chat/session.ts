@@ -5,6 +5,7 @@ import {
 import type { JsonValue } from "../../../_shared/types.ts";
 import {
   buildChatBehaviorFacts,
+  getInstallIdFromHeaders,
   logBehaviorEvents,
   logBehaviorFacts,
 } from "../../lib/behavior-events.ts";
@@ -51,6 +52,7 @@ export const handleCreateSession = async (
 
   const body = await requireJsonBody<{ message: string }>(request);
   const message = body.message?.trim();
+  const installId = getInstallIdFromHeaders(request);
   if (!message) {
     throw new ApiError(400, "invalid_message", "message is required");
   }
@@ -117,6 +119,7 @@ export const handleCreateSession = async (
     events: [{
       eventId: crypto.randomUUID(),
       userId: auth.userId,
+      installId,
       eventType: "chat_session_started",
       sessionId: chatSession.id,
       entityType: "chat_session",
@@ -128,6 +131,7 @@ export const handleCreateSession = async (
     }, {
       eventId: crypto.randomUUID(),
       userId: auth.userId,
+      installId,
       eventType: "chat_turn_submitted",
       sessionId: chatSession.id,
       entityType: "chat_session",
@@ -245,6 +249,7 @@ export const handleCreateSession = async (
     events: [{
       eventId: resolvedEventId,
       userId: auth.userId,
+      installId,
       eventType: "chat_turn_resolved",
       sessionId: chatSession.id,
       entityType: "chat_session",

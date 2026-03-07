@@ -18,6 +18,17 @@ export {
   type BehaviorEventType,
   type BehaviorSurface,
 } from "./behavior-events";
+export {
+  ACQUISITION_CHANNELS,
+  INSTALL_TELEMETRY_EVENT_TYPES,
+  LIFECYCLE_STAGES,
+  isAcquisitionChannel,
+  isInstallTelemetryEventType,
+  type AcquisitionChannel,
+  type InstallTelemetryEvent,
+  type InstallTelemetryEventType,
+  type LifecycleStage,
+} from "./acquisition";
 
 export {
   resolveIngredientIconKey,

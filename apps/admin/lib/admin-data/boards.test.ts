@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { AnalyticsQueryState } from "@/lib/admin-analytics";
-import { buildEngagementBoardSnapshot, buildOperationsBoardSnapshot } from "./boards";
+import {
+  buildAcquisitionBoardSnapshot,
+  buildEngagementBoardSnapshot,
+  buildOperationsBoardSnapshot,
+} from "./boards";
 
 const query: AnalyticsQueryState = {
   range: "30d",
@@ -15,6 +19,7 @@ describe("buildEngagementBoardSnapshot", () => {
       {
         event_type: "chat_turn_resolved",
         occurred_at: new Date(now - 5 * 60_000).toISOString(),
+        install_id: "install-1",
         user_id: "user-1",
         entity_id: null,
         session_id: "session-1",
@@ -24,6 +29,7 @@ describe("buildEngagementBoardSnapshot", () => {
       {
         event_type: "chat_turn_submitted",
         occurred_at: new Date(now - 6 * 60_000).toISOString(),
+        install_id: "install-1",
         user_id: "user-1",
         entity_id: null,
         session_id: "session-1",
@@ -33,6 +39,7 @@ describe("buildEngagementBoardSnapshot", () => {
       {
         event_type: "chat_commit_completed",
         occurred_at: new Date(now - 4 * 60_000).toISOString(),
+        install_id: "install-1",
         user_id: "user-1",
         entity_id: "recipe-1",
         session_id: "session-1",
@@ -42,6 +49,7 @@ describe("buildEngagementBoardSnapshot", () => {
       {
         event_type: "recipe_saved",
         occurred_at: new Date(now - 3 * 60_000).toISOString(),
+        install_id: "install-1",
         user_id: "user-1",
         entity_id: "recipe-1",
         session_id: "session-1",
@@ -51,6 +59,7 @@ describe("buildEngagementBoardSnapshot", () => {
       {
         event_type: "recipe_cooked_inferred",
         occurred_at: new Date(now - 2 * 60_000).toISOString(),
+        install_id: "install-1",
         user_id: "user-1",
         entity_id: "recipe-1",
         session_id: "detail-1",
@@ -60,6 +69,7 @@ describe("buildEngagementBoardSnapshot", () => {
       {
         event_type: "cookbook_viewed",
         occurred_at: new Date(now - 90_000).toISOString(),
+        install_id: "install-1",
         user_id: "user-1",
         entity_id: null,
         session_id: "cookbook-1",
@@ -69,6 +79,7 @@ describe("buildEngagementBoardSnapshot", () => {
       {
         event_type: "cookbook_viewed",
         occurred_at: new Date(now - 60_000).toISOString(),
+        install_id: "install-1",
         user_id: "user-1",
         entity_id: null,
         session_id: "cookbook-2",
@@ -102,6 +113,7 @@ describe("buildOperationsBoardSnapshot", () => {
       {
         event_type: "chat_turn_resolved",
         occurred_at: new Date().toISOString(),
+        install_id: "install-1",
         user_id: "user-1",
         entity_id: null,
         session_id: "session-1",
@@ -111,6 +123,7 @@ describe("buildOperationsBoardSnapshot", () => {
       {
         event_type: "chat_iteration_requested",
         occurred_at: new Date().toISOString(),
+        install_id: "install-1",
         user_id: "user-1",
         entity_id: "recipe-1",
         session_id: "session-1",
@@ -120,6 +133,7 @@ describe("buildOperationsBoardSnapshot", () => {
       {
         event_type: "chat_commit_completed",
         occurred_at: new Date().toISOString(),
+        install_id: "install-1",
         user_id: "user-1",
         entity_id: "recipe-1",
         session_id: "session-1",
@@ -171,5 +185,110 @@ describe("buildOperationsBoardSnapshot", () => {
     expect(snapshot.summary.pipelineFailureBacklog).toBe(8);
     expect(snapshot.summary.staleVariantBacklog).toBe(3);
     expect(snapshot.summary.safetyFlaggedResponseRate).toBe(0.1);
+  });
+});
+
+describe("buildAcquisitionBoardSnapshot", () => {
+  it("computes acquisition funnel and install-cohort retention metrics", () => {
+    const now = Date.now();
+    const installRows = [
+      {
+        install_id: "install-1",
+        acquisition_channel: "organic",
+        campaign_token: null,
+        provider_token: null,
+        first_opened_at: new Date(now - 20 * 24 * 60 * 60 * 1000).toISOString(),
+        last_seen_at: new Date(now - 5 * 24 * 60 * 60 * 1000).toISOString(),
+        snapshot: {},
+      },
+      {
+        install_id: "install-2",
+        acquisition_channel: "waitlist",
+        campaign_token: null,
+        provider_token: null,
+        first_opened_at: new Date(now - 18 * 24 * 60 * 60 * 1000).toISOString(),
+        last_seen_at: new Date(now - 2 * 24 * 60 * 60 * 1000).toISOString(),
+        snapshot: {},
+      },
+      {
+        install_id: "install-3",
+        acquisition_channel: "unknown",
+        campaign_token: null,
+        provider_token: null,
+        first_opened_at: new Date(now - 5 * 24 * 60 * 60 * 1000).toISOString(),
+        last_seen_at: new Date(now - 1 * 24 * 60 * 60 * 1000).toISOString(),
+        snapshot: {},
+      },
+    ];
+
+    const acquisitionRows = [
+      {
+        user_id: "user-1",
+        install_id: "install-1",
+        acquisition_channel: "organic",
+        lifecycle_stage: "habit",
+        signed_in_at: new Date(now - 20 * 24 * 60 * 60 * 1000 + 60_000).toISOString(),
+        onboarding_started_at: new Date(now - 20 * 24 * 60 * 60 * 1000 + 120_000).toISOString(),
+        onboarding_completed_at: new Date(now - 20 * 24 * 60 * 60 * 1000 + 180_000).toISOString(),
+        first_generation_at: new Date(now - 20 * 24 * 60 * 60 * 1000 + 300_000).toISOString(),
+        first_save_at: new Date(now - 20 * 24 * 60 * 60 * 1000 + 480_000).toISOString(),
+        first_cook_at: new Date(now - 19 * 24 * 60 * 60 * 1000).toISOString(),
+        last_seen_at: new Date(now - 5 * 24 * 60 * 60 * 1000).toISOString(),
+      },
+      {
+        user_id: "user-2",
+        install_id: "install-2",
+        acquisition_channel: "waitlist",
+        lifecycle_stage: "saved",
+        signed_in_at: new Date(now - 18 * 24 * 60 * 60 * 1000 + 120_000).toISOString(),
+        onboarding_started_at: new Date(now - 18 * 24 * 60 * 60 * 1000 + 180_000).toISOString(),
+        onboarding_completed_at: new Date(now - 18 * 24 * 60 * 60 * 1000 + 240_000).toISOString(),
+        first_generation_at: new Date(now - 18 * 24 * 60 * 60 * 1000 + 360_000).toISOString(),
+        first_save_at: null,
+        first_cook_at: null,
+        last_seen_at: new Date(now - 2 * 24 * 60 * 60 * 1000).toISOString(),
+      },
+    ];
+
+    const cookRows = [
+      {
+        event_type: "recipe_cooked_inferred",
+        occurred_at: new Date(now - 12 * 24 * 60 * 60 * 1000).toISOString(),
+        install_id: "install-1",
+        user_id: "user-1",
+        entity_id: "recipe-1",
+        session_id: "detail-1",
+        source_surface: "cookbook",
+        payload: {},
+      },
+      {
+        event_type: "recipe_cooked_inferred",
+        occurred_at: new Date(now - 10 * 24 * 60 * 60 * 1000).toISOString(),
+        install_id: "install-1",
+        user_id: "user-1",
+        entity_id: "recipe-2",
+        session_id: "detail-2",
+        source_surface: "cookbook",
+        payload: {},
+      },
+    ];
+
+    const snapshot = buildAcquisitionBoardSnapshot(installRows, acquisitionRows, cookRows, query);
+
+    expect(snapshot.summary.firstOpens).toBe(3);
+    expect(snapshot.summary.signInRate).toBeCloseTo(2 / 3, 6);
+    expect(snapshot.summary.onboardingCompletionRate).toBeCloseTo(2 / 3, 6);
+    expect(snapshot.summary.firstGenerationRate).toBeCloseTo(2 / 3, 6);
+    expect(snapshot.summary.firstSaveRate).toBeCloseTo(1 / 3, 6);
+    expect(snapshot.summary.firstCookWithin7dRate).toBeCloseTo(1 / 3, 6);
+    expect(snapshot.summary.medianTimeToSignInSeconds).toBe(60);
+    expect(snapshot.summary.returningCooks7dRate).toBeCloseTo(0.5, 6);
+    expect(snapshot.sourceMix[0]).toMatchObject({
+      channel: "organic",
+      installs: 1,
+      signIns: 1,
+      firstCooksWithin7d: 1,
+    });
+    expect(snapshot.cohortRetention.some((row) => row.returningCookInstalls > 0)).toBe(true);
   });
 });

@@ -10,6 +10,7 @@
 		0102A7DABC96D0AF3534FE85 /* RecipeDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 635F4D1E11354088D7E60332 /* RecipeDetailView.swift */; };
 		09F9CB80C3738977CD00F63B /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D92723C258CA540A3F92B30C /* SettingsView.swift */; };
 		0CC44F91B845E0A2A59565C2 /* AnimatedMeshBackground.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9BC218713992D6BA03C55B5 /* AnimatedMeshBackground.swift */; };
+		0D54B7F2A6C9437FBB3F7E1A /* AlchemyLoadingIndicator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E5D3C44B0CB42C1A4A3F9E8 /* AlchemyLoadingIndicator.swift */; };
 		13D3D15DE40CEB19C2055317 /* NukeUI in Frameworks */ = {isa = PBXBuildFile; productRef = 8D91DB8AD300F7012A81FA10 /* NukeUI */; };
 		18E73A73E21723DD2702F997 /* APIModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6846E9DD30BF0EE67FFB668 /* APIModels.swift */; };
 		1BCAA1BF4DDE155C7DFDC1AD /* CompactGauge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68F1901D9F8AEF2C890D5D53 /* CompactGauge.swift */; };
@@ -82,6 +83,7 @@
 		1905F952E153213B82628C1E /* TabShell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabShell.swift; sourceTree = "<group>"; };
 		1A7D97690AB17BAA8EF132F1 /* ImportView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportView.swift; sourceTree = "<group>"; };
 		1C28B61F4E21CEE9BBC0973A /* AlchemyColors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlchemyColors.swift; sourceTree = "<group>"; };
+		1E5D3C44B0CB42C1A4A3F9E8 /* AlchemyLoadingIndicator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlchemyLoadingIndicator.swift; sourceTree = "<group>"; };
 		20A4C7C99FB3A4527D8BD1AA /* NutritionGauge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NutritionGauge.swift; sourceTree = "<group>"; };
 		2EFB886BFCD48E94BCC03D46 /* ImportViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportViewModel.swift; sourceTree = "<group>"; };
 		31A803D819EE21D9B9F1C894 /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Release.xcconfig; sourceTree = "<group>"; };
@@ -280,6 +282,7 @@
 		87D393C6F8B37EE0DD94C4B3 /* Components */ = {
 			isa = PBXGroup;
 			children = (
+				1E5D3C44B0CB42C1A4A3F9E8 /* AlchemyLoadingIndicator.swift */,
 				E9BC218713992D6BA03C55B5 /* AnimatedMeshBackground.swift */,
 				AE34608B8617C7346206908A /* ChatBubble.swift */,
 				FB9DB9E35B45274A732B6943 /* ClipboardBanner.swift */,
@@ -486,6 +489,7 @@
 				F5372D3CC30E4886B6B137EE /* APIError.swift in Sources */,
 				18E73A73E21723DD2702F997 /* APIModels.swift in Sources */,
 				F205CC290343B5D206997842 /* AlchemyApp.swift in Sources */,
+				0D54B7F2A6C9437FBB3F7E1A /* AlchemyLoadingIndicator.swift in Sources */,
 				3A51B8D2AC4FDC9BD9E34F47 /* AlchemyColors.swift in Sources */,
 				4A522F0FAC7B7669D0DBE472 /* AlchemySpacing.swift in Sources */,
 				298E8D59DB41594A075B7D81 /* AlchemyTypography.swift in Sources */,

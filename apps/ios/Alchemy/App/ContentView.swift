@@ -1,4 +1,3 @@
-import Lottie
 import SwiftUI
 
 /// Root router that determines which flow to show based on auth + onboarding state.
@@ -37,6 +36,8 @@ struct ContentView: View {
         .animation(.easeInOut(duration: 0.4), value: hasCompletedOnboarding)
         .animation(.easeInOut(duration: 0.3), value: isCheckingOnboarding)
         .task {
+            InstallTelemetry.shared.trackFirstOpenIfNeeded()
+            InstallTelemetry.shared.trackSessionStarted()
             await authManager.restoreSession()
         }
         .onOpenURL { url in
@@ -53,17 +54,22 @@ struct ContentView: View {
             }
         }
         .onChange(of: scenePhase) { _, phase in
-            guard phase != .active else { return }
-            Task { await BehaviorTelemetry.shared.flush() }
+            if phase == .active {
+                InstallTelemetry.shared.trackSessionStarted()
+                return
+            }
+
+            Task {
+                await InstallTelemetry.shared.flush()
+                await BehaviorTelemetry.shared.flush()
+            }
         }
     }
 
     private var loadingView: some View {
         ZStack {
             AlchemyColors.background.ignoresSafeArea()
-            LottieView(animation: .named("alchemy-loading"))
-                .playing(loopMode: .loop)
-                .frame(width: 120, height: 120)
+            AlchemyLoadingIndicator()
         }
     }
 

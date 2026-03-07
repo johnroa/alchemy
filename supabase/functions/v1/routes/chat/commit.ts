@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2";
 import { ApiError } from "../../../_shared/errors.ts";
-import { logBehaviorEvents } from "../../lib/behavior-events.ts";
+import { getInstallIdFromHeaders, logBehaviorEvents } from "../../lib/behavior-events.ts";
 import type {
   CandidateRecipeSet,
   ChatCommitClaim,
@@ -226,6 +226,7 @@ export const handleCommit = async (
   deps: ChatDeps,
 ): Promise<Response> => {
   const {
+    request,
     segments,
     auth,
     client,
@@ -249,6 +250,7 @@ export const handleCommit = async (
   } = deps;
 
   const chatId = parseUuid(segments[1]);
+  const installId = getInstallIdFromHeaders(request);
   const chatSession = await loadChatSession(client, chatId);
 
   if (!chatSession) {
@@ -560,6 +562,7 @@ export const handleCommit = async (
       serviceClient,
       events: [{
         eventId: crypto.randomUUID(),
+        installId,
         userId: auth.userId,
         eventType: "chat_commit_completed",
         sessionId: chatId,
