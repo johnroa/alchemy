@@ -4720,6 +4720,34 @@
           }
         }
       },
+      "SubstitutionDiff": {
+        "type": "object",
+        "required": [
+          "original",
+          "replacement",
+          "constraint",
+          "reason"
+        ],
+        "description": "A single ingredient substitution made during personalization.\nRecords what was swapped, the replacement, the driving constraint,\nand a human-readable reason.\n",
+        "properties": {
+          "original": {
+            "type": "string",
+            "description": "The canonical ingredient that was replaced."
+          },
+          "replacement": {
+            "type": "string",
+            "description": "The ingredient used in the variant."
+          },
+          "constraint": {
+            "type": "string",
+            "description": "The user constraint that triggered the substitution (e.g. \"gluten-free\")."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Human-readable explanation of why the substitution was made."
+          }
+        }
+      },
       "VariantRefreshResponse": {
         "type": "object",
         "required": [
@@ -4741,6 +4769,20 @@
           },
           "adaptation_summary": {
             "type": "string"
+          },
+          "substitution_diffs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SubstitutionDiff"
+            },
+            "description": "Structured ingredient substitutions made during personalization."
+          },
+          "conflicts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Manual edits that conflict with current constraints."
           }
         }
       },

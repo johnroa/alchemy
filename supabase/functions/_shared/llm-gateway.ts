@@ -168,12 +168,31 @@ type MemorySummary = {
 
 export type ModelOverrideMap = ExecutorModelOverrideMap;
 
+/**
+ * A single ingredient substitution made during personalization.
+ * Captures what was swapped, the replacement, the driving constraint,
+ * and a human-readable reason. Stored in provenance and aggregated
+ * into graph edges by the batch substitution aggregator (Phase 8).
+ */
+export type SubstitutionDiff = {
+  original: string;
+  replacement: string;
+  constraint: string;
+  reason: string;
+};
+
 /** Output from llmGateway.personalizeRecipe — the materialised variant. */
 export type PersonalizeRecipeResult = {
   recipe: RecipePayload;
   adaptationSummary: string;
   appliedAdaptations: JsonValue[];
   tagDiff: { added: string[]; removed: string[] };
+  /**
+   * Structured substitution diffs — each entry describes an ingredient
+   * swap made during personalization. Used by the graph feedback loop
+   * to aggregate proven substitution patterns into knowledge graph edges.
+   */
+  substitutionDiffs: SubstitutionDiff[];
   /**
    * Conflicts detected when reapplying manual edits during constraint-driven
    * re-personalization. Each entry describes a manual edit that contradicts
@@ -4656,6 +4675,7 @@ export const llmGateway = {
             "adaptation_summary",
             "applied_adaptations",
             "tag_diff",
+            "substitution_diffs",
           ],
         },
       };
@@ -4719,6 +4739,34 @@ export const llmGateway = {
           ? (result.tag_diff as { added?: string[]; removed?: string[] })
           : { added: [], removed: [] };
 
+      // Substitution diffs: structured records of ingredient swaps.
+      // Each entry has original (canonical ingredient), replacement (variant),
+      // constraint (which user constraint triggered it), and reason.
+      // Gracefully handles missing or malformed entries — the LLM may not
+      // always produce this key until the prompt is updated.
+      const substitutionDiffs: SubstitutionDiff[] = [];
+      if (Array.isArray(result.substitution_diffs)) {
+        for (const raw of result.substitution_diffs) {
+          if (
+            raw && typeof raw === "object" && !Array.isArray(raw) &&
+            typeof (raw as Record<string, unknown>).original === "string" &&
+            typeof (raw as Record<string, unknown>).replacement === "string"
+          ) {
+            const entry = raw as Record<string, unknown>;
+            substitutionDiffs.push({
+              original: entry.original as string,
+              replacement: entry.replacement as string,
+              constraint: typeof entry.constraint === "string"
+                ? entry.constraint
+                : "unspecified",
+              reason: typeof entry.reason === "string"
+                ? entry.reason
+                : "",
+            });
+          }
+        }
+      }
+
       // Conflicts: manual edits that contradict the current constraint set.
       // The LLM returns these when accumulated_manual_edits were provided
       // but some conflict with the user's active constraints (e.g., "use
@@ -4737,12 +4785,14 @@ export const llmGateway = {
         "ok",
         {
           adaptations_count: appliedAdaptations.length,
+          substitution_count: substitutionDiffs.length,
           tags_added: (tagDiff.added ?? []).length,
           tags_removed: (tagDiff.removed ?? []).length,
           conflicts_count: conflicts.length,
           has_manual_edits: Boolean(
             params.manualEditInstructions || params.accumulatedManualEdits?.length,
           ),
+          has_graph_substitutions: Boolean(params.graphSubstitutions?.length),
         },
         accum,
       );
@@ -4755,6 +4805,7 @@ export const llmGateway = {
           added: tagDiff.added ?? [],
           removed: tagDiff.removed ?? [],
         },
+        substitutionDiffs,
         conflicts,
       };
     } catch (error) {

@@ -267,16 +267,42 @@ struct VariantEditRequest: Encodable {
     let instructions: String
 }
 
+/// A single ingredient substitution made during personalization.
+/// Records what was swapped, why, and which constraint triggered it.
+struct SubstitutionDiff: Decodable, Identifiable {
+    var id: String { "\(original)::\(replacement)" }
+    let original: String
+    let replacement: String
+    let constraint: String
+    let reason: String
+}
+
 /// Response from POST /recipes/{id}/variant/refresh.
-/// Contains the resulting variant state and any conflicts detected.
+/// Contains the resulting variant state, substitution diffs, and any conflicts detected.
 struct VariantRefreshResponse: Decodable {
     let variantId: String
     let variantVersionId: String
     let variantStatus: String
     let adaptationSummary: String
+    /// Structured ingredient substitutions made during personalization.
+    let substitutionDiffs: [SubstitutionDiff]?
     /// Manual edits that conflict with current constraints.
     /// Non-empty → variant is in `needs_review` state.
     let conflicts: [String]?
+}
+
+/// Response from GET /recipes/{id}/variant — full variant detail
+/// including substitution diffs for the "What did my Sous Chef change?" view.
+struct VariantDetailResponse: Decodable {
+    let variantId: String
+    let variantVersionId: String
+    let canonicalRecipeId: String
+    let adaptationSummary: String?
+    let variantStatus: String
+    let derivationKind: String?
+    let personalizedAt: String?
+    /// Structured ingredient substitutions from provenance.
+    let substitutionDiffs: [SubstitutionDiff]?
 }
 
 // MARK: - Chat / Generate

@@ -2775,6 +2775,26 @@ components:
           type: object
           additionalProperties: true
           description: Structured record of applied constraints, preferences, and manual edits.
+    SubstitutionDiff:
+      type: object
+      required: [original, replacement, constraint, reason]
+      description: |
+        A single ingredient substitution made during personalization.
+        Records what was swapped, the replacement, the driving constraint,
+        and a human-readable reason.
+      properties:
+        original:
+          type: string
+          description: The canonical ingredient that was replaced.
+        replacement:
+          type: string
+          description: The ingredient used in the variant.
+        constraint:
+          type: string
+          description: The user constraint that triggered the substitution (e.g. "gluten-free").
+        reason:
+          type: string
+          description: Human-readable explanation of why the substitution was made.
     VariantRefreshResponse:
       type: object
       required: [variant_id, variant_version_id, variant_status]
@@ -2789,6 +2809,16 @@ components:
           $ref: '#/components/schemas/VariantStatus'
         adaptation_summary:
           type: string
+        substitution_diffs:
+          type: array
+          items:
+            $ref: '#/components/schemas/SubstitutionDiff'
+          description: Structured ingredient substitutions made during personalization.
+        conflicts:
+          type: array
+          items:
+            type: string
+          description: Manual edits that conflict with current constraints.
     PreferenceUpdate:
       type: object
       required: [field, action, value, category]

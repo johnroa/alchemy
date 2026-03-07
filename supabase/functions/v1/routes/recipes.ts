@@ -131,6 +131,11 @@ type RecipesDeps = {
     variantPayload: RecipePayload;
     tagDiff: { added: string[]; removed: string[] };
   }) => Record<string, unknown>;
+  fetchGraphSubstitutions: (params: {
+    serviceClient: RouteContext["serviceClient"];
+    recipeVersionId: string;
+    constraints: string[];
+  }) => Promise<Record<string, JsonValue>[]>;
 };
 
 export const handleRecipeRoutes = async (
@@ -169,6 +174,7 @@ export const handleRecipeRoutes = async (
     computePreferenceFingerprint,
     computeSafetyExclusions,
     computeVariantTags,
+    fetchGraphSubstitutions,
   } = deps;
 
   if (segments.length === 1 && segments[0] === "collections") {
@@ -746,12 +752,33 @@ export const handleRecipeRoutes = async (
                 presentation_preferences: preferences.presentation_preferences as unknown as JsonValue,
               };
 
+              // Query graph for proven substitution patterns.
+              const bgConstraints = [
+                ...(Array.isArray(preferences.dietary_restrictions)
+                  ? preferences.dietary_restrictions
+                  : []),
+                ...(Array.isArray(preferences.aversions)
+                  ? preferences.aversions
+                  : []),
+              ].map((c) => String(c).toLowerCase());
+
+              const bgGraphSubs = bgConstraints.length > 0
+                ? await fetchGraphSubstitutions({
+                    serviceClient,
+                    recipeVersionId: canonicalVersion.id,
+                    constraints: bgConstraints,
+                  })
+                : [];
+
               const result = await llmGateway.personalizeRecipe({
                 client,
                 userId: auth.userId,
                 requestId,
                 canonicalPayload,
                 preferences: preferenceContext,
+                graphSubstitutions: bgGraphSubs.length > 0
+                  ? bgGraphSubs
+                  : undefined,
                 modelOverrides,
               });
 
@@ -762,6 +789,7 @@ export const handleRecipeRoutes = async (
                 adaptation_summary: result.adaptationSummary,
                 applied_adaptations: result.appliedAdaptations as JsonValue,
                 tag_diff: result.tagDiff as unknown as JsonValue,
+                substitution_diffs: result.substitutionDiffs as unknown as JsonValue,
                 preference_fingerprint: bgFingerprint,
               };
 
@@ -967,6 +995,8 @@ export const handleRecipeRoutes = async (
       personalized_at:
         variant.last_materialized_at ?? variantVersion.created_at,
       tag_diff: (provenance.tag_diff as JsonValue) ?? { added: [], removed: [] },
+      substitution_diffs:
+        (provenance.substitution_diffs as JsonValue) ?? [],
       provenance,
     });
   }
@@ -1054,7 +1084,28 @@ export const handleRecipeRoutes = async (
         }>)
       : [];
 
-    // 3. Call LLM to materialise the personalised variant.
+    // 3. Query graph for known substitution patterns relevant to the
+    //    user's constraints. These ground the LLM in proven patterns
+    //    (e.g., "wheat flour → almond flour" for gluten-free) instead
+    //    of reinventing substitutions from scratch each time.
+    const userConstraints = [
+      ...(Array.isArray(preferenceContext.dietary_restrictions)
+        ? preferenceContext.dietary_restrictions
+        : []),
+      ...(Array.isArray(preferenceContext.aversions)
+        ? preferenceContext.aversions
+        : []),
+    ].map((c) => String(c).toLowerCase());
+
+    const graphSubstitutions = userConstraints.length > 0
+      ? await fetchGraphSubstitutions({
+          serviceClient,
+          recipeVersionId: canonicalVersion.id,
+          constraints: userConstraints,
+        })
+      : [];
+
+    // 4. Call LLM to materialise the personalised variant.
     // Both new instructions and accumulated edits are sent so the LLM
     // can apply everything in one pass and detect conflicts.
     const result = await llmGateway.personalizeRecipe({
@@ -1063,6 +1114,9 @@ export const handleRecipeRoutes = async (
       requestId,
       canonicalPayload,
       preferences: preferenceContext,
+      graphSubstitutions: graphSubstitutions.length > 0
+        ? graphSubstitutions
+        : undefined,
       manualEditInstructions,
       accumulatedManualEdits: storedEdits.length > 0 ? storedEdits : undefined,
       modelOverrides: modelOverrides,
@@ -1085,6 +1139,7 @@ export const handleRecipeRoutes = async (
       adaptation_summary: result.adaptationSummary,
       applied_adaptations: result.appliedAdaptations as JsonValue,
       tag_diff: result.tagDiff as unknown as JsonValue,
+      substitution_diffs: result.substitutionDiffs as unknown as JsonValue,
       preference_fingerprint: fingerprint,
     };
     if (manualEditInstructions) {
@@ -1242,6 +1297,9 @@ export const handleRecipeRoutes = async (
       variant_version_id: newVersion.id,
       variant_status: resolvedStaleStatus as VariantStatus,
       adaptation_summary: result.adaptationSummary,
+      substitution_diffs: result.substitutionDiffs.length > 0
+        ? result.substitutionDiffs
+        : undefined,
       conflicts: result.conflicts.length > 0 ? result.conflicts : undefined,
     });
   }

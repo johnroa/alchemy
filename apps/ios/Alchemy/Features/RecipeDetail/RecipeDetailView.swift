@@ -38,6 +38,9 @@ struct RecipeDetailView: View {
     @State private var tweakText = ""
     @State private var isTweaking = false
     @State private var tweakConflicts: [String]?
+    @State private var substitutionDiffs: [SubstitutionDiff] = []
+    @State private var adaptationSummary: String?
+    @State private var showChanges = false
     @Environment(\.dismiss) private var dismiss
     @FocusState private var tweakBarFocused: Bool
 
@@ -134,6 +137,11 @@ struct RecipeDetailView: View {
                     heroSection(recipe)
 
                     VStack(alignment: .leading, spacing: AlchemySpacing.xl) {
+                        if !substitutionDiffs.isEmpty {
+                            sousChefChangesSection
+                            Divider().overlay(AlchemyColors.separator)
+                        }
+
                         ingredientSection(recipe)
                         Divider().overlay(AlchemyColors.separator)
                         stepsSection(recipe)
@@ -447,6 +455,7 @@ struct RecipeDetailView: View {
         if let preloadedDetail {
             detail = preloadedDetail
             isLoading = false
+            await loadVariantDiffs()
             return
         }
 
@@ -468,6 +477,7 @@ struct RecipeDetailView: View {
         }
 
         isLoading = false
+        await loadVariantDiffs()
     }
 
     private func saveRecipe(_ id: String) async {
@@ -482,6 +492,109 @@ struct RecipeDetailView: View {
     /// Sends manual edit instructions to variant/refresh, then reloads
     /// the recipe to show the updated variant. If conflicts are detected,
     /// shows the conflict banner instead of silently applying.
+    // MARK: - Sous Chef Changes
+
+    /// "What did my Sous Chef change?" — collapsible section showing
+    /// ingredient substitutions with the constraint that triggered each
+    /// swap and a human-readable reason. Only appears when the variant
+    /// has substitution diffs in its provenance.
+    private var sousChefChangesSection: some View {
+        VStack(alignment: .leading, spacing: AlchemySpacing.sm) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    showChanges.toggle()
+                }
+            } label: {
+                HStack {
+                    Image(systemName: "sparkles")
+                        .foregroundStyle(AlchemyColors.accent)
+                    Text("What did my Sous Chef change?")
+                        .font(AlchemyTypography.subheading)
+                        .foregroundStyle(AlchemyColors.textPrimary)
+                    Spacer()
+                    Image(systemName: showChanges ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(AlchemyColors.textTertiary)
+                }
+            }
+            .buttonStyle(.plain)
+
+            if let summary = adaptationSummary, !summary.isEmpty {
+                Text(summary)
+                    .font(AlchemyTypography.caption)
+                    .foregroundStyle(AlchemyColors.textSecondary)
+            }
+
+            if showChanges {
+                VStack(alignment: .leading, spacing: AlchemySpacing.sm) {
+                    ForEach(substitutionDiffs) { diff in
+                        substitutionRow(diff)
+                    }
+                }
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+    }
+
+    /// Single substitution row: "flour → almond flour" with constraint
+    /// badge and reason text.
+    private func substitutionRow(_ diff: SubstitutionDiff) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: AlchemySpacing.xs) {
+                Text(diff.original)
+                    .font(AlchemyTypography.body)
+                    .foregroundStyle(AlchemyColors.textSecondary)
+                    .strikethrough(color: AlchemyColors.textTertiary)
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(AlchemyColors.accent)
+                Text(diff.replacement)
+                    .font(AlchemyTypography.body)
+                    .foregroundStyle(AlchemyColors.textPrimary)
+            }
+
+            HStack(spacing: AlchemySpacing.xs) {
+                Text(diff.constraint)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(AlchemyColors.accent.opacity(0.8))
+                    .clipShape(Capsule())
+
+                if !diff.reason.isEmpty {
+                    Text(diff.reason)
+                        .font(AlchemyTypography.caption)
+                        .foregroundStyle(AlchemyColors.textTertiary)
+                        .lineLimit(2)
+                }
+            }
+        }
+        .padding(AlchemySpacing.sm)
+        .background(AlchemyColors.surface.opacity(0.5))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    // MARK: - Variant Detail Loading
+
+    /// Fetches the variant detail for the current recipe to populate
+    /// the "What did my Sous Chef change?" section. Called after the
+    /// recipe loads. Silently no-ops if no variant exists.
+    private func loadVariantDiffs() async {
+        guard let id = detail?.id ?? recipeId else { return }
+        do {
+            let response: VariantDetailResponse = try await APIClient.shared.request(
+                "/recipes/\(id)/variant"
+            )
+            withAnimation {
+                substitutionDiffs = response.substitutionDiffs ?? []
+                adaptationSummary = response.adaptationSummary
+            }
+        } catch {
+            // No variant or fetch failed — that's fine, section stays hidden.
+        }
+    }
+
     private func submitTweak(_ instructions: String) async {
         guard let id = detail?.id ?? recipeId else { return }
         isTweaking = true
@@ -496,6 +609,14 @@ struct RecipeDetailView: View {
 
             if let conflicts = response.conflicts, !conflicts.isEmpty {
                 withAnimation { tweakConflicts = conflicts }
+            }
+
+            // Update substitution diffs from the refresh response.
+            if let diffs = response.substitutionDiffs, !diffs.isEmpty {
+                withAnimation {
+                    substitutionDiffs = diffs
+                    adaptationSummary = response.adaptationSummary
+                }
             }
 
             // Reload the recipe to reflect the personalized variant.

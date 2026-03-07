@@ -2529,6 +2529,21 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /**
+         * @description A single ingredient substitution made during personalization.
+         *     Records what was swapped, the replacement, the driving constraint,
+         *     and a human-readable reason.
+         */
+        SubstitutionDiff: {
+            /** @description The canonical ingredient that was replaced. */
+            original: string;
+            /** @description The ingredient used in the variant. */
+            replacement: string;
+            /** @description The user constraint that triggered the substitution (e.g. "gluten-free"). */
+            constraint: string;
+            /** @description Human-readable explanation of why the substitution was made. */
+            reason: string;
+        };
         VariantRefreshResponse: {
             /** Format: uuid */
             variant_id: string;
@@ -2536,6 +2551,10 @@ export interface components {
             variant_version_id: string;
             variant_status: components["schemas"]["VariantStatus"];
             adaptation_summary?: string;
+            /** @description Structured ingredient substitutions made during personalization. */
+            substitution_diffs?: components["schemas"]["SubstitutionDiff"][];
+            /** @description Manual edits that conflict with current constraints. */
+            conflicts?: string[];
         };
         PreferenceUpdate: {
             /** @description Which preference field changed (e.g. equipment, dietary_restrictions). */

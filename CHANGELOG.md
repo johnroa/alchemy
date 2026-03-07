@@ -2,6 +2,15 @@
 
 ## [Unreleased] — 2026-03-07
 
+### Graph Feedback Loop (v3.1.0)
+
+- **Graph-grounded personalization:** `personalizeRecipe` now queries the knowledge graph for proven substitution patterns (source: `variant_aggregation`) relevant to the user's constraints before calling the LLM. The LLM receives these as `graph_substitutions` grounding context.
+- **Structured substitution diffs:** LLM output now includes `substitution_diffs` — each entry records `original`, `replacement`, `constraint`, and `reason` for ingredient swaps. Stored in variant version provenance.
+- **Batch substitution aggregation:** New `POST /graph/substitution-aggregate` admin endpoint scans variant provenance, aggregates substitution patterns across all users, and creates/strengthens `substitutes_for` + `alternative_to` graph edges with `source: variant_aggregation`. Confidence scales logarithmically with occurrence count.
+- **"What did my Sous Chef change?" view:** iOS recipe detail now shows a collapsible section listing ingredient substitutions with constraint badges and reasons. Loads from variant provenance via `GET /recipes/{id}/variant`.
+- Added `SubstitutionDiff` OpenAPI schema. Updated `VariantRefreshResponse` with `substitution_diffs` and `conflicts` fields.
+- Admin API route at `/api/admin/graph/substitution-aggregate` to trigger batch aggregation.
+
 ### Graph-Enabled Variant Tags + Cookbook Filtering (v3.1.0)
 
 - **Breaking (minor):** `variant_tags` in `CookbookEntry` changed from `string[]` to structured `VariantTags` object with `cuisine`, `dietary`, `technique`, `occasion`, `time_minutes`, `difficulty`, and `key_ingredients` fields for multi-dimensional cookbook filtering.
