@@ -1,0 +1,237 @@
+import {
+  ApiError,
+  requireJsonBody,
+} from "../../../_shared/errors.ts";
+import type {
+  ChatLoopState,
+  ChatSessionContext,
+  RouteContext,
+} from "../shared.ts";
+import type { ChatDeps } from "./types.ts";
+
+/**
+ * PATCH /chat/:id/candidate
+ *
+ * Mutates the candidate recipe set for an existing chat session.
+ * Supports three actions:
+ *   - set_active_component: switch the active component within the set
+ *   - delete_component: remove a component (cannot delete the last one)
+ *   - clear_candidate: discard the entire candidate set
+ */
+export const handleCandidatePatch = async (
+  context: RouteContext,
+  deps: ChatDeps,
+): Promise<Response> => {
+  const {
+    request,
+    segments,
+    auth,
+    client,
+    serviceClient,
+    requestId,
+    respond,
+    modelOverrides,
+  } = context;
+  const {
+    parseUuid,
+    extractChatContext,
+    normalizeCandidateRecipeSet,
+    enrollCandidateImageRequests,
+    scheduleImageQueueDrain,
+    updateChatSessionLoopContext,
+    logChangelog,
+    buildChatLoopResponse,
+    fetchChatMessages,
+  } = deps;
+
+  const chatId = parseUuid(segments[1]);
+  const body = await requireJsonBody<{
+    action?: "set_active_component" | "delete_component" | "clear_candidate";
+    component_id?: string;
+  }>(request);
+
+  if (!body.action) {
+    throw new ApiError(
+      400,
+      "invalid_candidate_action",
+      "action is required",
+    );
+  }
+
+  const { data: chatSession, error: chatError } = await client
+    .from("chat_sessions")
+    .select("id,context,created_at,updated_at")
+    .eq("id", chatId)
+    .maybeSingle();
+
+  if (chatError || !chatSession) {
+    throw new ApiError(
+      404,
+      "chat_not_found",
+      "Chat session not found",
+      chatError?.message,
+    );
+  }
+
+  const contextValue = extractChatContext(chatSession.context);
+  const candidateSet = normalizeCandidateRecipeSet(
+    contextValue.candidate_recipe_set ?? null,
+  );
+  let nextCandidateSet = candidateSet;
+
+  if (body.action === "clear_candidate") {
+    nextCandidateSet = null;
+  }
+
+  if (body.action === "set_active_component") {
+    if (!candidateSet) {
+      throw new ApiError(
+        409,
+        "candidate_missing",
+        "No candidate recipe set exists for this chat",
+      );
+    }
+    if (!body.component_id) {
+      throw new ApiError(
+        400,
+        "invalid_component_id",
+        "component_id is required for set_active_component",
+      );
+    }
+    if (
+      !candidateSet.components.some((component) =>
+        component.component_id === body.component_id
+      )
+    ) {
+      throw new ApiError(
+        404,
+        "candidate_component_not_found",
+        "Candidate component not found",
+      );
+    }
+    nextCandidateSet = {
+      ...candidateSet,
+      revision: Math.max(1, candidateSet.revision + 1),
+      active_component_id: body.component_id,
+    };
+  }
+
+  if (body.action === "delete_component") {
+    if (!candidateSet) {
+      throw new ApiError(
+        409,
+        "candidate_missing",
+        "No candidate recipe set exists for this chat",
+      );
+    }
+    if (!body.component_id) {
+      throw new ApiError(
+        400,
+        "invalid_component_id",
+        "component_id is required for delete_component",
+      );
+    }
+    const remaining = candidateSet.components.filter((component) =>
+      component.component_id !== body.component_id
+    );
+    if (remaining.length === candidateSet.components.length) {
+      throw new ApiError(
+        404,
+        "candidate_component_not_found",
+        "Candidate component not found",
+      );
+    }
+    if (remaining.length === 0) {
+      throw new ApiError(
+        409,
+        "candidate_last_component",
+        "Cannot delete the final remaining component",
+      );
+    }
+
+    const nextActiveId =
+      candidateSet.active_component_id === body.component_id
+        ? remaining[0].component_id
+        : candidateSet.active_component_id;
+
+    nextCandidateSet = {
+      ...candidateSet,
+      revision: Math.max(1, candidateSet.revision + 1),
+      active_component_id: nextActiveId,
+      components: remaining,
+    };
+  }
+
+  let hydratedNextCandidateSet = nextCandidateSet;
+  if (hydratedNextCandidateSet) {
+    hydratedNextCandidateSet = await enrollCandidateImageRequests({
+      serviceClient,
+      userId: auth.userId,
+      requestId,
+      chatId,
+      candidateSet: hydratedNextCandidateSet,
+    });
+    scheduleImageQueueDrain({
+      serviceClient,
+      actorUserId: auth.userId,
+      requestId,
+      limit: Math.max(5, hydratedNextCandidateSet.components.length),
+      modelOverrides,
+    });
+  }
+
+  const nextLoopState: ChatLoopState = hydratedNextCandidateSet
+    ? "candidate_presented"
+    : "ideation";
+  const memoryContextIds = Array.isArray(contextValue.selected_memory_ids)
+    ? contextValue.selected_memory_ids.filter((item): item is string =>
+      typeof item === "string"
+    )
+    : [];
+  const nextContext: ChatSessionContext = {
+    ...contextValue,
+    loop_state: nextLoopState,
+    candidate_recipe_set: hydratedNextCandidateSet,
+    candidate_revision: hydratedNextCandidateSet?.revision ?? 0,
+    active_component_id: hydratedNextCandidateSet?.active_component_id ?? null,
+  };
+
+  await updateChatSessionLoopContext({
+    client,
+    chatId,
+    context: nextContext,
+  });
+
+  await logChangelog({
+    serviceClient,
+    actorUserId: auth.userId,
+    scope: "chat",
+    entityType: "chat_session",
+    entityId: chatId,
+    action: `candidate_${body.action}`,
+    requestId,
+    afterJson: {
+      candidate_id: nextCandidateSet?.candidate_id ?? null,
+      revision: hydratedNextCandidateSet?.revision ?? null,
+      active_component_id: hydratedNextCandidateSet?.active_component_id ?? null,
+    },
+  });
+
+  const messages = await fetchChatMessages(client, chatId, 120);
+  return respond(
+    200,
+    buildChatLoopResponse({
+      chatId,
+      messages,
+      context: nextContext,
+      memoryContextIds,
+      createdAt: chatSession.created_at,
+      updatedAt: new Date().toISOString(),
+      uiHints: hydratedNextCandidateSet
+        ? {
+          focus_component_id: hydratedNextCandidateSet.active_component_id,
+        }
+        : undefined,
+    }),
+  );
+};
