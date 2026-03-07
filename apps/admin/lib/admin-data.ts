@@ -10,6 +10,12 @@ export {
 
 export { getLlmConfigData, getModelUsageData } from "./admin-data/llm";
 
+export type {
+  RecipeAuditIndexRow,
+  RecipeAuditDetail,
+  CookbookEntryRow,
+} from "./admin-data/recipes";
+
 export {
   getRecipeAuditDetail,
   getRecipeAuditIndexData,

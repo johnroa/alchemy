@@ -1,7 +1,7 @@
 import { getAdminClient } from "@/lib/supabase-admin";
 import { isSchemaMissingError } from "./shared";
 
-type RecipeAuditIndexRow = {
+export type RecipeAuditIndexRow = {
   id: string;
   title: string;
   owner_user_id: string;
@@ -20,7 +20,7 @@ type RecipeAuditIndexRow = {
   latest_request_id: string | null;
 };
 
-type RecipeAuditDetail = {
+export type RecipeAuditDetail = {
   recipe: {
     id: string;
     title: string;
@@ -557,7 +557,7 @@ export const getRecipeAuditDetail = async (recipeId: string): Promise<RecipeAudi
 
 // ── Cookbook + Variant admin data functions ──────────────────────────────────
 
-type CookbookEntryRow = {
+export type CookbookEntryRow = {
   user_id: string;
   user_email: string | null;
   canonical_recipe_id: string;
