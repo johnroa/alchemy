@@ -8,7 +8,7 @@ import SwiftUI
 /// which TabShell uses to navigate to GenerateView with the imported recipe.
 struct ImportView: View {
     let method: ImportMethod
-    let onImported: (ChatSessionResponse) -> Void
+    let onImported: @Sendable (ChatSessionResponse) -> Void
 
     @State private var viewModel = ImportViewModel()
     @Environment(\.dismiss) private var dismiss

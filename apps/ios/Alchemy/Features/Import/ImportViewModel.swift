@@ -8,7 +8,7 @@ import SwiftUI
 ///
 /// The view model does NOT hold the imported session — it passes it back
 /// via the `onImported` closure so TabShell can hand it to GenerateView.
-@Observable
+@MainActor @Observable
 final class ImportViewModel {
     // MARK: - State
 
@@ -111,7 +111,7 @@ final class ImportViewModel {
             onImported(response)
         } catch let error as NetworkError {
             isLoading = false
-            errorMessage = error.userFacingMessage
+            errorMessage = error.localizedDescription
         } catch {
             isLoading = false
             errorMessage = error.localizedDescription
@@ -128,8 +128,9 @@ final class ImportViewModel {
         // Build the Supabase Storage upload URL directly.
         // The storage API is at the same base as our API but different path.
         let storageBaseURL = "https://xrpkilgbfohzmibpvnit.supabase.co/storage/v1/object/import-source-photos"
-        guard let url = URL(string: "\(storageBaseURL)/\(path)") else {
-            throw NetworkError.invalidURL
+        let fullURLString = "\(storageBaseURL)/\(path)"
+        guard let url = URL(string: fullURLString) else {
+            throw NetworkError.invalidURL(fullURLString)
         }
 
         var request = URLRequest(url: url)
@@ -137,15 +138,15 @@ final class ImportViewModel {
         request.httpBody = data
         request.setValue(contentType, forHTTPHeaderField: "Content-Type")
 
-        // Inject auth token from the auth manager
         if let token = await AuthManager.shared.accessToken {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
 
-        let (_, response) = try await URLSession.shared.data(for: request)
+        let (responseData, response) = try await URLSession.shared.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse,
               (200...299).contains(httpResponse.statusCode) else {
-            throw NetworkError.serverError(statusCode: (response as? HTTPURLResponse)?.statusCode ?? 500, message: "Upload failed")
+            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 500
+            throw NetworkError.unexpectedStatusCode(statusCode, responseData)
         }
 
         return path
