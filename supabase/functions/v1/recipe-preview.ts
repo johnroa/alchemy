@@ -59,6 +59,23 @@ const normalizeScalarText = (value: unknown): string | null => {
   return normalized.length > 0 ? normalized : null;
 };
 
+export const resolveRecipePayloadSummary = (
+  payload: Pick<RecipePayload, "summary" | "description" | "notes">,
+): string => {
+  return normalizeScalarText(payload.summary) ??
+    normalizeScalarText(payload.description) ??
+    normalizeScalarText(payload.notes) ??
+    "";
+};
+
+export const resolveRecipePayloadDescription = (
+  payload: Pick<RecipePayload, "summary" | "description">,
+): string | undefined => {
+  return normalizeScalarText(payload.description) ??
+    normalizeScalarText(payload.summary) ??
+    undefined;
+};
+
 const normalizeFiniteInteger = (value: unknown): number | null => {
   const parsed = typeof value === "number"
     ? value

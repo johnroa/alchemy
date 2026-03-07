@@ -12,6 +12,8 @@ import {
 } from "../recipe-standardization.ts";
 import {
   canonicalizeRecipePayloadMetadata,
+  resolveRecipePayloadDescription,
+  resolveRecipePayloadSummary,
 } from "../recipe-preview.ts";
 import {
   resolveRecipeImageStatus,
@@ -169,8 +171,8 @@ export const fetchRecipeView = async (
   return {
     id: recipe.id,
     title: payload.title ?? recipe.title,
-    description: payload.description,
-    summary: payload.description ?? payload.notes ?? "",
+    description: resolveRecipePayloadDescription(payload),
+    summary: resolveRecipePayloadSummary(payload),
     servings: payload.servings,
     ingredients: projectedIngredients,
     steps: projectedSteps,

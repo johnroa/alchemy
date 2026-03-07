@@ -8,6 +8,7 @@ import {
 } from "../recipe-images.ts";
 import {
   canonicalizeRecipePayloadMetadata,
+  resolveRecipePayloadSummary,
   resolveSearchPreviewCategory,
 } from "../recipe-preview.ts";
 import type {
@@ -29,9 +30,7 @@ import {
 // ---------------------------------------------------------------------------
 
 const buildSearchDocumentSummary = (payload: RecipePayload): string => {
-  return normalizeScalarText(payload.description) ??
-    normalizeScalarText(payload.notes) ??
-    "";
+  return normalizeScalarText(resolveRecipePayloadSummary(payload)) ?? "";
 };
 
 const listifyMetadata = (

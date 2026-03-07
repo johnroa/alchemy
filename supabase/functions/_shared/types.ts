@@ -154,6 +154,7 @@ export type AssistantResponseContext = {
 
 export type RecipePayload = {
   title: string;
+  summary?: string;
   description?: string;
   servings: number;
   ingredients: Array<{

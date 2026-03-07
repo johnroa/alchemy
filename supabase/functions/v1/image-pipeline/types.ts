@@ -13,7 +13,10 @@ import type {
   JsonValue,
   RecipePayload,
 } from "../../_shared/types.ts";
-import { canonicalizeRecipePayloadMetadata } from "../recipe-preview.ts";
+import {
+  canonicalizeRecipePayloadMetadata,
+  resolveRecipePayloadSummary,
+} from "../recipe-preview.ts";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -200,7 +203,7 @@ export const buildRecipeImageFingerprintPayload = (
 
   return {
     title: normalizeText(titleOverride) ?? normalizeText(recipe.title) ?? "",
-    description: normalizeText(recipe.description),
+    description: normalizeText(resolveRecipePayloadSummary(recipe)),
     servings: normalizeInteger(recipe.servings),
     ingredients: (recipe.ingredients ?? []).map((ingredient) => ({
       name: normalizeText(ingredient.name) ?? "",
@@ -249,7 +252,7 @@ export const buildImageReuseSearchText = (
   const metadata = canonicalizeRecipePayloadMetadata(recipe) ?? {};
   const lines = [
     normalizeText(titleOverride) ?? normalizeText(recipe.title) ?? "Untitled Recipe",
-    normalizeText(recipe.description),
+    normalizeText(resolveRecipePayloadSummary(recipe)),
     ...Array.from(
       new Set(
         (recipe.ingredients ?? []).flatMap((ingredient) => {

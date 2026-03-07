@@ -2,6 +2,14 @@
 
 ## [Unreleased] — 2026-03-07
 
+### Recipe Payload Summary + Long Description (v3.5.2)
+
+- Added optional `summary` to `RecipePayload` for short preview/share copy while keeping `description` as long-form detail copy.
+- Updated recipe projection and compatibility fallbacks so historical payloads without `summary` still render correctly.
+- Updated search indexing, cookbook assembly, and image-reuse identity to prefer short `summary` over long `description`.
+- Fixed variant responses to overlay personalized `description` as well as personalized `summary`.
+- Updated iOS candidate payload decoding and detail mapping to preserve distinct short and long recipe copy.
+
 ### Executive Boards + First-Party Behavior Telemetry + iOS Sentry (v3.5.0)
 
 - **First-party behavior ledger:** Added append-only `behavior_events` and `behavior_semantic_facts` tables for product telemetry across Explore, Chat, Cookbook, and recipe detail sessions.

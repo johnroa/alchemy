@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Alchemy API",
-    "version": "3.5.1",
+    "version": "3.5.2",
     "description": "API contract for Alchemy — an AI-driven recipe creation and management platform.\nCovers the user-facing v1 API at api.cookwithalchemy.com and the admin API at admin.cookwithalchemy.com.\n"
   },
   "servers": [
@@ -120,6 +120,8 @@
                     "value": {
                       "id": "0b123456-1111-2222-3333-444455556666",
                       "title": "Weeknight Pasta",
+                      "summary": "Tomato pasta with basil.",
+                      "description": "A weeknight pasta that lands with the confidence of a corner trattoria classic, all bright tomatoes, olive oil, and basil in a sauce that tastes far more patient than the clock would suggest.",
                       "servings": 4,
                       "ingredients": [
                         {
@@ -154,6 +156,8 @@
                     "value": {
                       "id": "0b123456-1111-2222-3333-444455556666",
                       "title": "Weeknight Pasta",
+                      "summary": "Tomato pasta with basil.",
+                      "description": "A weeknight pasta that lands with the confidence of a corner trattoria classic, all bright tomatoes, olive oil, and basil in a sauce that tastes far more patient than the clock would suggest.",
                       "servings": 4,
                       "ingredients": [
                         {
@@ -1805,6 +1809,8 @@
                             "image_status": "pending",
                             "recipe": {
                               "title": "Spicy Chicken Parm",
+                              "summary": "Spicy chicken parm with crisp edges.",
+                              "description": "This chicken parm arrives with the swagger of a red-sauce darling and just enough chile to keep the whole affair from getting too comfortable. It is crunchy, saucy, and unapologetically dramatic in the best possible way.",
                               "servings": 2,
                               "ingredients": [],
                               "steps": []
@@ -1818,6 +1824,8 @@
                             "image_status": "ready",
                             "recipe": {
                               "title": "Garlicky Broccolini",
+                              "summary": "Garlicky broccolini with lemon.",
+                              "description": "The broccolini comes in all snap and sparkle, charred at the edges and lifted with enough garlic and lemon to feel like more than a side dish afterthought.",
                               "servings": 2,
                               "ingredients": [],
                               "steps": []
@@ -1859,6 +1867,8 @@
                             "image_status": "processing",
                             "recipe": {
                               "title": "Lighter Spicy Chicken Parm",
+                              "summary": "Lighter chicken parm with chile.",
+                              "description": "The lighter version keeps the sauce-slick charm of chicken parm but trades heft for a sharper, brisker kind of pleasure, the sort of plate that feels lively rather than leaden.",
                               "servings": 2,
                               "ingredients": [],
                               "steps": []
@@ -3063,8 +3073,13 @@
           "title": {
             "type": "string"
           },
+          "summary": {
+            "type": "string",
+            "description": "Short preview/share blurb used in cards, search, and share text."
+          },
           "description": {
-            "type": "string"
+            "type": "string",
+            "description": "Long-form editorial detail copy shown on recipe detail surfaces."
           },
           "servings": {
             "type": "integer"
@@ -3151,10 +3166,12 @@
             "type": "string"
           },
           "description": {
-            "type": "string"
+            "type": "string",
+            "description": "Long-form editorial detail copy shown on recipe detail surfaces."
           },
           "summary": {
-            "type": "string"
+            "type": "string",
+            "description": "Short preview/share blurb used in cards, search, and share text."
           },
           "image_url": {
             "type": [

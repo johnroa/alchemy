@@ -473,6 +473,7 @@ struct APICandidateComponent: Decodable, Identifiable {
 /// after POST /chat/{id}/commit persists the recipe.
 struct RecipePayload: Decodable {
     let title: String
+    let summary: String?
     let description: String?
     let servings: Int?
     let ingredients: [APIIngredient]?

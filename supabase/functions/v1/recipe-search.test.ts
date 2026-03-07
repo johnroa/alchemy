@@ -21,7 +21,9 @@ Deno.test("buildRecipeSearchDocument keeps missing images truthful", () => {
     ontologyTermKeys: ["poultry", "stone-fruit"],
     payload: {
       title: "Seared Duck Breast",
-      description: "Crisp skin with cherry gastrique",
+      summary: "Crisp skin with cherry gastrique",
+      description:
+        "This is the sort of duck dinner that makes a weeknight feel like a white-tablecloth indulgence, with lacquered skin and a cherry finish that leans lush rather than sugary.",
       servings: 2,
       ingredients: [
         { name: "Duck Breast", amount: 2, unit: "pieces" },
@@ -61,11 +63,20 @@ Deno.test("buildRecipeSearchDocument keeps missing images truthful", () => {
   if (document.time_minutes !== 35 || document.health_score !== 72) {
     throw new Error("expected quick stats to flow into the search document");
   }
+  if (document.summary !== "Crisp skin with cherry gastrique") {
+    throw new Error("expected search summary to prefer payload.summary");
+  }
   if (document.ingredient_count !== 2) {
     throw new Error("expected ingredient count to flow into the search document");
   }
   if (!document.search_text.includes("Seared Duck Breast")) {
     throw new Error("expected title inside search text");
+  }
+  if (!document.search_text.includes("Crisp skin with cherry gastrique")) {
+    throw new Error("expected short summary inside search text");
+  }
+  if (document.search_text.includes("white-tablecloth indulgence")) {
+    throw new Error("did not expect long description inside search text");
   }
   if (!document.search_text.includes("Duck Breast")) {
     throw new Error("expected ingredient names inside search text");

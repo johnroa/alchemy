@@ -4,6 +4,8 @@ import {
   canonicalizeRecipePayloadMetadata,
   normalizeRecipePreview,
   resolveCookbookPreviewCategory,
+  resolveRecipePayloadDescription,
+  resolveRecipePayloadSummary,
   resolveSearchPreviewCategory,
 } from "./recipe-preview.ts";
 
@@ -104,6 +106,44 @@ Deno.test("normalizeRecipePreview backfills quick stats from legacy search field
   }
   if (preview.visibility !== "public") {
     throw new Error("expected fallback visibility");
+  }
+});
+
+Deno.test("recipe payload copy helpers preserve the new summary split and backfill legacy payloads", () => {
+  const modernPayload = {
+    title: "Summer Pasta",
+    summary: "Lemony pasta with sweet corn.",
+    description:
+      "This pasta lands somewhere between rooftop-dinner ease and greenmarket showmanship. Sweet corn softens into the sauce while lemon keeps the whole bowl bright and a little theatrical.",
+    servings: 4,
+    ingredients: [],
+    steps: [],
+  };
+
+  if (resolveRecipePayloadSummary(modernPayload) !== "Lemony pasta with sweet corn.") {
+    throw new Error("expected summary helper to prefer payload.summary");
+  }
+  if (
+    resolveRecipePayloadDescription(modernPayload) !== modernPayload.description
+  ) {
+    throw new Error("expected description helper to preserve long-form copy");
+  }
+
+  const legacyPayload = {
+    title: "Legacy Soup",
+    description: "Cozy tomato soup with basil.",
+    servings: 2,
+    ingredients: [],
+    steps: [],
+  };
+
+  if (resolveRecipePayloadSummary(legacyPayload) !== legacyPayload.description) {
+    throw new Error("expected summary helper to backfill from legacy description");
+  }
+  if (
+    resolveRecipePayloadDescription(legacyPayload) !== legacyPayload.description
+  ) {
+    throw new Error("expected description helper to backfill from legacy description");
   }
 });
 

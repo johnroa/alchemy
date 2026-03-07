@@ -688,6 +688,9 @@ export const normalizeRecipeShape = (candidate: unknown): RecipePayload | null =
 
   return {
     title: normalizedTitle,
+    summary: typeof recipe.summary === "string"
+      ? recipe.summary.trim()
+      : undefined,
     description: typeof recipe.description === "string"
       ? recipe.description.trim()
       : undefined,
@@ -1301,7 +1304,7 @@ export const normalizeChatEnvelope = (
 export const deriveAssistantReplyFromRecipe = (
   recipe: RecipePayload,
 ): AssistantReply | null => {
-  const textCandidates = [recipe.notes, recipe.description, recipe.title]
+  const textCandidates = [recipe.notes, recipe.summary, recipe.title]
     .filter(
       (value): value is string =>
         typeof value === "string" && value.trim().length > 0,

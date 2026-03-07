@@ -258,6 +258,104 @@ const createRecipeSaveClient = (currentVersionId: string | null) => {
   };
 };
 
+const createRecipeDetailFetchView = () => ({
+  id: "recipe-123",
+  title: "Late-Summer Pasta",
+  description:
+    "This pasta has the swagger of a restaurant special and the ease of something you can still pull together on a Tuesday, with corn, lemon, and basil doing all the right flirting.",
+  summary: "Corn, lemon, and basil pasta.",
+  servings: 4,
+  ingredients: [],
+  steps: [],
+  notes: undefined,
+  pairings: [],
+  metadata: undefined,
+  emoji: [],
+  image_url: null,
+  image_status: "pending",
+  visibility: "public",
+  updated_at: "2026-03-07T12:00:00.000Z",
+  version: {
+    version_id: "version-123",
+    recipe_id: "recipe-123",
+    parent_version_id: null,
+    diff_summary: null,
+    created_at: "2026-03-07T12:00:00.000Z",
+  },
+  attachments: [],
+});
+
+const createVariantRouteClient = () => ({
+  from(table: string) {
+    if (table === "user_recipe_variants") {
+      return {
+        select(_columns: string) {
+          return {
+            eq(_column: string, _value: string) {
+              return {
+                eq(_columnTwo: string, _valueTwo: string) {
+                  return {
+                    async maybeSingle() {
+                      return {
+                        data: {
+                          id: "variant-123",
+                          current_version_id: "variant-version-123",
+                          base_canonical_version_id: "canonical-version-123",
+                          preference_fingerprint: "fp",
+                          stale_status: "current",
+                          last_materialized_at: "2026-03-07T13:00:00.000Z",
+                        },
+                        error: null,
+                      };
+                    },
+                  };
+                },
+              };
+            },
+          };
+        },
+      };
+    }
+
+    if (table === "user_recipe_variant_versions") {
+      return {
+        select(_columns: string) {
+          return {
+            eq(_column: string, _value: string) {
+              return {
+                async single() {
+                  return {
+                    data: {
+                      id: "variant-version-123",
+                      payload: {
+                        summary: "Corn, lemon, and basil pasta.",
+                        description:
+                          "The personalized version keeps the same breezy spirit but leans even brighter, the sort of bowl you want to eat by an open window with a glass of cold white wine.",
+                        ingredients: [],
+                        steps: [],
+                      },
+                      derivation_kind: "automatic",
+                      provenance: {
+                        adaptation_summary: "Adjusted to the user's preferences.",
+                        tag_diff: { added: [], removed: [] },
+                      },
+                      source_canonical_version_id: "canonical-version-123",
+                      created_at: "2026-03-07T13:00:00.000Z",
+                    },
+                    error: null,
+                  };
+                },
+              };
+            },
+          };
+        },
+      };
+    }
+
+    throw new Error(`unexpected table: ${table}`);
+  },
+});
+
 Deno.test("GET /recipes/cookbook returns the preview shape plus cookbook_insight", async () => {
   const item: RecipePreview = {
     id: "11111111-1111-1111-1111-111111111111",
@@ -316,6 +414,86 @@ Deno.test("GET /recipes/cookbook returns the preview shape plus cookbook_insight
     if (!(key in preview)) {
       throw new Error(`expected cookbook preview field: ${key}`);
     }
+  }
+});
+
+Deno.test("GET /recipes/{id} preserves distinct summary and long description fields", async () => {
+  const response = await handleRecipeRoutes(
+    createRouteContext({
+      path: "/recipes/recipe-123",
+      method: "GET",
+      serviceClient: {
+        from(table: string) {
+          if (table === "recipe_view_events") {
+            return {
+              async insert(_payload: unknown) {
+                return { error: null };
+              },
+            };
+          }
+
+          throw new Error(`unexpected table: ${table}`);
+        },
+      },
+    }) as never,
+    createDeps({
+      resolvePresentationOptions: () => ({
+        units: "source",
+        groupBy: "flat",
+        inlineMeasurements: false,
+      }),
+      fetchRecipeView: async () => createRecipeDetailFetchView(),
+    }) as never,
+  );
+
+  if (!response || response.status !== 200) {
+    throw new Error("expected recipe detail response");
+  }
+
+  const body = await parseJson(response);
+  if (body.summary !== "Corn, lemon, and basil pasta.") {
+    throw new Error("expected short summary on detail response");
+  }
+  if (
+    body.description !==
+      "This pasta has the swagger of a restaurant special and the ease of something you can still pull together on a Tuesday, with corn, lemon, and basil doing all the right flirting."
+  ) {
+    throw new Error("expected long description on detail response");
+  }
+});
+
+Deno.test("GET /recipes/{id}/variant overlays personalized summary and description", async () => {
+  const response = await handleRecipeRoutes(
+    createRouteContext({
+      path: "/recipes/recipe-123/variant",
+      method: "GET",
+      client: createVariantRouteClient(),
+    }) as never,
+    createDeps({
+      resolvePresentationOptions: () => ({
+        units: "source",
+        groupBy: "flat",
+        inlineMeasurements: false,
+      }),
+      fetchRecipeView: async () => createRecipeDetailFetchView(),
+    }) as never,
+  );
+
+  if (!response || response.status !== 200) {
+    throw new Error("expected variant response");
+  }
+
+  const body = await parseJson(response);
+  const recipe = body.recipe as Record<string, unknown>;
+
+  if (recipe.summary !== "Corn, lemon, and basil pasta.") {
+    throw new Error("expected personalized summary on variant response");
+  }
+  if (
+    recipe.description !==
+      "The personalized version keeps the same breezy spirit but leans even brighter, the sort of bowl you want to eat by an open window with a glass of cold white wine."
+  ) {
+    throw new Error("expected personalized long description on variant response");
   }
 });
 

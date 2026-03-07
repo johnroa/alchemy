@@ -33,6 +33,7 @@ import {
   buildHighestConfidenceCategoryMap,
   canonicalizeRecipePayloadMetadata,
   resolveCookbookPreviewCategory,
+  resolveRecipePayloadSummary,
 } from "../recipe-preview.ts";
 import {
   applyThreadPreferenceOverrides,
@@ -514,7 +515,7 @@ const renderChatMessageForPrompt = (message: ChatMessageView): string => {
   if (parsed?.recipe) {
     const summaryParts = [
       parsed.recipe.title,
-      parsed.recipe.description,
+      parsed.recipe.summary,
       parsed.recipe.notes,
     ].filter(
       (value): value is string =>
@@ -972,7 +973,7 @@ export const buildCookbookItems = async (
     return {
       canonical_recipe_id: recipe.id,
       title: payload?.title ?? recipe.title,
-      summary: payload?.description ?? payload?.notes ?? "",
+      summary: payload ? resolveRecipePayloadSummary(payload) : "",
       image_url: resolveRecipeImageUrl(recipe.hero_image_url),
       image_status: resolveRecipeImageStatus(
         recipe.hero_image_url,

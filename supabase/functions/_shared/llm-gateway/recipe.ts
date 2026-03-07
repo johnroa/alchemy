@@ -32,7 +32,7 @@ import {
 const deriveAssistantReplyFromRecipe = (
   recipe: RecipePayload,
 ): AssistantReply | null => {
-  const textCandidates = [recipe.notes, recipe.description, recipe.title]
+  const textCandidates = [recipe.notes, recipe.summary, recipe.title]
     .filter(
       (value): value is string =>
         typeof value === "string" && value.trim().length > 0,

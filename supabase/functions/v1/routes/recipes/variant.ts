@@ -104,7 +104,12 @@ export const handleVariantRoutes = async (
     // The variant payload has the same structure as recipe_versions.payload.
     const variantRecipe = {
       ...canonicalRecipe,
-      summary: (payload.summary as string) ?? canonicalRecipe.summary,
+      description: (payload.description as string) ??
+        (payload.summary as string) ??
+        canonicalRecipe.description,
+      summary: (payload.summary as string) ??
+        (payload.description as string) ??
+        canonicalRecipe.summary,
       ingredients: (payload.ingredients as JsonValue[]) ?? canonicalRecipe.ingredients,
       steps: (payload.steps as JsonValue[]) ?? canonicalRecipe.steps,
     };

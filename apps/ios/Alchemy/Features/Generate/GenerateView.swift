@@ -1083,8 +1083,8 @@ extension RecipePayload {
         RecipeDetail(
             id: "candidate-\(UUID().uuidString.prefix(8))",
             title: title ?? self.title,
-            description: self.description,
-            summary: self.description ?? self.title,
+            description: self.description ?? self.summary,
+            summary: self.summary ?? self.description ?? self.title,
             servings: self.servings ?? 4,
             ingredients: self.ingredients ?? [],
             steps: self.steps ?? [],

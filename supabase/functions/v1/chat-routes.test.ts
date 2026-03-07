@@ -13,6 +13,7 @@ const unused = () => {
 
 const recipePayload: RecipePayload = {
   title: "Lemon Chicken",
+  summary: "Bright and quick chicken dinner.",
   description: "Bright and quick chicken dinner.",
   servings: 2,
   ingredients: [

@@ -2216,6 +2216,9 @@ export interface components {
         };
         RecipePayload: {
             title: string;
+            /** @description Short preview/share blurb used in cards, search, and share text. */
+            summary?: string;
+            /** @description Long-form editorial detail copy shown on recipe detail surfaces. */
             description?: string;
             servings: number;
             ingredients: components["schemas"]["Ingredient"][];
@@ -2237,7 +2240,9 @@ export interface components {
             /** Format: uuid */
             id: string;
             title: string;
+            /** @description Long-form editorial detail copy shown on recipe detail surfaces. */
             description?: string;
+            /** @description Short preview/share blurb used in cards, search, and share text. */
             summary?: string;
             /** Format: uri */
             image_url?: string | null;

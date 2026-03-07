@@ -7,8 +7,9 @@ import {
 Deno.test("buildImageReuseSearchText excludes pairings and optional notes from reuse identity", () => {
   const searchText = buildImageReuseSearchText({
     title: "Classic Buttered Toast",
+    summary: "Golden toast with soft butter.",
     description:
-      "A simple yet comforting breakfast staple, this buttered toast is crisp and golden.",
+      "A simple yet comforting breakfast staple, this buttered toast is crisp and golden, the sort of thing that feels impossibly generous for how little it asks of you.",
     notes: "Try adding jam or honey for a tasty twist.",
     pairings: ["Freshly brewed coffee", "Orange juice", "Scrambled eggs"],
     ingredients: [
@@ -33,9 +34,13 @@ Deno.test("buildImageReuseSearchText excludes pairings and optional notes from r
   if (searchText.includes("jam") || searchText.includes("honey")) {
     throw new Error("expected optional notes to be excluded from image reuse search text");
   }
+  if (searchText.includes("comforting breakfast staple")) {
+    throw new Error("expected long description to be excluded from image reuse search text");
+  }
 
   for (const expected of [
     "Classic Buttered Toast",
+    "Golden toast with soft butter.",
     "bread",
     "butter",
     "American",
@@ -51,7 +56,9 @@ Deno.test("buildImageReuseSearchText excludes pairings and optional notes from r
 Deno.test("buildImageRequestDescriptor uses image reuse search text instead of discovery search text", async () => {
   const descriptor = await buildImageRequestDescriptor({
     title: "Elevated Scrambled Eggs",
-    description: "Silky, buttery French-style eggs with creme fraiche and chives.",
+    summary: "Silky eggs with creme fraiche and chives.",
+    description:
+      "Soft curds and creme fraiche give these eggs the kind of plush, slow luxury that makes even a quiet breakfast feel faintly Parisian.",
     pairings: ["Buttered toast"],
     ingredients: [
       { name: "large eggs", amount: 6, unit: "piece" },
@@ -70,9 +77,13 @@ Deno.test("buildImageRequestDescriptor uses image reuse search text instead of d
   if (descriptor.normalizedSearchText.includes("Buttered toast")) {
     throw new Error("expected descriptor search text to exclude pairings");
   }
+  if (descriptor.normalizedSearchText.includes("quiet breakfast feel faintly Parisian")) {
+    throw new Error("expected descriptor search text to exclude long description");
+  }
 
   for (const expected of [
     "Elevated Scrambled Eggs",
+    "Silky eggs with creme fraiche and chives.",
     "large eggs",
     "creme fraiche",
     "fresh chives",
@@ -88,7 +99,9 @@ Deno.test("buildImageRequestDescriptor uses image reuse search text instead of d
 Deno.test("shouldResetReusedReadyImageRequest only resets stale reused requests", async () => {
   const descriptor = await buildImageRequestDescriptor({
     title: "Elevated Scrambled Eggs",
-    description: "Silky, buttery French-style eggs with creme fraiche and chives.",
+    summary: "Silky eggs with creme fraiche and chives.",
+    description:
+      "Soft curds and creme fraiche give these eggs the kind of plush, slow luxury that makes even a quiet breakfast feel faintly Parisian.",
     ingredients: [
       { name: "large eggs", amount: 6, unit: "piece" },
       { name: "creme fraiche", amount: 2, unit: "tbsp" },
