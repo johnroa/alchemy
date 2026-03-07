@@ -11,6 +11,17 @@
 -- This migration restores the original preview projection while preserving the
 -- popularity/trending sort behavior and count columns introduced in 0051.
 
+drop function if exists public.list_recipe_search_documents(
+  timestamptz,
+  boolean,
+  int,
+  timestamptz,
+  uuid,
+  text[],
+  text[],
+  text
+);
+
 create or replace function public.list_recipe_search_documents(
   p_snapshot_cutoff_indexed_at timestamptz,
   p_explore_only boolean default false,
