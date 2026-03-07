@@ -19,7 +19,7 @@
  */
 
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2";
-import { normalizeDelimitedToken } from "../../../packages/shared/src/text-normalization.ts";
+import { normalizeDelimitedToken } from "../../../../packages/shared/src/text-normalization.ts";
 import { ApiError } from "../../_shared/errors.ts";
 import type { JsonValue, RecipePayload } from "../../_shared/types.ts";
 import { llmGateway } from "../../_shared/llm-gateway.ts";
