@@ -2,6 +2,43 @@
 
 ## [Unreleased] — 2026-03-07
 
+### Recipe Import (v3.2.0)
+
+- **POST /chat/import endpoint:** Accepts a recipe source (URL, pasted text, or cookbook-page photo) and returns a seeded ChatSession with a CandidateRecipeSet. Imported recipes enter the existing Generate flow (iteration via `/chat/{id}/messages`, commit via `/chat/{id}/commit`).
+- **URL scraping:** Built-in recipe scraper with Schema.org JSON-LD extraction, microdata fallback, and OpenGraph meta fallback. Bounded fetcher with timeout, redirect cap, byte cap, and private-network rejection (SSRF protection).
+- **Text import:** Accepts pasted recipe text (up to 50k chars) and processes through LLM normalisation.
+- **Photo import:** Cookbook-page photos uploaded to Supabase Storage, then extracted via `recipe_import_vision_extract` LLM scope using vision-capable models.
+- **LLM pipeline scopes:** `recipe_import_transform` (ImportedRecipeDocument → RecipePayload + AssistantReply) and `recipe_import_vision_extract` (cookbook photo → ImportedRecipeDocument). Both routed through gpt-4.1.
+- **Copyright compliance:** All imported recipe text is rewritten in Alchemy's voice by the transform scope — source phrasing is never reproduced verbatim. Images are always re-generated.
+- **Source fingerprint deduplication:** Per-user fingerprint on normalised source content enables idempotent retry and re-share detection. Existing completed imports return the cached session.
+- **import_provenance table:** Tracks import metadata, extraction strategy, confidence, error state, and telemetry. Linked to chat_sessions and recipe_versions for full audit trail.
+- **Admin Imports page:** New admin page at `/imports` with KPI cards (total imports, success rate, avg latency, cache hit rate), source kind and extraction strategy breakdowns, recent imports table, and failure details.
+- **Admin Dashboard integration:** Import Activity section on main dashboard with total imports, success rate, avg latency, and source breakdown.
+- **iOS import entry point:** 4th tab bar button in TabShell using `Tab(role: .search)` for visually separated Liquid Glass circle. Opens confirmation dialog with Paste URL, Take Photo, and Paste Text options.
+- **iOS import views:** ImportView and ImportViewModel for URL paste, text paste, and photo capture/selection flows.
+- **iOS share extension:** AlchemyShareExtension accepts URLs, text, and images from other apps. Uses App Group handoff to main app via `alchemy://import` URL scheme.
+- **GenerateView integration:** `importedSession` binding allows GenerateView to enter `.presenting` phase directly from an imported chat session.
+- OpenAPI version bumped to 3.2.0. Added `ImportRequest` (oneOf: ImportUrlRequest, ImportTextRequest, ImportPhotoRequest) schema with discriminator.
+
+### Recipe & Ingredient Popularity + Trending (v3.3.0)
+
+- **Recipe popularity scoring:** New `save_count`, `variant_count`, `view_count`, `popularity_score`, and `trending_score` columns on `recipe_search_documents`. All-time and 7-day weighted composites (saves x3, variants x2, views x0.5).
+- **View tracking:** New `recipe_view_events` table with fire-and-forget logging on `GET /recipes/{id}`. Append-only, deduped by `COUNT(DISTINCT user_id)` during aggregation.
+- **Ingredient trending:** New `ingredient_trending_stats` table with two signals: recipe-derived popularity (sum of recipe scores) and substitution momentum (sub-in vs sub-out from variant provenance diffs). Momentum scaled -100 to +100.
+- **Batch refresh RPC:** `refresh_recipe_popularity_stats()` recomputes all recipe and ingredient stats in a single transaction. Triggered via `POST /popularity/refresh`.
+- **Explore sort:** `POST /recipes/search` now accepts `sort_by` parameter (`recent`, `popular`, `trending`). RPC `list_recipe_search_documents` updated with `p_sort_by`. Returns `save_count` and `variant_count` in `RecipePreview`.
+- **Trending ingredients endpoint:** New `GET /ingredients/trending` with `?sort=trending|momentum&limit=N`.
+- **iOS Explore updates:** Sort picker (New/Popular/Trending), social proof badges on Explore cards ("42 saves · 12 versions"), trending ingredients data loading.
+- **Admin API routes:** `POST /api/admin/popularity/refresh`, `GET /api/admin/ingredients/trending`.
+- OpenAPI version bumped to 3.3.0. Added `IngredientTrendingStat` schema, `sort_by` to `RecipeSearchRequest`, `save_count`/`variant_count` to `RecipePreview`.
+
+### Pipeline Observability (v3.3.0)
+
+- **Pipeline Health dashboard:** New admin page at `/pipeline-health` showing per-scope LLM call stats (total calls, error rate, p50/p95/max latency, tokens, cost), variant health breakdown (current/stale/processing/failed/needs_review), and graph edge creation rate.
+- **`get_pipeline_observability_stats` RPC:** Aggregates LLM events, variant health, and graph activity into a single JSONB response. Supports configurable lookback window (`p_hours`, default 24).
+- **`GET /observability/pipeline` endpoint** with `?hours=N` query param.
+- **Admin API route** at `GET /api/admin/observability/pipeline`.
+
 ### Graph Feedback Loop (v3.1.0)
 
 - **Graph-grounded personalization:** `personalizeRecipe` now queries the knowledge graph for proven substitution patterns (source: `variant_aggregation`) relevant to the user's constraints before calling the LLM. The LLM receives these as `graph_substitutions` grounding context.

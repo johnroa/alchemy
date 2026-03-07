@@ -13,6 +13,7 @@ import NukeUI
 struct ExploreView: View {
     @State private var previews: [RecipePreview] = []
     @State private var selectedFilter = "All"
+    @State private var selectedSort: ExploreSortMode = .recent
     @State private var searchText = ""
     @State private var selectedRecipeId: String?
     @State private var showPreferences = false
@@ -21,6 +22,7 @@ struct ExploreView: View {
     @State private var contextLabel = "Exploring all recipes"
     @State private var nextCursor: String?
     @State private var searchId: String?
+    @State private var trendingIngredients: [IngredientTrendingStat] = []
 
     private let filters = PreviewData.exploreFilters
 
@@ -63,6 +65,7 @@ struct ExploreView: View {
                                 .foregroundStyle(.white)
                                 .shadow(color: .black.opacity(0.5), radius: 4)
                             Spacer()
+                            sortPicker
                             ProfileMenu(
                                 onPreferences: { showPreferences = true },
                                 onSettings: { showSettings = true }
@@ -114,7 +117,40 @@ struct ExploreView: View {
             }
             .sheet(isPresented: $showPreferences) { PreferencesView() }
             .sheet(isPresented: $showSettings) { SettingsView() }
-            .task { await loadFeed() }
+            .task {
+                await loadFeed()
+                await loadTrendingIngredients()
+            }
+        }
+    }
+
+    // MARK: - Sort Picker
+
+    private var sortPicker: some View {
+        Menu {
+            ForEach(ExploreSortMode.allCases) { mode in
+                Button {
+                    guard selectedSort != mode else { return }
+                    selectedSort = mode
+                    Task { await loadFeed(sortMode: mode) }
+                } label: {
+                    Label(mode.label, systemImage: mode.icon)
+                    if selectedSort == mode {
+                        Image(systemName: "checkmark")
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: selectedSort.icon)
+                    .font(.system(size: 14, weight: .semibold))
+                Text(selectedSort.shortLabel)
+                    .font(.system(size: 14, weight: .semibold))
+            }
+            .foregroundStyle(.white.opacity(0.85))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(.ultraThinMaterial, in: Capsule())
         }
     }
 
@@ -182,9 +218,18 @@ struct ExploreView: View {
 
     /// Loads the explore feed from POST /recipes/search.
     /// When no query or preset is provided, returns the default explore feed.
-    private func loadFeed(query: String? = nil, preset: String? = nil, context: String = "Exploring all recipes") async {
+    /// sortMode controls ordering: recent (default), popular, or trending.
+    private func loadFeed(
+        query: String? = nil,
+        preset: String? = nil,
+        context: String = "Exploring all recipes",
+        sortMode: ExploreSortMode? = nil
+    ) async {
         isLoading = true
-        contextLabel = context
+        let effectiveSort = sortMode ?? selectedSort
+        contextLabel = effectiveSort == .recent
+            ? context
+            : "\(effectiveSort.label) recipes"
         nextCursor = nil
 
         do {
@@ -195,7 +240,8 @@ struct ExploreView: View {
                     query: query,
                     presetId: preset,
                     cursor: nil,
-                    limit: 10
+                    limit: 10,
+                    sortBy: effectiveSort.rawValue
                 )
             )
 
@@ -227,7 +273,8 @@ struct ExploreView: View {
                     query: nil,
                     presetId: nil,
                     cursor: cursor,
-                    limit: 10
+                    limit: 10,
+                    sortBy: selectedSort.rawValue
                 )
             )
 
@@ -237,6 +284,48 @@ struct ExploreView: View {
             }
         } catch {
             print("[ExploreView] loadMore error: \(error)")
+        }
+    }
+
+    /// Fetches trending ingredient stats for the trending section.
+    private func loadTrendingIngredients() async {
+        do {
+            let response: IngredientTrendingResponse = try await APIClient.shared.request(
+                "/ingredients/trending?limit=10",
+                method: .get
+            )
+            withAnimation { trendingIngredients = response.items }
+        } catch {
+            print("[ExploreView] loadTrendingIngredients error: \(error)")
+        }
+    }
+}
+
+// MARK: - Sort Mode
+
+/// Explore feed sort options. Maps to the API's sort_by parameter.
+enum ExploreSortMode: String, CaseIterable, Identifiable {
+    case recent
+    case popular
+    case trending
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .recent: return "New"
+        case .popular: return "Popular"
+        case .trending: return "Trending"
+        }
+    }
+
+    var shortLabel: String { label }
+
+    var icon: String {
+        switch self {
+        case .recent: return "clock"
+        case .popular: return "heart.fill"
+        case .trending: return "flame.fill"
         }
     }
 }
@@ -291,6 +380,17 @@ private struct ExploreCardView: View {
                             .foregroundStyle(.white.opacity(0.85))
                             .lineLimit(2)
                             .shadow(color: .black.opacity(0.3), radius: 4, x: 0, y: 1)
+
+                        if let socialProof = preview.socialProofText {
+                            HStack(spacing: AlchemySpacing.xs) {
+                                Image(systemName: "person.2.fill")
+                                    .font(.system(size: 11))
+                                Text(socialProof)
+                                    .font(.system(size: 13, weight: .medium))
+                            }
+                            .foregroundStyle(.white.opacity(0.65))
+                            .shadow(color: .black.opacity(0.3), radius: 3)
+                        }
                     }
 
                     Spacer(minLength: 0)

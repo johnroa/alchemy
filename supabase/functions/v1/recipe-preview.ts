@@ -26,6 +26,8 @@ export type RecipePreview = {
   visibility: string;
   updated_at: string;
   quick_stats: RecipeQuickStats | null;
+  save_count?: number;
+  variant_count?: number;
 };
 
 export type RecipeCategoryCandidate = {
@@ -147,8 +149,10 @@ export const buildRecipePreview = (input: {
   difficulty?: unknown;
   health_score?: unknown;
   items?: unknown;
+  save_count?: number | null;
+  variant_count?: number | null;
 }): RecipePreview => {
-  return {
+  const preview: RecipePreview = {
     id: input.id,
     title: normalizeScalarText(input.title) ?? "Untitled Recipe",
     summary: normalizeScalarText(input.summary) ?? "",
@@ -165,6 +169,14 @@ export const buildRecipePreview = (input: {
       items: input.items,
     }),
   };
+  // Only include popularity counts when present (search/explore responses).
+  if (typeof input.save_count === "number" && input.save_count > 0) {
+    preview.save_count = input.save_count;
+  }
+  if (typeof input.variant_count === "number" && input.variant_count > 0) {
+    preview.variant_count = input.variant_count;
+  }
+  return preview;
 };
 
 export const normalizeRecipePreview = (value: unknown): RecipePreview | null => {

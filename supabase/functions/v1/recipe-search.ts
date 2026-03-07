@@ -114,6 +114,8 @@ type SearchRpcRow = {
   updated_at: string;
   quick_stats: JsonValue;
   indexed_at: string;
+  save_count?: number;
+  variant_count?: number;
 };
 
 type SearchDocumentSource = {
@@ -381,6 +383,8 @@ const mapRpcRowToCard = (row: SearchRpcRow): RecipeSearchCard =>
     visibility: row.visibility,
     updated_at: row.updated_at,
     quick_stats: row.quick_stats,
+    save_count: row.save_count,
+    variant_count: row.variant_count,
   });
 
 const normalizeSearchIntent = (params: {
@@ -1094,6 +1098,7 @@ const fetchAllFeedPage = async (params: {
   limit: number;
   cursor: AllFeedCursor | null;
   safetyExclusions?: SearchSafetyExclusions;
+  sortBy?: RecipeSearchSortBy;
 }): Promise<Pick<RecipeSearchResponse, "items" | "next_cursor" | "no_match">> => {
   const { data, error } = await params.serviceClient.rpc(
     "list_recipe_search_documents",
@@ -1106,6 +1111,7 @@ const fetchAllFeedPage = async (params: {
       p_exclude_ingredient_names:
         params.safetyExclusions?.excludeIngredients ?? [],
       p_require_diet_tags: params.safetyExclusions?.requireDietTags ?? [],
+      p_sort_by: params.sortBy ?? "recent",
     },
   );
 
@@ -1249,6 +1255,8 @@ export type SearchSafetyExclusions = {
   requireDietTags: string[];
 };
 
+export type RecipeSearchSortBy = "recent" | "popular" | "trending";
+
 export const searchRecipes = async (params: {
   serviceClient: SupabaseClient;
   userId: string;
@@ -1261,6 +1269,7 @@ export const searchRecipes = async (params: {
   conversationContext?: RecipeSearchConversationContext;
   modelOverrides?: ModelOverrideMap;
   safetyExclusions?: SearchSafetyExclusions;
+  sortBy?: RecipeSearchSortBy;
 }): Promise<InternalRecipeSearchResponse> => {
   const startedAt = Date.now();
   const limit = clampLimit(params.limit);
@@ -1338,6 +1347,7 @@ export const searchRecipes = async (params: {
       limit,
       cursor: decodedCursor,
       safetyExclusions: params.safetyExclusions,
+      sortBy: params.sortBy,
     });
 
     await logSearchEvent({
@@ -1403,6 +1413,7 @@ export const searchRecipes = async (params: {
       limit,
       cursor: null,
       safetyExclusions: params.safetyExclusions,
+      sortBy: params.sortBy,
     });
 
     await logSearchEvent({

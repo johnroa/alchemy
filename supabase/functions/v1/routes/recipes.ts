@@ -108,6 +108,7 @@ type RecipesDeps = {
     presetId?: string | null;
     cursor?: string | null;
     limit?: number | null;
+    sortBy?: "recent" | "popular" | "trending";
   }) => Promise<{
     search_id: string;
     applied_context: "all" | "preset" | "query";
@@ -284,12 +285,20 @@ export const handleRecipeRoutes = async (
       preset_id?: string;
       cursor?: string;
       limit?: number;
+      sort_by?: string;
     }>(request);
 
     // Load user preferences for safety exclusions — ensures recipes
     // containing the user's allergens/restrictions are never surfaced.
     const searchPrefs = await getPreferences(client, auth.userId);
     const safetyExclusions = computeSafetyExclusions(searchPrefs);
+
+    // Validate sort_by: only "recent", "popular", "trending" are valid.
+    const validSorts = ["recent", "popular", "trending"] as const;
+    type SortBy = typeof validSorts[number];
+    const sortBy: SortBy = body.sort_by && validSorts.includes(body.sort_by as SortBy)
+      ? (body.sort_by as SortBy)
+      : "recent";
 
     const response = await searchRecipes({
       serviceClient,
@@ -301,6 +310,7 @@ export const handleRecipeRoutes = async (
       cursor: body.cursor ?? null,
       limit: typeof body.limit === "number" ? body.limit : null,
       safetyExclusions,
+      sortBy,
     });
 
     return respond(200, response);
@@ -326,6 +336,18 @@ export const handleRecipeRoutes = async (
         preferences.presentation_preferences as Record<string, unknown>,
     });
     const recipe = await fetchRecipeView(client, recipeId, true, viewOptions);
+
+    // Fire-and-forget: log view event for popularity tracking.
+    // Uses service client because recipe_view_events has service_role-only RLS.
+    serviceClient
+      .from("recipe_view_events")
+      .insert({ recipe_id: recipeId, user_id: auth.userId })
+      .then(({ error: viewErr }) => {
+        if (viewErr) {
+          console.warn(`[view-track] failed to log view: ${viewErr.message}`);
+        }
+      });
+
     return respond(200, recipe);
   }
 

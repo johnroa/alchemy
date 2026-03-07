@@ -88,6 +88,7 @@ import { handleGraphRoutes } from "./routes/graph.ts";
 import { handleMemoryRoutes } from "./routes/memory.ts";
 import { handleMetadataRoutes } from "./routes/metadata.ts";
 import { handleOnboardingRoutes } from "./routes/onboarding.ts";
+import { handleImportRoutes } from "./routes/import.ts";
 import { handleRecipeRoutes } from "./routes/recipes.ts";
 import type { CookbookEntry, VariantStatus, VariantTagSet } from "./routes/shared.ts";
 
@@ -7786,6 +7787,93 @@ Deno.serve(async (request) => {
       return metadataResponse;
     }
 
+    // ── POST /popularity/refresh ──
+    // Admin-only batch job: recomputes recipe popularity scores and
+    // ingredient trending stats. Called periodically or on-demand.
+    if (
+      segments.length === 2 &&
+      segments[0] === "popularity" &&
+      segments[1] === "refresh" &&
+      method === "POST"
+    ) {
+      const { data, error } = await serviceClient.rpc(
+        "refresh_recipe_popularity_stats",
+      );
+      if (error) {
+        throw new ApiError(
+          500,
+          "popularity_refresh_failed",
+          "Could not refresh popularity stats",
+          error.message,
+        );
+      }
+      return respond(200, data);
+    }
+
+    // ── GET /ingredients/trending ──
+    // Returns trending ingredients ordered by trending_score or
+    // momentum_score. Supports ?sort=trending|momentum and ?limit=N.
+    if (
+      segments.length === 2 &&
+      segments[0] === "ingredients" &&
+      segments[1] === "trending" &&
+      method === "GET"
+    ) {
+      const sortParam = url.searchParams.get("sort") ?? "trending";
+      const orderColumn = sortParam === "momentum"
+        ? "momentum_score"
+        : "trending_score";
+      const limitParam = Math.max(
+        1,
+        Math.min(Number(url.searchParams.get("limit")) || 20, 100),
+      );
+
+      const { data, error } = await serviceClient
+        .from("ingredient_trending_stats")
+        .select("*")
+        .order(orderColumn, { ascending: false })
+        .limit(limitParam);
+
+      if (error) {
+        throw new ApiError(
+          500,
+          "ingredient_trending_failed",
+          "Could not fetch trending ingredients",
+          error.message,
+        );
+      }
+
+      return respond(200, { items: data ?? [] });
+    }
+
+    // ── GET /observability/pipeline ──
+    // Aggregated LLM pipeline stats for the admin dashboard.
+    // Supports ?hours=N query param (default 24).
+    if (
+      segments.length === 2 &&
+      segments[0] === "observability" &&
+      segments[1] === "pipeline" &&
+      method === "GET"
+    ) {
+      const hours = Math.max(
+        1,
+        Math.min(Number(url.searchParams.get("hours")) || 24, 720),
+      );
+      const { data, error } = await serviceClient.rpc(
+        "get_pipeline_observability_stats",
+        { p_hours: hours },
+      );
+      if (error) {
+        throw new ApiError(
+          500,
+          "observability_fetch_failed",
+          "Could not fetch pipeline observability stats",
+          error.message,
+        );
+      }
+      return respond(200, data);
+    }
+
     const recipeResponse = await handleRecipeRoutes(routeContext, {
       parseUuid,
       getPreferences,
@@ -7811,6 +7899,7 @@ Deno.serve(async (request) => {
           presetId: input.presetId,
           cursor: input.cursor,
           limit: input.limit,
+          sortBy: input.sortBy,
         });
       },
       toJsonValue,
@@ -7832,6 +7921,28 @@ Deno.serve(async (request) => {
     });
     if (graphResponse) {
       return graphResponse;
+    }
+
+    // Import routes handle POST /chat/import. Must be checked before the
+    // general chat handler because both match on segments[0] === "chat".
+    const importResponse = await handleImportRoutes(routeContext, {
+      updateChatSessionLoopContext,
+      resolveAssistantMessageContent,
+      logChangelog,
+      buildChatLoopResponse,
+      enrollCandidateImageRequests: async (input) => {
+        return await enrollCandidateImageRequests({
+          serviceClient: input.serviceClient,
+          userId: input.userId,
+          requestId: input.requestId,
+          chatId: input.chatId,
+          candidateSet: input.candidateSet,
+        });
+      },
+      scheduleImageQueueDrain,
+    });
+    if (importResponse) {
+      return importResponse;
     }
 
     const chatResponse = await handleChatRoutes(routeContext, {

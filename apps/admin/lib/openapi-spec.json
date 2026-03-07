@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Alchemy API",
-    "version": "3.1.0",
+    "version": "3.3.0",
     "description": "API contract for Alchemy — an AI-driven recipe creation and management platform.\nCovers the user-facing v1 API at api.cookwithalchemy.com and the admin API at admin.cookwithalchemy.com.\n"
   },
   "servers": [
@@ -1538,6 +1538,66 @@
         }
       }
     },
+    "/chat/import": {
+      "post": {
+        "summary": "Import a recipe from a URL, pasted text, or cookbook photo",
+        "description": "Accepts a recipe source and returns a seeded ChatSession with a\nCandidateRecipeSet, ready for the standard Generate flow (iterate\nvia POST /chat/{id}/messages, commit via POST /chat/{id}/commit).\n\nImages are always re-generated — source images are never stored.\nThe first draft is a source-faithful rewrite in Alchemy wording.\n\nSupports fingerprint-based dedup: re-importing the same URL or\ntext returns the existing chat session if one was already created.\n",
+        "tags": [
+          "Chat"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportRequest"
+              },
+              "examples": {
+                "url": {
+                  "summary": "Import from a recipe URL",
+                  "value": {
+                    "kind": "url",
+                    "url": "https://www.allrecipes.com/recipe/158968/spinach-and-feta-turkey-burgers/",
+                    "origin": "in_app_paste"
+                  }
+                },
+                "text": {
+                  "summary": "Import from pasted text",
+                  "value": {
+                    "kind": "text",
+                    "text": "Classic Margherita Pizza\n\nIngredients:\n- 1 pizza dough\n- 1/2 cup tomato sauce\n- 8 oz fresh mozzarella\n- Fresh basil leaves\n- 2 tbsp olive oil\n\nInstructions:\n1. Preheat oven to 500°F\n2. Stretch dough on floured surface\n3. Spread sauce, add torn mozzarella\n4. Bake 10-12 minutes until crust is golden\n5. Top with fresh basil and drizzle olive oil",
+                    "origin": "in_app_paste"
+                  }
+                },
+                "photo": {
+                  "summary": "Import from a cookbook page photo",
+                  "value": {
+                    "kind": "photo",
+                    "photo_asset_ref": "imports/abc123/cookbook-page.jpg",
+                    "origin": "share_extension"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Import successful — chat session seeded with recipe candidate",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatSession"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
     "/chat": {
       "post": {
         "summary": "Start a new chat session",
@@ -2306,6 +2366,102 @@
           }
         }
       }
+    },
+    "/ingredients/trending": {
+      "get": {
+        "summary": "Get trending ingredients by popularity or substitution momentum",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "trending",
+                "momentum"
+              ],
+              "default": "trending"
+            },
+            "description": "Sort mode. \"trending\" ranks by recipe-derived popularity,\n\"momentum\" ranks by substitution velocity (ingredients being swapped in/out).\n"
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Trending ingredients",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "items"
+                  ],
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/IngredientTrendingStat"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/popularity/refresh": {
+      "post": {
+        "summary": "Refresh recipe popularity scores and ingredient trending stats",
+        "description": "Admin batch job that recomputes all recipe popularity scores\n(save_count, variant_count, view_count, popularity_score, trending_score)\nand ingredient trending stats (recipe-derived popularity + substitution momentum).\n",
+        "responses": {
+          "200": {
+            "description": "Refresh result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "recipes_updated",
+                    "ingredients_updated",
+                    "computed_at"
+                  ],
+                  "properties": {
+                    "recipes_updated": {
+                      "type": "integer"
+                    },
+                    "ingredients_updated": {
+                      "type": "integer"
+                    },
+                    "computed_at": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2358,6 +2514,99 @@
       }
     },
     "schemas": {
+      "ImportRequest": {
+        "description": "Discriminated union for recipe import sources. Exactly one of\nurl/text/photo_asset_ref must be provided, matching the kind field.\n",
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/ImportUrlRequest"
+          },
+          {
+            "$ref": "#/components/schemas/ImportTextRequest"
+          },
+          {
+            "$ref": "#/components/schemas/ImportPhotoRequest"
+          }
+        ],
+        "discriminator": {
+          "propertyName": "kind",
+          "mapping": {
+            "url": "#/components/schemas/ImportUrlRequest",
+            "text": "#/components/schemas/ImportTextRequest",
+            "photo": "#/components/schemas/ImportPhotoRequest"
+          }
+        }
+      },
+      "ImportUrlRequest": {
+        "type": "object",
+        "required": [
+          "kind",
+          "url"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "url"
+            ]
+          },
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "description": "Recipe page URL to scrape"
+          },
+          "origin": {
+            "type": "string",
+            "description": "Provenance label (e.g. \"in_app_paste\", \"safari_share\", \"share_extension\")"
+          }
+        }
+      },
+      "ImportTextRequest": {
+        "type": "object",
+        "required": [
+          "kind",
+          "text"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "text"
+            ]
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 50000,
+            "description": "Pasted recipe text"
+          },
+          "origin": {
+            "type": "string",
+            "description": "Provenance label"
+          }
+        }
+      },
+      "ImportPhotoRequest": {
+        "type": "object",
+        "required": [
+          "kind",
+          "photo_asset_ref"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "photo"
+            ]
+          },
+          "photo_asset_ref": {
+            "type": "string",
+            "description": "Storage reference for the uploaded cookbook page photo"
+          },
+          "origin": {
+            "type": "string",
+            "description": "Provenance label"
+          }
+        }
+      },
       "LlmScope": {
         "type": "string",
         "description": "Internal LLM pipeline scope key used for prompt/rule/model routing.",
@@ -3053,6 +3302,16 @@
                 "type": "null"
               }
             ]
+          },
+          "save_count": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Number of users who saved this recipe. Only present in search/explore responses when > 0."
+          },
+          "variant_count": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Number of personalized variants created. Only present in search/explore responses when > 0."
           }
         }
       },
@@ -3072,6 +3331,16 @@
             "type": "integer",
             "minimum": 1,
             "maximum": 20
+          },
+          "sort_by": {
+            "type": "string",
+            "enum": [
+              "recent",
+              "popular",
+              "trending"
+            ],
+            "default": "recent",
+            "description": "Sort order for the Explore feed. Only applies when query and preset_id are empty."
           }
         }
       },
@@ -4717,6 +4986,62 @@
             "type": "object",
             "additionalProperties": true,
             "description": "Structured record of applied constraints, preferences, and manual edits."
+          }
+        }
+      },
+      "IngredientTrendingStat": {
+        "type": "object",
+        "required": [
+          "ingredient_id",
+          "canonical_name",
+          "recipe_count",
+          "trending_recipe_count",
+          "popularity_score",
+          "trending_score",
+          "sub_in_count",
+          "sub_out_count",
+          "momentum_score",
+          "updated_at"
+        ],
+        "properties": {
+          "ingredient_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "canonical_name": {
+            "type": "string"
+          },
+          "recipe_count": {
+            "type": "integer",
+            "description": "Total recipes containing this ingredient."
+          },
+          "trending_recipe_count": {
+            "type": "integer",
+            "description": "Recipes containing this ingredient with trending_score > 0."
+          },
+          "popularity_score": {
+            "type": "number",
+            "description": "Sum of popularity_score from recipes containing this ingredient."
+          },
+          "trending_score": {
+            "type": "number",
+            "description": "Sum of trending_score from recipes containing this ingredient."
+          },
+          "sub_in_count": {
+            "type": "integer",
+            "description": "All-time count of this ingredient being swapped IN as a replacement."
+          },
+          "sub_out_count": {
+            "type": "integer",
+            "description": "All-time count of this ingredient being swapped OUT (replaced by another)."
+          },
+          "momentum_score": {
+            "type": "number",
+            "description": "7-day substitution momentum. Scaled -100 to +100.\nPositive = rising ingredient (being used as replacement more often).\nNegative = declining ingredient (being replaced more often).\n"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       },

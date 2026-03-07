@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   Activity,
+  ArrowDownToLine,
   BarChart3,
   BookOpen,
   Bot,
@@ -31,6 +32,7 @@ const navGroups = [
       { href: "/users", label: "Users", icon: Users },
       { href: "/simulation-recipe", label: "Recipe Simulations", icon: Activity },
       { href: "/images", label: "Images", icon: Image },
+      { href: "/imports", label: "Imports", icon: ArrowDownToLine },
       { href: "/development", label: "Development", icon: Wrench }
     ]
   },
@@ -59,6 +61,7 @@ const navGroups = [
     items: [
       { href: "/changelog", label: "Changelog", icon: History },
       { href: "/request-trace", label: "Request Trace", icon: Radar },
+      { href: "/pipeline-health", label: "Pipeline Health", icon: Activity },
       { href: "/version-causality", label: "Version Causality", icon: FolderGit2 },
       { href: "/api-docs", label: "API Reference", icon: BookOpen }
     ]

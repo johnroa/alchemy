@@ -100,11 +100,27 @@ struct RecipePreview: Decodable, Identifiable, Hashable {
     let visibility: String
     let updatedAt: String
     let quickStats: RecipeQuickStats?
+    /// Number of users who saved this recipe. Only present in search/explore responses.
+    let saveCount: Int?
+    /// Number of personalized variants created across all users.
+    let variantCount: Int?
 
     /// Derives a URL from the image_url string, returns nil when pending/failed.
     var resolvedImageURL: URL? {
         guard let imageUrl, imageStatus == "ready" else { return nil }
         return URL(string: imageUrl)
+    }
+
+    /// Human-readable social proof text, e.g. "42 saves · 12 versions".
+    var socialProofText: String? {
+        var parts: [String] = []
+        if let saveCount, saveCount > 0 {
+            parts.append("\(saveCount) \(saveCount == 1 ? "save" : "saves")")
+        }
+        if let variantCount, variantCount > 0 {
+            parts.append("\(variantCount) \(variantCount == 1 ? "version" : "versions")")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 }
 
@@ -456,6 +472,29 @@ struct ChatMessageRequest: Encodable {
     let message: String
 }
 
+/// Request body for POST /chat/import.
+/// Discriminated by `kind`: exactly one of url/text/photoAssetRef must be set.
+/// Response is a ChatSessionResponse with a seeded CandidateRecipeSet.
+struct ImportRequest: Encodable {
+    let kind: String
+    let url: String?
+    let text: String?
+    let photoAssetRef: String?
+    let origin: String?
+
+    static func url(_ url: String, origin: String = "in_app_paste") -> ImportRequest {
+        ImportRequest(kind: "url", url: url, text: nil, photoAssetRef: nil, origin: origin)
+    }
+
+    static func text(_ text: String, origin: String = "in_app_paste") -> ImportRequest {
+        ImportRequest(kind: "text", url: nil, text: text, photoAssetRef: nil, origin: origin)
+    }
+
+    static func photo(ref: String, origin: String = "in_app_paste") -> ImportRequest {
+        ImportRequest(kind: "photo", url: nil, text: nil, photoAssetRef: ref, origin: origin)
+    }
+}
+
 /// Request body for PATCH /chat/{id}/candidate
 struct PatchCandidateRequest: Encodable {
     let action: String
@@ -558,6 +597,8 @@ struct RecipeSearchRequest: Encodable {
     let presetId: String?
     let cursor: String?
     let limit: Int?
+    /// Sort order for Explore feed: "recent" (default), "popular", "trending".
+    let sortBy: String?
 }
 
 /// Response from POST /recipes/search
@@ -573,6 +614,42 @@ struct RecipeSearchNoMatch: Decodable {
     let code: String
     let message: String
     let suggestedAction: String?
+}
+
+// MARK: - Ingredient Trending
+
+/// Response from GET /ingredients/trending
+struct IngredientTrendingResponse: Decodable {
+    let items: [IngredientTrendingStat]
+}
+
+/// A single ingredient's popularity and substitution momentum stats.
+struct IngredientTrendingStat: Decodable, Identifiable {
+    let ingredientId: String
+    let canonicalName: String
+    let recipeCount: Int
+    let trendingRecipeCount: Int
+    let popularityScore: Double
+    let trendingScore: Double
+    let subInCount: Int
+    let subOutCount: Int
+    /// Scaled -100 to +100. Positive = rising ingredient.
+    let momentumScore: Double
+    let updatedAt: String
+
+    var id: String { ingredientId }
+
+    /// True when this ingredient has meaningful substitution activity.
+    var hasSubstitutionActivity: Bool {
+        subInCount > 0 || subOutCount > 0
+    }
+
+    /// Direction indicator for the momentum badge.
+    var momentumDirection: String {
+        if momentumScore > 10 { return "rising" }
+        if momentumScore < -10 { return "declining" }
+        return "stable"
+    }
 }
 
 // MARK: - Changelog

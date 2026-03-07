@@ -1399,6 +1399,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/chat/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Import a recipe from a URL, pasted text, or cookbook photo
+         * @description Accepts a recipe source and returns a seeded ChatSession with a
+         *     CandidateRecipeSet, ready for the standard Generate flow (iterate
+         *     via POST /chat/{id}/messages, commit via POST /chat/{id}/commit).
+         *
+         *     Images are always re-generated — source images are never stored.
+         *     The first draft is a source-faithful rewrite in Alchemy wording.
+         *
+         *     Supports fingerprint-based dedup: re-importing the same URL or
+         *     text returns the existing chat session if one was already created.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["ImportRequest"];
+                };
+            };
+            responses: {
+                /** @description Import successful — chat session seeded with recipe candidate */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ChatSession"];
+                    };
+                };
+                default: components["responses"]["ErrorResponse"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/chat": {
         parameters: {
             query?: never;
@@ -1871,10 +1923,144 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/ingredients/trending": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get trending ingredients by popularity or substitution momentum */
+        get: {
+            parameters: {
+                query?: {
+                    /**
+                     * @description Sort mode. "trending" ranks by recipe-derived popularity,
+                     *     "momentum" ranks by substitution velocity (ingredients being swapped in/out).
+                     */
+                    sort?: "trending" | "momentum";
+                    limit?: number;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Trending ingredients */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: components["schemas"]["IngredientTrendingStat"][];
+                        };
+                    };
+                };
+                default: components["responses"]["ErrorResponse"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/popularity/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Refresh recipe popularity scores and ingredient trending stats
+         * @description Admin batch job that recomputes all recipe popularity scores
+         *     (save_count, variant_count, view_count, popularity_score, trending_score)
+         *     and ingredient trending stats (recipe-derived popularity + substitution momentum).
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Refresh result */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            recipes_updated: number;
+                            ingredients_updated: number;
+                            /** Format: date-time */
+                            computed_at: string;
+                        };
+                    };
+                };
+                default: components["responses"]["ErrorResponse"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * @description Discriminated union for recipe import sources. Exactly one of
+         *     url/text/photo_asset_ref must be provided, matching the kind field.
+         */
+        ImportRequest: components["schemas"]["ImportUrlRequest"] | components["schemas"]["ImportTextRequest"] | components["schemas"]["ImportPhotoRequest"];
+        ImportUrlRequest: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "url";
+            /**
+             * Format: uri
+             * @description Recipe page URL to scrape
+             */
+            url: string;
+            /** @description Provenance label (e.g. "in_app_paste", "safari_share", "share_extension") */
+            origin?: string;
+        };
+        ImportTextRequest: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "text";
+            /** @description Pasted recipe text */
+            text: string;
+            /** @description Provenance label */
+            origin?: string;
+        };
+        ImportPhotoRequest: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "photo";
+            /** @description Storage reference for the uploaded cookbook page photo */
+            photo_asset_ref: string;
+            /** @description Provenance label */
+            origin?: string;
+        };
         /**
          * @description Internal LLM pipeline scope key used for prompt/rule/model routing.
          * @enum {string}
@@ -2054,12 +2240,22 @@ export interface components {
             /** Format: date-time */
             updated_at: string;
             quick_stats: components["schemas"]["RecipeQuickStats"] | null;
+            /** @description Number of users who saved this recipe. Only present in search/explore responses when > 0. */
+            save_count?: number;
+            /** @description Number of personalized variants created. Only present in search/explore responses when > 0. */
+            variant_count?: number;
         };
         RecipeSearchRequest: {
             query?: string;
             preset_id?: string;
             cursor?: string;
             limit?: number;
+            /**
+             * @description Sort order for the Explore feed. Only applies when query and preset_id are empty.
+             * @default recent
+             * @enum {string}
+             */
+            sort_by: "recent" | "popular" | "trending";
         };
         RecipeSearchNoMatch: {
             code: string;
@@ -2528,6 +2724,31 @@ export interface components {
             provenance?: {
                 [key: string]: unknown;
             };
+        };
+        IngredientTrendingStat: {
+            /** Format: uuid */
+            ingredient_id: string;
+            canonical_name: string;
+            /** @description Total recipes containing this ingredient. */
+            recipe_count: number;
+            /** @description Recipes containing this ingredient with trending_score > 0. */
+            trending_recipe_count: number;
+            /** @description Sum of popularity_score from recipes containing this ingredient. */
+            popularity_score: number;
+            /** @description Sum of trending_score from recipes containing this ingredient. */
+            trending_score: number;
+            /** @description All-time count of this ingredient being swapped IN as a replacement. */
+            sub_in_count: number;
+            /** @description All-time count of this ingredient being swapped OUT (replaced by another). */
+            sub_out_count: number;
+            /**
+             * @description 7-day substitution momentum. Scaled -100 to +100.
+             *     Positive = rising ingredient (being used as replacement more often).
+             *     Negative = declining ingredient (being replaced more often).
+             */
+            momentum_score: number;
+            /** Format: date-time */
+            updated_at: string;
         };
         /**
          * @description A single ingredient substitution made during personalization.
