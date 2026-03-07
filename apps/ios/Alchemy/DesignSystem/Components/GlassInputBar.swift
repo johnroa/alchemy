@@ -2,7 +2,7 @@ import SwiftUI
 
 /// Floating Liquid Glass input bar used across multiple screens:
 /// - Cookbook/RecipeDetail: "Want to tweak this recipe?"
-/// - Generate: "Give me dinner ideas" / "Want to make any changes?"
+/// - Sous Chef: "Give me dinner ideas" / "Want to make any changes?"
 /// - Explore: single-line search input
 ///
 /// Uses iOS 26 `.glassEffect()` for the native frosted glass material.

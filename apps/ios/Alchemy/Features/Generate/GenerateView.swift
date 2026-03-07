@@ -1,7 +1,7 @@
 import SwiftUI
 import Lottie
 
-/// Generate screen — the core recipe creation experience.
+/// Sous Chef screen — the core recipe creation experience.
 ///
 /// State machine driven by the chat API's loop_state:
 /// 1. `.chatting` (ideation) — Skeleton in background, chat floating over bottom 75%
@@ -29,6 +29,9 @@ struct GenerateView: View {
     @State private var showSettings = false
     @State private var chatHasStarted = false
     @State private var isSending = false
+    /// Guards against double-tap on the Save button. Set true on first
+    /// commit attempt; never reset (we navigate away on success).
+    @State private var isCommitting = false
     /// Populated from AssistantReply.suggestedNextActions after each API
     /// response. The first item becomes the placeholder text in the input
     /// bar, giving contextual hints instead of a static default.
@@ -99,7 +102,7 @@ struct GenerateView: View {
                 .toolbar { toolbarContent }
                 .animation(.spring(duration: 0.5, bounce: 0.2), value: phase)
                 .toolbarVisibility(.hidden, for: .tabBar)
-                .sheet(isPresented: $showPreferences) { PreferencesView() }
+                .sheet(isPresented: $showPreferences) { PreferencesView(selectedTab: $selectedTab) }
                 .sheet(isPresented: $showSettings) { SettingsView() }
             }
         }
@@ -176,7 +179,8 @@ struct GenerateView: View {
                         imageStatus: component.imageStatus
                     ),
                     showShareButton: false,
-                    showTweakBar: false
+                    showTweakBar: false,
+                    isEmbedded: true
                 )
                 // Force view recreation when image status changes so the
                 // @State detail inside RecipeDetailView picks up the new
@@ -250,7 +254,7 @@ struct GenerateView: View {
                     }
                     .padding(.horizontal, AlchemySpacing.screenHorizontal)
                     .padding(.top, AlchemySpacing.sm)
-                    .padding(.bottom, AlchemySpacing.xl)
+                    .padding(.bottom, AlchemySpacing.xxl)
                 }
                 .scrollDismissesKeyboard(.interactively)
                 .onTapGesture { inputFocused = false }
@@ -259,7 +263,11 @@ struct GenerateView: View {
                 .onChange(of: keyboardHeight) { scrollToBottom(proxy: proxy) }
             }
 
+            suggestionChips
+                .padding(.top, AlchemySpacing.sm)
+
             chatInputBar
+                .padding(.top, AlchemySpacing.xs)
                 .padding(.bottom, keyboardHeight > 0 ? keyboardHeight - 16 : 40)
         }
         .frame(maxHeight: UIScreen.main.bounds.height * 0.75)
@@ -326,6 +334,50 @@ struct GenerateView: View {
         .opacity(0.95)
     }
 
+    /// Tappable suggestion chips shown above the input bar when the LLM
+    /// provides suggested next actions. Tapping a chip sends its text as
+    /// a message immediately, removing all chips. Uses the same layered
+    /// glass treatment as the chat input bar for visual consistency.
+    @ViewBuilder
+    private var suggestionChips: some View {
+        if !iterationSuggestions.isEmpty && !isSending {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: AlchemySpacing.sm) {
+                    ForEach(iterationSuggestions, id: \.self) { suggestion in
+                        Button {
+                            inputText = suggestion
+                            sendMessage()
+                        } label: {
+                            Text(suggestion)
+                                .font(AlchemyTypography.caption)
+                                .foregroundStyle(Color(red: 0.2, green: 0.2, blue: 0.25))
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 10)
+                                .background {
+                                    ZStack {
+                                        Capsule(style: .continuous)
+                                            .fill(.white.opacity(0.3))
+                                            .blur(radius: 8)
+                                        Capsule(style: .continuous)
+                                            .fill(.white.opacity(0.2))
+                                            .overlay(
+                                                Capsule(style: .continuous)
+                                                    .fill(.ultraThinMaterial.opacity(0.5))
+                                            )
+                                        Capsule(style: .continuous)
+                                            .strokeBorder(.white.opacity(0.45), lineWidth: 0.5)
+                                    }
+                                }
+                        }
+                    }
+                }
+                .padding(.horizontal, AlchemySpacing.screenHorizontal)
+            }
+            .padding(.bottom, AlchemySpacing.xs)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
+    }
+
     private var chatInputBar: some View {
         HStack(spacing: AlchemySpacing.sm) {
             TextField(
@@ -378,16 +430,14 @@ struct GenerateView: View {
         .animation(.easeInOut(duration: 0.2), value: inputText)
     }
 
-    /// Contextual placeholder for the chat input. Prefers the first
-    /// `suggestedNextActions` item from the latest assistant reply, with
-    /// phase-appropriate fallbacks.
+    /// Contextual placeholder for the chat input. Suggestions are now
+    /// shown as tappable chips above the bar, so the placeholder stays
+    /// generic and phase-appropriate.
     private var dynamicPlaceholder: String {
-        if let suggestion = suggestedPlaceholder {
-            return suggestion
+        if phase == .iterating {
+            return "Tell me what to change..."
         }
-        return phase == .iterating
-            ? "Want to make any changes?"
-            : "Give me dinner ideas"
+        return "Give me dinner ideas"
     }
 
     // MARK: - Generation Loader
@@ -424,12 +474,21 @@ struct GenerateView: View {
 
                 if showAddToCookbook {
                     Button {
+                        guard !isCommitting else { return }
+                        isCommitting = true
                         Task { await commitToCookbook() }
                     } label: {
-                        Text("Save")
-                            .font(AlchemyTypography.captionBold)
-                            .foregroundStyle(AlchemyColors.accent)
+                        if isCommitting {
+                            ProgressView()
+                                .tint(AlchemyColors.accent)
+                                .scaleEffect(0.7)
+                        } else {
+                            Text("Save")
+                                .font(AlchemyTypography.captionBold)
+                                .foregroundStyle(AlchemyColors.accent)
+                        }
                     }
+                    .disabled(isCommitting)
                     .transition(.scale.combined(with: .opacity))
                 }
 
@@ -527,6 +586,8 @@ struct GenerateView: View {
         )
         messages.append(userMsg)
         isSending = true
+        // Clear chips immediately so they disappear when the user sends
+        withAnimation { iterationSuggestions = [] }
 
         // Deferred clear: multi-line TextField (axis: .vertical) has a known
         // SwiftUI issue where setting the binding to "" while focused doesn't
@@ -612,6 +673,23 @@ struct GenerateView: View {
             withAnimation {
                 messages.removeAll { $0.id == loadingId }
             }
+        }
+
+        // Surface preference changes as inline system notifications.
+        // The API returns preference_updates in response_context when the
+        // Sous Chef saves user preferences during conversation.
+        if let updates = response.responseContext?.preferenceUpdates, !updates.isEmpty {
+            let fields = updates.map(\.field)
+            let summary = fields.count == 1
+                ? "Preference saved: \(fields[0].replacingOccurrences(of: "_", with: " "))"
+                : "\(fields.count) preferences saved"
+            let systemMsg = ChatMessage(
+                id: UUID().uuidString,
+                role: .system,
+                content: summary,
+                createdAt: .now
+            )
+            withAnimation { messages.append(systemMsg) }
         }
 
         // Update iteration suggestions and placeholder from the LLM response.
@@ -706,19 +784,24 @@ struct GenerateView: View {
     }
 
     /// Commits all candidate components to the cookbook.
+    /// Sets `isCommitting` guard before entry so the Save button is
+    /// disabled immediately. On success, switches to the Cookbook tab.
+    /// On failure, re-enables the button so the user can retry.
     private func commitToCookbook() async {
-        guard let sessionId = chatSessionId else { return }
+        guard let sessionId = chatSessionId else {
+            isCommitting = false
+            return
+        }
         do {
-            let response: ChatCommitResponse = try await APIClient.shared.request(
+            let _: ChatCommitResponse = try await APIClient.shared.request(
                 "/chat/\(sessionId)/commit",
                 method: .post
             )
 
-            // Navigate to the first committed recipe in the cookbook
-            if let firstRecipe = response.commit?.recipes.first {
-                selectedTab = .cookbook
-            }
+            // Navigate to the Cookbook tab — CookbookView reloads via .task
+            selectedTab = .cookbook
         } catch {
+            isCommitting = false
             print("[GenerateView] commit error: \(error)")
         }
     }
@@ -790,6 +873,7 @@ struct GenerateView: View {
             suggestedPlaceholder = nil
             iterationSuggestions = []
             showAddToCookbook = false
+            isCommitting = false
             chatHasStarted = false
             activeComponentIndex = 0
             chatSessionId = nil

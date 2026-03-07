@@ -19,7 +19,7 @@ struct TabShell: View {
                 CookbookView()
             }
 
-            Tab("Generate", systemImage: "wand.and.stars", value: .generate) {
+            Tab("Sous Chef", systemImage: "sparkles", value: .sousChef) {
                 GenerateView(selectedTab: $selectedTab)
             }
 
@@ -31,7 +31,7 @@ struct TabShell: View {
         .tabBarMinimizeBehavior(.onScrollDown)
         .tint(AlchemyColors.textPrimary)
         .sheet(isPresented: $showPreferences) {
-            PreferencesView()
+            PreferencesView(selectedTab: $selectedTab)
         }
         .sheet(isPresented: $showSettings) {
             SettingsView()
@@ -44,6 +44,6 @@ struct TabShell: View {
 /// programmatic tab switching (e.g., post-commit "go to cookbook" action).
 enum AppTab: String, Hashable {
     case cookbook
-    case generate
+    case sousChef
     case explore
 }

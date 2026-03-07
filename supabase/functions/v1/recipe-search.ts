@@ -155,6 +155,20 @@ const MAX_LIMIT = 20;
 const HYBRID_CANDIDATE_LIMIT = 200;
 const PAGE1_RERANK_LIMIT = 30;
 
+/** Deduplicated union of two string arrays (case-insensitive, trimmed). */
+const mergeUnique = (a: string[], b: string[]): string[] => {
+  const seen = new Set(a.map((s) => s.toLowerCase().trim()));
+  const result = [...a];
+  for (const s of b) {
+    const key = s.toLowerCase().trim();
+    if (key && !seen.has(key)) {
+      seen.add(key);
+      result.push(s);
+    }
+  }
+  return result;
+};
+
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
@@ -1079,6 +1093,7 @@ const fetchAllFeedPage = async (params: {
   snapshotCutoffIndexedAt: string;
   limit: number;
   cursor: AllFeedCursor | null;
+  safetyExclusions?: SearchSafetyExclusions;
 }): Promise<Pick<RecipeSearchResponse, "items" | "next_cursor" | "no_match">> => {
   const { data, error } = await params.serviceClient.rpc(
     "list_recipe_search_documents",
@@ -1088,6 +1103,9 @@ const fetchAllFeedPage = async (params: {
       p_limit: params.limit + 1,
       p_cursor_indexed_at: params.cursor?.last_indexed_at ?? null,
       p_cursor_recipe_id: params.cursor?.last_recipe_id ?? null,
+      p_exclude_ingredient_names:
+        params.safetyExclusions?.excludeIngredients ?? [],
+      p_require_diet_tags: params.safetyExclusions?.requireDietTags ?? [],
     },
   );
 
@@ -1127,7 +1145,17 @@ const fetchHybridCandidates = async (params: {
   snapshotCutoffIndexedAt: string;
   intent: RecipeSearchIntent;
   embeddingVector: number[];
+  safetyExclusions?: SearchSafetyExclusions;
 }): Promise<RecipeSearchCard[]> => {
+  // Merge user's safety exclusions with the query-derived hard filters.
+  // Safety exclusions come from stored user preferences (allergies,
+  // dietary restrictions) and must always apply regardless of what the
+  // user typed in the search query.
+  const mergedExcludeIngredients = mergeUnique(
+    params.intent.hard_filters.exclude_ingredients,
+    params.safetyExclusions?.excludeIngredients ?? [],
+  );
+
   const { data, error } = await params.serviceClient.rpc(
     "hybrid_search_recipe_documents",
     {
@@ -1139,7 +1167,7 @@ const fetchHybridCandidates = async (params: {
       p_cuisine_tags: params.intent.hard_filters.cuisines,
       p_diet_tags: params.intent.hard_filters.diet_tags,
       p_technique_tags: params.intent.hard_filters.techniques,
-      p_exclude_ingredient_names: params.intent.hard_filters.exclude_ingredients,
+      p_exclude_ingredient_names: mergedExcludeIngredients,
       p_max_time_minutes: params.intent.hard_filters.max_time_minutes,
       p_max_difficulty: params.intent.hard_filters.max_difficulty,
     },
@@ -1206,6 +1234,21 @@ const paginateSessionItems = (params: {
   };
 };
 
+/**
+ * Safety exclusions derived from user constraint preferences. Injected
+ * by the caller (which has access to the user's preference context)
+ * so search results never surface recipes containing the user's
+ * allergens or restricted ingredients.
+ */
+export type SearchSafetyExclusions = {
+  /** Ingredients the user is allergic to or wants to avoid. Matched
+   *  against canonical_ingredient_names via array overlap. */
+  excludeIngredients: string[];
+  /** Diet tags the recipe MUST have (e.g. "gluten-free", "nut-free").
+   *  Recipes missing any of these tags are excluded. */
+  requireDietTags: string[];
+};
+
 export const searchRecipes = async (params: {
   serviceClient: SupabaseClient;
   userId: string;
@@ -1217,6 +1260,7 @@ export const searchRecipes = async (params: {
   limit?: number | null;
   conversationContext?: RecipeSearchConversationContext;
   modelOverrides?: ModelOverrideMap;
+  safetyExclusions?: SearchSafetyExclusions;
 }): Promise<InternalRecipeSearchResponse> => {
   const startedAt = Date.now();
   const limit = clampLimit(params.limit);
@@ -1293,6 +1337,7 @@ export const searchRecipes = async (params: {
       snapshotCutoffIndexedAt: session.snapshot_cutoff_indexed_at,
       limit,
       cursor: decodedCursor,
+      safetyExclusions: params.safetyExclusions,
     });
 
     await logSearchEvent({
@@ -1357,6 +1402,7 @@ export const searchRecipes = async (params: {
       snapshotCutoffIndexedAt,
       limit,
       cursor: null,
+      safetyExclusions: params.safetyExclusions,
     });
 
     await logSearchEvent({
@@ -1420,6 +1466,7 @@ export const searchRecipes = async (params: {
     snapshotCutoffIndexedAt,
     intent: interpretedIntent,
     embeddingVector: embedding.vector,
+    safetyExclusions: params.safetyExclusions,
   });
 
   let page1Items = hybridItems.slice(0, limit);

@@ -96,6 +96,9 @@ struct ChatMessage: Identifiable, Hashable {
 enum MessageRole: String, Hashable {
     case user
     case assistant
+    /// Synthetic client-side role for inline system notifications
+    /// (e.g., "Preferences Saved!"). Not sent to the API.
+    case system
 }
 
 /// Represents a component in a candidate recipe set during generation.

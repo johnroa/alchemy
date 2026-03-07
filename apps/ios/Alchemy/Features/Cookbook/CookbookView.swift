@@ -7,10 +7,10 @@ import NukeUI
 /// recipes are saved. Supports pull-to-refresh and client-side filtering
 /// by category and search text.
 struct CookbookView: View {
-    @State private var previews: [RecipePreview] = []
+    @State private var previews: [CookbookEntryItem] = []
     @State private var isLoading = true
     @State private var errorMessage: String?
-    @State private var selectedPreview: RecipePreview?
+    @State private var selectedPreview: CookbookEntryItem?
     @State private var navigateToRecipeId: String?
     @State private var showPreferences = false
     @State private var showSettings = false
@@ -18,16 +18,32 @@ struct CookbookView: View {
     @State private var selectedFilter = "All"
     @State private var showFullScreenPreview = false
 
-    /// Unique categories derived from the loaded cookbook items.
+    /// System-generated placeholder categories that shouldn't surface as
+    /// user-facing filter chips. These appear when the auto-categorization
+    /// pipeline hasn't run yet or produced no real category.
+    private static let systemCategories: Set<String> = [
+        "auto organized", "uncategorized",
+    ]
+
+    /// Unique real categories derived from the loaded cookbook items,
+    /// excluding system fallback categories that carry no user meaning.
     private var categories: [String] {
-        let unique = Set(previews.map(\.category))
-        return ["All"] + unique.sorted()
+        let meaningful = Set(
+            previews.map(\.category)
+                .filter { !Self.systemCategories.contains($0.lowercased()) }
+        )
+        guard !meaningful.isEmpty else { return [] }
+        return ["All"] + meaningful.sorted()
     }
 
     /// Filtered previews based on selected category and search text.
-    private var filteredPreviews: [RecipePreview] {
+    /// When no meaningful categories exist (chips hidden), all recipes pass
+    /// the category filter.
+    private var filteredPreviews: [CookbookEntryItem] {
         previews.filter { preview in
-            let matchesFilter = selectedFilter == "All" || preview.category == selectedFilter
+            let matchesFilter = categories.isEmpty
+                || selectedFilter == "All"
+                || preview.category == selectedFilter
             let matchesSearch = searchText.isEmpty
                 || preview.title.localizedCaseInsensitiveContains(searchText)
                 || preview.summary.localizedCaseInsensitiveContains(searchText)
@@ -57,7 +73,9 @@ struct CookbookView: View {
                     ScrollView {
                         VStack(spacing: AlchemySpacing.md) {
                             searchBar
-                            filterChips
+                            if !categories.isEmpty {
+                                filterChips
+                            }
                             masonryGrid
                         }
                         .padding(.bottom, AlchemySpacing.xxxl)
@@ -95,6 +113,11 @@ struct CookbookView: View {
             }
             .toolbarVisibility(showFullScreenPreview ? .hidden : .automatic, for: .tabBar)
             .task { await loadCookbook() }
+            .onAppear {
+                // Refresh when returning from another tab (e.g. after
+                // saving from Sous Chef) so new recipes appear immediately.
+                Task { await loadCookbook() }
+            }
         }
     }
 
@@ -184,8 +207,11 @@ struct CookbookView: View {
         .padding(.horizontal, AlchemySpacing.screenHorizontal)
     }
 
-    private func cardCell(_ preview: RecipePreview) -> some View {
+    private func cardCell(_ preview: CookbookEntryItem) -> some View {
         RecipeCardView(card: preview.asRecipeCard)
+            .overlay(alignment: .topTrailing) {
+                variantBadge(for: preview)
+            }
             .onTapGesture {
                 selectedPreview = preview
                 withAnimation(.easeInOut(duration: 0.3)) {
@@ -201,7 +227,7 @@ struct CookbookView: View {
                 }
 
                 Button {
-                    // Edit — will navigate to generate with recipe loaded
+                    // Edit — will navigate to Sous Chef with recipe loaded
                 } label: {
                     Label("Edit", systemImage: "pencil")
                 }
@@ -224,6 +250,48 @@ struct CookbookView: View {
             }
     }
 
+    /// Small badge overlay indicating variant personalisation state.
+    /// Only shows when a variant is active. Uses sparkles for current,
+    /// exclamation for stale/needs_review, xmark for failed.
+    @ViewBuilder
+    private func variantBadge(for entry: CookbookEntryItem) -> some View {
+        switch entry.variantStatus {
+        case "current":
+            Image(systemName: "sparkles")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(.white)
+                .padding(5)
+                .background(AlchemyColors.accent)
+                .clipShape(Circle())
+                .padding(6)
+        case "processing":
+            ProgressView()
+                .controlSize(.mini)
+                .padding(5)
+                .background(.ultraThinMaterial)
+                .clipShape(Circle())
+                .padding(6)
+        case "stale", "needs_review":
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(.white)
+                .padding(5)
+                .background(.orange)
+                .clipShape(Circle())
+                .padding(6)
+        case "failed":
+            Image(systemName: "xmark.circle.fill")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(.white)
+                .padding(5)
+                .background(.red)
+                .clipShape(Circle())
+                .padding(6)
+        default:
+            EmptyView()
+        }
+    }
+
     // MARK: - Empty / Error States
 
     private var emptyView: some View {
@@ -234,7 +302,7 @@ struct CookbookView: View {
             Text("No recipes yet")
                 .font(AlchemyTypography.subheading)
                 .foregroundStyle(AlchemyColors.textSecondary)
-            Text("Generate your first recipe to get started.")
+            Text("Ask your Sous Chef to create your first recipe.")
                 .font(AlchemyTypography.body)
                 .foregroundStyle(AlchemyColors.textTertiary)
         }
@@ -290,7 +358,7 @@ struct CookbookView: View {
 
 /// Bottom-anchored recipe preview that slides up, covering 90% of the screen.
 struct CookbookFullScreenPreview: View {
-    let preview: RecipePreview
+    let preview: CookbookEntryItem
     var onOpenRecipe: () -> Void
     var onDismiss: () -> Void
 
@@ -410,11 +478,33 @@ struct CookbookFullScreenPreview: View {
     }
 }
 
-// MARK: - RecipePreview → RecipeCard Conversion
+// MARK: - CookbookEntryItem → RecipeCard Conversion
+
+extension CookbookEntryItem {
+    /// Converts a cookbook entry to the UI RecipeCard model for
+    /// compatibility with RecipeCardView and other existing components.
+    var asRecipeCard: RecipeCard {
+        RecipeCard(
+            id: canonicalRecipeId,
+            title: title,
+            summary: summary,
+            category: category,
+            imageURL: resolvedImageURL,
+            imageStatus: ImageStatus(rawValue: imageStatus) ?? .pending,
+            updatedAt: ISO8601DateFormatter().date(from: updatedAt) ?? .now,
+            cookTimeMinutes: quickStats?.timeMinutes ?? 30,
+            difficulty: quickStats?.difficultyNormalized ?? 0.5,
+            healthScore: quickStats?.healthNormalized ?? 0.5,
+            ingredientCount: quickStats?.items ?? 8
+        )
+    }
+}
+
+// MARK: - RecipePreview → RecipeCard Conversion (Explore/Search)
 
 extension RecipePreview {
     /// Converts an API RecipePreview to the UI RecipeCard model for
-    /// compatibility with RecipeCardView and other existing components.
+    /// compatibility with RecipeCardView in Explore/Search contexts.
     var asRecipeCard: RecipeCard {
         RecipeCard(
             id: id,

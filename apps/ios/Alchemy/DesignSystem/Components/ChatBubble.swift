@@ -1,12 +1,14 @@
 import SwiftUI
 
-/// Chat bubble used in Generate and Onboarding screens.
+/// Chat bubble used in Sous Chef and Onboarding screens.
 ///
 /// Designed to sit on the light holographic mesh gradient:
 /// - **Assistant messages**: no background — dark text floats directly on the
 ///   gradient with a subtle white drop shadow for readability. Left-aligned.
 /// - **User messages**: dark translucent background (black @ 70% opacity) with
 ///   white text. Right-aligned with iMessage-style asymmetric corners.
+/// - **System messages**: center-aligned notification cards with a subtle
+///   accent tint, used for inline "Preferences Saved!" feedback.
 /// - **Loading state**: animated chef phrase with shimmer + cycling periods.
 struct ChatBubble: View {
     let message: ChatMessage
@@ -15,8 +17,17 @@ struct ChatBubble: View {
     private let maxWidthFraction: CGFloat = 0.78
 
     private var isUser: Bool { message.role == .user }
+    private var isSystem: Bool { message.role == .system }
 
     var body: some View {
+        if isSystem {
+            systemBubble
+        } else {
+            standardBubble
+        }
+    }
+
+    private var standardBubble: some View {
         HStack {
             if isUser { Spacer(minLength: 40) }
 
@@ -44,6 +55,24 @@ struct ChatBubble: View {
             if !isUser { Spacer(minLength: 40) }
         }
         .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
+    }
+
+    /// Center-aligned notification card for system events like preference saves.
+    /// Uses a compact pill shape with a sparkles icon and subtle accent background.
+    private var systemBubble: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(AlchemyColors.accent)
+            Text(message.content)
+                .font(AlchemyTypography.caption.weight(.medium))
+                .foregroundStyle(Color(red: 0.2, green: 0.2, blue: 0.25))
+        }
+        .padding(.horizontal, AlchemySpacing.md)
+        .padding(.vertical, AlchemySpacing.xs + 2)
+        .background(AlchemyColors.accent.opacity(0.12))
+        .clipShape(Capsule())
+        .frame(maxWidth: .infinity, alignment: .center)
     }
 
     /// Asymmetric rounded corners for the user bubble tail effect.

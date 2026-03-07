@@ -25,6 +25,10 @@ struct RecipeDetailView: View {
     var showShareButton: Bool = true
     /// Whether to show the built-in tweak bar at the bottom
     var showTweakBar: Bool = true
+    /// When embedded inside another NavigationStack (e.g. GenerateView),
+    /// the parent owns the toolbar. Setting this false prevents duplicate
+    /// nav bar items that cause the toolbar to render double-wide.
+    var isEmbedded: Bool = false
 
     @State private var detail: RecipeDetail?
     @State private var isLoading = true
@@ -46,21 +50,23 @@ struct RecipeDetailView: View {
     // MARK: - Initializers
 
     /// Fetch-by-ID initializer (most common path)
-    init(recipeId: String, showAddToCookbook: Bool = false, showShareButton: Bool = true, showTweakBar: Bool = true) {
+    init(recipeId: String, showAddToCookbook: Bool = false, showShareButton: Bool = true, showTweakBar: Bool = true, isEmbedded: Bool = false) {
         self.recipeId = recipeId
         self.preloadedDetail = nil
         self.showAddToCookbook = showAddToCookbook
         self.showShareButton = showShareButton
         self.showTweakBar = showTweakBar
+        self.isEmbedded = isEmbedded
     }
 
     /// Pre-loaded detail initializer (used after commit or from candidate)
-    init(detail: RecipeDetail, showAddToCookbook: Bool = false, showShareButton: Bool = true, showTweakBar: Bool = true) {
+    init(detail: RecipeDetail, showAddToCookbook: Bool = false, showShareButton: Bool = true, showTweakBar: Bool = true, isEmbedded: Bool = false) {
         self.recipeId = nil
         self.preloadedDetail = detail
         self.showAddToCookbook = showAddToCookbook
         self.showShareButton = showShareButton
         self.showTweakBar = showTweakBar
+        self.isEmbedded = isEmbedded
     }
 
     var body: some View {
@@ -78,10 +84,12 @@ struct RecipeDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(.hidden, for: .navigationBar)
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Group {
-                    if let recipe = detail {
-                        toolbarActions(recipe)
+            if !isEmbedded {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Group {
+                        if let recipe = detail {
+                            toolbarActions(recipe)
+                        }
                     }
                 }
             }
@@ -450,37 +458,45 @@ private struct ScrollOffsetKey: PreferenceKey {
 // MARK: - Image Shimmer Placeholder
 
 /// Skeleton shimmer placeholder for the hero image area while the
-/// image is being generated. Just a subtle sweep — no icon, no text.
+/// recipe image is being generated. Uses a wide, soft gradient pulse
+/// that fades in and out rather than sliding, avoiding the pixelated
+/// edge artifacts of a translating narrow band.
 struct ImageShimmerPlaceholder: View {
-    @State private var phase: CGFloat = -1.0
+    @State private var shimmerActive = false
 
     var body: some View {
         Rectangle()
-            .fill(AlchemyColors.surfaceSecondary)
+            .fill(
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.12, green: 0.12, blue: 0.14),
+                        Color(red: 0.14, green: 0.14, blue: 0.17),
+                        Color(red: 0.12, green: 0.12, blue: 0.14),
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
             .overlay {
-                Rectangle()
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                .clear,
-                                .white.opacity(0.04),
-                                .white.opacity(0.07),
-                                .white.opacity(0.04),
-                                .clear,
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                    .offset(x: phase * UIScreen.main.bounds.width)
+                LinearGradient(
+                    stops: [
+                        .init(color: .clear, location: 0.0),
+                        .init(color: .white.opacity(0.03), location: 0.3),
+                        .init(color: .white.opacity(0.06), location: 0.5),
+                        .init(color: .white.opacity(0.03), location: 0.7),
+                        .init(color: .clear, location: 1.0),
+                    ],
+                    startPoint: shimmerActive ? .trailing : .leading,
+                    endPoint: shimmerActive ? .init(x: 2.0, y: 1.0) : .trailing
+                )
+                .blendMode(.screen)
             }
-            .clipped()
             .onAppear {
                 withAnimation(
-                    .linear(duration: 2.0)
-                    .repeatForever(autoreverses: false)
+                    .easeInOut(duration: 2.2)
+                    .repeatForever(autoreverses: true)
                 ) {
-                    phase = 1.5
+                    shimmerActive = true
                 }
             }
     }

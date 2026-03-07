@@ -192,6 +192,12 @@ export const handleOnboardingRoutes = async (
       /\b(skip|later|not now|start using|use the app|done for now|skip onboarding)\b/i
         .test(normalizedMessage);
 
+    // Completion authority: only the LLM or an explicit user skip can end
+    // the conversation. The inferred state (derived from stored preferences)
+    // feeds progress tracking but must NOT force completion — doing so causes
+    // the "Let's Cook" button to appear while the assistant is still asking
+    // a follow-up question, since the reply was generated before the
+    // override and doesn't know the conversation is being cut short.
     const onboardingState: OnboardingState = userSkipRequested
       ? {
         completed: true,
@@ -202,7 +208,7 @@ export const handleOnboardingRoutes = async (
           skip_requested: true,
         },
       }
-      : interview.onboarding_state.completed || inferredState.completed
+      : interview.onboarding_state.completed
       ? {
         completed: true,
         progress: 1,

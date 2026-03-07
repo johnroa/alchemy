@@ -53,6 +53,7 @@ import {
   searchRecipes,
   upsertRecipeSearchDocument,
   backfillRecipeSearchDocuments,
+  type SearchSafetyExclusions,
 } from "./recipe-search.ts";
 import {
   attachCommittedCandidateImages,
@@ -88,6 +89,7 @@ import { handleMemoryRoutes } from "./routes/memory.ts";
 import { handleMetadataRoutes } from "./routes/metadata.ts";
 import { handleOnboardingRoutes } from "./routes/onboarding.ts";
 import { handleRecipeRoutes } from "./routes/recipes.ts";
+import type { CookbookEntry, VariantStatus } from "./routes/shared.ts";
 
 type PreferenceContext = {
   free_form: string | null;
@@ -100,6 +102,220 @@ type PreferenceContext = {
   cooking_for: string | null;
   max_difficulty: number;
   presentation_preferences: Record<string, JsonValue>;
+};
+
+/**
+ * Constraint-category preference fields that are fingerprinted for stale
+ * variant detection. Only changes to these fields invalidate existing
+ * variants. Non-constraint fields (dietary_preferences, cuisines,
+ * skill_level, etc.) are forward-only — they influence future generation
+ * but don't trigger variant re-materialization.
+ */
+const CONSTRAINT_FIELDS = [
+  "dietary_restrictions",
+  "aversions",
+  "equipment",
+] as const;
+
+/**
+ * Computes a deterministic hash (SHA-256 hex) of the constraint-category
+ * preference values. Used as the `preference_fingerprint` on variants.
+ *
+ * The hash is order-independent within each field (arrays are sorted)
+ * but field order is fixed. Empty arrays produce the same fingerprint
+ * as missing fields — both mean "no constraints in this category."
+ *
+ * Returns null when all constraint fields are empty (no constraints at all,
+ * so no fingerprint needed).
+ */
+const computePreferenceFingerprint = async (
+  preferences: PreferenceContext,
+): Promise<string | null> => {
+  const constraintData: Record<string, string[]> = {};
+  let hasAnyConstraint = false;
+
+  for (const field of CONSTRAINT_FIELDS) {
+    const value = preferences[field];
+    const sorted = Array.isArray(value)
+      ? [...value].map((v) => String(v).toLowerCase().trim()).filter(Boolean).sort()
+      : [];
+    constraintData[field] = sorted;
+    if (sorted.length > 0) hasAnyConstraint = true;
+  }
+
+  if (!hasAnyConstraint) return null;
+
+  const canonical = JSON.stringify(constraintData);
+  const encoded = new TextEncoder().encode(canonical);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", encoded);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+};
+
+/**
+ * Classifies a preference field as constraint or preference for the
+ * propagation logic. Constraint changes trigger retroactive variant
+ * refresh; preference changes are forward-only.
+ */
+const classifyPreferenceField = (
+  field: string,
+): "constraint" | "preference" => {
+  return (CONSTRAINT_FIELDS as readonly string[]).includes(field)
+    ? "constraint"
+    : "preference";
+};
+
+/**
+ * Builds safety exclusions for recipe search from user preferences.
+ * Aversions map to excluded ingredient names; dietary_restrictions
+ * map to required diet tags (the recipe must satisfy all restrictions).
+ *
+ * Returns undefined if no constraints are active (no filtering needed).
+ */
+const buildSafetyExclusions = (
+  preferences: PreferenceContext,
+): SearchSafetyExclusions | undefined => {
+  const excludeIngredients = (preferences.aversions ?? [])
+    .map((s) => s.toLowerCase().trim())
+    .filter(Boolean);
+
+  const requireDietTags = (preferences.dietary_restrictions ?? [])
+    .map((s) => s.toLowerCase().trim())
+    .filter(Boolean);
+
+  if (excludeIngredients.length === 0 && requireDietTags.length === 0) {
+    return undefined;
+  }
+
+  return { excludeIngredients, requireDietTags };
+};
+
+/**
+ * Marks all of a user's variants with stale_status = 'current' as 'stale'.
+ * Called when a constraint-category preference changes so the user knows
+ * their variants need re-materialization. Variants already in 'processing',
+ * 'failed', or 'needs_review' states are left untouched — they have their
+ * own lifecycle.
+ */
+const markUserVariantsStale = async (
+  serviceClient: SupabaseClient,
+  userId: string,
+): Promise<number> => {
+  const { data, error } = await serviceClient
+    .from("user_recipe_variants")
+    .update({ stale_status: "stale" })
+    .eq("user_id", userId)
+    .eq("stale_status", "current")
+    .select("id");
+
+  if (error) {
+    console.error("mark_variants_stale_failed", {
+      user_id: userId,
+      error: error.message,
+    });
+    return 0;
+  }
+
+  const count = data?.length ?? 0;
+  if (count > 0) {
+    console.log("variants_marked_stale", {
+      user_id: userId,
+      count,
+    });
+  }
+  return count;
+};
+
+/**
+ * All preference fields that can be tracked in the change log.
+ * Maps field name → { category, propagation } for the change log insert.
+ *
+ * Constraint fields trigger retroactive variant refresh; preference fields
+ * are forward-only (influence future generation). Rendering fields (like
+ * presentation_preferences) never enter the variant pipeline.
+ */
+const PREFERENCE_FIELD_CONFIG: Record<
+  string,
+  { category: "constraint" | "preference" | "rendering"; propagation: "retroactive" | "forward_only" | "none" }
+> = {
+  dietary_restrictions: { category: "constraint", propagation: "retroactive" },
+  aversions: { category: "constraint", propagation: "retroactive" },
+  equipment: { category: "constraint", propagation: "retroactive" },
+  dietary_preferences: { category: "preference", propagation: "forward_only" },
+  cuisines: { category: "preference", propagation: "forward_only" },
+  skill_level: { category: "preference", propagation: "forward_only" },
+  cooking_for: { category: "preference", propagation: "forward_only" },
+  max_difficulty: { category: "preference", propagation: "forward_only" },
+  free_form: { category: "preference", propagation: "forward_only" },
+  presentation_preferences: { category: "rendering", propagation: "none" },
+};
+
+/**
+ * Diffs two PreferenceContext snapshots and inserts rows into
+ * preference_change_log for every field that changed. Uses service-role
+ * client because the table is write-restricted to service role for users.
+ *
+ * Returns true if any constraint-category field changed (caller can use
+ * this to trigger stale variant detection).
+ */
+const logPreferenceChanges = async (params: {
+  serviceClient: SupabaseClient;
+  userId: string;
+  before: PreferenceContext;
+  after: PreferenceContext;
+  source: "chat" | "settings" | "onboarding";
+}): Promise<{ hasConstraintChange: boolean }> => {
+  const rows: Array<{
+    user_id: string;
+    field: string;
+    old_value: JsonValue;
+    new_value: JsonValue;
+    category: string;
+    propagation: string;
+    source: string;
+  }> = [];
+
+  let hasConstraintChange = false;
+
+  for (const [field, config] of Object.entries(PREFERENCE_FIELD_CONFIG)) {
+    const oldVal = params.before[field as keyof PreferenceContext];
+    const newVal = params.after[field as keyof PreferenceContext];
+
+    const oldJson = JSON.stringify(oldVal ?? null);
+    const newJson = JSON.stringify(newVal ?? null);
+
+    if (oldJson === newJson) continue;
+
+    rows.push({
+      user_id: params.userId,
+      field,
+      old_value: (oldVal ?? null) as JsonValue,
+      new_value: (newVal ?? null) as JsonValue,
+      category: config.category,
+      propagation: config.propagation,
+      source: params.source,
+    });
+
+    if (config.propagation === "retroactive") {
+      hasConstraintChange = true;
+    }
+  }
+
+  if (rows.length > 0) {
+    const { error } = await params.serviceClient
+      .from("preference_change_log")
+      .insert(rows);
+
+    if (error) {
+      console.error("preference_change_log_insert_failed", {
+        user_id: params.userId,
+        error: error.message,
+        fields: rows.map((r) => r.field),
+      });
+    }
+  }
+
+  return { hasConstraintChange };
 };
 
 type ContextPack = {
@@ -902,6 +1118,22 @@ const applyModelPreferenceUpdates = async (params: {
     action: "assistant_updated",
     requestId: params.requestId,
     afterJson: persistedPreferences,
+  });
+
+  // Log field-level changes and mark variants stale if constraint fields
+  // changed. Fire-and-forget — don't block the chat response.
+  logPreferenceChanges({
+    serviceClient: params.serviceClient,
+    userId: params.userId,
+    before: params.currentPreferences,
+    after: persistedPreferences,
+    source: "chat",
+  }).then(({ hasConstraintChange }) => {
+    if (hasConstraintChange) {
+      return markUserVariantsStale(params.serviceClient, params.userId);
+    }
+  }).catch((err) => {
+    console.error("preference_change_log_failed", err);
   });
 
   return persistedPreferences;
@@ -6432,30 +6664,91 @@ const mergeRecipeIntoCandidate = (
   };
 };
 
+/**
+ * Builds cookbook entries by reading from cookbook_entries (preferred) with
+ * fallback to recipe_saves (legacy). Joins canonical recipe data with
+ * variant status to produce the CookbookEntry shape.
+ *
+ * Data flow:
+ *   cookbook_entries → recipe IDs → recipes + recipe_versions (canonical)
+ *   → user_recipe_variants (variant status) → merge into CookbookEntry[]
+ */
 const buildCookbookItems = async (
   client: SupabaseClient,
   userId: string,
-): Promise<RecipePreview[]> => {
-  const { data: saves, error: savesError } = await client
-    .from("recipe_saves")
-    .select("recipe_id")
+): Promise<CookbookEntry[]> => {
+  // Read from cookbook_entries (new table). Falls back to recipe_saves if
+  // no cookbook_entries exist yet (pre-migration users).
+  const { data: cookbookRows, error: cbError } = await client
+    .from("cookbook_entries")
+    .select(
+      "canonical_recipe_id, autopersonalize, active_variant_id, saved_at, updated_at",
+    )
     .eq("user_id", userId);
 
-  if (savesError) {
+  if (cbError) {
     throw new ApiError(
       500,
-      "cookbook_saves_fetch_failed",
-      "Could not fetch saved recipes",
-      savesError.message,
+      "cookbook_entries_fetch_failed",
+      "Could not fetch cookbook entries",
+      cbError.message,
     );
   }
 
-  const recipeIds = (saves ?? []).map((row) => row.recipe_id);
+  // Legacy fallback: if no cookbook_entries, read recipe_saves.
+  let recipeIds: string[];
+  let entryMap = new Map<
+    string,
+    {
+      autopersonalize: boolean;
+      active_variant_id: string | null;
+      saved_at: string;
+      updated_at: string;
+    }
+  >();
+
+  if (cookbookRows && cookbookRows.length > 0) {
+    recipeIds = cookbookRows.map((row) => row.canonical_recipe_id);
+    for (const row of cookbookRows) {
+      entryMap.set(row.canonical_recipe_id, {
+        autopersonalize: row.autopersonalize ?? true,
+        active_variant_id: row.active_variant_id,
+        saved_at: row.saved_at ?? row.updated_at,
+        updated_at: row.updated_at,
+      });
+    }
+  } else {
+    const { data: saves, error: savesError } = await client
+      .from("recipe_saves")
+      .select("recipe_id, created_at")
+      .eq("user_id", userId);
+
+    if (savesError) {
+      throw new ApiError(
+        500,
+        "cookbook_saves_fetch_failed",
+        "Could not fetch saved recipes",
+        savesError.message,
+      );
+    }
+
+    recipeIds = (saves ?? []).map((row) => row.recipe_id);
+    for (const row of saves ?? []) {
+      entryMap.set(row.recipe_id, {
+        autopersonalize: true,
+        active_variant_id: null,
+        saved_at: row.created_at,
+        updated_at: row.created_at,
+      });
+    }
+  }
+
   if (recipeIds.length === 0) {
     return [];
   }
 
-  const preferredRecipesQuery = await client
+  // Load canonical recipe data.
+  const { data: recipesData, error: recipesError } = await client
     .from("recipes")
     .select(
       "id,title,hero_image_url,image_status,visibility,updated_at,current_version_id",
@@ -6463,7 +6756,16 @@ const buildCookbookItems = async (
     .in("id", recipeIds)
     .order("updated_at", { ascending: false });
 
-  let recipes: Array<{
+  if (recipesError) {
+    throw new ApiError(
+      500,
+      "cookbook_fetch_failed",
+      "Could not load cookbook recipes",
+      recipesError.message,
+    );
+  }
+
+  const recipes = (recipesData ?? []) as Array<{
     id: string;
     title: string;
     hero_image_url: string | null;
@@ -6471,29 +6773,11 @@ const buildCookbookItems = async (
     visibility: string;
     updated_at: string;
     current_version_id: string | null;
-  }> = [];
+  }>;
 
-  if (preferredRecipesQuery.error) {
-    throw new ApiError(
-      500,
-      "cookbook_fetch_failed",
-      "Could not load cookbook recipes",
-      preferredRecipesQuery.error.message,
-    );
-  } else {
-    recipes = (preferredRecipesQuery.data ?? []) as Array<{
-      id: string;
-      title: string;
-      hero_image_url: string | null;
-      image_status: string;
-      visibility: string;
-      updated_at: string;
-      current_version_id: string | null;
-    }>;
-  }
-
+  // Load canonical version payloads for summaries and metadata.
   const versionIds = recipes
-    .map((recipe) => recipe.current_version_id)
+    .map((r) => r.current_version_id)
     .filter((id): id is string => Boolean(id));
 
   let versionById = new Map<string, RecipePayload>();
@@ -6513,12 +6797,37 @@ const buildCookbookItems = async (
     }
 
     versionById = new Map(
-      (versions ?? []).map((
-        version,
-      ) => [version.id, version.payload as RecipePayload]),
+      (versions ?? []).map((v) => [v.id, v.payload as RecipePayload]),
     );
   }
 
+  // Load variant statuses for recipes that have variants.
+  const variantRecipeIds = [...entryMap.entries()]
+    .filter(([, e]) => e.active_variant_id != null)
+    .map(([recipeId]) => recipeId);
+
+  const variantByRecipe = new Map<
+    string,
+    { stale_status: string; last_materialized_at: string | null; current_version_id: string | null }
+  >();
+
+  if (variantRecipeIds.length > 0) {
+    const { data: variants } = await client
+      .from("user_recipe_variants")
+      .select("canonical_recipe_id, stale_status, last_materialized_at, current_version_id")
+      .eq("user_id", userId)
+      .in("canonical_recipe_id", variantRecipeIds);
+
+    for (const v of variants ?? []) {
+      variantByRecipe.set(v.canonical_recipe_id, {
+        stale_status: v.stale_status,
+        last_materialized_at: v.last_materialized_at,
+        current_version_id: v.current_version_id,
+      });
+    }
+  }
+
+  // Load categories (same as before).
   const [{ data: userCategories }, { data: autoCategories }] = await Promise
     .all([
       client
@@ -6538,10 +6847,11 @@ const buildCookbookItems = async (
   for (const entry of userCategories ?? []) {
     userCategoryByRecipe.set(entry.recipe_id, entry.category);
   }
+  const autoCategoryByRecipe = buildHighestConfidenceCategoryMap(
+    autoCategories ?? [],
+  );
 
-  const autoCategoryByRecipe = buildHighestConfidenceCategoryMap(autoCategories ?? []);
-
-  return recipes.map((recipe) => {
+  return recipes.map((recipe): CookbookEntry => {
     const payload = recipe.current_version_id
       ? versionById.get(recipe.current_version_id)
       : undefined;
@@ -6550,9 +6860,15 @@ const buildCookbookItems = async (
     const canonicalMetadata = payload
       ? canonicalizeRecipePayloadMetadata(payload)
       : undefined;
+    const entry = entryMap.get(recipe.id);
+    const variant = variantByRecipe.get(recipe.id);
 
-    return buildRecipePreview({
-      id: recipe.id,
+    const variantStatus: VariantStatus = variant
+      ? (variant.stale_status as VariantStatus)
+      : "none";
+
+    return {
+      canonical_recipe_id: recipe.id,
       title: payload?.title ?? recipe.title,
       summary: payload?.description ?? payload?.notes ?? "",
       image_url: resolveRecipeImageUrl(recipe.hero_image_url),
@@ -6563,12 +6879,14 @@ const buildCookbookItems = async (
       category: resolveCookbookPreviewCategory(userCategory, autoCategory),
       visibility: recipe.visibility,
       updated_at: recipe.updated_at,
-      quick_stats: canonicalMetadata?.quick_stats,
-      time_minutes: canonicalMetadata?.time_minutes,
-      difficulty: canonicalMetadata?.difficulty,
-      health_score: canonicalMetadata?.health_score,
-      items: canonicalMetadata?.items,
-    });
+      quick_stats: canonicalMetadata?.quick_stats ?? null,
+      variant_status: variantStatus,
+      active_variant_version_id: variant?.current_version_id ?? null,
+      personalized_at: variant?.last_materialized_at ?? null,
+      autopersonalize: entry?.autopersonalize ?? true,
+      saved_at: entry?.saved_at ?? recipe.updated_at,
+      variant_tags: [],
+    };
   });
 };
 
@@ -6596,7 +6914,7 @@ const normalizeCookbookInsight = (
 };
 
 const buildCookbookInsightDeterministic = (
-  items: Array<Record<string, JsonValue>>,
+  items: CookbookEntry[],
 ): string | null => {
   if (items.length === 0) {
     return null;
@@ -7139,6 +7457,23 @@ Deno.serve(async (request) => {
           afterJson: data as unknown as JsonValue,
         });
 
+        // Log field-level changes for variant propagation. The result
+        // tells us whether any constraint-category fields changed,
+        // which triggers stale variant marking (Phase 4d).
+        const { hasConstraintChange } = await logPreferenceChanges({
+          serviceClient,
+          userId: auth.userId,
+          before: currentPreferences,
+          after: nextPreferences,
+          source: "settings",
+        });
+
+        // If constraint fields changed, mark all this user's variants
+        // as stale so they get re-materialized with the new constraints.
+        if (hasConstraintChange) {
+          await markUserVariantsStale(serviceClient, auth.userId);
+        }
+
         return respond(200, data);
       }
     }
@@ -7251,6 +7586,8 @@ Deno.serve(async (request) => {
         });
       },
       toJsonValue,
+      computePreferenceFingerprint,
+      computeSafetyExclusions: buildSafetyExclusions,
     });
     if (recipeResponse) {
       return recipeResponse;

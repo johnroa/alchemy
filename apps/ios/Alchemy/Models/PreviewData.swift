@@ -99,7 +99,7 @@ enum PreviewData {
         quickStats: QuickStats(timeMinutes: 75, difficulty: 0.5, healthScore: 0.65, ingredientCount: 10)
     )
 
-    // MARK: - Chat Messages (Generate / Onboarding)
+    // MARK: - Chat Messages (Sous Chef / Onboarding)
 
     static let generateGreeting = ChatMessage(
         id: "msg-greeting",
@@ -116,7 +116,7 @@ enum PreviewData {
     ]
 
     static let onboardingMessages: [ChatMessage] = [
-        ChatMessage(id: "ob-1", role: .assistant, content: "Welcome to Alchemy! I'm your personal chef assistant. Tell me a little about yourself — who are you cooking for, and how comfortable are you in the kitchen?", createdAt: .now.addingTimeInterval(-300)),
+        ChatMessage(id: "ob-1", role: .assistant, content: "Welcome to Alchemy! I'm your Sous Chef. Tell me a little about yourself — who are you cooking for, and how comfortable are you in the kitchen?", createdAt: .now.addingTimeInterval(-300)),
     ]
 
     // MARK: - Explore Cards

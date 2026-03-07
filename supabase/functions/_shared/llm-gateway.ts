@@ -168,6 +168,14 @@ type MemorySummary = {
 
 export type ModelOverrideMap = ExecutorModelOverrideMap;
 
+/** Output from llmGateway.personalizeRecipe — the materialised variant. */
+export type PersonalizeRecipeResult = {
+  recipe: RecipePayload;
+  adaptationSummary: string;
+  appliedAdaptations: JsonValue[];
+  tagDiff: { added: string[]; removed: string[] };
+};
+
 type TokenAccum = { input: number; output: number; costUsd: number };
 
 type ImageQualityWinner = "A" | "B" | "tie";
@@ -4582,6 +4590,154 @@ export const llmGateway = {
         accum,
       );
       return { text: FALLBACK_TEXT };
+    }
+  },
+
+  /**
+   * Materialises a personalised recipe variant from a canonical recipe base.
+   *
+   * Uses the `recipe_personalize` LLM scope with prompt/rule/route loaded
+   * from the database via admin API pipeline.
+   *
+   * Input context must include:
+   *   - canonical_recipe: the canonical recipe payload (JSON)
+   *   - user_preferences: structured preference profile
+   *   - graph_substitutions (optional): known substitutions from knowledge graph
+   *   - manual_edit_instructions (optional): explicit user changes
+   *
+   * Returns: { recipe, adaptation_summary, applied_adaptations, tag_diff }
+   */
+  async personalizeRecipe(params: {
+    client: SupabaseClient;
+    userId: string;
+    requestId: string;
+    canonicalPayload: RecipePayload;
+    preferences: Record<string, JsonValue>;
+    graphSubstitutions?: Record<string, JsonValue>[];
+    manualEditInstructions?: string;
+    modelOverrides?: ModelOverrideMap;
+  }): Promise<PersonalizeRecipeResult> {
+    const startedAt = Date.now();
+    const accum: TokenAccum = { input: 0, output: 0, costUsd: 0 };
+    const scope: GatewayScope = "recipe_personalize";
+
+    try {
+      const config = await getActiveConfig(
+        params.client,
+        scope,
+        params.modelOverrides?.[scope],
+      );
+
+      const runtimeModelConfig = cleanLegacyModelConfig(config.modelConfig);
+      if (!Number.isFinite(Number(runtimeModelConfig.temperature))) {
+        runtimeModelConfig.temperature = 0.4;
+      }
+
+      const userInput: Record<string, JsonValue> = {
+        task: "personalize_recipe",
+        canonical_recipe: params.canonicalPayload as unknown as JsonValue,
+        user_preferences: params.preferences as unknown as JsonValue,
+        rule: config.rule,
+        contract: {
+          format: "json_object",
+          required_keys: [
+            "recipe",
+            "adaptation_summary",
+            "applied_adaptations",
+            "tag_diff",
+          ],
+        },
+      };
+
+      if (params.graphSubstitutions?.length) {
+        userInput.graph_substitutions =
+          params.graphSubstitutions as unknown as JsonValue;
+      }
+      if (params.manualEditInstructions?.trim()) {
+        userInput.manual_edit_instructions = params.manualEditInstructions;
+      }
+
+      const { result, inputTokens, outputTokens } = await callProvider<
+        Record<string, JsonValue>
+      >({
+        provider: config.provider,
+        model: config.model,
+        modelConfig: runtimeModelConfig,
+        systemPrompt: config.promptTemplate,
+        userInput,
+      });
+
+      if (accum) {
+        const inputCost =
+          (inputTokens / 1_000_000) * config.inputCostPer1m;
+        const outputCost =
+          (outputTokens / 1_000_000) * config.outputCostPer1m;
+        accum.input += inputTokens;
+        accum.output += outputTokens;
+        accum.costUsd += inputCost + outputCost;
+      }
+
+      const recipe = result.recipe as RecipePayload | undefined;
+      if (!recipe || typeof recipe !== "object") {
+        throw new ApiError(
+          500,
+          "personalize_invalid_output",
+          "LLM did not return a valid recipe payload",
+        );
+      }
+
+      const adaptationSummary =
+        typeof result.adaptation_summary === "string"
+          ? result.adaptation_summary
+          : "";
+
+      const appliedAdaptations = Array.isArray(result.applied_adaptations)
+        ? (result.applied_adaptations as JsonValue[])
+        : [];
+
+      const tagDiff =
+        result.tag_diff && typeof result.tag_diff === "object"
+          ? (result.tag_diff as { added?: string[]; removed?: string[] })
+          : { added: [], removed: [] };
+
+      await logLlmEvent(
+        params.client,
+        params.userId,
+        params.requestId,
+        scope,
+        Date.now() - startedAt,
+        "ok",
+        {
+          adaptations_count: appliedAdaptations.length,
+          tags_added: (tagDiff.added ?? []).length,
+          tags_removed: (tagDiff.removed ?? []).length,
+        },
+        accum,
+      );
+
+      return {
+        recipe,
+        adaptationSummary,
+        appliedAdaptations,
+        tagDiff: {
+          added: tagDiff.added ?? [],
+          removed: tagDiff.removed ?? [],
+        },
+      };
+    } catch (error) {
+      const errorCode =
+        error instanceof ApiError ? error.code : "unknown_error";
+      await logLlmEvent(
+        params.client,
+        params.userId,
+        params.requestId,
+        scope,
+        Date.now() - startedAt,
+        "error",
+        { error_code: errorCode },
+        accum,
+      );
+      throw error;
     }
   },
 };

@@ -1,4 +1,5 @@
 import SwiftUI
+import Lottie
 
 /// Full-screen chat-based onboarding where the assistant learns user preferences.
 ///
@@ -24,6 +25,9 @@ struct OnboardingView: View {
     @State private var isComplete = false
     /// Prevents double-sends while waiting for the API response.
     @State private var isSending = false
+    /// False until the initial greeting has loaded from the API.
+    /// While false, a full-screen Lottie loader is shown instead of the chat.
+    @State private var greetingLoaded = false
 
     @FocusState private var inputFocused: Bool
     /// Actual keyboard height in points, tracked via NotificationCenter.
@@ -41,52 +45,17 @@ struct OnboardingView: View {
             chatGradientBackground
                 .ignoresSafeArea()
 
-            VStack(spacing: 0) {
-                headerBar
-
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVStack(spacing: AlchemySpacing.sm) {
-                            ForEach(messages) { message in
-                                ChatBubble(message: message)
-                                    .id(message.id)
-                            }
-                        }
-                        .padding(.horizontal, AlchemySpacing.screenHorizontal)
-                        .padding(.top, AlchemySpacing.xxxl)
-                        .padding(.bottom, 80)
-                    }
-                    .scrollDismissesKeyboard(.interactively)
-                    .onTapGesture { inputFocused = false }
-                    .onChange(of: messages.count) {
-                        scrollToBottom(proxy: proxy)
-                    }
-                    .onChange(of: messages.last?.isLoading) {
-                        scrollToBottom(proxy: proxy)
-                    }
-                    .onChange(of: keyboardHeight) {
-                        scrollToBottom(proxy: proxy)
-                    }
-                }
-
-                if isComplete {
-                    completionButton
-                        .padding(.bottom, 40)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                } else {
-                    chatInputBar
-                        .padding(.top, AlchemySpacing.lg)
-                        .padding(.bottom, keyboardHeight > 0
-                            ? keyboardHeight - 16
-                            : 40)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                }
+            if greetingLoaded {
+                chatContent
+            } else {
+                initialLoader
             }
         }
         .background(AlchemyColors.background)
         .ignoresSafeArea(.keyboard)
         .animation(.spring(duration: 0.35), value: keyboardHeight)
         .animation(.spring(duration: 0.4), value: isComplete)
+        .animation(.easeInOut(duration: 0.4), value: greetingLoaded)
         .onReceive(
             NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)
         ) { notification in
@@ -102,6 +71,75 @@ struct OnboardingView: View {
         .task {
             await loadInitialGreeting()
         }
+    }
+
+    // MARK: - Initial Loader
+
+    /// Full-screen Lottie loader shown while the first greeting loads.
+    private var initialLoader: some View {
+        VStack(spacing: AlchemySpacing.lg) {
+            Spacer()
+
+            LottieView(animation: .named("alchemy-loading"))
+                .playing(loopMode: .loop)
+                .frame(width: 140, height: 140)
+
+            Text("Loading your Sous Chef...")
+                .font(AlchemyTypography.bodySecondary)
+                .foregroundStyle(Color(red: 0.3, green: 0.3, blue: 0.35))
+
+            Spacer()
+        }
+        .transition(.opacity)
+    }
+
+    // MARK: - Chat Content
+
+    /// The main chat UI — header, scrollable messages, and input bar.
+    /// Only shown after the initial greeting has loaded.
+    private var chatContent: some View {
+        VStack(spacing: 0) {
+            headerBar
+
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: AlchemySpacing.sm) {
+                        ForEach(messages) { message in
+                            ChatBubble(message: message)
+                                .id(message.id)
+                        }
+                    }
+                    .padding(.horizontal, AlchemySpacing.screenHorizontal)
+                    .padding(.top, AlchemySpacing.xxxl)
+                    .padding(.bottom, 80)
+                }
+                .scrollDismissesKeyboard(.interactively)
+                .onTapGesture { inputFocused = false }
+                .onChange(of: messages.count) {
+                    scrollToBottom(proxy: proxy)
+                }
+                .onChange(of: messages.last?.isLoading) {
+                    scrollToBottom(proxy: proxy)
+                }
+                .onChange(of: keyboardHeight) {
+                    scrollToBottom(proxy: proxy)
+                }
+            }
+
+            if isComplete {
+                completionButton
+                    .padding(.bottom, 40)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            } else {
+                chatInputBar
+                    .padding(.top, AlchemySpacing.lg)
+                    .padding(.bottom, keyboardHeight > 0
+                        ? keyboardHeight - 16
+                        : 40)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .transition(.opacity)
     }
 
     // MARK: - Header
@@ -123,7 +161,9 @@ struct OnboardingView: View {
             }
         }
         .padding(.horizontal, AlchemySpacing.screenHorizontal)
-        .padding(.vertical, AlchemySpacing.md)
+        .padding(.top, AlchemySpacing.xl)
+        .padding(.bottom, AlchemySpacing.md)
+        .safeAreaPadding(.top)
     }
 
     // MARK: - Gradient
@@ -247,22 +287,10 @@ struct OnboardingView: View {
 
     // MARK: - API Integration
 
-    /// Kicks off onboarding by sending an empty message to get the
-    /// assistant's opening question. Shows a loading bubble immediately
-    /// so the screen is never blank, then swaps in the real greeting.
+    /// Kicks off onboarding by fetching the assistant's opening question.
+    /// While loading, the full-screen Lottie loader is shown (greetingLoaded
+    /// is false). Once the greeting arrives, the chat UI crossfades in.
     private func loadInitialGreeting() async {
-        let loadingId = "onboarding-loading"
-
-        withAnimation {
-            messages = [ChatMessage(
-                id: loadingId,
-                role: .assistant,
-                content: "",
-                createdAt: .now,
-                isLoading: true
-            )]
-        }
-
         let greetingText: String
         do {
             let response: OnboardingChatResponse = try await APIClient.shared.request(
@@ -272,26 +300,26 @@ struct OnboardingView: View {
             )
             greetingText = response.assistantReply.text
         } catch {
-            greetingText = "Welcome to Alchemy! I'm your personal chef assistant. Tell me a little about yourself — who are you cooking for, and how comfortable are you in the kitchen?"
+            greetingText = "Welcome to Alchemy! I'm your Sous Chef. Tell me a little about yourself — who are you cooking for, and how comfortable are you in the kitchen?"
             print("[OnboardingView] initial greeting failed: \(error)")
         }
 
-        withAnimation {
-            if let idx = messages.firstIndex(where: { $0.id == loadingId }) {
-                messages[idx] = ChatMessage(
-                    id: UUID().uuidString,
-                    role: .assistant,
-                    content: greetingText,
-                    createdAt: .now
-                )
-            }
-        }
+        messages = [ChatMessage(
+            id: UUID().uuidString,
+            role: .assistant,
+            content: greetingText,
+            createdAt: .now
+        )]
 
         transcript.append(TranscriptEntry(
             role: "assistant",
             content: greetingText,
             createdAt: ISO8601DateFormatter().string(from: .now)
         ))
+
+        withAnimation {
+            greetingLoaded = true
+        }
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
             inputFocused = true
@@ -359,7 +387,14 @@ struct OnboardingView: View {
                     createdAt: ISO8601DateFormatter().string(from: .now)
                 ))
 
-                if response.onboardingState.completed {
+                // Only show "Let's Cook" when the API marks completed AND
+                // the assistant isn't asking a follow-up question. If the
+                // reply ends with a question mark the conversation isn't
+                // really done — let the user respond first.
+                let replyEndsWithQuestion = response.assistantReply.text
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .hasSuffix("?")
+                if response.onboardingState.completed && !replyEndsWithQuestion {
                     try? await Task.sleep(for: .seconds(0.5))
                     withAnimation {
                         isComplete = true

@@ -1,29 +1,32 @@
 import SwiftUI
 
-/// User preferences form backed by GET /preferences and PATCH /preferences.
+/// Two-tier preferences screen:
 ///
-/// Nine preference fields organized in sections. Loads current values on
-/// appear and sends only changed fields on save. Array fields (dietary,
-/// equipment, cuisines, aversions) use comma-separated text inputs that
-/// are split/joined for the API.
+/// 1. **Quick Settings** — directly editable fields for simple preferences
+///    (skill level, household size, max difficulty). Saved via PATCH /preferences.
+/// 2. **Sous Chef Profile** — read-only view of complex, nuanced preferences
+///    that are managed through conversation (dietary, equipment, cuisines,
+///    aversions, free-form notes). Includes a CTA to open the Sous Chef tab.
+///
+/// This design reflects the philosophy that simple preferences are best edited
+/// directly, while complex culinary preferences benefit from the Sous Chef's
+/// guided conversational approach.
 struct PreferencesView: View {
     @Environment(\.dismiss) private var dismiss
+    /// Bound to TabShell's selectedTab so the "Chat with Sous Chef" CTA
+    /// can switch tabs programmatically after dismissing. Nil when the
+    /// view is presented without tab context (e.g., previews).
+    var selectedTab: Binding<AppTab>?
 
     @State private var profile = PreferenceProfile()
     @State private var isLoading = true
     @State private var isSaving = false
     @State private var errorMessage: String?
 
-    // Local form state — arrays stored as comma-separated strings for editing
-    @State private var dietaryPreferencesText = ""
-    @State private var dietaryRestrictionsText = ""
+    // Quick Settings form state
     @State private var skillLevel = "Home Cook"
-    @State private var equipmentText = ""
-    @State private var cuisinesText = ""
-    @State private var aversionsText = ""
     @State private var cookingFor = ""
     @State private var maxDifficulty = 0.5
-    @State private var freeForm = ""
 
     /// Maps API skill level values to display labels and back.
     /// API returns lowercase values like "beginner", "intermediate", "advanced".
@@ -42,50 +45,13 @@ struct PreferencesView: View {
                     ProgressView()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
-                    Form {
-                        Section("Dietary") {
-                            TextField("Preferences (e.g., vegetarian, keto)", text: $dietaryPreferencesText)
-                            TextField("Restrictions (e.g., gluten-free, nut allergy)", text: $dietaryRestrictionsText)
+                    ScrollView {
+                        VStack(spacing: AlchemySpacing.xl) {
+                            quickSettingsSection
+                            sousChefProfileSection
                         }
-
-                        Section("Skill & Equipment") {
-                            Picker("Skill Level", selection: $skillLevel) {
-                                ForEach(skillLevels, id: \.self) { level in
-                                    Text(level).tag(level)
-                                }
-                            }
-
-                            TextField("Equipment (e.g., oven, stand mixer, grill)", text: $equipmentText)
-                        }
-
-                        Section("Taste") {
-                            TextField("Favorite cuisines", text: $cuisinesText)
-                            TextField("Aversions / dislikes", text: $aversionsText)
-                        }
-
-                        Section("Household") {
-                            TextField("Cooking for (number of people)", text: $cookingFor)
-                                .keyboardType(.numberPad)
-
-                            VStack(alignment: .leading) {
-                                Text("Max Difficulty: \(difficultyLabel)")
-                                Slider(value: $maxDifficulty, in: 0...1)
-                                    .tint(AlchemyColors.accent)
-                            }
-                        }
-
-                        Section("Anything Else") {
-                            TextField("Free-form notes for the chef...", text: $freeForm, axis: .vertical)
-                                .lineLimit(3...6)
-                        }
-
-                        if let errorMessage {
-                            Section {
-                                Text(errorMessage)
-                                    .foregroundStyle(.red)
-                                    .font(AlchemyTypography.caption)
-                            }
-                        }
+                        .padding(.horizontal, AlchemySpacing.lg)
+                        .padding(.vertical, AlchemySpacing.xl)
                     }
                 }
             }
@@ -97,7 +63,7 @@ struct PreferencesView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Save") {
-                        Task { await savePreferences() }
+                        Task { await saveQuickSettings() }
                     }
                     .fontWeight(.semibold)
                     .disabled(isSaving)
@@ -107,6 +73,165 @@ struct PreferencesView: View {
                 await loadPreferences()
             }
         }
+    }
+
+    // MARK: - Quick Settings
+
+    private var quickSettingsSection: some View {
+        VStack(alignment: .leading, spacing: AlchemySpacing.md) {
+            Label("Quick Settings", systemImage: "slider.horizontal.3")
+                .font(AlchemyTypography.subheading)
+                .foregroundStyle(AlchemyColors.textPrimary)
+
+            VStack(spacing: 0) {
+                settingsRow("Skill Level") {
+                    Picker("Skill Level", selection: $skillLevel) {
+                        ForEach(skillLevels, id: \.self) { level in
+                            Text(level).tag(level)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .tint(AlchemyColors.accent)
+                }
+
+                Divider()
+
+                settingsRow("Cooking For") {
+                    TextField("People", text: $cookingFor)
+                        .keyboardType(.numberPad)
+                        .multilineTextAlignment(.trailing)
+                        .frame(maxWidth: 60)
+                }
+
+                Divider()
+
+                VStack(alignment: .leading, spacing: AlchemySpacing.sm) {
+                    HStack {
+                        Text("Max Difficulty")
+                            .font(AlchemyTypography.body)
+                            .foregroundStyle(AlchemyColors.textPrimary)
+                        Spacer()
+                        Text(difficultyLabel)
+                            .font(AlchemyTypography.caption)
+                            .foregroundStyle(AlchemyColors.accent)
+                            .fontWeight(.medium)
+                    }
+                    Slider(value: $maxDifficulty, in: 0...1)
+                        .tint(AlchemyColors.accent)
+                }
+                .padding(.vertical, AlchemySpacing.md)
+            }
+            .padding(.horizontal, AlchemySpacing.md)
+            .background(AlchemyColors.surface)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+
+            if let errorMessage {
+                Text(errorMessage)
+                    .foregroundStyle(.red)
+                    .font(AlchemyTypography.caption)
+            }
+        }
+    }
+
+    private func settingsRow<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        HStack {
+            Text(title)
+                .font(AlchemyTypography.body)
+                .foregroundStyle(AlchemyColors.textPrimary)
+            Spacer()
+            content()
+        }
+        .padding(.vertical, AlchemySpacing.md)
+    }
+
+    // MARK: - Sous Chef Profile
+
+    private var sousChefProfileSection: some View {
+        VStack(alignment: .leading, spacing: AlchemySpacing.md) {
+            Label("Sous Chef Profile", systemImage: "sparkles")
+                .font(AlchemyTypography.subheading)
+                .foregroundStyle(AlchemyColors.textPrimary)
+
+            Text("Complex preferences are managed through conversation with your Sous Chef for more nuanced results.")
+                .font(AlchemyTypography.caption)
+                .foregroundStyle(AlchemyColors.textTertiary)
+
+            VStack(spacing: 0) {
+                profileRow("Dietary Preferences", values: profile.dietaryPreferences)
+                Divider()
+                profileRow("Dietary Restrictions", values: profile.dietaryRestrictions)
+                Divider()
+                profileRow("Equipment", values: profile.equipment)
+                Divider()
+                profileRow("Favorite Cuisines", values: profile.cuisines)
+                Divider()
+                profileRow("Aversions", values: profile.aversions)
+
+                if let freeForm = profile.freeForm, !freeForm.isEmpty {
+                    Divider()
+                    VStack(alignment: .leading, spacing: AlchemySpacing.xs) {
+                        Text("Notes")
+                            .font(AlchemyTypography.caption)
+                            .foregroundStyle(AlchemyColors.textTertiary)
+                        Text(freeForm)
+                            .font(AlchemyTypography.body)
+                            .foregroundStyle(AlchemyColors.textSecondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, AlchemySpacing.md)
+                }
+            }
+            .padding(.horizontal, AlchemySpacing.md)
+            .background(AlchemyColors.surface)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+
+            // CTA to jump to Sous Chef tab
+            Button {
+                dismiss()
+                if let selectedTab {
+                    // Small delay so the sheet dismiss animation completes
+                    // before the tab switch, avoiding visual stutter.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                        selectedTab.wrappedValue = .sousChef
+                    }
+                }
+            } label: {
+                HStack(spacing: AlchemySpacing.sm) {
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 14, weight: .semibold))
+                    Text("Chat with Sous Chef")
+                        .font(AlchemyTypography.body.weight(.semibold))
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, AlchemySpacing.md)
+                .foregroundStyle(.white)
+                .background(AlchemyColors.accent)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+            }
+        }
+    }
+
+    private func profileRow(_ title: String, values: [String]?) -> some View {
+        HStack(alignment: .top) {
+            Text(title)
+                .font(AlchemyTypography.body)
+                .foregroundStyle(AlchemyColors.textPrimary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            if let values, !values.isEmpty {
+                Text(values.joined(separator: ", "))
+                    .font(AlchemyTypography.body)
+                    .foregroundStyle(AlchemyColors.textSecondary)
+                    .multilineTextAlignment(.trailing)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            } else {
+                Text("Not set")
+                    .font(AlchemyTypography.body)
+                    .foregroundStyle(AlchemyColors.textTertiary)
+                    .italic()
+            }
+        }
+        .padding(.vertical, AlchemySpacing.md)
     }
 
     private var difficultyLabel: String {
@@ -122,35 +247,28 @@ struct PreferencesView: View {
         do {
             let p: PreferenceProfile = try await APIClient.shared.request("/preferences")
             profile = p
-            populateFormFields(from: p)
+            populateQuickSettings(from: p)
         } catch {
-            // Surface the error so the user knows something is wrong,
-            // rather than silently showing an empty form.
             errorMessage = "Couldn't load your preferences."
             print("[PreferencesView] load failed: \(error)")
         }
     }
 
-    private func savePreferences() async {
+    /// Saves only the Quick Settings fields (skill, household, difficulty).
+    /// Sous Chef Profile fields are read-only here — they're changed via chat.
+    private func saveQuickSettings() async {
         isSaving = true
         errorMessage = nil
         defer { isSaving = false }
 
-        // Convert display skill level back to API value
         let apiSkillLevel = Self.skillLevelMap.first { $0.display == skillLevel }?.api ?? "intermediate"
-        // Convert slider 0-1 back to API 1-5 integer scale
+        // Slider 0-1 maps to API 1-5 integer scale
         let apiMaxDifficulty = round(maxDifficulty * 4.0) + 1.0
 
         let updated = PreferenceProfile(
-            dietaryPreferences: splitCommaSeparated(dietaryPreferencesText),
-            dietaryRestrictions: splitCommaSeparated(dietaryRestrictionsText),
             skillLevel: apiSkillLevel,
-            equipment: splitCommaSeparated(equipmentText),
-            cuisines: splitCommaSeparated(cuisinesText),
-            aversions: splitCommaSeparated(aversionsText),
             cookingFor: cookingFor.isEmpty ? nil : cookingFor,
-            maxDifficulty: apiMaxDifficulty,
-            freeForm: freeForm.isEmpty ? nil : freeForm
+            maxDifficulty: apiMaxDifficulty
         )
 
         do {
@@ -168,30 +286,13 @@ struct PreferencesView: View {
 
     // MARK: - Helpers
 
-    private func populateFormFields(from p: PreferenceProfile) {
-        dietaryPreferencesText = (p.dietaryPreferences ?? []).joined(separator: ", ")
-        dietaryRestrictionsText = (p.dietaryRestrictions ?? []).joined(separator: ", ")
-
-        // Normalize API skill level ("intermediate") to display label ("Home Cook")
+    private func populateQuickSettings(from p: PreferenceProfile) {
         let apiSkill = (p.skillLevel ?? "intermediate").lowercased()
         skillLevel = Self.skillLevelMap.first { $0.api == apiSkill }?.display ?? "Home Cook"
-
-        equipmentText = (p.equipment ?? []).joined(separator: ", ")
-        cuisinesText = (p.cuisines ?? []).joined(separator: ", ")
-        aversionsText = (p.aversions ?? []).joined(separator: ", ")
         cookingFor = p.cookingFor ?? ""
 
-        // API stores max_difficulty as 1-5 integer scale; slider uses 0-1 normalized.
+        // API stores max_difficulty as 1-5 integer scale; slider uses 0-1
         let rawDifficulty = p.maxDifficulty ?? 3.0
         maxDifficulty = rawDifficulty <= 1.0 ? rawDifficulty : min(rawDifficulty / 5.0, 1.0)
-
-        freeForm = p.freeForm ?? ""
-    }
-
-    /// Splits a comma-separated string into trimmed, non-empty array items.
-    private func splitCommaSeparated(_ text: String) -> [String] {
-        text.split(separator: ",")
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
     }
 }

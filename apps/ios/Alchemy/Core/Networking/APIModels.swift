@@ -2,10 +2,51 @@ import Foundation
 
 // MARK: - Cookbook
 
-/// Response from GET /recipes/cookbook
+/// Response from GET /recipes/cookbook.
+/// Items are CookbookEntryItem (canonical recipe + variant status),
+/// not plain RecipePreview.
 struct CookbookResponse: Decodable {
-    let items: [RecipePreview]
+    let items: [CookbookEntryItem]
     let cookbookInsight: String?
+}
+
+/// A cookbook entry as returned by GET /recipes/cookbook. Includes canonical
+/// recipe preview data plus variant status. When a variant exists, summary
+/// and tags reflect the personalised version; title always stays canonical.
+struct CookbookEntryItem: Decodable, Identifiable, Hashable {
+    let canonicalRecipeId: String
+    let title: String
+    let summary: String
+    let imageUrl: String?
+    let imageStatus: String
+    let category: String
+    let visibility: String
+    let updatedAt: String
+    let quickStats: RecipeQuickStats?
+    let variantStatus: String
+    let activeVariantVersionId: String?
+    let personalizedAt: String?
+    let autopersonalize: Bool
+    let savedAt: String
+    let variantTags: [String]?
+
+    /// Identifiable conformance uses the canonical recipe ID.
+    var id: String { canonicalRecipeId }
+
+    var resolvedImageURL: URL? {
+        guard let imageUrl, imageStatus == "ready" else { return nil }
+        return URL(string: imageUrl)
+    }
+
+    /// Whether the variant is actively personalised (not "none").
+    var hasVariant: Bool {
+        variantStatus != "none"
+    }
+
+    /// Whether the variant needs attention (stale, failed, or needs review).
+    var variantNeedsAttention: Bool {
+        variantStatus == "stale" || variantStatus == "failed" || variantStatus == "needs_review"
+    }
 }
 
 /// Shared preview model used by both cookbook items and search/explore results.
@@ -97,10 +138,15 @@ struct APIIngredient: Decodable, Identifiable, Hashable {
     let normalizedStatus: String?
     let component: String?
 
+    /// Units that add no useful information for whole countable items
+    /// (e.g. "1 piece" of egg → just "1"). Checked case-insensitively.
+    private static let redundantUnits: Set<String> = [
+        "piece", "pieces", "whole", "unit", "units", "item", "items",
+    ]
+
     /// Formatted display string for the quantity column.
-    /// Combines the display_amount (or raw amount) with the unit.
-    /// display_amount carries the formatted numeric part (e.g. "1 1/2"),
-    /// while unit is always a separate field (e.g. "tbsp").
+    /// Combines the display_amount (or raw amount) with the unit,
+    /// omitting redundant units like "piece" for whole countable items.
     var displayQuantity: String {
         let numericPart: String = {
             if let displayAmount, !displayAmount.isEmpty {
@@ -108,7 +154,8 @@ struct APIIngredient: Decodable, Identifiable, Hashable {
             }
             return amount?.stringValue ?? ""
         }()
-        if let unit, !unit.isEmpty {
+        if let unit, !unit.isEmpty,
+           !Self.redundantUnits.contains(unit.lowercased()) {
             return "\(numericPart) \(unit)"
         }
         return numericPart
@@ -307,6 +354,17 @@ struct ChatResponseContext: Decodable {
     let intent: String?
     let changedSections: [String]?
     let personalizationNotes: [String]?
+    /// Preference updates extracted by the Sous Chef during conversation.
+    /// Each entry describes a single preference field change that was saved.
+    let preferenceUpdates: [PreferenceUpdate]?
+}
+
+/// A single preference field change surfaced in response_context.
+/// Used to synthesize inline "Preferences Saved!" system messages.
+struct PreferenceUpdate: Decodable {
+    let field: String
+    let value: AnyCodableValue
+    let action: String?
 }
 
 /// Request body for POST /chat (new session) and POST /chat/{id}/messages
