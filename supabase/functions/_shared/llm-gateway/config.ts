@@ -15,7 +15,9 @@ import {
   executeWithConfig,
   getActiveConfig as loadActiveConfig,
 } from "../llm-executor.ts";
-import type { ChatConversationScope, ModelOverrideMap } from "./types.ts";
+import type { ChatConversationScope, ModelOverrideMap, TokenAccum } from "./types.ts";
+export { estimateImageGenerationCostUsd } from "../image-billing.ts";
+export { logLlmEvent } from "./event-log.ts";
 
 export const DEFAULT_OUT_OF_SCOPE_FALLBACK_TEXT =
   "I'm here to help with recipes. What are you in the mood for?";
@@ -129,6 +131,18 @@ export const buildRecipeImagePrompt = (params: {
       context: params.context,
     })
   }`;
+};
+
+export const addTokens = (
+  accum: TokenAccum,
+  inputTokens: number,
+  outputTokens: number,
+  config: GatewayConfig,
+): void => {
+  accum.input += inputTokens;
+  accum.output += outputTokens;
+  accum.costUsd += (inputTokens * config.inputCostPer1m +
+    outputTokens * config.outputCostPer1m) / 1_000_000;
 };
 
 export const LEGACY_MODEL_CONFIG_KEYS = [
