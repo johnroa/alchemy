@@ -109,7 +109,35 @@ Pre-computed popularity scores for recipes and ingredient trending stats.
 - **Sonner** for toasts
 - Deployed via OpenNext on Cloudflare
 
-Admin pages: dashboard, users, images, imports, development, provider-model, model-usage, models, prompts, rules, memory, recipes, ingredients, graph, metadata-pipeline, changelog, request-trace, pipeline-health, version-causality, api-docs, simulation-recipe, simulation-image, simulations.
+Admin sections: analytics (content, llm, pipelines, product), content (recipes, ingredients, graph), LLM (models, prompts, rules, routes), operations (users, images, imports, memory, metadata), system (development, changelog, request-trace, api-reference, simulations).
+
+### Admin Component Organization
+
+Large admin components are split into focused sub-component directories:
+
+```
+components/admin/
+├── simulation/              Recipe simulation runner (split from simulation-runner-card.tsx)
+│   ├── types.ts, simulation-config-form.tsx, simulation-results-panel.tsx
+│   ├── simulation-comparison.tsx, simulation-runner-card.tsx, index.ts
+├── llm-config/              LLM configuration panel (split from llm-config-panel.tsx)
+│   ├── types.ts, model-routes-section.tsx, prompts-rules-section.tsx
+│   ├── models-section.tsx, llm-config-panel.tsx, index.ts
+├── recipes/                 Recipe audit/management (split from page.tsx)
+│   ├── types.ts, recipe-filters.tsx, recipe-table.tsx
+│   ├── recipe-detail-panel.tsx, index.ts
+├── ingredients/             Ingredient registry explorer (split)
+│   ├── types.ts, ingredient-filters.tsx, ingredient-table.tsx
+│   ├── ingredient-detail.tsx, ingredients-registry-explorer.tsx, index.ts
+├── graph/                   Knowledge graph visualizer (split)
+│   ├── types.ts, graph-controls.tsx, graph-canvas.tsx
+│   ├── graph-detail-panel.tsx, graph-visualizer.tsx, index.ts
+├── api-docs/                API reference visualizer (split)
+│   ├── types.ts, schema-viewer.tsx, endpoint-detail.tsx
+│   ├── endpoint-list.tsx, api-visualizer.tsx, index.ts
+```
+
+Original files become thin re-export shims. New code should import from the sub-directory.
 
 ## API Gateway (`infra/cloudflare/api-gateway/`)
 - Cloudflare Worker, TypeScript
@@ -123,6 +151,77 @@ Admin pages: dashboard, users, images, imports, development, provider-model, mod
 - **Edge Functions** (`functions/v1/`): LLM gateway, structured output, prompt templates
 - LLM config (models, prompts, rules) lives in DB and is loaded at runtime — editable via admin UI
 - **LLM scopes**: `recipe_generate`, `recipe_search_interpret`, `recipe_canonicalize`, `recipe_personalize`, `recipe_import_transform`, `recipe_import_vision_extract`, `memory_extract`, `metadata_enrich`
+
+### Backend Module Organization
+
+```
+supabase/functions/
+├── _shared/
+│   ├── llm-gateway/              LLM gateway (split from monolithic llm-gateway.ts)
+│   │   ├── types.ts              Gateway-specific type definitions
+│   │   ├── config.ts             Scope config loading, provider call helpers
+│   │   ├── normalizers.ts        Recipe/chat/image envelope normalizers
+│   │   ├── recipe.ts             Recipe generation pipeline
+│   │   ├── chat.ts               Chat conversation envelope generation
+│   │   ├── onboarding.ts         Onboarding interview envelope
+│   │   ├── ingredients.ts        Ingredient normalization/parsing/enrichment
+│   │   ├── search.ts             Search embedding/interpretation/reranking
+│   │   ├── memory.ts             Memory extract/select/summarize
+│   │   ├── image.ts              Image generation/quality evaluation
+│   │   ├── personalize.ts        Recipe personalization
+│   │   ├── preferences.ts        Preference list normalization
+│   │   ├── classify.ts           Scope classification
+│   │   ├── greeting.ts           Greeting generation
+│   │   ├── event-log.ts          LLM event logging
+│   │   └── index.ts              Facade composing llmGateway object
+│   ├── llm-gateway.ts            Re-export shim (backward compat)
+│   ├── llm-executor.ts           Scope execution engine
+│   ├── llm-adapters/             Provider-specific adapters
+│   ├── metadata-normalization/   Recipe metadata normalization (split)
+│   │   ├── types.ts
+│   │   ├── normalizers.ts
+│   │   └── index.ts
+│   └── recipe-metadata-normalization.ts  Re-export shim
+├── v1/
+│   ├── index.ts                  Thin router (~560 lines, DI wiring)
+│   ├── lib/                      Extracted business logic modules
+│   │   ├── routing-utils.ts      Path normalization, UUID parsing
+│   │   ├── preferences.ts        Preference types, fingerprinting, normalization
+│   │   ├── variant-tags.ts       Variant tag computation
+│   │   ├── graph-substitutions.ts  Knowledge graph substitution queries
+│   │   ├── chat-types.ts         Chat/candidate types and normalization
+│   │   ├── onboarding-helpers.ts Onboarding state derivation
+│   │   ├── user-profile.ts       User profile, memory, changelog
+│   │   ├── recipe-enrichment.ts  Ingredient resolution and enrichment
+│   │   ├── metadata-pipeline.ts  Metadata job queue and processing
+│   │   ├── recipe-persistence.ts Recipe CRUD, view projection, attachments
+│   │   ├── context-pack.ts       Context assembly, memory lifecycle
+│   │   ├── chat-orchestration.ts Chat turn orchestration, cookbook items
+│   │   └── background-tasks.ts   Background task scheduling
+│   ├── image-pipeline/           Image generation pipeline (split)
+│   │   ├── types.ts, generation.ts, queue.ts, hydration.ts, index.ts
+│   ├── search/                   Recipe search (split)
+│   │   ├── types.ts, filters.ts, index-management.ts, query.ts, index.ts
+│   ├── standardization/          Recipe standardization (split)
+│   │   ├── types.ts, ingredient-projection.ts, step-projection.ts, index.ts
+│   ├── routes/
+│   │   ├── chat/                 Chat routes (split)
+│   │   │   ├── types.ts, greeting.ts, session.ts, message.ts, candidate.ts, commit.ts, index.ts
+│   │   ├── recipes/              Recipe routes (split)
+│   │   │   ├── types.ts, cookbook.ts, search-routes.ts, detail.ts, save.ts, variant.ts, index.ts
+│   │   ├── import/               Import routes (split)
+│   │   │   ├── types.ts, validation.ts, extraction.ts, index.ts
+│   │   ├── graph.ts, memory.ts, metadata.ts, onboarding.ts
+│   │   └── shared.ts
+│   ├── recipe-image-pipeline.ts  Re-export shim → image-pipeline/
+│   ├── recipe-search.ts          Re-export shim → search/
+│   └── recipe-standardization.ts Re-export shim → standardization/
+```
+
+### Module Size Guidelines
+- **Target**: ~400 lines per file maximum. Files above 600 lines should be split.
+- **Pattern**: Extract into `<name>/` subdirectory with `types.ts`, domain modules, and `index.ts` facade. Original file becomes a re-export shim for backward compatibility.
+- **Dependencies**: Use dependency injection (deps parameter) for route handlers. Avoid circular imports by separating types from implementations.
 
 ## Security
 - No secrets in client code

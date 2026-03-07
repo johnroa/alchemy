@@ -157,7 +157,41 @@ Expo Router + TanStack Query v5 + Zustand v5 + Reanimated 3 + Gesture Handler.
 
 Next.js 15 App Router + Tailwind CSS + shadcn/ui + Lucide React + Sonner. Deployed via OpenNext on Cloudflare.
 
-Admin pages: dashboard, users, images, imports, development, provider-model, model-usage, models, prompts, rules, memory, recipes, ingredients, graph, metadata-pipeline, changelog, request-trace, pipeline-health, version-causality, api-docs, simulation-recipe, simulation-image, simulations.
+Admin sections: analytics (content, llm, pipelines, product), content (recipes, ingredients, graph), LLM (models, prompts, rules, routes), operations (users, images, imports, memory, metadata), system (development, changelog, request-trace, api-reference, simulations).
+
+Large admin components split into sub-directories under `components/admin/`:
+- `simulation/` — Recipe simulation runner (6 files)
+- `llm-config/` — LLM config panel (6 files)
+- `recipes/` — Recipe management (5 files)
+- `ingredients/` — Ingredient registry (6 files)
+- `graph/` — Knowledge graph visualizer (6 files)
+- `api-docs/` — API reference (6 files)
+
+## Module Organization
+
+### Backend (`supabase/functions/`)
+
+The backend is organized into focused modules. Large files have been split into subdirectories with re-export shims at the original paths.
+
+```
+v1/index.ts               Thin router (~560 lines) with DI wiring
+v1/lib/                   13 extracted business logic modules
+v1/image-pipeline/        Image generation (5 modules, from recipe-image-pipeline.ts)
+v1/search/                Recipe search (5 modules, from recipe-search.ts)
+v1/standardization/       Recipe standardization (4 modules)
+v1/routes/chat/           Chat routes (7 modules)
+v1/routes/recipes/        Recipe routes (7 modules)
+v1/routes/import/         Import routes (4 modules)
+_shared/llm-gateway/      LLM gateway (16 domain modules + facade)
+_shared/metadata-normalization/  Metadata normalization (3 modules)
+```
+
+### Module Size Guidelines
+
+- **Target**: ~400 lines per file maximum. Files above 600 lines should be split.
+- **Pattern**: Extract into `<name>/` subdirectory with `types.ts`, domain modules, and `index.ts` facade. Original file becomes a re-export shim (`export * from "./<name>/index.ts"`) for backward compatibility.
+- **Dependencies**: Use dependency injection (deps parameter) for route handlers. Avoid circular imports by separating types from implementations.
+- **New modules**: When adding significant new functionality, create it as a separate file from the start. Don't add >100 lines to an existing file if a new module would be clearer.
 
 ## Code Comments
 

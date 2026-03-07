@@ -93,10 +93,53 @@ Core architecture: canonical (public, immutable) recipes + per-user private vari
 - **Endpoint:** `POST /chat/import` — accepts url/text/photo kind, returns seeded ChatSession.
 - **LLM scopes:** `recipe_import_transform`, `recipe_import_vision_extract`. Prompts/rules managed via admin API only (not migration-seeded).
 - **Scraper module:** `supabase/functions/_shared/recipe-scraper.ts` — bounded URL fetcher + Schema.org/microdata/meta extraction.
-- **Import route:** `supabase/functions/v1/routes/import.ts` — fingerprint dedup, extraction, LLM transform, session seeding, image enrollment.
+- **Import route:** `supabase/functions/v1/routes/import/` — validation, extraction, session seeding (split into sub-modules).
 - **Provenance:** `import_provenance` table tracks source, strategy, confidence, errors. Linked to `chat_sessions` and `recipe_versions`.
 - **Admin:** `/imports` page with telemetry. Dashboard has Import Activity section.
 - **iOS:** Tab bar accessory → dialog → ImportView. Share extension via App Group + `alchemy://import` URL scheme.
+
+## Module Organization
+
+### Backend Module Structure
+
+The backend is organized into focused modules. Large files have been split into subdirectories with re-export shims at the original paths for backward compatibility.
+
+```
+supabase/functions/v1/
+├── index.ts              Thin router (~560 lines) with DI wiring
+├── lib/                  Extracted business logic (13 modules)
+│   ├── routing-utils.ts, preferences.ts, variant-tags.ts
+│   ├── graph-substitutions.ts, chat-types.ts, onboarding-helpers.ts
+│   ├── user-profile.ts, recipe-enrichment.ts, metadata-pipeline.ts
+│   ├── recipe-persistence.ts, context-pack.ts, chat-orchestration.ts
+│   └── background-tasks.ts
+├── image-pipeline/       Image generation (5 modules)
+├── search/               Recipe search (5 modules)
+├── standardization/      Recipe standardization (4 modules)
+├── routes/
+│   ├── chat/             Chat routes (7 modules)
+│   ├── recipes/          Recipe routes (7 modules)
+│   └── import/           Import routes (4 modules)
+
+supabase/functions/_shared/
+├── llm-gateway/          LLM gateway (16 domain modules + facade)
+├── metadata-normalization/  Metadata normalization (3 modules)
+```
+
+### Admin Component Structure
+
+Large admin components are split into focused sub-component directories under `apps/admin/components/admin/`:
+- `simulation/` — Recipe simulation runner
+- `llm-config/` — LLM configuration panel
+- `recipes/` — Recipe audit/management
+- `ingredients/` — Ingredient registry explorer
+- `graph/` — Knowledge graph visualizer
+- `api-docs/` — API reference visualizer
+
+### Module Size Guidelines
+- **Target**: ~400 lines per file maximum. Files above 600 lines should be split.
+- **Pattern**: Extract into `<name>/` subdirectory with `types.ts`, domain modules, and `index.ts` facade. Original file becomes a re-export shim.
+- **Dependencies**: Use dependency injection (deps parameter) for route handlers. Avoid circular imports.
 
 ## API Contract & Spec Workflow (Required)
 
