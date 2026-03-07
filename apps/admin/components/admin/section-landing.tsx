@@ -20,7 +20,7 @@ export function SectionLanding({
   return (
     <div className="space-y-8">
       <section className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
-        <div className="space-y-4 rounded-[1.75rem] border border-border/60 bg-[radial-gradient(circle_at_top_left,rgba(22,163,74,0.12),transparent_42%),linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(245,248,245,0.96)_100%)] p-7 shadow-sm">
+        <div className="space-y-4 rounded-[1.75rem] border border-border/60 bg-[radial-gradient(circle_at_top_left,rgba(22,163,74,0.18),transparent_42%),linear-gradient(180deg,rgba(11,17,28,0.98)_0%,rgba(7,12,20,0.94)_100%)] p-7 shadow-sm">
           {eyebrow ? (
             <Badge variant="outline" className="rounded-full">
               {eyebrow}
@@ -37,7 +37,7 @@ export function SectionLanding({
           </div>
         </div>
 
-        <Card className="border-border/60 bg-white/90">
+        <Card className="border-border/60 bg-card/80 backdrop-blur">
           <CardHeader>
             <CardTitle className="text-base">What lives here</CardTitle>
             <CardDescription>{cards.length} primary workflows in this section.</CardDescription>
@@ -65,7 +65,7 @@ export function SectionLanding({
           const CardIcon = card.icon;
           return (
             <Link key={card.key} href={card.href} className="group block">
-              <Card className="h-full border-border/60 bg-white/90 transition-transform duration-200 group-hover:-translate-y-0.5 group-hover:shadow-md">
+              <Card className="h-full border-border/60 bg-card/80 transition-transform duration-200 group-hover:-translate-y-0.5 group-hover:shadow-md">
                 <CardHeader className="space-y-3">
                   <div className="flex items-center justify-between">
                     <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-muted/80">

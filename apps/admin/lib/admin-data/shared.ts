@@ -13,6 +13,10 @@ export type RegistryModel = {
   notes: string | null;
 };
 
+export const COUNTABLE_TABLE_COLUMNS = {
+  cookbook_entries: "user_id",
+} as const;
+
 export const isSchemaMissingError = (error: unknown): boolean => {
   if (!error || typeof error !== "object") {
     return false;

@@ -1,5 +1,5 @@
 import { getAdminClient, toRecord } from "@/lib/supabase-admin";
-import { isSchemaMissingError } from "./shared";
+import { COUNTABLE_TABLE_COLUMNS, isSchemaMissingError } from "./shared";
 
 export const getDashboardData = async (): Promise<{
   requestCount: number;
@@ -56,7 +56,7 @@ export const getDashboardData = async (): Promise<{
     client.from("image_requests").select("id", { count: "exact", head: true }),
     client.from("memories").select("id", { count: "exact", head: true }).eq("status", "active"),
     client.from("changelog_events").select("created_at,scope,entity_type,action").order("created_at", { ascending: false }).limit(10),
-    client.from("cookbook_entries").select("id", { count: "exact", head: true }),
+    client.from("cookbook_entries").select(COUNTABLE_TABLE_COLUMNS.cookbook_entries, { count: "exact", head: true }),
     client.from("recipe_saves").select("id", { count: "exact", head: true }),
     client.from("user_recipe_variants").select("id", { count: "exact", head: true }),
     client

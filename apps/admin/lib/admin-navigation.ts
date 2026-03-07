@@ -20,7 +20,7 @@ import {
   Wrench,
 } from "lucide-react";
 
-export type AdminSectionKey = "overview" | "analytics" | "llm" | "content" | "operations" | "system";
+export type AdminSectionKey = "overview" | "boards" | "analytics" | "llm" | "content" | "operations" | "system";
 
 export type AdminSectionMeta = {
   key: AdminSectionKey;
@@ -48,6 +48,13 @@ export const ADMIN_SECTIONS: AdminSectionMeta[] = [
     description: "Global command center, alerts, and quick actions.",
     href: "/",
     icon: Home,
+  },
+  {
+    key: "boards",
+    title: "Boards",
+    description: "Executive KPI boards for engagement, operations, and personalization.",
+    href: "/boards",
+    icon: Radar,
   },
   {
     key: "analytics",
@@ -98,6 +105,43 @@ export const ADMIN_PAGES: AdminPageMeta[] = [
     isSectionRoot: true,
   },
   {
+    key: "boards-root",
+    section: "boards",
+    title: "Boards",
+    navLabel: "Overview",
+    description: "Curated executive dashboards with direct drill-down paths.",
+    href: "/boards",
+    icon: Radar,
+    isSectionRoot: true,
+  },
+  {
+    key: "boards-engagement",
+    section: "boards",
+    title: "Engagement",
+    navLabel: "Engagement",
+    description: "Cooking, saves, acceptance, and cookbook return behavior.",
+    href: "/boards/engagement",
+    icon: Users,
+  },
+  {
+    key: "boards-operations",
+    section: "boards",
+    title: "Operations",
+    navLabel: "Operations",
+    description: "Latency, cost, failures, and queue pressure.",
+    href: "/boards/operations",
+    icon: Activity,
+  },
+  {
+    key: "boards-personalization",
+    section: "boards",
+    title: "Personalization",
+    navLabel: "Personalization",
+    description: "Ranking lift and preference-learning surfaces queued behind telemetry rollups.",
+    href: "/boards/personalization",
+    icon: Radar,
+  },
+  {
     key: "analytics-root",
     section: "analytics",
     title: "Analytics",
@@ -139,7 +183,7 @@ export const ADMIN_PAGES: AdminPageMeta[] = [
     section: "analytics",
     title: "Product",
     navLabel: "Product",
-    description: "Users, cookbook entries, saves, and variant adoption.",
+    description: "Users, cookbook saves, variants, and catalog footprint.",
     href: "/analytics/product",
     icon: Users,
   },

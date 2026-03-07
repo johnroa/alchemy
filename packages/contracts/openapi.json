@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Alchemy API",
-    "version": "3.4.0",
+    "version": "3.5.1",
     "description": "API contract for Alchemy — an AI-driven recipe creation and management platform.\nCovers the user-facing v1 API at api.cookwithalchemy.com and the admin API at admin.cookwithalchemy.com.\n"
   },
   "servers": [
@@ -318,14 +318,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "type": "object",
-                "properties": {
-                  "autopersonalize": {
-                    "type": "boolean",
-                    "default": true,
-                    "description": "Whether to auto-personalise the recipe using the user's constraint preferences."
-                  }
-                }
+                "$ref": "#/components/schemas/SaveRecipeRequest"
               }
             }
           }
@@ -337,6 +330,37 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SaveRecipeResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/telemetry/behavior": {
+      "post": {
+        "summary": "Ingest first-party product behavior telemetry",
+        "description": "Batched client-side telemetry sink for Explore, Chat, Cookbook, and\nrecipe detail behavior events. Events are append-only and validated\nagainst the canonical event catalog.\n",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BehaviorTelemetryBatchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Batch accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BehaviorTelemetryBatchResponse"
                 }
               }
             }
@@ -3312,6 +3336,18 @@
             "type": "integer",
             "minimum": 0,
             "description": "Number of personalized variants created. Only present in search/explore responses when > 0."
+          },
+          "popularity_score": {
+            "type": "number",
+            "format": "double",
+            "minimum": 0,
+            "description": "All-time weighted discovery score used to identify broadly popular recipes."
+          },
+          "trending_score": {
+            "type": "number",
+            "format": "double",
+            "minimum": 0,
+            "description": "Recent weighted discovery score used to identify recipes gaining momentum."
           }
         }
       },
@@ -4915,6 +4951,141 @@
               "null"
             ],
             "format": "uuid"
+          }
+        }
+      },
+      "SaveRecipeRequest": {
+        "type": "object",
+        "properties": {
+          "autopersonalize": {
+            "type": "boolean",
+            "default": true,
+            "description": "Whether to auto-personalise the recipe using the user's constraint preferences."
+          },
+          "source_surface": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional originating UI surface for first-party attribution (for example explore or cookbook)."
+          }
+        }
+      },
+      "BehaviorTelemetryEvent": {
+        "type": "object",
+        "required": [
+          "event_id",
+          "event_type"
+        ],
+        "properties": {
+          "event_id": {
+            "type": "string",
+            "description": "Client-generated idempotency key for the behavior event."
+          },
+          "event_type": {
+            "type": "string",
+            "enum": [
+              "explore_impression",
+              "explore_opened_recipe",
+              "explore_saved_recipe",
+              "chat_session_started",
+              "chat_turn_submitted",
+              "chat_turn_resolved",
+              "chat_iteration_requested",
+              "chat_candidate_selected",
+              "chat_commit_completed",
+              "cookbook_viewed",
+              "cookbook_search_applied",
+              "cookbook_chip_applied",
+              "cookbook_recipe_opened",
+              "cookbook_recipe_unsaved",
+              "recipe_detail_opened",
+              "recipe_detail_heartbeat",
+              "recipe_detail_closed",
+              "recipe_saved",
+              "recipe_unsaved",
+              "recipe_cooked_inferred",
+              "ingredient_substitution_applied"
+            ]
+          },
+          "surface": {
+            "type": "string",
+            "enum": [
+              "explore",
+              "chat",
+              "cookbook",
+              "recipe_detail"
+            ],
+            "description": "Optional explicit surface override. When omitted, the API applies the canonical surface for the event type."
+          },
+          "occurred_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "session_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "entity_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source_surface": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "algorithm_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "payload": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "BehaviorTelemetryBatchRequest": {
+        "type": "object",
+        "required": [
+          "events"
+        ],
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BehaviorTelemetryEvent"
+            }
+          }
+        }
+      },
+      "BehaviorTelemetryBatchResponse": {
+        "type": "object",
+        "required": [
+          "accepted",
+          "rejected"
+        ],
+        "properties": {
+          "accepted": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "rejected": {
+            "type": "integer",
+            "minimum": 0
           }
         }
       },

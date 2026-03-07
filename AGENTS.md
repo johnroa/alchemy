@@ -13,6 +13,12 @@ packages/contracts/   OpenAPI schema + generated TypeScript types
 packages/shared/      Shared utilities (ingredient icon resolution, food icon catalogs, common types)
 ```
 
+## Read This First
+- Before taking actions in this repo, read `README.md` first and then follow `AGENTS.md`.
+- Do this before touching auth, admin workflows, deploys, scripts, LLM config, or other operational paths.
+- If `README.md` documents a project-specific workflow, follow it instead of assuming a standard/default approach.
+- If `README.md` and `AGENTS.md` appear to conflict, stop and flag the discrepancy explicitly.
+
 ## Deployment
 
 All commands run from repo root (`/Users/john/Projects/alchemy`). **Always deploy after making changes — never tell the user to run commands.**

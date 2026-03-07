@@ -2,10 +2,12 @@
 // Supabase credentials come from Local.xcconfig (gitignored).
 // If Local.xcconfig is missing, SupabaseManager will fatalError with instructions.
 
-#include? "Local.xcconfig"
-
 // API gateway
 API_BASE_URL = https:$()/$()/api.cookwithalchemy.com/v1
+SENTRY_DSN =
+SENTRY_TRACES_SAMPLE_RATE = 1.0
+
+#include? "Local.xcconfig"
 
 // Debug-only settings
 SWIFT_OPTIMIZATION_LEVEL = -Onone

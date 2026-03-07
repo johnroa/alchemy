@@ -104,6 +104,10 @@ struct RecipePreview: Decodable, Identifiable, Hashable {
     let saveCount: Int?
     /// Number of personalized variants created across all users.
     let variantCount: Int?
+    /// All-time weighted discovery score from the search index.
+    let popularityScore: Double?
+    /// Recent weighted growth score from the search index.
+    let trendingScore: Double?
 
     /// Derives a URL from the image_url string, returns nil when pending/failed.
     var resolvedImageURL: URL? {
@@ -706,6 +710,35 @@ struct IngredientTrendingStat: Decodable, Identifiable {
     }
 }
 
+// MARK: - Telemetry
+
+struct BehaviorTelemetryEventRequest: Encodable {
+    let eventId: String
+    let eventType: String
+    let surface: String
+    let occurredAt: String
+    let sessionId: String?
+    let entityType: String?
+    let entityId: String?
+    let sourceSurface: String?
+    let algorithmVersion: String?
+    let payload: [String: AnyCodableValue]?
+}
+
+struct BehaviorTelemetryBatchRequest: Encodable {
+    let events: [BehaviorTelemetryEventRequest]
+}
+
+struct BehaviorTelemetryBatchResponse: Decodable {
+    let accepted: Int
+    let rejected: Int
+}
+
+struct SaveRecipeRequest: Encodable {
+    let autopersonalize: Bool?
+    let sourceSurface: String?
+}
+
 // MARK: - Changelog
 
 struct ChangelogResponse: Decodable {
@@ -724,7 +757,7 @@ struct ChangelogEvent: Decodable, Identifiable {
 
 /// A type-erased Codable value for handling dynamic JSON fields
 /// like metadata and preference_updates where the shape varies.
-enum AnyCodableValue: Decodable, Hashable {
+enum AnyCodableValue: Codable, Hashable {
     case string(String)
     case int(Int)
     case double(Double)
@@ -739,6 +772,22 @@ enum AnyCodableValue: Decodable, Hashable {
         else if let v = try? container.decode(String.self) { self = .string(v) }
         else if container.decodeNil() { self = .null }
         else { self = .null }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .string(let value):
+            try container.encode(value)
+        case .int(let value):
+            try container.encode(value)
+        case .double(let value):
+            try container.encode(value)
+        case .bool(let value):
+            try container.encode(value)
+        case .null:
+            try container.encodeNil()
+        }
     }
 
     var stringValue: String? {

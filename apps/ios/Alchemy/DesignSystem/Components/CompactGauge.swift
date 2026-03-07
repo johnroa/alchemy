@@ -75,7 +75,7 @@ extension CompactGauge {
 
 // MARK: - Recipe Badge
 
-/// Pill badge for contextual signals (New, Trending, Popular) shown in the
+/// Pill badge for contextual signals (Trending, Popular, New, Rising) shown in the
 /// explore card right-side rail alongside CompactGauges.
 struct RecipeBadge: View {
     let label: String
@@ -108,7 +108,7 @@ struct RecipeBadge: View {
 
 extension RecipeBadge {
     static var trending: RecipeBadge {
-        RecipeBadge(label: "Hot", icon: "flame.fill", tint: .orange)
+        RecipeBadge(label: "Trending", icon: "flame.fill", tint: .orange)
     }
 
     static var popular: RecipeBadge {
@@ -118,26 +118,37 @@ extension RecipeBadge {
     static var new: RecipeBadge {
         RecipeBadge(label: "New", icon: "sparkles", tint: .cyan)
     }
+
+    static var rising: RecipeBadge {
+        RecipeBadge(label: "Rising", icon: "chart.line.uptrend.xyaxis", tint: .mint)
+    }
 }
 
 // MARK: - Explore Rail
 
-/// Vertical right-edge rail for Explore cards combining contextual badges
-/// (New, Trending, Popular) and stat gauges (time, difficulty, health, items).
+/// Vertical right-edge rail for Explore cards combining a single contextual
+/// badge (Trending, Popular, New, or Rising) and stat gauges
+/// (time, difficulty, health, items).
 ///
-/// Badges are derived from the RecipePreview's save/variant counts and recency.
-/// Gauges show when quickStats is available on the preview.
+/// Badges are derived from source-of-truth discovery metrics exposed on the
+/// preview (`trendingScore`, `popularityScore`) plus recency. This keeps the
+/// client aligned with backend ranking semantics instead of inventing labels
+/// from local-only heuristics. Gauges show when quickStats is available.
 struct ExploreRail: View {
     let preview: RecipePreview
 
     /// Threshold: recipes updated within this many days are considered "New".
     private static let newThresholdDays = 7
-    /// Threshold: save count above this marks a recipe as "Popular".
-    private static let popularThreshold = 5
+    /// Discovery thresholds tuned around the backend score semantics:
+    /// popularity_score = all-time weighted engagement
+    /// trending_score   = recent weighted engagement growth
+    private static let popularScoreThreshold = 8.0
+    private static let trendingScoreThreshold = 3.0
+    private static let risingScoreThreshold = 1.0
 
     var body: some View {
         VStack(spacing: AlchemySpacing.md) {
-            ForEach(badges, id: \.label) { badge in
+            if let badge = contextualBadge {
                 badge
             }
 
@@ -150,15 +161,15 @@ struct ExploreRail: View {
         }
     }
 
-    /// Derives which contextual badges to show. A recipe can earn
-    /// multiple badges but we cap at 2 to keep the rail compact.
-    private var badges: [RecipeBadge] {
-        var result: [RecipeBadge] = []
-
-        if isNew { result.append(.new) }
-        if isPopular { result.append(.popular) }
-
-        return Array(result.prefix(2))
+    /// Each Explore card gets at most one discovery label. Priority order:
+    /// Trending > Popular > New > Rising. This keeps the rail clean and makes
+    /// the label feel editorial rather than a stack of competing statuses.
+    private var contextualBadge: RecipeBadge? {
+        if isTrending { return .trending }
+        if isPopular { return .popular }
+        if isNew { return .new }
+        if isRising { return .rising }
+        return nil
     }
 
     /// A recipe is "new" if updatedAt is within the last N days.
@@ -169,10 +180,22 @@ struct ExploreRail: View {
         let daysAgo = Calendar.current.dateComponents(
             [.day], from: date, to: .now
         ).day ?? Int.max
-        return daysAgo <= Self.newThresholdDays
+        let earlyEngagement = (preview.trendingScore ?? 0) >= Self.risingScoreThreshold ||
+            (preview.saveCount ?? 0) > 0
+        return daysAgo <= Self.newThresholdDays && earlyEngagement
     }
 
     private var isPopular: Bool {
-        (preview.saveCount ?? 0) >= Self.popularThreshold
+        (preview.popularityScore ?? 0) >= Self.popularScoreThreshold
+    }
+
+    private var isTrending: Bool {
+        (preview.trendingScore ?? 0) >= Self.trendingScoreThreshold
+    }
+
+    private var isRising: Bool {
+        let trendingScore = preview.trendingScore ?? 0
+        return trendingScore >= Self.risingScoreThreshold &&
+            trendingScore < Self.trendingScoreThreshold
     }
 }

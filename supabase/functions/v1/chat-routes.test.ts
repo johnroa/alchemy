@@ -188,6 +188,28 @@ const createRouteContext = (input: {
   client?: unknown;
   serviceClient?: unknown;
 }) => {
+  const defaultServiceClient = {
+    from(table: string) {
+      if (table === "behavior_events") {
+        return {
+          async upsert(_payload: unknown, _options?: unknown) {
+            return { error: null };
+          },
+        };
+      }
+
+      if (table === "behavior_semantic_facts") {
+        return {
+          async insert(_payload: unknown) {
+            return { error: null };
+          },
+        };
+      }
+
+      throw new Error(`unexpected service table: ${table}`);
+    },
+  };
+
   const url = new URL(`https://api.cookwithalchemy.com/v1${input.path}`);
   const request = new Request(url, {
     method: input.method,
@@ -209,7 +231,7 @@ const createRouteContext = (input: {
       avatarUrl: null,
     },
     client: input.client ?? {},
-    serviceClient: input.serviceClient ?? {},
+    serviceClient: input.serviceClient ?? defaultServiceClient,
     respond: (status: number, body: unknown) =>
       new Response(JSON.stringify(body), {
         status,
@@ -336,7 +358,6 @@ Deno.test("POST /chat returns enrolled candidate image fields and schedules drai
       method: "POST",
       body: { message: "Make dinner with a side." },
       client: chatClient.client,
-      serviceClient: {},
     }) as never,
     createDeps({
       enrollCandidateImageRequests: async () => enrolled,
@@ -401,7 +422,6 @@ Deno.test("GET /chat/{id} returns hydrated candidate image state for polling", a
       path: "/chat/chat-1",
       method: "GET",
       client: chatClient.client,
-      serviceClient: {},
     }) as never,
     createDeps({
       hydrateCandidateRecipeSetImages: async () => hydratedCandidate,
@@ -469,7 +489,6 @@ Deno.test("POST /chat/{id}/messages returns iterated candidate image fields and 
       method: "POST",
       body: { message: "Make it a little lighter." },
       client: chatClient.client,
-      serviceClient: {},
     }) as never,
     createDeps({
       orchestrateChatTurn: async () => ({

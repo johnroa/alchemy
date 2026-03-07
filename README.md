@@ -30,6 +30,7 @@ Native SwiftUI rewrite of the Expo mobile app. MVVM architecture with `@Observab
 - **supabase-swift 2.0** — Auth with Keychain-managed sessions
 - **Nuke + NukeUI** — Async image loading and caching
 - **Lottie 4.4** — Recipe generation animation
+- **Sentry Cocoa** — Crash reporting and performance tracing
 - **SPM** — All dependencies via Swift Package Manager
 - **XcodeGen** — Project generation from `project.yml`
 
@@ -94,7 +95,17 @@ open Alchemy.xcodeproj
 
 ### Configuration
 
-Supabase credentials are in `Configuration/Debug.xcconfig` and `Configuration/Release.xcconfig`, injected into `Info.plist` at build time via `$(VARIABLE_NAME)`.
+Supabase and Sentry settings are injected into `Info.plist` at build time via `Configuration/Debug.xcconfig`, `Configuration/Release.xcconfig`, and optional `Configuration/Local.xcconfig` overrides.
+
+| Variable | Required | Description |
+|---|---|---|
+| `SUPABASE_URL` | Yes | Supabase project URL |
+| `SUPABASE_ANON_KEY` | Yes | Supabase publishable/anon key |
+| `API_BASE_URL` | No | Defaults to `https://api.cookwithalchemy.com/v1` |
+| `SENTRY_DSN` | No | Enables iOS Sentry crash + perf capture when set |
+| `SENTRY_TRACES_SAMPLE_RATE` | No | Trace sample rate (`1.0` debug default, `0.2` release default) |
+
+`SENTRY_DSN` is intentionally blank in the committed xcconfigs. Set it in `Configuration/Local.xcconfig` so local or CI secrets override the tracked defaults without leaking credentials.
 
 ## Client History
 
@@ -123,6 +134,10 @@ Next.js 15 App Router. All pages under `app/(admin)/`:
 | `/memory` | User memory snapshots + confidence/salience quality signals |
 | `/metadata-pipeline` | Metadata enrichment pipeline queue |
 | `/pipeline-health` | LLM pipeline observability — per-scope stats, variant health, graph activity |
+| `/boards` | Executive board landing page with curated KPI drill-downs |
+| `/boards/engagement` | North-star cooking, acceptance, cookbook revisit, and repeat-cook KPIs |
+| `/boards/operations` | Generation latency, defect rate, queue pressure, failure backlog, and cost KPIs |
+| `/boards/personalization` | Placeholder for ranking lift and preference-learning metrics as rollups mature |
 | `/simulations` | Seeded simulation runner — single or concurrent A/B with full trace, latency segments, and token deltas |
 | `/simulation-recipe` | Recipe-specific simulation runs |
 | `/simulation-image` | Image generation simulation and comparison |
@@ -131,6 +146,13 @@ Next.js 15 App Router. All pages under `app/(admin)/`:
 | `/changelog` | Changelog event audit with action/scope distribution charts |
 | `/version-causality` | Recipe version causality chains |
 | `/api-docs` | Auto-generated API reference from OpenAPI spec + admin route discovery |
+
+### Executive boards and first-party telemetry
+
+- Boards are intentionally distinct from Analytics pages. Boards are fixed executive KPI surfaces; Analytics remains the drill-down layer.
+- The first shipped board set is `/boards/engagement` and `/boards/operations`, with `/boards/personalization` reserved until ranking-ready rollups stabilize.
+- First-party product behavior is stored in append-only `behavior_events` and `behavior_semantic_facts` tables.
+- The client ingestion endpoint for batched product events is `POST /telemetry/behavior`.
 
 ---
 

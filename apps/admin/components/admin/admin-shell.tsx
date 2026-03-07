@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { type ReactNode } from "react";
 import { ChevronRight, Sparkles } from "lucide-react";
 import { AccountMenu } from "@/components/admin/account-menu";
+import { BUILD_INFO } from "@/lib/build-info.generated";
 import {
   ADMIN_SECTIONS,
   getBreadcrumbsForPathname,
@@ -13,7 +14,6 @@ import {
   getSectionPages,
   isActivePath,
 } from "@/lib/admin-navigation";
-import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "@/components/ui/breadcrumb";
 import {
@@ -39,8 +39,16 @@ export function AdminShell({ email, children }: { email: string; children: React
   const pathname = usePathname();
   const page = getPageForPathname(pathname);
   const section = getSectionForPathname(pathname);
-  const sectionPages = getSectionPages(section.key);
   const breadcrumbs = getBreadcrumbsForPathname(pathname);
+  const isSectionRootPage = page.href === section.href;
+  const builtAtLabel = new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone: "UTC",
+    hour12: false,
+  }).format(new Date(BUILD_INFO.builtAt));
 
   return (
     <SidebarProvider>
@@ -143,34 +151,19 @@ export function AdminShell({ email, children }: { email: string; children: React
                 <div className="space-y-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <h1 className="text-xl font-semibold tracking-tight text-foreground">{section.title}</h1>
-                    <Badge variant="outline" className="hidden sm:inline-flex">
-                      {page.title}
+                    {!isSectionRootPage ? (
+                      <Badge variant="outline" className="hidden sm:inline-flex">
+                        {page.title}
+                      </Badge>
+                    ) : null}
+                    <Badge variant="outline" className="hidden font-mono text-[11px] text-muted-foreground md:inline-flex">
+                      {`build ${BUILD_INFO.commitSha} · ${builtAtLabel} UTC`}
                     </Badge>
                   </div>
                   <p className="max-w-3xl text-sm text-muted-foreground">{section.description}</p>
                 </div>
               </div>
-
             </div>
-
-            {section.key !== "overview" ? (
-              <div className="mt-4 flex flex-wrap gap-2">
-                {sectionPages.map((item) => (
-                  <Link
-                    key={item.key}
-                    href={item.href}
-                    className={cn(
-                      "rounded-full border px-3 py-1.5 text-sm font-medium transition-colors",
-                      isActivePath(pathname, item.href)
-                        ? "border-primary/25 bg-primary text-primary-foreground"
-                        : "border-border/60 bg-background/80 text-muted-foreground hover:text-foreground"
-                    )}
-                  >
-                    {item.navLabel}
-                  </Link>
-                ))}
-              </div>
-            ) : null}
           </div>
         </header>
 

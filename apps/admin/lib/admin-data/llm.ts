@@ -37,6 +37,19 @@ const toFiniteNumber = (value: unknown): number => {
   return Number.isFinite(numeric) ? numeric : 0;
 };
 
+const LLM_EVENTS_PAGE_SIZE = 1000;
+
+type LlmEventRow = {
+  id: string;
+  created_at: string;
+  token_input: unknown;
+  token_output: unknown;
+  token_total: unknown;
+  cost_usd: unknown;
+  latency_ms: unknown;
+  event_payload: unknown;
+};
+
 const scopeLabel = (scope: string): string => {
   const known: Record<string, string> = {
     generate: "Generating",
@@ -180,14 +193,12 @@ export const getModelUsageData = async (
   const windowStart = new Date(windowEnd.getTime() - rangeDays * 24 * 60 * 60 * 1000);
   const hourlyStart = new Date(windowEnd.getTime() - 24 * 60 * 60 * 1000);
 
-  const [{ data: rows, error }, { data: routes }, { data: registry }] = await Promise.all([
+  const [{ count: totalEventCount, error: countError }, { data: routes }, { data: registry }] = await Promise.all([
     client
       .from("events")
-      .select("created_at,token_input,token_output,token_total,cost_usd,latency_ms,event_payload")
+      .select("id", { count: "exact", head: true })
       .eq("event_type", "llm_call")
-      .gte("created_at", windowStart.toISOString())
-      .order("created_at", { ascending: false })
-      .limit(5000),
+      .gte("created_at", windowStart.toISOString()),
     client
       .from("llm_model_routes")
       .select("scope,provider,model,is_active")
@@ -195,8 +206,29 @@ export const getModelUsageData = async (
     client.from("llm_model_registry").select("provider,model,display_name")
   ]);
 
-  if (error) {
-    throw new Error(error.message);
+  if (countError) {
+    throw new Error(countError.message);
+  }
+
+  const rows: LlmEventRow[] = [];
+  const pageCount = Math.ceil((totalEventCount ?? 0) / LLM_EVENTS_PAGE_SIZE);
+  for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
+    const from = pageIndex * LLM_EVENTS_PAGE_SIZE;
+    const to = Math.min((pageIndex + 1) * LLM_EVENTS_PAGE_SIZE, totalEventCount ?? 0) - 1;
+    const { data, error } = await client
+      .from("events")
+      .select("id,created_at,token_input,token_output,token_total,cost_usd,latency_ms,event_payload")
+      .eq("event_type", "llm_call")
+      .gte("created_at", windowStart.toISOString())
+      .order("created_at", { ascending: false })
+      .order("id", { ascending: false })
+      .range(from, to);
+
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    rows.push(...((data ?? []) as LlmEventRow[]));
   }
 
   const routeByScope = new Map<string, { provider: string; model: string }>();

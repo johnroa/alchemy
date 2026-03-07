@@ -33,6 +33,7 @@ import type {
 } from "../../../_shared/types.ts";
 import type {
   CandidateRecipeSet,
+  ChatLoopResponse,
   ChatMessageView,
   ChatSessionContext,
   RouteContext,
@@ -40,7 +41,11 @@ import type {
 
 export type { ImportDeps } from "./types.ts";
 import type { ImportDeps } from "./types.ts";
-import { validateImportRequest, computeFingerprint } from "./validation.ts";
+import {
+  validateImportRequest,
+  computeFingerprint,
+  assertImportedDocumentLooksRecipeLike,
+} from "./validation.ts";
 import { extractFromPhoto } from "./extraction.ts";
 
 export const handleImportRoutes = async (
@@ -228,6 +233,11 @@ export const handleImportRoutes = async (
   }
 
   const extractLatencyMs = Date.now() - extractStartedAt;
+
+  // Validate the extracted payload before it reaches the transform scope.
+  // URL imports in particular must already look recipe-like here; otherwise
+  // arbitrary webpages can turn into placeholder hallucinations downstream.
+  assertImportedDocumentLooksRecipeLike(extractedDoc, kind);
 
   // ------------------------------------------------------------------
   // 4. Transform → RecipePayload + AssistantReply
@@ -449,18 +459,25 @@ export const handleImportRoutes = async (
 
   return respond(
     200,
+    // The import route constructs the same ChatLoopResponse shape as the
+    // normal chat/generate path, but its LLM envelope type is narrower than
+    // the shared route contract. Cast the merged context back to the shared
+    // response type after we inject the import-specific mode/intent.
     deps.buildChatLoopResponse({
       chatId: chatSession.id,
       messages,
       context: sessionContext,
       assistantReply,
       responseContext: transformed.response_context
-        ? {
+        ? ({
             mode: "import",
             intent: "in_scope_generate",
             ...transformed.response_context,
-          }
-        : { mode: "import", intent: "in_scope_generate" },
+          } as ChatLoopResponse["response_context"])
+        : ({
+            mode: "import",
+            intent: "in_scope_generate",
+          } as ChatLoopResponse["response_context"]),
       memoryContextIds: [],
       createdAt: chatSession.created_at,
       updatedAt: new Date().toISOString(),

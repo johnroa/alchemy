@@ -22,6 +22,8 @@ struct ExploreView: View {
     @State private var contextLabel = "Exploring all recipes"
     @State private var nextCursor: String?
     @State private var searchId: String?
+    @State private var feedSessionId = UUID().uuidString
+    @State private var seenImpressionKeys: Set<String> = []
     @State private var trendingIngredients: [IngredientTrendingStat] = []
 
     private let filters = PreviewData.exploreFilters
@@ -32,12 +34,14 @@ struct ExploreView: View {
                 // LAYER 1: Full-screen paging feed
                 ScrollView(.vertical) {
                     LazyVStack(spacing: 0) {
-                        ForEach(previews) { preview in
+                        ForEach(Array(previews.enumerated()), id: \.element.id) { index, preview in
                             ExploreCardView(preview: preview) {
+                                trackExploreOpen(preview: preview, rank: index)
                                 selectedRecipeId = preview.id
                             }
                             .containerRelativeFrame([.horizontal, .vertical])
                             .onAppear {
+                                trackExploreImpression(preview: preview, rank: index)
                                 // Infinite scroll: load more when near the end
                                 if preview.id == previews.last?.id {
                                     Task { await loadMore() }
@@ -114,7 +118,12 @@ struct ExploreView: View {
             .background(AlchemyColors.background)
             .navigationBarHidden(true)
             .navigationDestination(item: $selectedRecipeId) { recipeId in
-                RecipeDetailView(recipeId: recipeId, showAddToCookbook: true)
+                RecipeDetailView(
+                    recipeId: recipeId,
+                    sourceSurface: "explore",
+                    sourceSessionId: feedSessionId,
+                    showAddToCookbook: true
+                )
             }
             .sheet(isPresented: $showPreferences) { PreferencesView() }
             .sheet(isPresented: $showSettings) { SettingsView() }
@@ -250,6 +259,8 @@ struct ExploreView: View {
                 previews = response.items
                 nextCursor = response.nextCursor
                 searchId = response.searchId
+                feedSessionId = response.searchId
+                seenImpressionKeys = []
                 isLoading = false
             }
 
@@ -282,6 +293,7 @@ struct ExploreView: View {
             withAnimation {
                 previews.append(contentsOf: response.items)
                 nextCursor = response.nextCursor
+                searchId = response.searchId
             }
         } catch {
             print("[ExploreView] loadMore error: \(error)")
@@ -299,6 +311,43 @@ struct ExploreView: View {
         } catch {
             print("[ExploreView] loadTrendingIngredients error: \(error)")
         }
+    }
+
+    private func trackExploreImpression(preview: RecipePreview, rank: Int) {
+        let sessionId = searchId ?? feedSessionId
+        let key = "\(sessionId)::\(preview.id)"
+        guard seenImpressionKeys.insert(key).inserted else { return }
+
+        BehaviorTelemetry.shared.track(
+            eventType: "explore_impression",
+            surface: "explore",
+            sessionId: sessionId,
+            entityType: "recipe",
+            entityId: preview.id,
+            payload: [
+                "rank": .int(rank),
+                "sort": .string(selectedSort.rawValue),
+                "filter": .string(selectedFilter),
+                "has_query": .bool(!searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty),
+                "save_count": preview.saveCount.map(AnyCodableValue.int) ?? .null,
+                "variant_count": preview.variantCount.map(AnyCodableValue.int) ?? .null,
+            ]
+        )
+    }
+
+    private func trackExploreOpen(preview: RecipePreview, rank: Int) {
+        BehaviorTelemetry.shared.track(
+            eventType: "explore_opened_recipe",
+            surface: "explore",
+            sessionId: searchId ?? feedSessionId,
+            entityType: "recipe",
+            entityId: preview.id,
+            payload: [
+                "rank": .int(rank),
+                "sort": .string(selectedSort.rawValue),
+                "filter": .string(selectedFilter),
+            ]
+        )
     }
 }
 

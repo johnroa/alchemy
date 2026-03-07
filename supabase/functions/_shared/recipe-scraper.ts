@@ -362,6 +362,11 @@ function jsonLdToDocument(
   sourceUrl: string,
 ): ImportedRecipeDocument {
   const missingFields: string[] = [];
+  const publisher = node.publisher &&
+      typeof node.publisher === "object" &&
+      !Array.isArray(node.publisher)
+    ? node.publisher as Record<string, unknown>
+    : null;
 
   const title = asString(node.name);
   if (!title) missingFields.push("title");
@@ -409,7 +414,7 @@ function jsonLdToDocument(
     missingFields,
     extractionStrategy: "json_ld",
     sourceUrl,
-    sourceSiteName: asString(node.publisher?.name) ?? extractDomain(sourceUrl),
+    sourceSiteName: asString(publisher?.name) ?? extractDomain(sourceUrl),
   };
 }
 

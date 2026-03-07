@@ -30,15 +30,19 @@ struct TabShell: View {
     /// URL pre-filled by the clipboard banner. Passed to ImportView
     /// so the URL text field is populated when the sheet opens.
     @State private var prefillURL: String?
+    /// When non-nil, a recipe is being saved in the background.
+    /// CookbookView shows a skeleton card; GenerateView resets.
+    /// Cleared when the commit API finishes (success or failure).
+    @State private var pendingSave: PendingSave?
 
     var body: some View {
         TabView(selection: $selectedTab) {
             Tab("Cookbook", systemImage: "book.fill", value: .cookbook) {
-                CookbookView()
+                CookbookView(pendingSave: $pendingSave)
             }
 
             Tab("Sous Chef", systemImage: "sparkles", value: .sousChef) {
-                GenerateView(selectedTab: $selectedTab, importedSession: $importedSession)
+                GenerateView(selectedTab: $selectedTab, importedSession: $importedSession, pendingSave: $pendingSave)
             }
 
             Tab("Explore", systemImage: "safari", value: .explore) {
@@ -121,4 +125,11 @@ enum ImportMethod {
     case url
     case photo
     case text
+}
+
+/// Lightweight snapshot of a recipe being committed in the background.
+/// CookbookView uses this to render a skeleton card while the API runs.
+struct PendingSave: Equatable {
+    let title: String
+    let imageUrl: String?
 }

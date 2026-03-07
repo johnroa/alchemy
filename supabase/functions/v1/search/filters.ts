@@ -209,6 +209,8 @@ export const mapRpcRowToCard = (row: SearchRpcRow): RecipeSearchCard =>
     quick_stats: row.quick_stats,
     save_count: row.save_count,
     variant_count: row.variant_count,
+    popularity_score: row.popularity_score,
+    trending_score: row.trending_score,
   });
 
 // ---------------------------------------------------------------------------

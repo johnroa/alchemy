@@ -1,5 +1,5 @@
 {
-  "originHash" : "b188164f3fde92668bf70c9d52f58e08dda9f4bfddb1f600e4d20a5ddbe84243",
+  "originHash" : "dea1056da4da4ad98265c1fd2aabdb4101b27647e2c2fbf084418b3fefc33d2d",
   "pins" : [
     {
       "identity" : "lottie-ios",
@@ -17,6 +17,15 @@
       "state" : {
         "revision" : "83e19143355b02e9261edb2323b3e1e93287ebb9",
         "version" : "12.9.0"
+      }
+    },
+    {
+      "identity" : "sentry-cocoa",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/getsentry/sentry-cocoa",
+      "state" : {
+        "revision" : "990135f0881e56ac6b39404de0f5b0cd0dcf2131",
+        "version" : "9.6.0"
       }
     },
     {

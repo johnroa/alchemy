@@ -33,6 +33,12 @@ export {
   getProductAnalyticsData,
 } from "./admin-data/analytics";
 export {
+  buildEngagementBoardSnapshot,
+  buildOperationsBoardSnapshot,
+  getEngagementBoardData,
+  getOperationsBoardData,
+} from "./admin-data/boards";
+export {
   getImagePipelineData,
   getMetadataPipelineData,
 } from "./admin-data/pipelines";

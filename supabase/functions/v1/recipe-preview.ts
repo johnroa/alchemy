@@ -28,6 +28,8 @@ export type RecipePreview = {
   quick_stats: RecipeQuickStats | null;
   save_count?: number;
   variant_count?: number;
+  popularity_score?: number;
+  trending_score?: number;
 };
 
 export type RecipeCategoryCandidate = {
@@ -68,6 +70,19 @@ const normalizeFiniteInteger = (value: unknown): number | null => {
   }
 
   return Math.trunc(parsed);
+};
+
+const normalizeFiniteNumber = (value: unknown): number | null => {
+  const parsed = typeof value === "number"
+    ? value
+    : typeof value === "string"
+    ? Number(value)
+    : Number.NaN;
+  if (!Number.isFinite(parsed)) {
+    return null;
+  }
+
+  return parsed;
 };
 
 const normalizeDifficulty = (
@@ -151,6 +166,8 @@ export const buildRecipePreview = (input: {
   items?: unknown;
   save_count?: number | null;
   variant_count?: number | null;
+  popularity_score?: unknown;
+  trending_score?: unknown;
 }): RecipePreview => {
   const preview: RecipePreview = {
     id: input.id,
@@ -176,6 +193,14 @@ export const buildRecipePreview = (input: {
   if (typeof input.variant_count === "number" && input.variant_count > 0) {
     preview.variant_count = input.variant_count;
   }
+  const popularityScore = normalizeFiniteNumber(input.popularity_score);
+  if (popularityScore !== null && popularityScore > 0) {
+    preview.popularity_score = popularityScore;
+  }
+  const trendingScore = normalizeFiniteNumber(input.trending_score);
+  if (trendingScore !== null && trendingScore > 0) {
+    preview.trending_score = trendingScore;
+  }
   return preview;
 };
 
@@ -200,22 +225,43 @@ export const normalizeRecipePreview = (value: unknown): RecipePreview | null => 
     difficulty: record.difficulty,
     health_score: record.health_score,
     items: record.items ?? record.ingredient_count,
+    save_count: normalizeFiniteInteger(record.save_count),
+    variant_count: normalizeFiniteInteger(record.variant_count),
+    popularity_score: normalizeFiniteNumber(record.popularity_score),
+    trending_score: normalizeFiniteNumber(record.trending_score),
   });
 };
 
 export const serializeRecipePreview = (
   item: RecipePreview,
-): Record<string, JsonValue> => ({
-  id: item.id,
-  title: item.title,
-  summary: item.summary,
-  image_url: item.image_url,
-  image_status: item.image_status,
-  category: item.category,
-  visibility: item.visibility,
-  updated_at: item.updated_at,
-  quick_stats: item.quick_stats,
-});
+): Record<string, JsonValue> => {
+  const serialized: Record<string, JsonValue> = {
+    id: item.id,
+    title: item.title,
+    summary: item.summary,
+    image_url: item.image_url,
+    image_status: item.image_status,
+    category: item.category,
+    visibility: item.visibility,
+    updated_at: item.updated_at,
+    quick_stats: item.quick_stats,
+  };
+
+  if (typeof item.save_count === "number") {
+    serialized.save_count = item.save_count;
+  }
+  if (typeof item.variant_count === "number") {
+    serialized.variant_count = item.variant_count;
+  }
+  if (typeof item.popularity_score === "number") {
+    serialized.popularity_score = item.popularity_score;
+  }
+  if (typeof item.trending_score === "number") {
+    serialized.trending_score = item.trending_score;
+  }
+
+  return serialized;
+};
 
 export const buildHighestConfidenceCategoryMap = (
   entries: RecipeCategoryCandidate[],

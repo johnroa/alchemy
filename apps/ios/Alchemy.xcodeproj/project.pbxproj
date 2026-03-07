@@ -35,6 +35,7 @@
 		7C5265E1BA60220F06AB2E76 /* ImportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A7D97690AB17BAA8EF132F1 /* ImportView.swift */; };
 		92B2D41E5F1EF5194B385E98 /* TabShell.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1905F952E153213B82628C1E /* TabShell.swift */; };
 		9F99918ACFA548C23B11F940 /* Lottie in Frameworks */ = {isa = PBXBuildFile; productRef = 92C2805B6E32180FC1015CF1 /* Lottie */; };
+		A1D4D25A9B2F4D3AA7C18E11 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = A1D4D25C9B2F4D3AA7C18E11 /* Sentry */; };
 		A6DB3E6D49457E675F369DEB /* RecipeURLDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DA9E3E09DF919C668A03C35 /* RecipeURLDetector.swift */; };
 		A8F2490B77EECF2BFF284BAC /* SupabaseManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B8F424DA5D2661C4CB5914A /* SupabaseManager.swift */; };
 		ABD002AB352654AB6DE0B7DE /* CookbookView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0217F804B0511D28857FC816 /* CookbookView.swift */; };
@@ -128,6 +129,7 @@
 				13D3D15DE40CEB19C2055317 /* NukeUI in Frameworks */,
 				9F99918ACFA548C23B11F940 /* Lottie in Frameworks */,
 				67419F9DFC457F1F202E8B54 /* Supabase in Frameworks */,
+				A1D4D25A9B2F4D3AA7C18E11 /* Sentry in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -398,6 +400,7 @@
 				8D91DB8AD300F7012A81FA10 /* NukeUI */,
 				92C2805B6E32180FC1015CF1 /* Lottie */,
 				768CD6AAFD77D3BB27D13150 /* Supabase */,
+				A1D4D25C9B2F4D3AA7C18E11 /* Sentry */,
 			);
 			productName = Alchemy;
 			productReference = 47F2029BC56872F28BD677E1 /* Alchemy.app */;
@@ -451,6 +454,7 @@
 				A0B459FC528A7C26DFA6238B /* XCRemoteSwiftPackageReference "lottie-ios" */,
 				0A924F8C1492FAC0E30AC65F /* XCRemoteSwiftPackageReference "Nuke" */,
 				6226B36222665EA20B944668 /* XCRemoteSwiftPackageReference "supabase-swift" */,
+				A1D4D25B9B2F4D3AA7C18E11 /* XCRemoteSwiftPackageReference "sentry-cocoa" */,
 			);
 			projectDirPath = "";
 			projectRoot = "";
@@ -793,6 +797,14 @@
 				minimumVersion = 2.0.0;
 			};
 		};
+		A1D4D25B9B2F4D3AA7C18E11 /* XCRemoteSwiftPackageReference "sentry-cocoa" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/getsentry/sentry-cocoa";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 9.1.0;
+			};
+		};
 		A0B459FC528A7C26DFA6238B /* XCRemoteSwiftPackageReference "lottie-ios" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/airbnb/lottie-ios";
@@ -818,6 +830,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = A0B459FC528A7C26DFA6238B /* XCRemoteSwiftPackageReference "lottie-ios" */;
 			productName = Lottie;
+		};
+		A1D4D25C9B2F4D3AA7C18E11 /* Sentry */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A1D4D25B9B2F4D3AA7C18E11 /* XCRemoteSwiftPackageReference "sentry-cocoa" */;
+			productName = Sentry;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

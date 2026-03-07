@@ -146,7 +146,18 @@ const createMockServiceClient = (rows: SearchFeedRow[]) => {
 
 const createDeps = (overrides: Record<string, unknown> = {}) => ({
   parseUuid: (value: string) => value,
-  getPreferences: unused,
+  getPreferences: async () => ({
+    free_form: null,
+    dietary_preferences: [],
+    dietary_restrictions: [],
+    skill_level: "easy",
+    equipment: [],
+    cuisines: [],
+    aversions: [],
+    cooking_for: null,
+    max_difficulty: 1,
+    presentation_preferences: {},
+  }),
   resolvePresentationOptions: unused,
   fetchRecipeView: unused,
   fetchChatMessages: unused,
@@ -161,6 +172,7 @@ const createDeps = (overrides: Record<string, unknown> = {}) => ({
   scheduleImageQueueDrain: unused,
   searchRecipes,
   toJsonValue: (value: unknown) => value,
+  computeSafetyExclusions: () => undefined,
   ...overrides,
 });
 
@@ -206,16 +218,16 @@ const parseJson = async (response: Response) => {
 };
 
 const createRecipeSaveClient = (currentVersionId: string | null) => {
-  const savedPairs: Array<{ user_id: string; recipe_id: string }> = [];
+  const savedEntries: Array<{ user_id: string; canonical_recipe_id: string; autopersonalize: boolean }> = [];
 
   return {
-    savedPairs,
+    savedEntries,
     client: {
       from(table: string) {
-        if (table === "recipe_saves") {
+        if (table === "cookbook_entries") {
           return {
-            async upsert(payload: { user_id: string; recipe_id: string }) {
-              savedPairs.push(payload);
+            async upsert(payload: { user_id: string; canonical_recipe_id: string; autopersonalize: boolean }) {
+              savedEntries.push(payload);
               return { error: null };
             },
           };
@@ -465,12 +477,16 @@ Deno.test("OpenAPI uses RecipePreview for cookbook and search responses", () => 
   const recipeSearchResponse = openapiSpec.components.schemas.RecipeSearchResponse;
   const searchItemsRef = recipeSearchResponse.properties.items.items.$ref;
   const recipePreview = openapiSpec.components.schemas.RecipePreview;
+  const cookbookEntry = openapiSpec.components.schemas.CookbookEntry;
   const required = Array.isArray(recipePreview.required)
     ? recipePreview.required
     : [];
+  const cookbookRequired = Array.isArray(cookbookEntry.required)
+    ? cookbookEntry.required
+    : [];
 
-  if (cookbookItemsRef !== "#/components/schemas/RecipePreview") {
-    throw new Error("expected cookbook to reference RecipePreview");
+  if (cookbookItemsRef !== "#/components/schemas/CookbookEntry") {
+    throw new Error("expected cookbook to reference CookbookEntry");
   }
   if (searchItemsRef !== "#/components/schemas/RecipePreview") {
     throw new Error("expected search to reference RecipePreview");
@@ -493,19 +509,40 @@ Deno.test("OpenAPI uses RecipePreview for cookbook and search responses", () => 
       throw new Error(`expected RecipePreview.required to include ${key}`);
     }
   }
+
+  for (const key of ["canonical_recipe_id", "variant_status", "autopersonalize", "saved_at"]) {
+    if (!cookbookRequired.includes(key)) {
+      throw new Error(`expected CookbookEntry.required to include ${key}`);
+    }
+  }
 });
 
 Deno.test("POST /recipes/{id}/save attaches the persisted version to the image pipeline", async () => {
   const recipeClient = createRecipeSaveClient("version-123");
   const ensureCalls: Array<{ recipeId: string; recipeVersionId: string }> = [];
   const scheduleCalls: Array<{ limit?: number }> = [];
+  const behaviorEvents: unknown[] = [];
 
   const response = await handleRecipeRoutes(
     createRouteContext({
       path: "/recipes/recipe-123/save",
       method: "POST",
+      body: { autopersonalize: false, source_surface: "cookbook" },
       client: recipeClient.client,
-      serviceClient: {},
+      serviceClient: {
+        from(table: string) {
+          if (table === "behavior_events") {
+            return {
+              async upsert(payload: unknown, _options?: unknown) {
+                behaviorEvents.push(payload);
+                return { error: null };
+              },
+            };
+          }
+
+          throw new Error(`unexpected table: ${table}`);
+        },
+      },
     }) as never,
     createDeps({
       logChangelog: async () => undefined,
@@ -528,8 +565,11 @@ Deno.test("POST /recipes/{id}/save attaches the persisted version to the image p
   if (body.saved !== true) {
     throw new Error("expected saved=true response");
   }
-  if (recipeClient.savedPairs.length !== 1) {
-    throw new Error("expected recipe save upsert");
+  if (recipeClient.savedEntries.length !== 1) {
+    throw new Error("expected cookbook entry upsert");
+  }
+  if (recipeClient.savedEntries[0]?.canonical_recipe_id !== "recipe-123") {
+    throw new Error("expected canonical recipe id in cookbook entry");
   }
   if (ensureCalls.length !== 1) {
     throw new Error("expected persisted recipe image request attachment");
@@ -539,5 +579,8 @@ Deno.test("POST /recipes/{id}/save attaches the persisted version to the image p
   }
   if (scheduleCalls.length !== 1 || scheduleCalls[0].limit !== 5) {
     throw new Error("expected image queue drain scheduling after save");
+  }
+  if (behaviorEvents.length !== 1) {
+    throw new Error("expected recipe_saved behavior event");
   }
 });

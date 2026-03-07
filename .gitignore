@@ -10,6 +10,7 @@ node_modules
 .open-next
 .wrangler
 .vercel
+apps/admin/lib/build-info.generated.ts
 *.tsbuildinfo
 dist
 build

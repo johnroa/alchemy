@@ -250,13 +250,7 @@ export interface paths {
             };
             requestBody?: {
                 content: {
-                    "application/json": {
-                        /**
-                         * @description Whether to auto-personalise the recipe using the user's constraint preferences.
-                         * @default true
-                         */
-                        autopersonalize?: boolean;
-                    };
+                    "application/json": components["schemas"]["SaveRecipeRequest"];
                 };
             };
             responses: {
@@ -267,6 +261,52 @@ export interface paths {
                     };
                     content: {
                         "application/json": components["schemas"]["SaveRecipeResponse"];
+                    };
+                };
+                default: components["responses"]["ErrorResponse"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/telemetry/behavior": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ingest first-party product behavior telemetry
+         * @description Batched client-side telemetry sink for Explore, Chat, Cookbook, and
+         *     recipe detail behavior events. Events are append-only and validated
+         *     against the canonical event catalog.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["BehaviorTelemetryBatchRequest"];
+                };
+            };
+            responses: {
+                /** @description Batch accepted */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["BehaviorTelemetryBatchResponse"];
                     };
                 };
                 default: components["responses"]["ErrorResponse"];
@@ -2244,6 +2284,16 @@ export interface components {
             save_count?: number;
             /** @description Number of personalized variants created. Only present in search/explore responses when > 0. */
             variant_count?: number;
+            /**
+             * Format: double
+             * @description All-time weighted discovery score used to identify broadly popular recipes.
+             */
+            popularity_score?: number;
+            /**
+             * Format: double
+             * @description Recent weighted discovery score used to identify recipes gaining momentum.
+             */
+            trending_score?: number;
         };
         RecipeSearchRequest: {
             query?: string;
@@ -2700,6 +2750,43 @@ export interface components {
             variant_status: components["schemas"]["VariantStatus"];
             /** Format: uuid */
             active_variant_version_id?: string | null;
+        };
+        SaveRecipeRequest: {
+            /**
+             * @description Whether to auto-personalise the recipe using the user's constraint preferences.
+             * @default true
+             */
+            autopersonalize: boolean;
+            /** @description Optional originating UI surface for first-party attribution (for example explore or cookbook). */
+            source_surface?: string | null;
+        };
+        BehaviorTelemetryEvent: {
+            /** @description Client-generated idempotency key for the behavior event. */
+            event_id: string;
+            /** @enum {string} */
+            event_type: "explore_impression" | "explore_opened_recipe" | "explore_saved_recipe" | "chat_session_started" | "chat_turn_submitted" | "chat_turn_resolved" | "chat_iteration_requested" | "chat_candidate_selected" | "chat_commit_completed" | "cookbook_viewed" | "cookbook_search_applied" | "cookbook_chip_applied" | "cookbook_recipe_opened" | "cookbook_recipe_unsaved" | "recipe_detail_opened" | "recipe_detail_heartbeat" | "recipe_detail_closed" | "recipe_saved" | "recipe_unsaved" | "recipe_cooked_inferred" | "ingredient_substitution_applied";
+            /**
+             * @description Optional explicit surface override. When omitted, the API applies the canonical surface for the event type.
+             * @enum {string}
+             */
+            surface?: "explore" | "chat" | "cookbook" | "recipe_detail";
+            /** Format: date-time */
+            occurred_at?: string;
+            session_id?: string | null;
+            entity_type?: string | null;
+            entity_id?: string | null;
+            source_surface?: string | null;
+            algorithm_version?: string | null;
+            payload?: {
+                [key: string]: unknown;
+            };
+        };
+        BehaviorTelemetryBatchRequest: {
+            events: components["schemas"]["BehaviorTelemetryEvent"][];
+        };
+        BehaviorTelemetryBatchResponse: {
+            accepted: number;
+            rejected: number;
         };
         RecipeVariant: {
             /** Format: uuid */

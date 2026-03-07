@@ -1,9 +1,7 @@
-import { BookOpen, Sparkles, UserRoundPlus, Users } from "lucide-react";
+import { BookOpen, Layers3, Sparkles, UserRoundPlus, Users } from "lucide-react";
+import { BoardChartCard, BoardPageHeader, HeroStatGrid, type BoardHeroStat } from "@/components/admin/board-kit";
 import { FilterBar } from "@/components/admin/filter-bar";
-import { KpiCard } from "@/components/admin/kpi-card";
-import { PageHeader } from "@/components/admin/page-header";
 import { ProductAnalyticsPanels } from "@/components/admin/product-analytics-panels";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { DEFAULT_ANALYTICS_QUERY, parseAnalyticsQueryState } from "@/lib/admin-analytics";
 import { getProductAnalyticsData } from "@/lib/admin-data";
 
@@ -15,32 +13,61 @@ export default async function AnalyticsProductPage({
   const params = await searchParams;
   const query = parseAnalyticsQueryState(params, DEFAULT_ANALYTICS_QUERY);
   const data = await getProductAnalyticsData(query);
+  const heroStats: BoardHeroStat[] = [
+    {
+      label: "Users",
+      value: data.summary.users.toLocaleString(),
+      hint: `${data.summary.newUsers} joined in the selected range.`,
+      icon: Users,
+    },
+    {
+      label: "Cookbook Saves",
+      value: data.summary.cookbookEntries.toLocaleString(),
+      hint: `${data.summary.newCookbookEntries} new saves in selected range.`,
+      icon: BookOpen,
+      tone: "success",
+    },
+    {
+      label: "Variants",
+      value: data.summary.variants.toLocaleString(),
+      hint: `${data.summary.newVariants} materialized in selected range.`,
+      icon: Sparkles,
+    },
+    {
+      label: "Stale Backlog",
+      value: String(data.summary.staleVariants),
+      hint: "Variants waiting on refresh or review.",
+      icon: UserRoundPlus,
+      tone: data.summary.staleVariants > 0 ? "warning" : "success",
+    },
+    {
+      label: "Catalog Footprint",
+      value: `${data.summary.recipes.toLocaleString()} / ${data.summary.ingredients.toLocaleString()}`,
+      hint: `${data.summary.recipeUpdates} recipe updates · ${data.summary.ingredientUpdates} ingredient updates`,
+      icon: Layers3,
+      tone: "muted",
+    },
+  ];
 
   return (
-    <div className="space-y-6">
-      <PageHeader
+    <div className="space-y-8">
+      <BoardPageHeader
+        eyebrow="Analytics"
         title="Product Analytics"
-        description="Users, cookbook growth, and variant adoption signals from current platform data."
+        description="User adoption, saves, variants, and catalog footprint from current platform data."
+        badges={["Adoption", "Catalog", "Variant health"]}
       />
 
       <FilterBar query={query} showCompare={false} />
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <KpiCard label="Users" value={data.summary.users.toLocaleString()} hint={`${data.summary.newUsers} new in range`} icon={Users} />
-        <KpiCard label="Cookbook Entries" value={data.summary.cookbookEntries.toLocaleString()} hint={`${data.summary.newCookbookEntries} added in range`} icon={BookOpen} />
-        <KpiCard label="Variants" value={data.summary.variants.toLocaleString()} hint={`${data.summary.newVariants} materialized in range`} icon={Sparkles} />
-        <KpiCard label="Stale Backlog" value={String(data.summary.staleVariants)} hint="Variants waiting on refresh or review" icon={UserRoundPlus} variant={data.summary.staleVariants > 0 ? "warning" : "success"} />
-      </div>
+      <HeroStatGrid items={heroStats} />
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Growth trend</CardTitle>
-          <CardDescription>Users, cookbook entries, and variants over the selected window.</CardDescription>
-        </CardHeader>
-        <CardContent className="pt-0">
+      <BoardChartCard
+        title="Adoption trend"
+        description="Users, cookbook saves, and variants over the selected window."
+      >
           <ProductAnalyticsPanels data={data.series} />
-        </CardContent>
-      </Card>
+      </BoardChartCard>
     </div>
   );
 }

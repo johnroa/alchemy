@@ -4,10 +4,18 @@ import Lottie
 /// Sous Chef screen — the core recipe creation experience.
 ///
 /// State machine driven by the chat API's loop_state:
-/// 1. `.chatting` (ideation) — Skeleton in background, chat floating over bottom 75%
-/// 2. `.generating` — Chat minimizes, Lottie animation plays over skeleton
-/// 3. `.presenting` (candidate_presented) — Recipe loads, "Add to Cookbook" appears
-/// 4. `.iterating` — User sends tweaks, loops back through generating/presenting
+/// 1. `.chatting` (ideation) — Chat panel at ~75%, skeleton in background
+/// 2. `.generating` — Chat hidden, Lottie animation plays
+/// 3. `.presenting` — Recipe visible, chat **minimized** (~15%) showing
+///    last assistant message + "Want to make changes?" bar
+/// 4. `.iterating` — Recipe visible, chat **expanded** (~75%) for tweaks
+///
+/// The chat panel animates smoothly between minimized and expanded.
+/// Tapping the recipe behind an expanded chat minimizes it; tapping
+/// "Want to make changes?" expands it. No synthetic briefing messages
+/// are injected — the user sees their natural conversation.
+///
+/// On first open, the chat panel slides up from below the screen.
 ///
 /// API endpoints used:
 ///   - GET /chat/greeting — personalized opening message
@@ -21,6 +29,9 @@ struct GenerateView: View {
     /// this seeded session and jumps straight to the `.presenting` phase,
     /// bypassing the initial chat ideation flow. Cleared after consumption.
     @Binding var importedSession: ChatSessionResponse?
+    /// Set by commitToCookbook() to pass recipe info to CookbookView
+    /// for skeleton rendering. Cleared when the commit API finishes.
+    @Binding var pendingSave: PendingSave?
 
     // MARK: - UI State
 
@@ -37,12 +48,16 @@ struct GenerateView: View {
     /// commit attempt; never reset (we navigate away on success).
     @State private var isCommitting = false
     /// Populated from AssistantReply.suggestedNextActions after each API
-    /// response. The first item becomes the placeholder text in the input
-    /// bar, giving contextual hints instead of a static default.
+    /// response. Shown as tappable chips above the input bar.
     @State private var suggestedPlaceholder: String?
-    /// All suggested actions from the latest assistant reply. Used to build
-    /// the iteration briefing when "Make Changes" is tapped.
     @State private var iterationSuggestions: [String] = []
+    /// Controls the entry animation: chat panel starts off-screen and
+    /// slides up on first appear.
+    @State private var hasAppeared = false
+    /// Tracks the user's drag on the resize handle. Positive = dragging
+    /// down (shrink), negative = dragging up (expand). Reset to 0 on
+    /// gesture end when the panel snaps to a phase.
+    @State private var chatDragOffset: CGFloat = 0
 
     @FocusState private var inputFocused: Bool
     @State private var keyboardHeight: CGFloat = 0
@@ -57,6 +72,107 @@ struct GenerateView: View {
     @State private var candidateSet: APICandidateRecipeSet?
     @State private var imagePollingTask: Task<Void, Never>?
 
+    // MARK: - Layout Constants
+
+    /// Chat panel height when fully expanded (chatting / iterating).
+    private var expandedChatHeight: CGFloat {
+        UIScreen.main.bounds.height * 0.75
+    }
+
+    /// Chat panel height when minimized (presenting). Enough for the
+    /// last assistant message (2-3 lines) + the input prompt bar.
+    private let minimizedChatHeight: CGFloat = 220
+
+    /// Whether the chat panel should be visible at all.
+    private var showChatPanel: Bool {
+        phase != .generating
+    }
+
+    /// Target max-height for the chat panel based on current phase.
+    private var chatPanelHeight: CGFloat {
+        switch phase {
+        case .chatting, .iterating: return expandedChatHeight
+        case .presenting: return minimizedChatHeight
+        case .generating: return 0
+        }
+    }
+
+    /// Effective height during drag gestures. Combines the phase-based
+    /// target with the user's drag offset and clamps to valid bounds.
+    private var effectiveChatHeight: CGFloat {
+        let base = chatPanelHeight
+        let adjusted = base - chatDragOffset
+        return min(max(adjusted, minimizedChatHeight), expandedChatHeight)
+    }
+
+    /// Whether the chat is in its compact/minimized state (not being dragged).
+    private var isChatMinimized: Bool {
+        phase == .presenting && chatDragOffset == 0
+    }
+
+    /// Whether scroll interaction should be disabled. When the panel is
+    /// at minimized height (and not being actively dragged taller), the
+    /// tiny scroll area is unusable — disable it so the drag handle and
+    /// input bar tap take priority.
+    private var scrollDisabled: Bool {
+        phase == .presenting && chatDragOffset >= 0
+    }
+
+    /// The message we want to keep visible in the compact post-generate state.
+    /// We prefer the latest completed assistant reply so imports and generation
+    /// both show the actual "here's your recipe" message instead of relying on
+    /// scroll position through the whole conversation history.
+    private var lastAssistantMessage: ChatMessage? {
+        messages.last(where: { $0.role == .assistant && !$0.isLoading })
+    }
+
+    /// Drag gesture for the resize handle. Lets the user pull the chat
+    /// panel up/down between minimized and expanded heights. On release,
+    /// snaps to whichever state is closest (with velocity for flick).
+    /// Only active when a recipe is visible (presenting / iterating).
+    private var chatResizeGesture: some Gesture {
+        DragGesture(minimumDistance: 8)
+            .onChanged { value in
+                guard phase == .presenting || phase == .iterating else { return }
+                chatDragOffset = value.translation.height
+            }
+            .onEnded { value in
+                guard phase == .presenting || phase == .iterating else { return }
+
+                // Velocity = how far beyond the current position the
+                // finger was heading. Negative = upward flick.
+                let velocity = value.predictedEndTranslation.height - value.translation.height
+                let currentHeight = effectiveChatHeight
+                let midPoint = (minimizedChatHeight + expandedChatHeight) / 2
+
+                // Strong flick overrides position-based snap
+                let shouldExpand: Bool
+                if velocity < -200 {
+                    shouldExpand = true
+                } else if velocity > 200 {
+                    shouldExpand = false
+                } else {
+                    shouldExpand = currentHeight > midPoint
+                }
+
+                withAnimation(.spring(duration: 0.45, bounce: 0.15)) {
+                    if shouldExpand {
+                        phase = .iterating
+                    } else {
+                        phase = .presenting
+                        inputFocused = false
+                    }
+                    chatDragOffset = 0
+                }
+
+                if shouldExpand {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        inputFocused = true
+                    }
+                }
+            }
+    }
+
     var body: some View {
         ZStack {
             Color.clear
@@ -65,35 +181,32 @@ struct GenerateView: View {
 
             NavigationStack {
                 ZStack {
-                    if phase == .presenting {
+                    // Recipe content — shown whenever we have a candidate
+                    if phase == .presenting || phase == .iterating {
                         presentedRecipe
-                    } else {
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                // Tapping the recipe behind expanded chat
+                                // minimizes it so the user can review.
+                                if phase == .iterating {
+                                    withAnimation(.spring(duration: 0.45, bounce: 0.15)) {
+                                        phase = .presenting
+                                        inputFocused = false
+                                    }
+                                }
+                            }
+                    } else if phase != .generating {
                         Color.clear.allowsHitTesting(false)
                     }
 
-                    if phase == .chatting || phase == .iterating {
-                        chatPanelContent
-                            .transition(.move(edge: .bottom).combined(with: .opacity))
-                    }
-
-                    if phase == .presenting {
-                        VStack {
-                            Spacer()
-                            Button {
-                                enterIterationMode()
-                            } label: {
-                                Text("Want to make any changes?")
-                                    .font(AlchemyTypography.chatPlaceholder)
-                                    .foregroundStyle(AlchemyColors.textSecondary)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding(.horizontal, AlchemySpacing.lg)
-                                    .padding(.vertical, AlchemySpacing.md)
-                            }
-                            .glassEffect(.regular, in: .capsule)
-                            .padding(.horizontal, AlchemySpacing.screenHorizontal)
-                            .padding(.bottom, AlchemySpacing.lg)
-                        }
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                    // Chat panel — always visible except during generation.
+                    // Smoothly animates between minimized (~15%) and expanded (~75%).
+                    if showChatPanel {
+                        chatPanel
+                            .frame(maxHeight: effectiveChatHeight)
+                            .frame(maxHeight: .infinity, alignment: .bottom)
+                            // Entry animation: slide up from below on first appear
+                            .offset(y: hasAppeared ? 0 : UIScreen.main.bounds.height)
                     }
 
                     if phase == .generating {
@@ -104,7 +217,7 @@ struct GenerateView: View {
                 .toolbarBackground(.hidden, for: .navigationBar)
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar { toolbarContent }
-                .animation(.spring(duration: 0.5, bounce: 0.2), value: phase)
+                .animation(.spring(duration: 0.5, bounce: 0.15), value: phase)
                 .toolbarVisibility(.hidden, for: .tabBar)
                 .sheet(isPresented: $showPreferences) { PreferencesView(selectedTab: $selectedTab) }
                 .sheet(isPresented: $showSettings) { SettingsView() }
@@ -112,12 +225,38 @@ struct GenerateView: View {
         }
         .background(AlchemyColors.background)
         .ignoresSafeArea(.keyboard)
-        .task { await loadGreeting() }
+        .task {
+            // Imported sessions must win over the default greeting flow. If the
+            // sheet dismisses and TabShell selects Sous Chef with `importedSession`
+            // already populated, plain `.onChange` can miss that initial value.
+            // Handling it here ensures the import opens directly in the same
+            // post-generate presenting state as a freshly created recipe.
+            if let session = importedSession {
+                consumeImportedSession(session)
+                importedSession = nil
+            } else {
+                await loadGreeting()
+            }
+
+            // Animate the chat panel up from below after the initial state is ready.
+            withAnimation(.spring(duration: 0.6, bounce: 0.2)) {
+                hasAppeared = true
+            }
+        }
         .onDisappear { imagePollingTask?.cancel() }
         .onChange(of: importedSession?.id) { _, newId in
             guard newId != nil, let session = importedSession else { return }
             consumeImportedSession(session)
             importedSession = nil
+        }
+        .onChange(of: inputFocused) { _, focused in
+            // When the user taps the input bar while the chat is minimized,
+            // expand to full iterating mode so they can type comfortably.
+            if focused && phase == .presenting {
+                withAnimation(.spring(duration: 0.45, bounce: 0.15)) {
+                    phase = .iterating
+                }
+            }
         }
     }
 
@@ -128,9 +267,7 @@ struct GenerateView: View {
         switch phase {
         case .chatting, .generating:
             recipeSkeleton
-        case .iterating:
-            presentedRecipe
-        case .presenting:
+        case .presenting, .iterating:
             EmptyView()
         }
     }
@@ -176,8 +313,6 @@ struct GenerateView: View {
     // MARK: - Presented Recipe
 
     /// Displays the active candidate component as a RecipeDetailView.
-    /// Converts the RecipePayload from the candidate set into a RecipeDetail
-    /// for display. Lacks image/id since the recipe hasn't been committed yet.
     private var presentedRecipe: some View {
         ZStack(alignment: .top) {
             if let component = activeComponent {
@@ -187,13 +322,13 @@ struct GenerateView: View {
                         imageUrl: component.imageUrl,
                         imageStatus: component.imageStatus
                     ),
+                    sourceSurface: "chat",
+                    sourceSessionId: chatSessionId,
                     showShareButton: false,
                     showTweakBar: false,
-                    isEmbedded: true
+                    isEmbedded: true,
+                    trackBehavior: false
                 )
-                // Force view recreation when image status changes so the
-                // @State detail inside RecipeDetailView picks up the new
-                // imageUrl/imageStatus from polling.
                 .id("\(component.componentId)-\(component.imageStatus)-\(component.imageUrl ?? "")")
             } else {
                 recipeSkeleton
@@ -219,7 +354,6 @@ struct GenerateView: View {
                 ForEach(Array(components.enumerated()), id: \.element.id) { index, component in
                     Button {
                         withAnimation { activeComponentIndex = index }
-                        // Tell the API which component is active
                         Task { await setActiveComponent(component.componentId) }
                     } label: {
                         Text(component.role.capitalized)
@@ -243,43 +377,79 @@ struct GenerateView: View {
         }
     }
 
-    // MARK: - Chat Panel Content
+    // MARK: - Unified Chat Panel
 
-    private var chatPanelContent: some View {
+    /// Single chat panel that works at any height. The ScrollView + input bar
+    /// naturally adapt: at minimized height only the tail of the conversation
+    /// is visible; at expanded height the full message list is scrollable.
+    /// No view-swapping between states — just a height change — so the drag
+    /// resize gesture works smoothly without structural jumps.
+    private var chatPanel: some View {
         VStack(spacing: 0) {
+            // Drag handle — visual pill is 36×4pt, hit target is full-width × 28pt.
             RoundedRectangle(cornerRadius: 2)
                 .fill(Color.black.opacity(0.3))
                 .frame(width: 36, height: 4)
-                .padding(.top, AlchemySpacing.sm)
-                .padding(.bottom, AlchemySpacing.xs)
+                .frame(maxWidth: .infinity)
+                .frame(height: 28)
+                .contentShape(Rectangle())
+                .gesture(chatResizeGesture)
 
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(spacing: AlchemySpacing.sm) {
-                        ForEach(messages) { message in
-                            ChatBubble(message: message)
-                                .id(message.id)
+            if isChatMinimized {
+                VStack(alignment: .leading, spacing: AlchemySpacing.md) {
+                    if let lastAssistantMessage {
+                        Text(lastAssistantMessage.content)
+                            .font(AlchemyTypography.chatMessage)
+                            .foregroundStyle(Color(red: 0.15, green: 0.15, blue: 0.18))
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, AlchemySpacing.screenHorizontal)
+                    }
+
+                    chatInputBar
+                        .padding(.top, AlchemySpacing.xs)
+                        .padding(.bottom, 40)
+                }
+            } else {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(spacing: AlchemySpacing.sm) {
+                            ForEach(messages) { message in
+                                ChatBubble(message: message)
+                                    .id(message.id)
+                            }
+                        }
+                        .padding(.horizontal, AlchemySpacing.screenHorizontal)
+                        .padding(.top, AlchemySpacing.sm)
+                        .padding(.bottom, AlchemySpacing.xxl)
+                    }
+                    .scrollDisabled(scrollDisabled)
+                    .scrollDismissesKeyboard(.interactively)
+                    .onTapGesture {
+                        inputFocused = false
+                    }
+                    .onChange(of: messages.count) { scrollToBottom(proxy: proxy) }
+                    .onChange(of: messages.last?.isLoading) { scrollToBottom(proxy: proxy) }
+                    .onChange(of: keyboardHeight) { scrollToBottom(proxy: proxy) }
+                    .onChange(of: phase) { _, newPhase in
+                        if newPhase == .presenting {
+                            scrollToBottom(proxy: proxy)
                         }
                     }
-                    .padding(.horizontal, AlchemySpacing.screenHorizontal)
-                    .padding(.top, AlchemySpacing.sm)
-                    .padding(.bottom, AlchemySpacing.xxl)
                 }
-                .scrollDismissesKeyboard(.interactively)
-                .onTapGesture { inputFocused = false }
-                .onChange(of: messages.count) { scrollToBottom(proxy: proxy) }
-                .onChange(of: messages.last?.isLoading) { scrollToBottom(proxy: proxy) }
-                .onChange(of: keyboardHeight) { scrollToBottom(proxy: proxy) }
             }
 
-            suggestionChips
-                .padding(.top, AlchemySpacing.sm)
+            if !isChatMinimized {
+                suggestionChips
+                    .padding(.top, AlchemySpacing.sm)
+            }
 
-            chatInputBar
-                .padding(.top, AlchemySpacing.xs)
-                .padding(.bottom, keyboardHeight > 0 ? keyboardHeight - 16 : 40)
+            if !isChatMinimized {
+                chatInputBar
+                    .padding(.top, AlchemySpacing.xs)
+                    .padding(.bottom, keyboardHeight > 0 ? keyboardHeight - 16 : 40)
+            }
         }
-        .frame(maxHeight: UIScreen.main.bounds.height * 0.75)
         .background(
             UnevenRoundedRectangle(
                 topLeadingRadius: 20,
@@ -301,7 +471,6 @@ struct GenerateView: View {
             }
             .ignoresSafeArea(edges: .bottom)
         )
-        .frame(maxHeight: .infinity, alignment: .bottom)
         .ignoresSafeArea(.keyboard)
         .animation(.spring(duration: 0.35), value: keyboardHeight)
         .onReceive(
@@ -344,18 +513,15 @@ struct GenerateView: View {
     }
 
     /// Tappable suggestion chips shown above the input bar when the LLM
-    /// provides suggested next actions. Tapping a chip sends its text as
-    /// a message immediately, removing all chips. Uses the same layered
-    /// glass treatment as the chat input bar for visual consistency.
+    /// provides suggested next actions.
     @ViewBuilder
     private var suggestionChips: some View {
         if !iterationSuggestions.isEmpty && !isSending {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: AlchemySpacing.sm) {
-                    ForEach(iterationSuggestions, id: \.self) { suggestion in
+                    ForEach(Array(iterationSuggestions.enumerated()), id: \.offset) { _, suggestion in
                         Button {
-                            inputText = suggestion
-                            sendMessage()
+                            sendMessage(prefilledText: suggestion)
                         } label: {
                             Text(suggestion)
                                 .font(AlchemyTypography.caption)
@@ -439,10 +605,10 @@ struct GenerateView: View {
         .animation(.easeInOut(duration: 0.2), value: inputText)
     }
 
-    /// Contextual placeholder for the chat input. Suggestions are now
-    /// shown as tappable chips above the bar, so the placeholder stays
-    /// generic and phase-appropriate.
     private var dynamicPlaceholder: String {
+        if isChatMinimized {
+            return "Want to make any changes?"
+        }
         if phase == .iterating {
             return "Tell me what to change..."
         }
@@ -485,17 +651,11 @@ struct GenerateView: View {
                     Button {
                         guard !isCommitting else { return }
                         isCommitting = true
-                        Task { await commitToCookbook() }
+                        commitToCookbook()
                     } label: {
-                        if isCommitting {
-                            ProgressView()
-                                .tint(AlchemyColors.accent)
-                                .scaleEffect(0.7)
-                        } else {
-                            Text("Save")
-                                .font(AlchemyTypography.captionBold)
-                                .foregroundStyle(AlchemyColors.accent)
-                        }
+                        Text("Save")
+                            .font(AlchemyTypography.captionBold)
+                            .foregroundStyle(AlchemyColors.accent)
                     }
                     .disabled(isCommitting)
                     .transition(.scale.combined(with: .opacity))
@@ -540,8 +700,6 @@ struct GenerateView: View {
     // MARK: - Import Session Handoff
 
     /// Hydrates the Generate view from a pre-seeded imported ChatSession.
-    /// Skips the ideation/chat phase entirely and jumps to `.presenting`
-    /// with the imported recipe candidate set.
     private func consumeImportedSession(_ session: ChatSessionResponse) {
         chatSessionId = session.id
         loopState = session.loopState
@@ -557,22 +715,19 @@ struct GenerateView: View {
             )
         }
 
-        // If a candidate was included, jump directly to presenting
         if session.candidateRecipeSet != nil {
             withAnimation(.easeInOut(duration: 0.4)) {
                 phase = .presenting
                 showAddToCookbook = true
             }
-
-            // Start polling for generated images
             refreshImagePolling()
         }
 
-        // Capture suggestions from the assistant reply
         if let suggestions = session.assistantReply?.suggestedNextActions,
            !suggestions.isEmpty {
-            suggestedPlaceholder = suggestions.first
-            iterationSuggestions = suggestions
+            applySuggestedActions(suggestions)
+        } else {
+            applySuggestedActions(nil)
         }
 
         chatHasStarted = true
@@ -581,12 +736,11 @@ struct GenerateView: View {
     // MARK: - API Integration
 
     /// Fetches a personalized greeting from GET /chat/greeting.
-    /// Shows a chef loading bubble immediately so the screen is never blank,
-    /// then swaps it for the real greeting once the API responds.
-    /// - Parameter focusAfter: Whether to focus the input field after the
-    ///   greeting loads. On Start Over the keyboard is raised immediately
-    ///   so we skip the deferred focus to avoid a double-trigger.
     private func loadGreeting(focusAfter: Bool = true) async {
+        // If another flow has already hydrated the screen (for example import
+        // handoff), never overwrite that state with the default greeting.
+        guard chatSessionId == nil, candidateSet == nil, messages.isEmpty else { return }
+
         let loadingId = "greeting-loading"
 
         withAnimation {
@@ -626,10 +780,9 @@ struct GenerateView: View {
     }
 
     /// Sends a message via the chat API.
-    /// First message creates a session (POST /chat), subsequent messages
-    /// continue it (POST /chat/{id}/messages).
-    private func sendMessage() {
-        let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
+    private func sendMessage(prefilledText: String? = nil) {
+        let text = (prefilledText ?? inputText)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !isSending else { return }
 
         let userMsg = ChatMessage(
@@ -642,11 +795,16 @@ struct GenerateView: View {
         isSending = true
         withAnimation { iterationSuggestions = [] }
 
-        // Unfocus the TextField BEFORE clearing — SwiftUI's multi-line
-        // TextField ignores binding updates while it holds editing focus.
-        // Dropping focus first lets the "" assignment actually take effect.
+        // Multi-line TextField can ignore binding clears while focused.
+        // Drop focus first, then restore it on the next run loop.
+        let shouldRestoreFocus = inputFocused || prefilledText != nil
         inputFocused = false
         inputText = ""
+        if shouldRestoreFocus {
+            DispatchQueue.main.async {
+                inputFocused = true
+            }
+        }
 
         if !chatHasStarted {
             withAnimation { chatHasStarted = true }
@@ -704,7 +862,6 @@ struct GenerateView: View {
 
     /// Processes the chat API response, updating the UI state machine.
     private func handleChatResponse(_ response: ChatSessionResponse, loadingId: String) {
-        // Replace loading bubble with assistant reply
         let replyText = response.assistantReply?.text ?? ""
         if !replyText.isEmpty {
             withAnimation {
@@ -718,15 +875,12 @@ struct GenerateView: View {
                 }
             }
         } else {
-            // No text reply — remove the loading bubble
             withAnimation {
                 messages.removeAll { $0.id == loadingId }
             }
         }
 
         // Surface preference changes as inline system notifications.
-        // The API returns preference_updates in response_context when the
-        // Sous Chef saves user preferences during conversation.
         if let updates = response.responseContext?.preferenceUpdates, !updates.isEmpty {
             let fields = updates.map(\.field)
             let summary = fields.count == 1
@@ -741,39 +895,52 @@ struct GenerateView: View {
             withAnimation { messages.append(systemMsg) }
         }
 
-        // Update iteration suggestions and placeholder from the LLM response.
-        // All actions are kept for the iteration briefing; the first becomes
-        // the input placeholder for contextual hints.
-        if let actions = response.assistantReply?.suggestedNextActions, !actions.isEmpty {
-            iterationSuggestions = actions
-            suggestedPlaceholder = actions[0]
-        } else {
-            iterationSuggestions = []
-            suggestedPlaceholder = nil
-        }
+        applySuggestedActions(response.assistantReply?.suggestedNextActions)
 
-        // Handle generation animation
+        // Handle generation animation — dismiss keyboard, show loader,
+        // then reveal recipe with minimized chat panel.
         if response.uiHints?.showGenerationAnimation == true {
             Task { @MainActor in
                 inputFocused = false
                 withAnimation { phase = .generating }
 
-                // Show loader for 2 seconds before revealing the recipe
                 try? await Task.sleep(for: .seconds(2))
 
-                withAnimation(.spring(duration: 0.5)) {
+                withAnimation(.spring(duration: 0.5, bounce: 0.15)) {
                     phase = .presenting
                     showAddToCookbook = true
                 }
             }
         } else if response.candidateRecipeSet != nil && phase != .presenting {
-            // Recipe was updated without animation (iteration)
-            withAnimation(.spring(duration: 0.5)) {
+            // Iteration update: go back to presenting (minimized chat)
+            // so the user can see the updated recipe.
+            withAnimation(.spring(duration: 0.5, bounce: 0.15)) {
                 phase = .presenting
                 showAddToCookbook = true
+                inputFocused = false
             }
         }
         applyChatSessionState(response)
+    }
+
+    /// Normalizes LLM-provided suggestion chips so the UI never renders
+    /// blank or duplicate actions, and chip taps can rely on stable content.
+    private func applySuggestedActions(_ actions: [String]?) {
+        var seen = Set<String>()
+        let normalized = (actions ?? []).compactMap { rawAction -> String? in
+            let trimmed = rawAction.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return nil }
+
+            let identity = trimmed.folding(
+                options: [.caseInsensitive, .diacriticInsensitive],
+                locale: .current
+            )
+            guard seen.insert(identity).inserted else { return nil }
+            return trimmed
+        }
+
+        iterationSuggestions = normalized
+        suggestedPlaceholder = normalized.first
     }
 
     private func applyChatSessionState(_ response: ChatSessionResponse) {
@@ -818,7 +985,6 @@ struct GenerateView: View {
         }
     }
 
-    /// Tells the API to switch the active component in the candidate set.
     private func setActiveComponent(_ componentId: String) async {
         guard let sessionId = chatSessionId else { return }
         do {
@@ -833,31 +999,35 @@ struct GenerateView: View {
     }
 
     /// Commits all candidate components to the cookbook.
-    /// Sets `isCommitting` guard before entry so the Save button is
-    /// disabled immediately. On success, switches to the Cookbook tab.
-    /// On failure, re-enables the button so the user can retry.
-    private func commitToCookbook() async {
+    /// Navigates to Cookbook immediately and shows a skeleton card there
+    /// while the commit API runs in the background.
+    private func commitToCookbook() {
         guard let sessionId = chatSessionId else {
             isCommitting = false
             return
         }
-        do {
-            let _: ChatCommitResponse = try await APIClient.shared.request(
-                "/chat/\(sessionId)/commit",
-                method: .post
-            )
 
-            // Navigate to the Cookbook tab — CookbookView reloads via .task
-            selectedTab = .cookbook
-        } catch {
-            isCommitting = false
-            print("[GenerateView] commit error: \(error)")
+        let title = activeComponent?.title ?? "Saving..."
+        let imageUrl = activeComponent?.imageUrl
+
+        pendingSave = PendingSave(title: title, imageUrl: imageUrl)
+        selectedTab = .cookbook
+
+        Task {
+            defer { pendingSave = nil }
+            do {
+                let _: ChatCommitResponse = try await APIClient.shared.request(
+                    "/chat/\(sessionId)/commit",
+                    method: .post
+                )
+            } catch {
+                print("[GenerateView] commit error: \(error)")
+            }
         }
+
+        startOver()
     }
 
-    /// Converts a caught error into a concise, user-facing message.
-    /// Prioritizes API error messages when available, falls back to
-    /// network error descriptions, and uses a generic fallback last.
     private static func describeError(_ error: Error) -> String {
         if let apiError = error as? APIError {
             return apiError.message
@@ -869,47 +1039,6 @@ struct GenerateView: View {
             return "Network connection failed. Please check your internet and try again."
         }
         return "Something went wrong. Tap send to try again."
-    }
-
-    /// Transitions to iteration mode with an assistant briefing message
-    /// that tells the user what they can change, using the LLM-provided
-    /// suggestions that are already tailored to the recipe and preferences.
-    private func enterIterationMode() {
-        let briefing = buildIterationBriefing()
-        withAnimation(.spring(duration: 0.4)) {
-            phase = .iterating
-            messages.append(ChatMessage(
-                id: UUID().uuidString,
-                role: .assistant,
-                content: briefing,
-                createdAt: .now
-            ))
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            inputFocused = true
-        }
-    }
-
-    /// Constructs a concise iteration briefing from the LLM's suggested
-    /// next actions. Falls back to generic guidance if none are available.
-    private func buildIterationBriefing() -> String {
-        if iterationSuggestions.count >= 2 {
-            let joined = iterationSuggestions
-                .prefix(3)
-                .enumerated()
-                .map { index, suggestion in
-                    // Lowercase the first character for mid-sentence flow
-                    let clean = suggestion.prefix(1).lowercased() + suggestion.dropFirst()
-                    return clean
-                }
-                .joined(separator: ", or ")
-            return "Sure! I can \(joined) — or tell me whatever you'd like to change."
-        } else if let single = iterationSuggestions.first {
-            let clean = single.prefix(1).lowercased() + single.dropFirst()
-            return "Sure! I can \(clean), swap ingredients, adjust servings — whatever you'd like."
-        } else {
-            return "Sure! I can swap ingredients, adjust portions, change the cooking method, or tweak the spice level. What would you like?"
-        }
     }
 
     /// Resets all state for a fresh conversation.
@@ -929,7 +1058,6 @@ struct GenerateView: View {
             loopState = .ideation
             candidateSet = nil
         }
-        // Focus keyboard immediately so user can type while greeting loads
         inputFocused = true
         Task { await loadGreeting(focusAfter: false) }
     }
@@ -947,8 +1075,6 @@ enum GeneratePhase: Equatable {
 
 extension RecipePayload {
     /// Converts a candidate RecipePayload into a RecipeDetail for display.
-    /// Fills in placeholder values for fields that only exist after persistence
-    /// (id, image_url, version, etc.).
     func asDisplayDetail(
         title: String? = nil,
         imageUrl: String? = nil,

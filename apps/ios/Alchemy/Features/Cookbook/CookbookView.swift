@@ -1,5 +1,6 @@
 import SwiftUI
 import NukeUI
+import Lottie
 
 /// Cookbook screen — saved recipes displayed in a staggered masonry 2-column grid.
 ///
@@ -7,6 +8,11 @@ import NukeUI
 /// recipes are saved. Supports pull-to-refresh, intelligent horizontal
 /// filter chips (derived from actual cookbook content), and text search.
 struct CookbookView: View {
+    /// When non-nil, a recipe is being saved in the background.
+    /// Shows a skeleton card at the top of the grid. Cleared by
+    /// GenerateView when the commit API finishes.
+    @Binding var pendingSave: PendingSave?
+
     @State private var previews: [CookbookEntryItem] = []
     @State private var isLoading = true
     @State private var errorMessage: String?
@@ -16,6 +22,8 @@ struct CookbookView: View {
     @State private var showSettings = false
     @State private var searchText = ""
     @State private var showFullScreenPreview = false
+    @State private var cookbookSessionId = UUID().uuidString
+    @State private var lastCookbookViewTrackedAt: Date?
 
     // MARK: - Smart Filter State
 
@@ -48,22 +56,26 @@ struct CookbookView: View {
             VStack(spacing: 0) {
                 headerBar
 
-                if isLoading && previews.isEmpty {
+                if isLoading && previews.isEmpty && pendingSave == nil {
                     Spacer()
-                    ProgressView()
-                        .tint(.white)
+                    LottieView(animation: .named("alchemy-loading"))
+                        .playing(loopMode: .loop)
+                        .frame(width: 80, height: 80)
                     Spacer()
-                } else if let errorMessage, previews.isEmpty {
+                } else if let errorMessage, previews.isEmpty, pendingSave == nil {
                     Spacer()
                     errorView(errorMessage)
                     Spacer()
-                } else if previews.isEmpty {
+                } else if previews.isEmpty && pendingSave == nil {
                     Spacer()
                     emptyView
                     Spacer()
                 } else {
                     ScrollView {
                         VStack(spacing: AlchemySpacing.md) {
+                            if let pending = pendingSave {
+                                savingSkeletonCard(pending)
+                            }
                             cookbookSearchBar
                             if !smartChips.isEmpty {
                                 smartFilterChips
@@ -82,6 +94,16 @@ struct CookbookView: View {
                     CookbookFullScreenPreview(
                         preview: preview,
                         onOpenRecipe: {
+                            BehaviorTelemetry.shared.track(
+                                eventType: "cookbook_recipe_opened",
+                                surface: "cookbook",
+                                sessionId: cookbookSessionId,
+                                entityType: "recipe",
+                                entityId: preview.id,
+                                payload: [
+                                    "variant_status": .string(preview.variantStatus),
+                                ]
+                            )
                             showFullScreenPreview = false
                             navigateToRecipeId = preview.id
                         },
@@ -95,7 +117,11 @@ struct CookbookView: View {
                 }
             }
             .navigationDestination(item: $navigateToRecipeId) { recipeId in
-                RecipeDetailView(recipeId: recipeId)
+                RecipeDetailView(
+                    recipeId: recipeId,
+                    sourceSurface: "cookbook",
+                    sourceSessionId: cookbookSessionId
+                )
             }
             .sheet(isPresented: $showPreferences) {
                 PreferencesView()
@@ -109,6 +135,14 @@ struct CookbookView: View {
                 // Refresh when returning from another tab (e.g. after
                 // saving from Sous Chef) so new recipes appear immediately.
                 Task { await loadCookbook() }
+            }
+            .onChange(of: pendingSave) { old, new in
+                // When the background commit finishes, pendingSave goes
+                // from non-nil to nil. Refresh the cookbook to show the
+                // newly saved recipe in place of the skeleton.
+                if old != nil && new == nil {
+                    Task { await loadCookbook() }
+                }
             }
         }
     }
@@ -144,6 +178,20 @@ struct CookbookView: View {
             TextField("Search recipes...", text: $searchText)
                 .font(AlchemyTypography.body)
                 .foregroundStyle(AlchemyColors.textPrimary)
+                .submitLabel(.search)
+                .onSubmit {
+                    let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !query.isEmpty else { return }
+                    BehaviorTelemetry.shared.track(
+                        eventType: "cookbook_search_applied",
+                        surface: "cookbook",
+                        sessionId: cookbookSessionId,
+                        payload: [
+                            "query_length": .int(query.count),
+                            "active_filter": activeFilter.map { .string($0.label) } ?? .null,
+                        ]
+                    )
+                }
 
             if !searchText.isEmpty {
                 Button {
@@ -172,6 +220,14 @@ struct CookbookView: View {
             HStack(spacing: AlchemySpacing.lg) {
                 Button {
                     withAnimation(.easeInOut(duration: 0.2)) { activeFilter = nil }
+                    BehaviorTelemetry.shared.track(
+                        eventType: "cookbook_chip_applied",
+                        surface: "cookbook",
+                        sessionId: cookbookSessionId,
+                        payload: [
+                            "chip": .string("All"),
+                        ]
+                    )
                 } label: {
                     Text("All")
                         .font(.system(size: 18, weight: activeFilter == nil ? .bold : .regular))
@@ -185,6 +241,15 @@ struct CookbookView: View {
                         withAnimation(.easeInOut(duration: 0.2)) {
                             activeFilter = isSelected ? nil : chip
                         }
+                        BehaviorTelemetry.shared.track(
+                            eventType: "cookbook_chip_applied",
+                            surface: "cookbook",
+                            sessionId: cookbookSessionId,
+                            payload: [
+                                "chip": .string(chip.label),
+                                "selected": .bool(!isSelected),
+                            ]
+                        )
                     } label: {
                         Text(chip.label)
                             .font(.system(size: 18, weight: isSelected ? .bold : .regular))
@@ -339,6 +404,91 @@ struct CookbookView: View {
         .padding(.horizontal, AlchemySpacing.screenHorizontal)
     }
 
+    // MARK: - Saving Skeleton
+
+    /// Full-width skeleton card shown at the top of the cookbook while
+    /// a recipe is being committed in the background. Matches the visual
+    /// style of RecipeCardView but uses a shimmer animation to indicate
+    /// the save is in progress.
+    private func savingSkeletonCard(_ pending: PendingSave) -> some View {
+        ZStack(alignment: .bottomLeading) {
+            // Image or placeholder with shimmer
+            if let urlStr = pending.imageUrl, let url = URL(string: urlStr) {
+                LazyImage(url: url) { state in
+                    if let image = state.image {
+                        image
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                    } else {
+                        skeletonShimmer
+                    }
+                }
+                .frame(height: 200)
+                .clipped()
+            } else {
+                skeletonShimmer
+                    .frame(height: 200)
+            }
+
+            Color.black.opacity(0.50)
+
+            LinearGradient(
+                colors: [.clear, .black.opacity(0.5)],
+                startPoint: .center,
+                endPoint: .bottom
+            )
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .tint(.white)
+                        .scaleEffect(0.7)
+                    Text("Saving...")
+                        .font(AlchemyTypography.caption)
+                        .foregroundStyle(.white.opacity(0.7))
+                }
+
+                Text(pending.title)
+                    .font(AlchemyTypography.displaySmall)
+                    .foregroundStyle(.white)
+                    .lineLimit(2)
+                    .shadow(color: .black.opacity(0.7), radius: 4, x: 0, y: 2)
+            }
+            .padding(AlchemySpacing.md)
+        }
+        .frame(height: 200)
+        .clipShape(RoundedRectangle(cornerRadius: AlchemySpacing.cardRadius))
+        .padding(.horizontal, AlchemySpacing.screenHorizontal)
+        .transition(.opacity.combined(with: .scale(scale: 0.95)))
+        .animation(.easeInOut(duration: 0.3), value: pendingSave)
+    }
+
+    /// Animated shimmer placeholder for the skeleton card image area.
+    private var skeletonShimmer: some View {
+        Rectangle()
+            .fill(AlchemyColors.surfaceSecondary)
+            .overlay {
+                Rectangle()
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                .clear,
+                                .white.opacity(0.08),
+                                .clear,
+                            ],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .phaseAnimator([false, true]) { content, phase in
+                        content.offset(x: phase ? 300 : -300)
+                    } animation: { _ in
+                        .easeInOut(duration: 1.5).repeatForever(autoreverses: false)
+                    }
+            }
+            .clipped()
+    }
+
     // MARK: - API
 
     private func loadCookbook() async {
@@ -348,6 +498,7 @@ struct CookbookView: View {
         do {
             let response: CookbookResponse = try await APIClient.shared.request("/recipes/cookbook")
             previews = response.items
+            trackCookbookView(itemCount: response.items.count)
         } catch {
             errorMessage = "Couldn't load your cookbook. Check your connection."
             print("[CookbookView] load failed: \(error)")
@@ -362,9 +513,34 @@ struct CookbookView: View {
             withAnimation {
                 previews.removeAll { $0.id == id }
             }
+            BehaviorTelemetry.shared.track(
+                eventType: "cookbook_recipe_unsaved",
+                surface: "cookbook",
+                sessionId: cookbookSessionId,
+                entityType: "recipe",
+                entityId: id
+            )
         } catch {
             print("[CookbookView] unsave failed: \(error)")
         }
+    }
+
+    private func trackCookbookView(itemCount: Int) {
+        let now = Date()
+        if let lastCookbookViewTrackedAt, now.timeIntervalSince(lastCookbookViewTrackedAt) < 30 {
+            return
+        }
+
+        lastCookbookViewTrackedAt = now
+        BehaviorTelemetry.shared.track(
+            eventType: "cookbook_viewed",
+            surface: "cookbook",
+            sessionId: cookbookSessionId,
+            payload: [
+                "item_count": .int(itemCount),
+                "smart_chip_count": .int(smartChips.count),
+            ]
+        )
     }
 }
 

@@ -7,6 +7,7 @@ import type {
   JsonValue,
   RecipePayload,
 } from "../../../_shared/types.ts";
+import { logBehaviorEvents } from "../../lib/behavior-events.ts";
 import type { RouteContext, VariantStatus } from "../shared.ts";
 import type { RecipesDeps } from "./types.ts";
 
@@ -39,10 +40,17 @@ export const handleSaveRoutes = async (
     if (method === "POST") {
       // Parse optional body for autopersonalize flag (defaults to true).
       let autopersonalize = true;
+      let sourceSurface: string | null = null;
       try {
-        const body = await requireJsonBody<{ autopersonalize?: boolean }>(request);
+        const body = await requireJsonBody<{
+          autopersonalize?: boolean;
+          source_surface?: string;
+        }>(request);
         if (typeof body.autopersonalize === "boolean") {
           autopersonalize = body.autopersonalize;
+        }
+        if (typeof body.source_surface === "string" && body.source_surface.trim().length > 0) {
+          sourceSurface = body.source_surface.trim();
         }
       } catch {
         // Body is optional — empty request means default autopersonalize=true.
@@ -80,6 +88,21 @@ export const handleSaveRoutes = async (
         action: "saved",
         requestId,
         afterJson: { autopersonalize } as unknown as JsonValue,
+      });
+
+      await logBehaviorEvents({
+        serviceClient,
+        events: [{
+          eventId: crypto.randomUUID(),
+          userId: auth.userId,
+          eventType: "recipe_saved",
+          entityType: "recipe",
+          entityId: recipeId,
+          sourceSurface,
+          payload: {
+            autopersonalize,
+          },
+        }],
       });
 
       // Ensure image processing for the recipe.
@@ -298,6 +321,17 @@ export const handleSaveRoutes = async (
         entityId: recipeId,
         action: "unsaved",
         requestId,
+      });
+
+      await logBehaviorEvents({
+        serviceClient,
+        events: [{
+          eventId: crypto.randomUUID(),
+          userId: auth.userId,
+          eventType: "recipe_unsaved",
+          entityType: "recipe",
+          entityId: recipeId,
+        }],
       });
 
       return respond(200, { saved: false });

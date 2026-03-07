@@ -3,6 +3,11 @@ import {
   requireJsonBody,
 } from "../../../_shared/errors.ts";
 import type { JsonValue } from "../../../_shared/types.ts";
+import {
+  buildChatBehaviorFacts,
+  logBehaviorEvents,
+  logBehaviorFacts,
+} from "../../lib/behavior-events.ts";
 import type {
   ChatMessageView,
   ChatSessionContext,
@@ -107,6 +112,34 @@ export const handleCreateSession = async (
     );
   }
 
+  await logBehaviorEvents({
+    serviceClient,
+    events: [{
+      eventId: crypto.randomUUID(),
+      userId: auth.userId,
+      eventType: "chat_session_started",
+      sessionId: chatSession.id,
+      entityType: "chat_session",
+      entityId: chatSession.id,
+      payload: {
+        prompt_char_count: message.length,
+        loop_state: "ideation",
+      },
+    }, {
+      eventId: crypto.randomUUID(),
+      userId: auth.userId,
+      eventType: "chat_turn_submitted",
+      sessionId: chatSession.id,
+      entityType: "chat_session",
+      entityId: chatSession.id,
+      payload: {
+        turn_index: 1,
+        prompt_char_count: message.length,
+        thread_size: 1,
+      },
+    }],
+  });
+
   const threadMessages: ChatMessageView[] = [
     {
       id: userMessage.id,
@@ -204,6 +237,39 @@ export const handleCreateSession = async (
       assistantMessageError?.message ?? "assistant_message_insert_missing",
     );
   }
+
+  const resolvedEventId = crypto.randomUUID();
+  const generatedCount = nextCandidateSet?.components.length ?? 0;
+  await logBehaviorEvents({
+    serviceClient,
+    events: [{
+      eventId: resolvedEventId,
+      userId: auth.userId,
+      eventType: "chat_turn_resolved",
+      sessionId: chatSession.id,
+      entityType: "chat_session",
+      entityId: chatSession.id,
+      payload: {
+        loop_state: orchestrated.nextLoopState,
+        intent: (orchestrated.responseContext?.intent ?? null) as JsonValue,
+        mode: (orchestrated.responseContext?.mode ?? null) as JsonValue,
+        candidate_id: (nextCandidateSet?.candidate_id ?? null) as JsonValue,
+        candidate_component_count: generatedCount,
+        triggered_recipe: Boolean(nextCandidateSet),
+      },
+    }],
+  });
+  await logBehaviorFacts({
+    serviceClient,
+    facts: buildChatBehaviorFacts({
+      eventId: resolvedEventId,
+      userId: auth.userId,
+      chatId: chatSession.id,
+      responseContext: (orchestrated.responseContext ?? null) as Record<string, JsonValue> | null,
+      candidateId: nextCandidateSet?.candidate_id ?? null,
+      generatedCount,
+    }),
+  });
 
   const interactionContext: Record<string, JsonValue> = {
     prompt: message,

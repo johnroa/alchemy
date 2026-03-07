@@ -18,4 +18,9 @@ describe("admin navigation registry", () => {
       { label: "Request Trace", href: "/system/request-trace" },
     ]);
   });
+
+  it("registers boards as a first-class section", () => {
+    expect(getPageForPathname("/boards/operations").href).toBe("/boards/operations");
+    expect(getSectionForPathname("/boards/operations").key).toBe("boards");
+  });
 });

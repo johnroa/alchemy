@@ -1,4 +1,5 @@
 import { ApiError } from "../../../_shared/errors.ts";
+import { logBehaviorEvents } from "../../lib/behavior-events.ts";
 import type { ChatSessionContext, RouteContext } from "../shared.ts";
 import type { ChatDeps } from "./types.ts";
 
@@ -239,6 +240,23 @@ export const handleCommit = async (
       committed_components: committedComponents,
       links,
     },
+  });
+
+  await logBehaviorEvents({
+    serviceClient,
+    events: [{
+      eventId: crypto.randomUUID(),
+      userId: auth.userId,
+      eventType: "chat_commit_completed",
+      sessionId: chatId,
+      entityType: "candidate_set",
+      entityId: candidateSet.candidate_id,
+      payload: {
+        candidate_id: candidateSet.candidate_id,
+        revision: candidateSet.revision,
+        committed_count: committedComponents.length,
+      },
+    }],
   });
 
   const messages = await fetchChatMessages(client, chatId, 120);

@@ -1,5 +1,6 @@
 import SwiftUI
 import NukeUI
+import Lottie
 
 /// Full recipe detail view with hero image, sticky scroll title, ingredient table,
 /// steps, and floating tweak chat bar.
@@ -18,6 +19,10 @@ struct RecipeDetailView: View {
     let recipeId: String?
     /// Pre-fetched recipe detail — used when navigating from Generate after commit.
     let preloadedDetail: RecipeDetail?
+    /// Surface that led to this detail view, used for first-party attribution.
+    var sourceSurface: String? = nil
+    /// Upstream session identifier, such as an Explore search ID.
+    var sourceSessionId: String? = nil
 
     /// Whether this view should show "Add to Cookbook" (save) action
     var showAddToCookbook: Bool = false
@@ -29,6 +34,8 @@ struct RecipeDetailView: View {
     /// the parent owns the toolbar. Setting this false prevents duplicate
     /// nav bar items that cause the toolbar to render double-wide.
     var isEmbedded: Bool = false
+    /// Disable product behavior telemetry for transient candidate previews.
+    var trackBehavior: Bool = true
 
     @State private var detail: RecipeDetail?
     @State private var isLoading = true
@@ -46,6 +53,13 @@ struct RecipeDetailView: View {
 
     @State private var heroHeight: CGFloat = 0
     @State private var scrollOffset: CGFloat = 0
+    @State private var detailSessionId = UUID().uuidString
+    @State private var lastActiveAt: Date?
+    @State private var cumulativeActiveDwellSeconds = 0
+    @State private var heartbeatTask: Task<Void, Never>?
+    @State private var hasTrackedOpen = false
+    @State private var hasTrackedCook = false
+    @Environment(\.scenePhase) private var scenePhase
     private let heroFraction: CGFloat = 0.4
 
     private var titleIsPinned: Bool {
@@ -55,23 +69,47 @@ struct RecipeDetailView: View {
     // MARK: - Initializers
 
     /// Fetch-by-ID initializer (most common path)
-    init(recipeId: String, showAddToCookbook: Bool = false, showShareButton: Bool = true, showTweakBar: Bool = true, isEmbedded: Bool = false) {
+    init(
+        recipeId: String,
+        sourceSurface: String? = nil,
+        sourceSessionId: String? = nil,
+        showAddToCookbook: Bool = false,
+        showShareButton: Bool = true,
+        showTweakBar: Bool = true,
+        isEmbedded: Bool = false,
+        trackBehavior: Bool = true
+    ) {
         self.recipeId = recipeId
         self.preloadedDetail = nil
+        self.sourceSurface = sourceSurface
+        self.sourceSessionId = sourceSessionId
         self.showAddToCookbook = showAddToCookbook
         self.showShareButton = showShareButton
         self.showTweakBar = showTweakBar
         self.isEmbedded = isEmbedded
+        self.trackBehavior = trackBehavior
     }
 
     /// Pre-loaded detail initializer (used after commit or from candidate)
-    init(detail: RecipeDetail, showAddToCookbook: Bool = false, showShareButton: Bool = true, showTweakBar: Bool = true, isEmbedded: Bool = false) {
+    init(
+        detail: RecipeDetail,
+        sourceSurface: String? = nil,
+        sourceSessionId: String? = nil,
+        showAddToCookbook: Bool = false,
+        showShareButton: Bool = true,
+        showTweakBar: Bool = true,
+        isEmbedded: Bool = false,
+        trackBehavior: Bool = true
+    ) {
         self.recipeId = nil
         self.preloadedDetail = detail
+        self.sourceSurface = sourceSurface
+        self.sourceSessionId = sourceSessionId
         self.showAddToCookbook = showAddToCookbook
         self.showShareButton = showShareButton
         self.showTweakBar = showTweakBar
         self.isEmbedded = isEmbedded
+        self.trackBehavior = trackBehavior
     }
 
     var body: some View {
@@ -102,6 +140,15 @@ struct RecipeDetailView: View {
         .toolbarVisibility(.hidden, for: .tabBar)
         .animation(.easeInOut(duration: 0.2), value: titleIsPinned)
         .task { await loadRecipe() }
+        .onChange(of: scenePhase) { _, _ in
+            handleBehaviorLifecycle()
+        }
+        .onChange(of: detail?.id) { _, _ in
+            handleBehaviorLifecycle()
+        }
+        .onDisappear {
+            finalizeBehaviorSession()
+        }
     }
 
     // MARK: - Loading / Error
@@ -109,7 +156,9 @@ struct RecipeDetailView: View {
     private var loadingView: some View {
         ZStack {
             AlchemyColors.background.ignoresSafeArea()
-            ProgressView().tint(.white)
+            LottieView(animation: .named("alchemy-loading"))
+                .playing(loopMode: .loop)
+                .frame(width: 80, height: 80)
         }
     }
 
@@ -482,7 +531,14 @@ struct RecipeDetailView: View {
 
     private func saveRecipe(_ id: String) async {
         do {
-            try await APIClient.shared.requestVoid("/recipes/\(id)/save", method: .post)
+            try await APIClient.shared.requestVoid(
+                "/recipes/\(id)/save",
+                method: .post,
+                body: SaveRecipeRequest(
+                    autopersonalize: nil,
+                    sourceSurface: sourceSurface
+                )
+            )
             withAnimation { isSaved = true }
         } catch {
             print("[RecipeDetailView] save failed: \(error)")
@@ -617,6 +673,14 @@ struct RecipeDetailView: View {
                     substitutionDiffs = diffs
                     adaptationSummary = response.adaptationSummary
                 }
+
+                trackDetailEvent(
+                    eventType: "ingredient_substitution_applied",
+                    payload: [
+                        "diff_count": .int(diffs.count),
+                        "has_conflicts": .bool((response.conflicts?.isEmpty == false)),
+                    ]
+                )
             }
 
             // Reload the recipe to reflect the personalized variant.
@@ -626,6 +690,133 @@ struct RecipeDetailView: View {
         }
 
         isTweaking = false
+    }
+
+    private var behaviorRecipeId: String? {
+        detail?.id ?? recipeId ?? preloadedDetail?.id
+    }
+
+    private func handleBehaviorLifecycle() {
+        guard trackBehavior, detail != nil else { return }
+
+        if scenePhase == .active {
+            resumeBehaviorSession()
+        } else {
+            pauseBehaviorSession()
+        }
+    }
+
+    private func resumeBehaviorSession() {
+        guard trackBehavior, let recipeId = behaviorRecipeId else { return }
+
+        if !hasTrackedOpen {
+            trackDetailEvent(
+                eventType: "recipe_detail_opened",
+                entityId: recipeId,
+                payload: [
+                    "image_ready": .bool(detail?.imageStatus == "ready"),
+                ]
+            )
+            hasTrackedOpen = true
+        }
+
+        guard lastActiveAt == nil else { return }
+        lastActiveAt = .now
+        startHeartbeatLoop()
+    }
+
+    private func pauseBehaviorSession() {
+        guard trackBehavior else { return }
+        recordActiveDwell(until: .now)
+        lastActiveAt = nil
+        heartbeatTask?.cancel()
+        heartbeatTask = nil
+    }
+
+    private func finalizeBehaviorSession() {
+        guard trackBehavior, hasTrackedOpen else { return }
+
+        pauseBehaviorSession()
+
+        trackDetailEvent(
+            eventType: "recipe_detail_closed",
+            payload: [
+                "active_dwell_seconds": .int(cumulativeActiveDwellSeconds),
+                "cooked_inferred": .bool(hasTrackedCook),
+            ]
+        )
+    }
+
+    private func startHeartbeatLoop() {
+        guard heartbeatTask == nil else { return }
+
+        heartbeatTask = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(15))
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    emitHeartbeat()
+                }
+            }
+        }
+    }
+
+    private func emitHeartbeat() {
+        guard trackBehavior, scenePhase == .active else { return }
+
+        recordActiveDwell(until: .now)
+        lastActiveAt = .now
+
+        trackDetailEvent(
+            eventType: "recipe_detail_heartbeat",
+            payload: [
+                "active_dwell_seconds": .int(cumulativeActiveDwellSeconds),
+            ]
+        )
+    }
+
+    private func recordActiveDwell(until date: Date) {
+        guard let lastActiveAt else { return }
+
+        let deltaSeconds = max(0, Int(date.timeIntervalSince(lastActiveAt)))
+        if deltaSeconds > 0 {
+            cumulativeActiveDwellSeconds += deltaSeconds
+        }
+
+        self.lastActiveAt = date
+
+        if !hasTrackedCook, cumulativeActiveDwellSeconds >= 600 {
+            hasTrackedCook = true
+            trackDetailEvent(
+                eventType: "recipe_cooked_inferred",
+                payload: [
+                    "active_dwell_seconds": .int(cumulativeActiveDwellSeconds),
+                ]
+            )
+        }
+    }
+
+    private func trackDetailEvent(
+        eventType: String,
+        entityId: String? = nil,
+        payload: [String: AnyCodableValue]? = nil
+    ) {
+        guard trackBehavior, let recipeId = entityId ?? behaviorRecipeId else { return }
+
+        var enrichedPayload = payload ?? [:]
+        if let sourceSessionId {
+            enrichedPayload["source_session_id"] = .string(sourceSessionId)
+        }
+
+        BehaviorTelemetry.shared.track(
+            eventType: eventType,
+            surface: "recipe_detail",
+            sessionId: detailSessionId,
+            entityType: "recipe",
+            entityId: recipeId,
+            sourceSurface: sourceSurface,
+            payload: enrichedPayload.isEmpty ? nil : enrichedPayload
+        )
     }
 }
 

@@ -2,6 +2,20 @@
 
 ## [Unreleased] — 2026-03-07
 
+### Executive Boards + First-Party Behavior Telemetry + iOS Sentry (v3.5.0)
+
+- **First-party behavior ledger:** Added append-only `behavior_events` and `behavior_semantic_facts` tables for product telemetry across Explore, Chat, Cookbook, and recipe detail sessions.
+- **Behavior ingestion endpoint:** Added `POST /telemetry/behavior`. OpenAPI bumped to `3.5.0`, generated contracts refreshed, and Admin API docs updated.
+- **Canonical event catalog:** Added shared behavior event definitions in `packages/shared` and wired them through the iOS client and Supabase edge function.
+- **iOS telemetry instrumentation:** Added Explore impressions and opens, Cookbook views/searches/chip usage, chat turn events, recipe-detail dwell heartbeats, and `recipe_cooked_inferred` after 10 minutes of cumulative foreground-active dwell.
+- **Recipe save attribution:** `POST /recipes/{id}/save` now accepts `source_surface` and logs first-party `recipe_saved` behavior events.
+- **Executive board surfaces:** Added Admin `/boards`, `/boards/engagement`, and `/boards/operations` routes plus a `/boards/personalization` placeholder while ranking rollups stabilize.
+- **Board UI kit:** Added first-party executive cards, chart shells, and table shells inspired by the approved shadcn references and applied them to the new board pages plus selected analytics pages.
+- **Board KPI rollups:** Added engagement and operations board data builders over `behavior_events` plus existing LLM and dashboard telemetry.
+- **Admin navigation:** Boards are now a first-class section in the Admin shell.
+- **iOS Sentry wiring:** Added Sentry Cocoa, app startup bootstrap in `AlchemyApp`, Info.plist-backed DSN/sample-rate config, MetricKit support, app-hang tracking, and privacy-safe defaults.
+- **Test coverage:** Added board KPI tests, updated analytics page tests, aligned route tests with `cookbook_entries` and current OpenAPI schema, and made shared DB config lazy so route tests do not require live env vars at import time.
+
 ### Recipe Import (v3.2.0)
 
 - **POST /chat/import endpoint:** Accepts a recipe source (URL, pasted text, or cookbook-page photo) and returns a seeded ChatSession with a CandidateRecipeSet. Imported recipes enter the existing Generate flow (iteration via `/chat/{id}/messages`, commit via `/chat/{id}/commit`).
@@ -23,6 +37,7 @@
 ### Recipe & Ingredient Popularity + Trending (v3.3.0)
 
 - **Recipe popularity scoring:** New `save_count`, `variant_count`, `view_count`, `popularity_score`, and `trending_score` columns on `recipe_search_documents`. All-time and 7-day weighted composites (saves x3, variants x2, views x0.5).
+- **Explore discovery badges:** `RecipePreview` now carries `popularity_score` and `trending_score` so clients can label recipes as `Trending`, `Popular`, `New`, and `Rising` using source-of-truth discovery metrics instead of ad hoc UI-only heuristics.
 - **View tracking:** New `recipe_view_events` table with fire-and-forget logging on `GET /recipes/{id}`. Append-only, deduped by `COUNT(DISTINCT user_id)` during aggregation.
 - **Ingredient trending:** New `ingredient_trending_stats` table with two signals: recipe-derived popularity (sum of recipe scores) and substitution momentum (sub-in vs sub-out from variant provenance diffs). Momentum scaled -100 to +100.
 - **Batch refresh RPC:** `refresh_recipe_popularity_stats()` recomputes all recipe and ingredient stats in a single transaction. Triggered via `POST /popularity/refresh`.

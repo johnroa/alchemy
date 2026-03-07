@@ -1,3 +1,4 @@
+import Lottie
 import SwiftUI
 
 /// Root router that determines which flow to show based on auth + onboarding state.
@@ -7,6 +8,7 @@ import SwiftUI
 /// On app launch, restores the Supabase session. If authenticated, checks
 /// onboarding completion via GET /onboarding/state before showing the main app.
 struct ContentView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @State var authManager = AuthManager.shared
     @State private var hasCompletedOnboarding = false
     @State private var isCheckingOnboarding = false
@@ -50,13 +52,18 @@ struct ContentView: View {
                 hasCompletedOnboarding = false
             }
         }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase != .active else { return }
+            Task { await BehaviorTelemetry.shared.flush() }
+        }
     }
 
     private var loadingView: some View {
         ZStack {
             AlchemyColors.background.ignoresSafeArea()
-            ProgressView()
-                .tint(.white)
+            LottieView(animation: .named("alchemy-loading"))
+                .playing(loopMode: .loop)
+                .frame(width: 120, height: 120)
         }
     }
 

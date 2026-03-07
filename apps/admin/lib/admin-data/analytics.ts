@@ -7,7 +7,7 @@ import { getImportData } from "./imports";
 import { getIngredientsData } from "./ingredients";
 import { getMetadataPipelineData } from "./pipelines";
 import { getRecipeAuditIndexData, getVariantStats } from "./recipes";
-import { isSchemaMissingError } from "./shared";
+import { COUNTABLE_TABLE_COLUMNS, isSchemaMissingError } from "./shared";
 import { getMemoryData } from "./memory";
 import { getDashboardData } from "./overview";
 
@@ -16,6 +16,12 @@ type TimeBucket = {
   label: string;
   startMs: number;
   endMs: number;
+};
+
+type CountQueryResult<Row = unknown> = {
+  data?: Row[] | null;
+  count?: number | null;
+  error?: { message: string } | null;
 };
 
 const startOfHour = (date: Date): Date => {
@@ -114,6 +120,15 @@ const createSeries = (buckets: TimeBucket[], fields: string[]): Array<Record<str
     return row;
   });
 
+const getResultCount = <Row>(result: CountQueryResult<Row>): number => result.count ?? result.data?.length ?? 0;
+
+const throwIfQueryError = (...results: CountQueryResult[]): void => {
+  const error = results.find((result) => result.error)?.error;
+  if (error) {
+    throw new Error(error.message);
+  }
+};
+
 export const getProductAnalyticsData = async (query: AnalyticsQueryState): Promise<{
   summary: {
     users: number;
@@ -123,22 +138,50 @@ export const getProductAnalyticsData = async (query: AnalyticsQueryState): Promi
     variants: number;
     newVariants: number;
     staleVariants: number;
+    recipes: number;
+    recipeUpdates: number;
+    ingredients: number;
+    ingredientUpdates: number;
   };
   series: Array<Record<string, number | string>>;
 }> => {
   const client = getAdminClient();
   const { buckets, windowStart } = buildBuckets(query);
 
-  const [dashboard, cookbookSeriesResult, variantSeriesResult, userSeriesResult] = await Promise.all([
-    getDashboardData(),
-    client.from("cookbook_entries").select("saved_at").gte("saved_at", windowStart.toISOString()).limit(4000),
+  const [userTotalResult, cookbookTotalResult, variantTotalResult, staleVariantTotalResult, recipeTotalResult, ingredientTotalResult, cookbookSeriesResult, variantSeriesResult, userSeriesResult, recipeUpdatesResult, ingredientUpdatesResult] = await Promise.all([
+    client.from("users").select("id", { count: "exact", head: true }),
+    client.from("cookbook_entries").select(COUNTABLE_TABLE_COLUMNS.cookbook_entries, { count: "exact", head: true }),
+    client.from("user_recipe_variants").select("id", { count: "exact", head: true }),
     client
       .from("user_recipe_variants")
-      .select("created_at,stale_status")
+      .select("id", { count: "exact", head: true })
+      .in("stale_status", ["stale", "needs_review"]),
+    client.from("recipes").select("id", { count: "exact", head: true }),
+    client.from("ingredients").select("id", { count: "exact", head: true }),
+    client.from("cookbook_entries").select("saved_at", { count: "exact" }).gte("saved_at", windowStart.toISOString()).limit(4000),
+    client
+      .from("user_recipe_variants")
+      .select("created_at", { count: "exact" })
       .gte("created_at", windowStart.toISOString())
       .limit(4000),
-    client.from("users").select("created_at").gte("created_at", windowStart.toISOString()).limit(4000),
+    client.from("users").select("created_at", { count: "exact" }).gte("created_at", windowStart.toISOString()).limit(4000),
+    client.from("recipes").select("id", { count: "exact", head: true }).gte("updated_at", windowStart.toISOString()),
+    client.from("ingredients").select("id", { count: "exact", head: true }).gte("updated_at", windowStart.toISOString()),
   ]);
+
+  throwIfQueryError(
+    userTotalResult,
+    cookbookTotalResult,
+    variantTotalResult,
+    staleVariantTotalResult,
+    recipeTotalResult,
+    ingredientTotalResult,
+    cookbookSeriesResult,
+    variantSeriesResult,
+    userSeriesResult,
+    recipeUpdatesResult,
+    ingredientUpdatesResult,
+  );
 
   const series = createSeries(buckets, ["users", "cookbook", "variants"]);
   for (const row of userSeriesResult.data ?? []) {
@@ -153,13 +196,17 @@ export const getProductAnalyticsData = async (query: AnalyticsQueryState): Promi
 
   return {
     summary: {
-      users: dashboard.userCount,
-      newUsers: (userSeriesResult.data ?? []).length,
-      cookbookEntries: dashboard.cookbookEntryCount,
-      newCookbookEntries: (cookbookSeriesResult.data ?? []).length,
-      variants: dashboard.variantCount,
-      newVariants: (variantSeriesResult.data ?? []).length,
-      staleVariants: dashboard.staleVariantCount,
+      users: getResultCount(userTotalResult),
+      newUsers: getResultCount(userSeriesResult),
+      cookbookEntries: getResultCount(cookbookTotalResult),
+      newCookbookEntries: getResultCount(cookbookSeriesResult),
+      variants: getResultCount(variantTotalResult),
+      newVariants: getResultCount(variantSeriesResult),
+      staleVariants: getResultCount(staleVariantTotalResult),
+      recipes: getResultCount(recipeTotalResult),
+      recipeUpdates: getResultCount(recipeUpdatesResult),
+      ingredients: getResultCount(ingredientTotalResult),
+      ingredientUpdates: getResultCount(ingredientUpdatesResult),
     },
     series,
   };

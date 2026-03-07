@@ -2,6 +2,7 @@ import {
   ApiError,
   requireJsonBody,
 } from "../../../_shared/errors.ts";
+import { logBehaviorEvents } from "../../lib/behavior-events.ts";
 import type {
   ChatLoopState,
   ChatSessionContext,
@@ -216,6 +217,25 @@ export const handleCandidatePatch = async (
       active_component_id: hydratedNextCandidateSet?.active_component_id ?? null,
     },
   });
+
+  if (body.action === "set_active_component" && hydratedNextCandidateSet) {
+    await logBehaviorEvents({
+      serviceClient,
+      events: [{
+        eventId: crypto.randomUUID(),
+        userId: auth.userId,
+        eventType: "chat_candidate_selected",
+        sessionId: chatId,
+        entityType: "candidate_set",
+        entityId: hydratedNextCandidateSet.candidate_id,
+        payload: {
+          candidate_id: hydratedNextCandidateSet.candidate_id,
+          revision: hydratedNextCandidateSet.revision,
+          active_component_id: hydratedNextCandidateSet.active_component_id,
+        },
+      }],
+    });
+  }
 
   const messages = await fetchChatMessages(client, chatId, 120);
   return respond(

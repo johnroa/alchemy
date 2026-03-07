@@ -44,6 +44,7 @@ import { handleMetadataRoutes } from "./routes/metadata.ts";
 import { handleOnboardingRoutes } from "./routes/onboarding.ts";
 import { handleImportRoutes } from "./routes/import.ts";
 import { handleRecipeRoutes } from "./routes/recipes.ts";
+import { handleTelemetryRoutes } from "./routes/telemetry.ts";
 
 // ── Extracted lib modules ──
 import { normalizePath, getLimit, parseUuid } from "./lib/routing-utils.ts";
@@ -168,6 +169,11 @@ Deno.serve(async (request) => {
       respond,
       modelOverrides,
     };
+
+    const telemetryResponse = await handleTelemetryRoutes(routeContext);
+    if (telemetryResponse) {
+      return telemetryResponse;
+    }
 
     // ── GET/PATCH /preferences ──
     if (segments.length === 1 && segments[0] === "preferences") {

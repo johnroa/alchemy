@@ -23,24 +23,49 @@ struct ImportView: View {
 
     var body: some View {
         NavigationStack {
-            Group {
-                switch method {
-                case .url:
-                    urlImportContent
-                case .text:
-                    textImportContent
-                case .photo:
-                    photoImportContent
+            ZStack {
+                AlchemyColors.background
+                    .ignoresSafeArea()
+
+                LinearGradient(
+                    colors: [
+                        Color.white.opacity(0.04),
+                        Color.clear,
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .ignoresSafeArea()
+
+                ScrollView {
+                    Group {
+                        switch method {
+                        case .url:
+                            urlImportContent
+                        case .text:
+                            textImportContent
+                        case .photo:
+                            photoImportContent
+                        }
+                    }
+                    .padding(.horizontal, AlchemySpacing.screenHorizontal)
+                    .padding(.top, AlchemySpacing.lg)
+                    .padding(.bottom, AlchemySpacing.xxxl)
                 }
             }
             .navigationTitle(navigationTitle)
             .navigationBarTitleDisplayMode(.inline)
+            .containerBackground(.clear, for: .navigation)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
+                        .font(AlchemyTypography.body)
+                        .foregroundStyle(AlchemyColors.textPrimary)
                 }
             }
             .disabled(viewModel.isLoading)
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
             .task {
                 // Auto-fill and start import if a URL was pre-filled
                 // (e.g., from the clipboard banner).
@@ -63,21 +88,49 @@ struct ImportView: View {
     // MARK: - URL Import
 
     private var urlImportContent: some View {
-        VStack(spacing: 24) {
-            VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 24) {
+            VStack(alignment: .leading, spacing: AlchemySpacing.sm) {
+                Text("Paste a recipe link and Sous Chef will turn it into a fully editable recipe.")
+                    .font(AlchemyTypography.body)
+                    .foregroundStyle(AlchemyColors.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.horizontal, AlchemySpacing.sm)
+
+            VStack(alignment: .leading, spacing: 12) {
                 Text("Recipe URL")
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                    .foregroundStyle(.secondary)
+                    .font(AlchemyTypography.captionBold)
+                    .foregroundStyle(AlchemyColors.textSecondary)
 
                 TextField("https://example.com/recipe", text: $viewModel.urlText)
-                    .textFieldStyle(.roundedBorder)
+                    .font(AlchemyTypography.body)
+                    .foregroundStyle(AlchemyColors.textPrimary)
                     .keyboardType(.URL)
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
+                    .submitLabel(.go)
+                    .padding(.horizontal, AlchemySpacing.md)
+                    .padding(.vertical, AlchemySpacing.md)
+                    .background {
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .fill(AlchemyColors.surface)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                    .strokeBorder(.white.opacity(0.08), lineWidth: 1)
+                            )
+                    }
                     .onSubmit {
                         Task { await viewModel.importFromURL(onImported: onImported) }
                     }
+            }
+            .padding(AlchemySpacing.lg)
+            .background {
+                RoundedRectangle(cornerRadius: 28, style: .continuous)
+                    .fill(.ultraThinMaterial)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 28, style: .continuous)
+                            .strokeBorder(.white.opacity(0.12), lineWidth: 1)
+                    )
             }
 
             if let error = viewModel.errorMessage {
@@ -87,16 +140,12 @@ struct ImportView: View {
             importButton("Import Recipe") {
                 await viewModel.importFromURL(onImported: onImported)
             }
-
-            Spacer()
-
-            Text("Paste a URL from any recipe website. We'll extract the recipe and create an editable version for you.")
-                .font(.footnote)
-                .foregroundStyle(.tertiary)
+            Text("Paste a URL from any recipe website. We’ll extract it, rewrite it into Alchemy format, and open it in Sous Chef ready to customize.")
+                .font(AlchemyTypography.caption)
+                .foregroundStyle(AlchemyColors.textTertiary)
                 .multilineTextAlignment(.center)
-                .padding(.horizontal)
+                .padding(.horizontal, AlchemySpacing.sm)
         }
-        .padding()
     }
 
     // MARK: - Text Import
@@ -105,9 +154,8 @@ struct ImportView: View {
         VStack(spacing: 24) {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Recipe Text")
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                    .foregroundStyle(.secondary)
+                    .font(AlchemyTypography.captionBold)
+                    .foregroundStyle(AlchemyColors.textSecondary)
 
                 TextEditor(text: $viewModel.pastedText)
                     .frame(minHeight: 200)
@@ -134,7 +182,6 @@ struct ImportView: View {
                 await viewModel.importFromText(onImported: onImported)
             }
         }
-        .padding()
     }
 
     // MARK: - Photo Import
@@ -212,7 +259,6 @@ struct ImportView: View {
 
             Spacer()
         }
-        .padding()
         .fullScreenCover(isPresented: $viewModel.showCamera) {
             CameraCapture(image: $viewModel.capturedImage)
                 .ignoresSafeArea()
@@ -226,32 +272,38 @@ struct ImportView: View {
             Task { await action() }
         } label: {
             if viewModel.isLoading {
-                ProgressView()
-                    .tint(.white)
-                    .frame(maxWidth: .infinity)
-                    .padding()
+                HStack(spacing: AlchemySpacing.sm) {
+                    ProgressView()
+                        .tint(AlchemyColors.textPrimary)
+                    Text("Importing...")
+                        .font(AlchemyTypography.subheading)
+                        .foregroundStyle(AlchemyColors.textPrimary)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, AlchemySpacing.md)
             } else {
                 Text(title)
-                    .fontWeight(.semibold)
+                    .font(AlchemyTypography.subheading)
+                    .foregroundStyle(AlchemyColors.textPrimary)
                     .frame(maxWidth: .infinity)
-                    .padding()
+                    .padding(.vertical, AlchemySpacing.md)
             }
         }
-        .buttonStyle(.borderedProminent)
+        .glassEffect(.regular, in: .capsule)
         .disabled(viewModel.isLoading)
     }
 
     private func errorBanner(_ message: String) -> some View {
         HStack {
             Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.orange)
+                .foregroundStyle(AlchemyColors.accent)
             Text(message)
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+                .font(AlchemyTypography.bodySecondary)
+                .foregroundStyle(AlchemyColors.textSecondary)
         }
-        .padding()
-        .background(.orange.opacity(0.1))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .padding(AlchemySpacing.md)
+        .background(AlchemyColors.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 }
 

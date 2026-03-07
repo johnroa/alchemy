@@ -128,6 +128,8 @@ export type SearchRpcRow = {
   indexed_at: string;
   save_count?: number;
   variant_count?: number;
+  popularity_score?: number | string;
+  trending_score?: number | string;
 };
 
 export type SearchDocumentSource = {

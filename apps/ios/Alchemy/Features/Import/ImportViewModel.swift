@@ -34,6 +34,10 @@ final class ImportViewModel {
             errorMessage = "Invalid URL format"
             return
         }
+        guard RecipeURLDetector.isLikelyRecipe(urlString: trimmed) else {
+            errorMessage = "That URL doesn't look like a recipe page. Paste a direct recipe link."
+            return
+        }
 
         await performImport(
             request: .url(trimmed, origin: "in_app_paste"),

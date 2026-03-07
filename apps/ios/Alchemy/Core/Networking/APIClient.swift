@@ -132,3 +132,91 @@ enum HTTPMethod: String {
     case put = "PUT"
     case delete = "DELETE"
 }
+
+// MARK: - First-Party Behavior Telemetry
+
+@MainActor
+final class BehaviorTelemetry {
+
+    static let shared = BehaviorTelemetry()
+
+    private let maxBatchSize = 10
+    private let flushDelayNs: UInt64 = 5_000_000_000
+    private let formatter: ISO8601DateFormatter
+
+    private var queue: [BehaviorTelemetryEventRequest] = []
+    private var scheduledFlushTask: Task<Void, Never>?
+
+    private init() {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        self.formatter = formatter
+    }
+
+    func track(
+        eventType: String,
+        surface: String,
+        sessionId: String? = nil,
+        entityType: String? = nil,
+        entityId: String? = nil,
+        sourceSurface: String? = nil,
+        algorithmVersion: String? = nil,
+        payload: [String: AnyCodableValue]? = nil
+    ) {
+        queue.append(
+            BehaviorTelemetryEventRequest(
+                eventId: UUID().uuidString,
+                eventType: eventType,
+                surface: surface,
+                occurredAt: formatter.string(from: .now),
+                sessionId: sessionId,
+                entityType: entityType,
+                entityId: entityId,
+                sourceSurface: sourceSurface,
+                algorithmVersion: algorithmVersion,
+                payload: payload
+            )
+        )
+
+        if queue.count >= maxBatchSize {
+            Task { await flush() }
+        } else {
+            scheduleFlush()
+        }
+    }
+
+    func flush() async {
+        scheduledFlushTask?.cancel()
+        scheduledFlushTask = nil
+
+        guard !queue.isEmpty else { return }
+
+        let batch = Array(queue.prefix(maxBatchSize))
+        queue.removeFirst(batch.count)
+
+        do {
+            let _: BehaviorTelemetryBatchResponse = try await APIClient.shared.request(
+                "/telemetry/behavior",
+                method: .post,
+                body: BehaviorTelemetryBatchRequest(events: batch)
+            )
+        } catch {
+            queue.insert(contentsOf: batch, at: 0)
+            scheduleFlush()
+            return
+        }
+
+        if !queue.isEmpty {
+            scheduleFlush()
+        }
+    }
+
+    private func scheduleFlush() {
+        guard scheduledFlushTask == nil else { return }
+
+        scheduledFlushTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: flushDelayNs)
+            await flush()
+        }
+    }
+}

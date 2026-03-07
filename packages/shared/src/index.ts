@@ -10,6 +10,16 @@ export type ErrorEnvelope = {
 export const API_BASE_PATH = "/v1";
 
 export {
+  BEHAVIOR_EVENT_DEFINITIONS,
+  BEHAVIOR_EVENT_TYPES,
+  BEHAVIOR_SURFACES,
+  isBehaviorEventType,
+  isBehaviorSurface,
+  type BehaviorEventType,
+  type BehaviorSurface,
+} from "./behavior-events";
+
+export {
   resolveIngredientIconKey,
   type IngredientIconInput,
   type IngredientIconKey
