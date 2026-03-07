@@ -27,6 +27,9 @@ struct TabShell: View {
     @State private var importedSession: ChatSessionResponse?
     /// Tracks which import method the user selected from ImportMenu.
     @State private var selectedImportMethod: ImportMethod?
+    /// URL pre-filled by the clipboard banner. Passed to ImportView
+    /// so the URL text field is populated when the sheet opens.
+    @State private var prefillURL: String?
 
     var body: some View {
         TabView(selection: $selectedTab) {
@@ -45,16 +48,22 @@ struct TabShell: View {
         .tabViewStyle(.tabBarOnly)
         .tabBarMinimizeBehavior(.onScrollDown)
         .tint(AlchemyColors.textPrimary)
-        .environment(\.importAction, ImportAction { [showImportSheet = $showImportSheet, selectedMethod = $selectedImportMethod] method in
-            Task { @MainActor in
-                selectedMethod.wrappedValue = method
-                showImportSheet.wrappedValue = true
-            }
+        .environment(\.importAction, ImportAction { method in
+            selectedImportMethod = method
+            showImportSheet = true
         })
+        .overlay(alignment: .top) {
+            ClipboardBanner { url in
+                prefillURL = url
+                selectedImportMethod = .url
+                showImportSheet = true
+            }
+        }
         .sheet(isPresented: $showImportSheet) {
             if let method = selectedImportMethod {
-                ImportView(method: method) { session in
+                ImportView(method: method, prefillURL: prefillURL) { session in
                     showImportSheet = false
+                    prefillURL = nil
                     importedSession = session
                     selectedTab = .sousChef
                 }

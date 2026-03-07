@@ -16,6 +16,7 @@ final class ImportViewModel {
     var pastedText: String = ""
     var selectedPhotoItem: PhotosPickerItem?
     var capturedImage: UIImage?
+    var showCamera = false
 
     var isLoading = false
     var errorMessage: String?

@@ -120,7 +120,9 @@ export const getLlmConfigData = async (): Promise<{
   };
 };
 
-export const getModelUsageData = async (): Promise<{
+export const getModelUsageData = async (
+  options: { rangeDays?: number } = {},
+): Promise<{
   windowStart: string;
   windowEnd: string;
   totals: {
@@ -174,7 +176,8 @@ export const getModelUsageData = async (): Promise<{
 }> => {
   const client = getAdminClient();
   const windowEnd = new Date();
-  const windowStart = new Date(windowEnd.getTime() - 14 * 24 * 60 * 60 * 1000);
+  const rangeDays = Math.max(1, Math.min(90, Math.round(options.rangeDays ?? 14)));
+  const windowStart = new Date(windowEnd.getTime() - rangeDays * 24 * 60 * 60 * 1000);
   const hourlyStart = new Date(windowEnd.getTime() - 24 * 60 * 60 * 1000);
 
   const [{ data: rows, error }, { data: routes }, { data: registry }] = await Promise.all([
@@ -267,7 +270,7 @@ export const getModelUsageData = async (): Promise<{
     });
   }
 
-  for (let index = 13; index >= 0; index -= 1) {
+  for (let index = rangeDays - 1; index >= 0; index -= 1) {
     const bucketDate = new Date(windowEnd);
     bucketDate.setHours(0, 0, 0, 0);
     bucketDate.setDate(bucketDate.getDate() - index);

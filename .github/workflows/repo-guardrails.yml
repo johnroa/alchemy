@@ -55,3 +55,6 @@ jobs:
 
       - name: Lint admin app
         run: pnpm --filter @alchemy/admin lint
+
+      - name: Test admin app
+        run: pnpm --filter @alchemy/admin test

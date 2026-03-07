@@ -28,7 +28,7 @@ type SimScope = (typeof SIM_SCOPES)[number];
 
 type LaneOverrides = Partial<Record<SimScope, ModelOverride>>;
 
-type RegistryModel = { id: string; provider: string; model: string; display_name: string; is_available: boolean };
+export type SimulationRegistryModel = { id: string; provider: string; model: string; display_name: string; is_available: boolean };
 
 type SimStepStatus = "running" | "ok" | "failed";
 
@@ -650,7 +650,7 @@ function OverridePanel({
   onChange
 }: {
   overrides: LaneOverrides;
-  registryModels: RegistryModel[];
+  registryModels: SimulationRegistryModel[];
   onChange: (overrides: LaneOverrides) => void;
 }): React.JSX.Element {
   const [open, setOpen] = useState(false);
@@ -840,7 +840,7 @@ function RunLane({
 }: {
   label: "A" | "B";
   overrides: LaneOverrides;
-  registryModels: RegistryModel[];
+  registryModels: SimulationRegistryModel[];
   onOverridesChange: (o: LaneOverrides) => void;
   running: boolean;
   result: SimResult | null;
@@ -1039,7 +1039,9 @@ function ComparisonTable({ a, b }: { a: SimResult; b: SimResult }): React.JSX.El
   );
 }
 
-export function RecipeSimulationRunnerCard({ registryModels }: { registryModels: RegistryModel[] }): React.JSX.Element {
+export type RecipeSimulationRunnerCardProps = { registryModels: SimulationRegistryModel[] };
+
+export function RecipeSimulationRunnerCard({ registryModels }: RecipeSimulationRunnerCardProps): React.JSX.Element {
   const [runningA, setRunningA] = useState(false);
   const [runningB, setRunningB] = useState(false);
   const [resultA, setResultA] = useState<SimResult | null>(null);

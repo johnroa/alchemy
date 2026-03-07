@@ -3,12 +3,20 @@ import SwiftUI
 
 /// Modal sheet for importing recipes from URLs, photos, or pasted text.
 ///
-/// Presented by TabShell after the user taps the import dialog action.
+/// Presented by TabShell after the user taps the import menu action.
 /// On successful import, calls `onImported` with the seeded ChatSession,
 /// which TabShell uses to navigate to GenerateView with the imported recipe.
 struct ImportView: View {
     let method: ImportMethod
-    let onImported: @Sendable (ChatSessionResponse) -> Void
+    /// Optional URL pre-filled by the clipboard banner. When set,
+    /// the URL text field is populated on appear and the import
+    /// starts automatically.
+    var prefillURL: String? = nil
+    /// Called on the main actor when the import API succeeds. The caller
+    /// (TabShell) uses this to dismiss the sheet, set the imported session,
+    /// and switch to the Sous Chef tab. Must NOT be @Sendable because
+    /// it mutates @State properties that are main-actor-isolated.
+    let onImported: (ChatSessionResponse) -> Void
 
     @State private var viewModel = ImportViewModel()
     @Environment(\.dismiss) private var dismiss
@@ -33,14 +41,22 @@ struct ImportView: View {
                 }
             }
             .disabled(viewModel.isLoading)
+            .task {
+                // Auto-fill and start import if a URL was pre-filled
+                // (e.g., from the clipboard banner).
+                if let prefillURL, method == .url {
+                    viewModel.urlText = prefillURL
+                    await viewModel.importFromURL(onImported: onImported)
+                }
+            }
         }
     }
 
     private var navigationTitle: String {
         switch method {
-        case .url: return "Import from URL"
-        case .text: return "Import from Text"
-        case .photo: return "Import from Photo"
+        case .url: "Import from URL"
+        case .text: "Import from Text"
+        case .photo: "Import from Photo"
         }
     }
 
@@ -123,6 +139,9 @@ struct ImportView: View {
 
     // MARK: - Photo Import
 
+    /// Two acquisition paths: live camera capture or photo library pick.
+    /// Once an image is loaded (from either source), shows a preview
+    /// and the "Import Recipe" button.
     private var photoImportContent: some View {
         VStack(spacing: 24) {
             if let image = viewModel.capturedImage {
@@ -138,8 +157,28 @@ struct ImportView: View {
                         onImported: onImported
                     )
                 }
+
+                Button("Choose a Different Photo") {
+                    viewModel.capturedImage = nil
+                    viewModel.selectedPhotoItem = nil
+                }
+                .font(.footnote)
             } else {
-                VStack(spacing: 16) {
+                VStack(spacing: 12) {
+                    // Camera capture (only on devices with a camera)
+                    if UIImagePickerController.isSourceTypeAvailable(.camera) {
+                        Button {
+                            viewModel.showCamera = true
+                        } label: {
+                            Label("Take Photo", systemImage: "camera")
+                                .frame(maxWidth: .infinity)
+                                .padding()
+                                .background(.ultraThinMaterial)
+                                .clipShape(RoundedRectangle(cornerRadius: 12))
+                        }
+                    }
+
+                    // Photo library picker
                     PhotosPicker(
                         selection: $viewModel.selectedPhotoItem,
                         matching: .images
@@ -158,12 +197,13 @@ struct ImportView: View {
                             }
                         }
                     }
-
-                    Text("Take a photo of a cookbook page or recipe card.")
-                        .font(.footnote)
-                        .foregroundStyle(.tertiary)
-                        .multilineTextAlignment(.center)
                 }
+
+                Text("Snap a photo of a cookbook page or recipe card, or choose an existing photo from your library.")
+                    .font(.footnote)
+                    .foregroundStyle(.tertiary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
             }
 
             if let error = viewModel.errorMessage {
@@ -173,6 +213,10 @@ struct ImportView: View {
             Spacer()
         }
         .padding()
+        .fullScreenCover(isPresented: $viewModel.showCamera) {
+            CameraCapture(image: $viewModel.capturedImage)
+                .ignoresSafeArea()
+        }
     }
 
     // MARK: - Shared Components
@@ -208,5 +252,47 @@ struct ImportView: View {
         .padding()
         .background(.orange.opacity(0.1))
         .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+// MARK: - Camera Capture
+
+/// UIKit camera wrapper. Presents UIImagePickerController with .camera source.
+/// Binds the captured image back to SwiftUI state.
+struct CameraCapture: UIViewControllerRepresentable {
+    @Binding var image: UIImage?
+    @Environment(\.dismiss) private var dismiss
+
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.sourceType = .camera
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    final class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
+        let parent: CameraCapture
+
+        init(_ parent: CameraCapture) {
+            self.parent = parent
+        }
+
+        func imagePickerController(
+            _ picker: UIImagePickerController,
+            didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]
+        ) {
+            if let uiImage = info[.originalImage] as? UIImage {
+                parent.image = uiImage
+            }
+            parent.dismiss()
+        }
+
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            parent.dismiss()
+        }
     }
 }

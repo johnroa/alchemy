@@ -5,6 +5,7 @@ export const getDashboardData = async (): Promise<{
   requestCount: number;
   avgLatencyMs: number;
   totalCostUsd: number;
+  userCount: number;
   safetyIncidentCount: number;
   emptyOutputCount: number;
   imagePendingCount: number;
@@ -25,23 +26,44 @@ export const getDashboardData = async (): Promise<{
   const [
     { data: costRows },
     { data: flagsRows },
-    { data: emptyOutputRows },
-    { data: imageRows },
-    { data: memoryRows },
+    safetyCountResult,
+    emptyOutputCountResult,
+    imagePendingResult,
+    imageProcessingResult,
+    imageReadyResult,
+    imageFailedResult,
+    imageTotalResult,
+    activeMemoryCountResult,
     { data: activityRows },
-    { data: cookbookRows },
-    { data: recipeSaveRows },
-    { data: variantRows },
+    cookbookCountResult,
+    recipeSaveCountResult,
+    variantCountResult,
+    staleVariantCountResult,
+    userCountResult,
   ] = await Promise.all([
     client.from("v_llm_cost_latency_rollup").select("request_count,avg_latency_ms,total_cost_usd"),
     client.from("v_abuse_rate_limit_flags").select("created_at,scope,reason").order("created_at", { ascending: false }).limit(8),
-    client.from("events").select("id").eq("event_type", "llm_call").contains("event_payload", { error_code: "llm_empty_output" }),
-    client.from("image_requests").select("status"),
-    client.from("memories").select("status"),
+    client.from("v_abuse_rate_limit_flags").select("created_at", { count: "exact", head: true }),
+    client
+      .from("events")
+      .select("id", { count: "exact", head: true })
+      .eq("event_type", "llm_call")
+      .contains("event_payload", { error_code: "llm_empty_output" }),
+    client.from("image_requests").select("id", { count: "exact", head: true }).eq("status", "pending"),
+    client.from("image_requests").select("id", { count: "exact", head: true }).eq("status", "processing"),
+    client.from("image_requests").select("id", { count: "exact", head: true }).eq("status", "ready"),
+    client.from("image_requests").select("id", { count: "exact", head: true }).eq("status", "failed"),
+    client.from("image_requests").select("id", { count: "exact", head: true }),
+    client.from("memories").select("id", { count: "exact", head: true }).eq("status", "active"),
     client.from("changelog_events").select("created_at,scope,entity_type,action").order("created_at", { ascending: false }).limit(10),
-    client.from("cookbook_entries").select("canonical_recipe_id"),
-    client.from("recipe_saves").select("recipe_id"),
-    client.from("user_recipe_variants").select("stale_status"),
+    client.from("cookbook_entries").select("id", { count: "exact", head: true }),
+    client.from("recipe_saves").select("id", { count: "exact", head: true }),
+    client.from("user_recipe_variants").select("id", { count: "exact", head: true }),
+    client
+      .from("user_recipe_variants")
+      .select("id", { count: "exact", head: true })
+      .in("stale_status", ["stale", "needs_review"]),
+    client.from("users").select("id", { count: "exact", head: true }),
   ]);
 
   const requestCount = (costRows ?? []).reduce((sum, row) => sum + Number(row.request_count ?? 0), 0);
@@ -51,38 +73,59 @@ export const getDashboardData = async (): Promise<{
   const avgLatencyMs = requestCount === 0 ? 0 : Math.round(weightedLatencySum / requestCount);
   const totalCostUsd = (costRows ?? []).reduce((sum, row) => sum + Number(row.total_cost_usd ?? 0), 0);
 
-  let resolvedImageRows = imageRows ?? [];
-  if (resolvedImageRows.length === 0) {
-    const { data: legacyImageRows, error: legacyError } = await client
-      .from("recipe_image_jobs")
-      .select("status");
-    if (legacyError && !isSchemaMissingError(legacyError)) {
-      throw new Error(legacyError.message);
-    }
-    resolvedImageRows = legacyImageRows ?? [];
+  const primaryImageCountsError = [
+    imagePendingResult.error,
+    imageProcessingResult.error,
+    imageReadyResult.error,
+    imageFailedResult.error,
+    imageTotalResult.error,
+  ].find((error) => error && !isSchemaMissingError(error));
+
+  if (primaryImageCountsError) {
+    throw new Error(primaryImageCountsError.message);
   }
 
-  const imagePendingCount = resolvedImageRows.filter((row) => row.status === "pending").length;
-  const imageProcessingCount = resolvedImageRows.filter((row) => row.status === "processing").length;
-  const imageReadyCount = resolvedImageRows.filter((row) => row.status === "ready").length;
-  const imageFailedCount = resolvedImageRows.filter((row) => row.status === "failed").length;
-  const imageTotalCount = resolvedImageRows.length;
-  const activeMemoryCount = (memoryRows ?? []).filter((row) => row.status === "active").length;
+  let imagePendingCount = imagePendingResult.count ?? 0;
+  let imageProcessingCount = imageProcessingResult.count ?? 0;
+  let imageReadyCount = imageReadyResult.count ?? 0;
+  let imageFailedCount = imageFailedResult.count ?? 0;
+  let imageTotalCount = imageTotalResult.count ?? 0;
 
-  const cookbookEntryCount = (cookbookRows ?? []).length;
-  const recipeSaveCount = (recipeSaveRows ?? []).length;
-  const allVariants = variantRows ?? [];
-  const variantCount = allVariants.length;
-  const staleVariantCount = allVariants.filter(
-    (v) => v.stale_status === "stale" || v.stale_status === "needs_review",
-  ).length;
+  if (imageTotalCount === 0 && imageTotalResult.error && isSchemaMissingError(imageTotalResult.error)) {
+    const [legacyPending, legacyProcessing, legacyReady, legacyFailed, legacyTotal] = await Promise.all([
+      client.from("recipe_image_jobs").select("id", { count: "exact", head: true }).eq("status", "pending"),
+      client.from("recipe_image_jobs").select("id", { count: "exact", head: true }).eq("status", "processing"),
+      client.from("recipe_image_jobs").select("id", { count: "exact", head: true }).eq("status", "ready"),
+      client.from("recipe_image_jobs").select("id", { count: "exact", head: true }).eq("status", "failed"),
+      client.from("recipe_image_jobs").select("id", { count: "exact", head: true }),
+    ]);
+
+    const legacyError = [legacyPending.error, legacyProcessing.error, legacyReady.error, legacyFailed.error, legacyTotal.error]
+      .find((error) => error && !isSchemaMissingError(error));
+    if (legacyError) {
+      throw new Error(legacyError.message);
+    }
+
+    imagePendingCount = legacyPending.count ?? 0;
+    imageProcessingCount = legacyProcessing.count ?? 0;
+    imageReadyCount = legacyReady.count ?? 0;
+    imageFailedCount = legacyFailed.count ?? 0;
+    imageTotalCount = legacyTotal.count ?? 0;
+  }
+
+  const activeMemoryCount = activeMemoryCountResult.count ?? 0;
+  const cookbookEntryCount = cookbookCountResult.count ?? 0;
+  const recipeSaveCount = recipeSaveCountResult.count ?? 0;
+  const variantCount = variantCountResult.count ?? 0;
+  const staleVariantCount = staleVariantCountResult.count ?? 0;
 
   return {
     requestCount,
     avgLatencyMs,
     totalCostUsd,
-    safetyIncidentCount: (flagsRows ?? []).length,
-    emptyOutputCount: (emptyOutputRows ?? []).length,
+    userCount: userCountResult.count ?? 0,
+    safetyIncidentCount: safetyCountResult.count ?? 0,
+    emptyOutputCount: emptyOutputCountResult.count ?? 0,
     imagePendingCount,
     imageProcessingCount,
     imageReadyCount,

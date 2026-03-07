@@ -30,7 +30,7 @@ type GraphEdge = {
   source: string;
 };
 
-type GraphData = {
+export type GraphData = {
   entities: GraphEntity[];
   edges: GraphEdge[];
   relation_types: string[];

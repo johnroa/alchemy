@@ -3,9 +3,15 @@ import SwiftUI
 /// Callback type injected by TabShell to trigger the import flow.
 /// When a child view calls this with an ImportMethod, TabShell presents
 /// the corresponding ImportView sheet.
-struct ImportAction: Sendable {
-    var trigger: @Sendable (ImportMethod) -> Void
+///
+/// The trigger closure is `@MainActor` because it mutates @State properties
+/// in TabShell. `@unchecked Sendable` is safe here because the trigger
+/// is only ever called from SwiftUI button actions (main actor) and the
+/// closure itself is main-actor-isolated.
+struct ImportAction: @unchecked Sendable {
+    var trigger: @MainActor (ImportMethod) -> Void
 
+    @MainActor
     func callAsFunction(_ method: ImportMethod) {
         trigger(method)
     }

@@ -678,7 +678,7 @@ export function IngredientsRegistryExplorer({
                           <TableRow key={usage.id}>
                             <TableCell>
                               {usage.recipe_id ? (
-                                <Link href={`/recipes?recipe=${usage.recipe_id}`} className="inline-flex items-center gap-1.5 text-xs font-medium underline-offset-2 hover:underline">
+                                <Link href={`/content/recipes?recipe=${usage.recipe_id}`} className="inline-flex items-center gap-1.5 text-xs font-medium underline-offset-2 hover:underline">
                                   <EntityTypeIcon entityType="recipe" className="h-3.5 w-3.5" />
                                   {usage.recipe_title}
                                 </Link>

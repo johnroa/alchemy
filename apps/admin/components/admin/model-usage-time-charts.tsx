@@ -7,6 +7,7 @@ import {
   ChartTooltip,
   ChartTooltipContent
 } from "@/components/ui/chart";
+import { formatCost, formatTokens } from "@/lib/format";
 
 type UsagePoint = {
   bucketStart: string;
@@ -38,16 +39,8 @@ const dailyConfig = {
   }
 } satisfies ChartConfig;
 
-const formatCost = (value: number): string => {
-  if (value < 0.001) return `$${value.toFixed(4)}`;
-  if (value < 0.01) return `$${value.toFixed(3)}`;
-  return `$${value.toFixed(2)}`;
-};
-
 const formatTicks = (value: number): string => {
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
-  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
-  return `${Math.round(value)}`;
+  return formatTokens(value);
 };
 
 export function ModelUsageTimeCharts({

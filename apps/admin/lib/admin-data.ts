@@ -21,6 +21,12 @@ export {
 export { getGraphData } from "./admin-data/graph";
 export { getMemoryData } from "./admin-data/memory";
 export {
+  getAnalyticsOverviewData,
+  getContentAnalyticsData,
+  getPipelineAnalyticsData,
+  getProductAnalyticsData,
+} from "./admin-data/analytics";
+export {
   getImagePipelineData,
   getMetadataPipelineData,
 } from "./admin-data/pipelines";

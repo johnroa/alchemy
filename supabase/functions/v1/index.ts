@@ -7632,7 +7632,19 @@ Deno.serve(async (request) => {
     if (segments.length === 1 && segments[0] === "preferences") {
       if (method === "GET") {
         const preferences = await getPreferences(client, auth.userId);
-        return respond(200, preferences);
+        // Include extended_preferences (JSONB column from migration 0043)
+        // in the client response. This field is not part of the internal
+        // PreferenceContext type because LLM pipelines don't need it —
+        // it's only consumed by the iOS preferences UI.
+        const { data: extRow } = await client
+          .from("preferences")
+          .select("extended_preferences")
+          .eq("user_id", auth.userId)
+          .maybeSingle();
+        return respond(200, {
+          ...preferences,
+          extended_preferences: extRow?.extended_preferences ?? {},
+        });
       }
 
       if (method === "PATCH") {

@@ -1,12 +1,17 @@
 import SwiftUI
 
-/// Settings screen wired to real API endpoints.
+/// Settings screen with Liquid Glass design matching the Preferences sheet.
 ///
 /// Sections:
 /// - Account: email from Supabase session
+/// - Import: clipboard recipe detection toggle
 /// - Memory: count from GET /memories, reset via POST /memories/reset
-/// - App: version, changelog
-/// - Sign Out: calls AuthManager.signOut()
+/// - App: version
+/// - Legal: privacy policy, terms of use
+/// - Sign Out
+///
+/// Uses `Form` with `.scrollContentBackground(.hidden)` for the iOS 26
+/// Liquid Glass translucency, and `.tint(.white)` to match Preferences.
 struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
 
@@ -15,18 +20,37 @@ struct SettingsView: View {
     @State private var isResettingMemories = false
     @State private var showResetConfirmation = false
 
+    /// Persisted toggle for clipboard recipe detection. Read by
+    /// ClipboardBanner in TabShell to decide whether to probe
+    /// the clipboard for recipe URLs.
+    @AppStorage("clipboardDetectionEnabled") private var clipboardDetectionEnabled = true
+
     private let authManager = AuthManager.shared
+
+    /// Placeholder URLs — replace with real hosted pages once available.
+    private static let privacyPolicyURL = URL(string: "https://cookwithalchemy.com/privacy")!
+    private static let termsOfUseURL = URL(string: "https://cookwithalchemy.com/terms")!
 
     var body: some View {
         NavigationStack {
-            List {
+            Form {
                 Section("Account") {
                     HStack {
                         Label("Email", systemImage: "envelope")
                         Spacer()
                         Text(authManager.userEmail ?? "—")
-                            .foregroundStyle(AlchemyColors.textSecondary)
+                            .foregroundStyle(.secondary)
                     }
+                }
+
+                Section {
+                    Toggle(isOn: $clipboardDetectionEnabled) {
+                        Label("Detect Recipe URLs", systemImage: "link.badge.plus")
+                    }
+                } header: {
+                    Label("Import", systemImage: "square.and.arrow.down")
+                } footer: {
+                    Text("When enabled, a banner appears if a recipe URL is detected on your clipboard.")
                 }
 
                 Section("Memory") {
@@ -37,7 +61,7 @@ struct SettingsView: View {
                             ProgressView()
                         } else {
                             Text("\(memoryCount)")
-                                .foregroundStyle(AlchemyColors.textSecondary)
+                                .foregroundStyle(.secondary)
                         }
                     }
 
@@ -57,7 +81,17 @@ struct SettingsView: View {
                         Label("Version", systemImage: "info.circle")
                         Spacer()
                         Text(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0")
-                            .foregroundStyle(AlchemyColors.textSecondary)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Section("Legal") {
+                    Link(destination: Self.privacyPolicyURL) {
+                        Label("Privacy Policy", systemImage: "hand.raised")
+                    }
+
+                    Link(destination: Self.termsOfUseURL) {
+                        Label("Terms of Use", systemImage: "doc.text")
                     }
                 }
 
@@ -72,6 +106,7 @@ struct SettingsView: View {
                     }
                 }
             }
+            .scrollContentBackground(.hidden)
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -93,6 +128,7 @@ struct SettingsView: View {
             }
             .task { await loadMemories() }
         }
+        .tint(.white)
     }
 
     // MARK: - API

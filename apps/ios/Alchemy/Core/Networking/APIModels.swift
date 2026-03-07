@@ -536,6 +536,14 @@ struct OnboardingStateResponse: Decodable {
 
 // MARK: - Preferences
 
+/// A single category inside the `extended_preferences` JSONB column.
+/// Each key (e.g. "spice_tolerance") maps to an array of freeform values
+/// and a propagation mode ("constraint" = retroactive, "preference" = forward-only).
+struct ExtendedPreferenceEntry: Codable {
+    let values: [String]
+    let propagation: String?
+}
+
 struct PreferenceProfile: Codable {
     var dietaryPreferences: [String]?
     var dietaryRestrictions: [String]?
@@ -546,6 +554,10 @@ struct PreferenceProfile: Codable {
     var cookingFor: String?
     var maxDifficulty: Double?
     var freeForm: String?
+
+    /// Structured JSONB for preference categories beyond the typed columns.
+    /// Keyed by category slug (e.g. "spice_tolerance", "health_goals").
+    var extendedPreferences: [String: ExtendedPreferenceEntry]?
 }
 
 // MARK: - Memories

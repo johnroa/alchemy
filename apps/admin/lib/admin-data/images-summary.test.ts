@@ -1,7 +1,8 @@
-/// <reference lib="deno.ns" />
-import { buildImagesOverview } from "./images-summary.ts";
+import { describe, expect, it } from "vitest";
+import { buildImagesOverview } from "./images-summary";
 
-Deno.test("buildImagesOverview computes pipeline and binding rollups", () => {
+describe("buildImagesOverview", () => {
+  it("computes pipeline and binding rollups", () => {
   const overview = buildImagesOverview({
     requests: [
       {
@@ -44,25 +45,18 @@ Deno.test("buildImagesOverview computes pipeline and binding rollups", () => {
     ],
   });
 
-  if (overview.pendingCount !== 0) {
-    throw new Error("expected no pending requests");
-  }
-  if (overview.processingCount !== 1 || overview.readyCount !== 2 || overview.failedCount !== 1) {
-    throw new Error("expected status counts");
-  }
-  if (overview.generatedCount !== 1 || overview.reusedCount !== 1) {
-    throw new Error("expected resolution source counts");
-  }
-  if (overview.candidateBoundCount !== 3 || overview.persistedBoundCount !== 2) {
-    throw new Error("expected bound request counts");
-  }
-  if (overview.sharedCount !== 1 || overview.candidateOnlyCount !== 2 || overview.persistedOnlyCount !== 1) {
-    throw new Error("expected request overlap counts");
-  }
-  if (overview.avgReadyLatencyMs !== 7_000) {
-    throw new Error("expected average ready latency");
-  }
-  if (overview.failureRate !== 0.25) {
-    throw new Error("expected failure rate");
-  }
+    expect(overview.pendingCount).toBe(0);
+    expect(overview.processingCount).toBe(1);
+    expect(overview.readyCount).toBe(2);
+    expect(overview.failedCount).toBe(1);
+    expect(overview.generatedCount).toBe(1);
+    expect(overview.reusedCount).toBe(1);
+    expect(overview.candidateBoundCount).toBe(3);
+    expect(overview.persistedBoundCount).toBe(2);
+    expect(overview.sharedCount).toBe(1);
+    expect(overview.candidateOnlyCount).toBe(2);
+    expect(overview.persistedOnlyCount).toBe(1);
+    expect(overview.avgReadyLatencyMs).toBe(7_000);
+    expect(overview.failureRate).toBe(0.25);
+  });
 });

@@ -9,8 +9,9 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
+import { formatCost, formatMs } from "@/lib/format";
 
-type RegistryModel = {
+export type ImageSimulationRegistryModel = {
   id: string;
   provider: string;
   model: string;
@@ -84,20 +85,16 @@ type ManualPick = "A" | "B" | "tie" | null;
 const modelValue = (model: { provider: string; model: string }): string =>
   `${model.provider}::${model.model}`;
 
-const formatLatency = (value: number | null): string =>
-  value === null ? "n/a" : `${(value / 1000).toFixed(2)}s`;
-
-const formatCost = (value: number | null): string =>
-  value === null ? "n/a" : `$${value.toFixed(3)}`;
+const formatLatency = (value: number | null): string => formatMs(value);
 
 const extractModel = (
-  models: RegistryModel[],
+  models: ImageSimulationRegistryModel[],
   value: string,
-): RegistryModel | null => {
+): ImageSimulationRegistryModel | null => {
   return models.find((model) => modelValue(model) === value) ?? null;
 };
 
-const buildPendingLane = (model: RegistryModel | null): ImageSimulationLaneResult => ({
+const buildPendingLane = (model: ImageSimulationRegistryModel | null): ImageSimulationLaneResult => ({
   status: "pending",
   provider: model?.provider ?? null,
   model: model?.model ?? null,
@@ -109,8 +106,8 @@ const buildPendingLane = (model: RegistryModel | null): ImageSimulationLaneResul
 
 const buildPendingResult = (
   scenario: ImageSimulationScenario,
-  laneAModel: RegistryModel | null,
-  laneBModel: RegistryModel | null,
+  laneAModel: ImageSimulationRegistryModel | null,
+  laneBModel: ImageSimulationRegistryModel | null,
 ): ImageSimulationCompareResponse => ({
   request_id: "",
   scenario,
@@ -166,12 +163,14 @@ const applyCompareStreamEvent = (
   }
 };
 
-export function ImageSimulationRunnerCard(props: {
+export type ImageSimulationRunnerCardProps = {
   scenarios: readonly ImageSimulationScenario[];
-  registryModels: RegistryModel[];
+  registryModels: ImageSimulationRegistryModel[];
   activeImageRoute: { provider: string; model: string } | null;
   activeJudgeRoute: { provider: string; model: string } | null;
-}): React.JSX.Element {
+};
+
+export function ImageSimulationRunnerCard(props: ImageSimulationRunnerCardProps): React.JSX.Element {
   const initialScenarioId = props.scenarios[0]?.id ?? "";
   const activeModelValue = props.activeImageRoute
     ? modelValue(props.activeImageRoute)

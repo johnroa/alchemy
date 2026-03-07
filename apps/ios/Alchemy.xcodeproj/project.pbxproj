@@ -31,9 +31,11 @@
 		60968686BEA8C1AA49E0E1DB /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59C6013CE1030E98DF4E617B /* ContentView.swift */; };
 		67419F9DFC457F1F202E8B54 /* Supabase in Frameworks */ = {isa = PBXBuildFile; productRef = 768CD6AAFD77D3BB27D13150 /* Supabase */; };
 		698B3C7D3C46D818CB832386 /* GlassInputBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87391E8941518B7568F1F1D3 /* GlassInputBar.swift */; };
+		76462F4E2FA531F493BFD81A /* ClipboardBanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB9DB9E35B45274A732B6943 /* ClipboardBanner.swift */; };
 		7C5265E1BA60220F06AB2E76 /* ImportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A7D97690AB17BAA8EF132F1 /* ImportView.swift */; };
 		92B2D41E5F1EF5194B385E98 /* TabShell.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1905F952E153213B82628C1E /* TabShell.swift */; };
 		9F99918ACFA548C23B11F940 /* Lottie in Frameworks */ = {isa = PBXBuildFile; productRef = 92C2805B6E32180FC1015CF1 /* Lottie */; };
+		A6DB3E6D49457E675F369DEB /* RecipeURLDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DA9E3E09DF919C668A03C35 /* RecipeURLDetector.swift */; };
 		A8F2490B77EECF2BFF284BAC /* SupabaseManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B8F424DA5D2661C4CB5914A /* SupabaseManager.swift */; };
 		ABD002AB352654AB6DE0B7DE /* CookbookView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0217F804B0511D28857FC816 /* CookbookView.swift */; };
 		B79A39E174485B7BAA126A2D /* ChatBubble.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE34608B8617C7346206908A /* ChatBubble.swift */; };
@@ -89,6 +91,7 @@
 		588AA69EA05DFB3A31694F64 /* AlchemyShareExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = AlchemyShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		58C789C96CA6EF5F537CC575 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		59C6013CE1030E98DF4E617B /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		5DA9E3E09DF919C668A03C35 /* RecipeURLDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecipeURLDetector.swift; sourceTree = "<group>"; };
 		635F4D1E11354088D7E60332 /* RecipeDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecipeDetailView.swift; sourceTree = "<group>"; };
 		680B4527FA728D679417F0A5 /* AlchemyApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlchemyApp.swift; sourceTree = "<group>"; };
 		68F1901D9F8AEF2C890D5D53 /* CompactGauge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompactGauge.swift; sourceTree = "<group>"; };
@@ -113,6 +116,7 @@
 		E9BC218713992D6BA03C55B5 /* AnimatedMeshBackground.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnimatedMeshBackground.swift; sourceTree = "<group>"; };
 		EDCB8A192471A69938D2F32F /* PreferencesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferencesView.swift; sourceTree = "<group>"; };
 		F2B075550312C3107FA05614 /* AlchemyShareExtension.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = AlchemyShareExtension.entitlements; sourceTree = "<group>"; };
+		FB9DB9E35B45274A732B6943 /* ClipboardBanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardBanner.swift; sourceTree = "<group>"; };
 		FE0962ABEA0819410B795078 /* AlchemyTypography.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlchemyTypography.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -276,6 +280,7 @@
 			children = (
 				E9BC218713992D6BA03C55B5 /* AnimatedMeshBackground.swift */,
 				AE34608B8617C7346206908A /* ChatBubble.swift */,
+				FB9DB9E35B45274A732B6943 /* ClipboardBanner.swift */,
 				68F1901D9F8AEF2C890D5D53 /* CompactGauge.swift */,
 				87391E8941518B7568F1F1D3 /* GlassInputBar.swift */,
 				E8043174613A6F56CD380A47 /* ImportMenu.swift */,
@@ -301,6 +306,7 @@
 				D2E3C78202A1FFEE730D31FE /* APIClient.swift */,
 				4A19FF6B7729BFE0C2694901 /* APIError.swift */,
 				B6846E9DD30BF0EE67FFB668 /* APIModels.swift */,
+				5DA9E3E09DF919C668A03C35 /* RecipeURLDetector.swift */,
 			);
 			path = Networking;
 			sourceTree = "<group>";
@@ -483,6 +489,7 @@
 				35FFBC157D573C451EEE926C /* AuthFlowView.swift in Sources */,
 				E6D7A1B09ABAB6A8B49EA54D /* AuthManager.swift in Sources */,
 				B79A39E174485B7BAA126A2D /* ChatBubble.swift in Sources */,
+				76462F4E2FA531F493BFD81A /* ClipboardBanner.swift in Sources */,
 				1BCAA1BF4DDE155C7DFDC1AD /* CompactGauge.swift in Sources */,
 				60968686BEA8C1AA49E0E1DB /* ContentView.swift in Sources */,
 				ABD002AB352654AB6DE0B7DE /* CookbookView.swift in Sources */,
@@ -500,6 +507,7 @@
 				C9397C3E69FB3E3AEA3A458F /* Recipe.swift in Sources */,
 				581098E885FA7B26E26C5ECB /* RecipeCardView.swift in Sources */,
 				0102A7DABC96D0AF3534FE85 /* RecipeDetailView.swift in Sources */,
+				A6DB3E6D49457E675F369DEB /* RecipeURLDetector.swift in Sources */,
 				09F9CB80C3738977CD00F63B /* SettingsView.swift in Sources */,
 				A8F2490B77EECF2BFF284BAC /* SupabaseManager.swift in Sources */,
 				92B2D41E5F1EF5194B385E98 /* TabShell.swift in Sources */,
