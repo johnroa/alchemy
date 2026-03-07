@@ -252,10 +252,14 @@ struct RecipeAttachmentView: Decodable, Identifiable {
 /// Subset of the full metadata blob relevant to the iOS UI.
 /// The API returns metadata as a flexible JSON object; we decode only
 /// the fields the UI needs and ignore the rest.
+///
+/// Uses a custom decoder for `cuisine` because the LLM and DB both
+/// store it as `[String]` (e.g. `["Italian","Mediterranean"]`) but
+/// older records or edge cases might produce a bare `"Italian"` string.
 struct RecipeMetadata: Decodable {
     let nutrition: RecipeNutrition?
     let quickStats: RecipeQuickStats?
-    let cuisine: String?
+    let cuisine: [String]?
     let difficulty: String?
     let timeMinutes: Int?
     let healthScore: Int?
@@ -264,6 +268,44 @@ struct RecipeMetadata: Decodable {
     let dietTags: [String]?
     let techniques: [String]?
     let equipment: [String]?
+    let timing: RecipeTiming?
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        nutrition = try container.decodeIfPresent(RecipeNutrition.self, forKey: .nutrition)
+        quickStats = try container.decodeIfPresent(RecipeQuickStats.self, forKey: .quickStats)
+        difficulty = try container.decodeIfPresent(String.self, forKey: .difficulty)
+        timeMinutes = try container.decodeIfPresent(Int.self, forKey: .timeMinutes)
+        healthScore = try container.decodeIfPresent(Int.self, forKey: .healthScore)
+        vibe = try container.decodeIfPresent(String.self, forKey: .vibe)
+        allergens = try container.decodeIfPresent([String].self, forKey: .allergens)
+        dietTags = try container.decodeIfPresent([String].self, forKey: .dietTags)
+        techniques = try container.decodeIfPresent([String].self, forKey: .techniques)
+        equipment = try container.decodeIfPresent([String].self, forKey: .equipment)
+        timing = try container.decodeIfPresent(RecipeTiming.self, forKey: .timing)
+
+        // cuisine: accept both ["Italian"] (array) and "Italian" (bare string).
+        // The LLM and DB use arrays; bare string is a fallback for robustness.
+        if let array = try? container.decode([String].self, forKey: .cuisine) {
+            cuisine = array
+        } else if let single = try? container.decode(String.self, forKey: .cuisine) {
+            cuisine = [single]
+        } else {
+            cuisine = nil
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case nutrition, quickStats, cuisine, difficulty, timeMinutes
+        case healthScore, vibe, allergens, dietTags, techniques, equipment, timing
+    }
+}
+
+/// Timing breakdown from the LLM's recipe metadata.
+struct RecipeTiming: Decodable {
+    let prepMinutes: Int?
+    let cookMinutes: Int?
+    let totalMinutes: Int?
 }
 
 struct RecipeNutrition: Decodable, Hashable {

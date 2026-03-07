@@ -25,8 +25,17 @@ const FETCH_TIMEOUT_MS = 10_000;
 const MAX_REDIRECTS = 5;
 /** 2 MB — reject pages larger than this to avoid memory pressure */
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
-const USER_AGENT =
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15";
+/**
+ * Rotate through multiple browser-like User-Agents to reduce 403 rates.
+ * Sites fingerprint UA + header order; varying these improves success.
+ */
+const USER_AGENTS = [
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7_2) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Safari/605.1.15",
+  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:134.0) Gecko/20100101 Firefox/134.0",
+];
 
 /**
  * Private / reserved IP ranges that must never be fetched.
@@ -132,54 +141,119 @@ function validateAndNormalizeUrl(raw: string): string {
 // Bounded fetch
 // ---------------------------------------------------------------------------
 
+/**
+ * Builds browser-realistic headers to reduce bot detection.
+ * Many recipe sites (Allrecipes, Food Network, etc.) use Cloudflare or
+ * similar WAFs that fingerprint the header set, not just User-Agent.
+ */
+function buildBrowserHeaders(ua: string): Record<string, string> {
+  const isChrome = ua.includes("Chrome/");
+  const isFirefox = ua.includes("Firefox/");
+
+  const headers: Record<string, string> = {
+    "User-Agent": ua,
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+    "Cache-Control": "max-age=0",
+  };
+
+  if (isChrome) {
+    headers["Sec-Fetch-Dest"] = "document";
+    headers["Sec-Fetch-Mode"] = "navigate";
+    headers["Sec-Fetch-Site"] = "none";
+    headers["Sec-Fetch-User"] = "?1";
+    headers["sec-ch-ua"] = '"Chromium";v="131", "Not_A Brand";v="24"';
+    headers["sec-ch-ua-mobile"] = "?0";
+    headers["sec-ch-ua-platform"] = '"macOS"';
+  } else if (isFirefox) {
+    headers["Sec-Fetch-Dest"] = "document";
+    headers["Sec-Fetch-Mode"] = "navigate";
+    headers["Sec-Fetch-Site"] = "none";
+    headers["Sec-Fetch-User"] = "?1";
+  }
+
+  return headers;
+}
+
+/**
+ * Fetches a URL with browser-like headers. On 403/429, retries once
+ * with a different User-Agent. This handles sites that block specific
+ * UA strings but accept others (common with recipe CDNs).
+ */
 async function boundedFetch(url: string): Promise<string> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  const shuffled = [...USER_AGENTS].sort(() => Math.random() - 0.5);
 
-  let response: Response;
-  try {
-    response = await fetch(url, {
-      signal: controller.signal,
-      headers: { "User-Agent": USER_AGENT, Accept: "text/html" },
-      redirect: "follow",
-    });
-  } catch (err) {
-    clearTimeout(timer);
-    if (err instanceof DOMException && err.name === "AbortError") {
-      throw new ScraperError("fetch_timeout", `Timed out fetching ${url}`);
+  let lastError: ScraperError | null = null;
+
+  // Try up to 2 different UA profiles before giving up
+  for (let attempt = 0; attempt < Math.min(2, shuffled.length); attempt++) {
+    const ua = shuffled[attempt];
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        signal: controller.signal,
+        headers: buildBrowserHeaders(ua),
+        redirect: "follow",
+      });
+    } catch (err) {
+      clearTimeout(timer);
+      if (err instanceof DOMException && err.name === "AbortError") {
+        throw new ScraperError("fetch_timeout", `Timed out fetching ${url}`);
+      }
+      throw new ScraperError(
+        "fetch_failed",
+        `Network error fetching ${url}: ${String(err)}`,
+      );
+    } finally {
+      clearTimeout(timer);
     }
-    throw new ScraperError(
-      "fetch_failed",
-      `Network error fetching ${url}: ${String(err)}`,
-    );
-  } finally {
-    clearTimeout(timer);
+
+    // Retry on 403/429 with a different UA
+    if ((response.status === 403 || response.status === 429) && attempt < 1) {
+      lastError = new ScraperError(
+        "fetch_http_error",
+        `HTTP ${response.status} from ${url}`,
+      );
+      continue;
+    }
+
+    if (!response.ok) {
+      throw new ScraperError(
+        "fetch_http_error",
+        `HTTP ${response.status} from ${url}`,
+      );
+    }
+
+    const contentType = response.headers.get("content-type") ?? "";
+    if (!contentType.includes("text/html") && !contentType.includes("text/xhtml")) {
+      throw new ScraperError(
+        "content_type_rejected",
+        `Expected text/html but got ${contentType} from ${url}`,
+      );
+    }
+
+    const body = await response.text();
+    if (body.length > MAX_BODY_BYTES) {
+      throw new ScraperError(
+        "body_too_large",
+        `Response body ${body.length} bytes exceeds ${MAX_BODY_BYTES} byte limit`,
+      );
+    }
+
+    return body;
   }
 
-  if (!response.ok) {
-    throw new ScraperError(
-      "fetch_http_error",
-      `HTTP ${response.status} from ${url}`,
-    );
-  }
-
-  const contentType = response.headers.get("content-type") ?? "";
-  if (!contentType.includes("text/html") && !contentType.includes("text/xhtml")) {
-    throw new ScraperError(
-      "content_type_rejected",
-      `Expected text/html but got ${contentType} from ${url}`,
-    );
-  }
-
-  const body = await response.text();
-  if (body.length > MAX_BODY_BYTES) {
-    throw new ScraperError(
-      "body_too_large",
-      `Response body ${body.length} bytes exceeds ${MAX_BODY_BYTES} byte limit`,
-    );
-  }
-
-  return body;
+  // All attempts exhausted
+  throw lastError ?? new ScraperError(
+    "fetch_http_error",
+    `All fetch attempts failed for ${url}`,
+  );
 }
 
 // ---------------------------------------------------------------------------
