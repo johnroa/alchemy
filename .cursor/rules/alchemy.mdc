@@ -61,6 +61,32 @@ curl https://api.cookwithalchemy.com/v1/healthz
 - **Remove**: remove callsite + wrapper + scope → migration deactivating scope rows (don't hard-delete).
 - Direct provider endpoints only in `supabase/functions/_shared/llm-adapters/*`.
 
+## Canonical Recipes + Private Variants ("Sous Chef")
+
+Canonical (public, immutable) recipes + per-user private variants. Explore shows canonical; Cookbook shows variant.
+
+- **`recipe_canonicalize`** scope strips user-specific content from chat output → canonical base.
+- **`recipe_personalize`** scope materialises variant from canonical + user preferences + manual edits.
+- **Constraints** (dietary_restrictions, aversions) are retroactive → change marks variants `stale`. **Preferences** (cuisines, equipment) are forward-only.
+- **Variant lifecycle**: `current` → `stale` → `processing` → `current`. Also `failed`, `needs_review`.
+- **Graph-grounded**: queries `substitutes_for` edges from knowledge graph before LLM personalization.
+- **Substitution diffs**: structured `{original, replacement, constraint, reason}` in provenance.
+- **Variant tags**: materialized JSONB on `user_recipe_variants` for multi-dimensional Cookbook filtering.
+- **Tables**: `cookbook_entries`, `user_recipe_variants`, `user_recipe_variant_versions`, `preference_change_log`.
+- **Endpoints**: `GET /recipes/{id}/variant`, `POST /recipes/{id}/variant/refresh`, `POST /recipes/{id}/publish`.
+
+## Popularity & Trending
+
+- `popularity_score` / `trending_score` on `recipe_search_documents` (saves x3, variants x2, views x0.5).
+- `recipe_view_events` — fire-and-forget on `GET /recipes/{id}`.
+- `ingredient_trending_stats` — recipe-derived popularity + substitution momentum.
+- `POST /popularity/refresh` recomputes all. `GET /ingredients/trending`. Search `sort_by: recent|popular|trending`.
+
+## Pipeline Observability
+
+- `GET /observability/pipeline?hours=N` — per-scope LLM stats, variant health, graph activity.
+- Admin `/pipeline-health` dashboard.
+
 ## Recipe Import
 
 - **Endpoint**: `POST /chat/import` with `kind: url|text|photo`.
@@ -130,6 +156,8 @@ Expo Router + TanStack Query v5 + Zustand v5 + Reanimated 3 + Gesture Handler.
 ## Admin (`apps/admin/`)
 
 Next.js 15 App Router + Tailwind CSS + shadcn/ui + Lucide React + Sonner. Deployed via OpenNext on Cloudflare.
+
+Admin pages: dashboard, users, images, imports, development, provider-model, model-usage, models, prompts, rules, memory, recipes, ingredients, graph, metadata-pipeline, changelog, request-trace, pipeline-health, version-causality, api-docs, simulation-recipe, simulation-image, simulations.
 
 ## Code Comments
 

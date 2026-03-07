@@ -44,6 +44,38 @@ packages/shared/      Shared utilities
 - Keep shared visual primitives under `apps/ios/Alchemy/DesignSystem/*`.
 - Preserve loading, empty, and error states for user-facing flows.
 
+## Canonical Recipes + Private Variants ("Sous Chef")
+
+Canonical (public, immutable) recipes + per-user private variants.
+
+- **`recipe_canonicalize`** scope: chat output → canonical base (strips user-specific content).
+- **`recipe_personalize`** scope: canonical + preferences + edits → variant.
+- **Constraints** (dietary_restrictions, aversions) are retroactive — mark variants `stale`. **Preferences** (cuisines, equipment) are forward-only.
+- **Variant lifecycle**: `current` → `stale` → `processing` → `current`. Also `failed`, `needs_review`.
+- **Graph-grounded**: queries knowledge graph for substitution patterns before LLM personalization.
+- **Variant tags**: materialized JSONB for multi-dimensional Cookbook filtering.
+- **Tables**: `cookbook_entries`, `user_recipe_variants`, `user_recipe_variant_versions`, `preference_change_log`.
+- **Endpoints**: `GET /recipes/{id}/variant`, `POST /recipes/{id}/variant/refresh`, `POST /recipes/{id}/publish`.
+
+## Popularity & Trending
+
+- `popularity_score` / `trending_score` on `recipe_search_documents` (saves x3, variants x2, views x0.5).
+- `recipe_view_events` — fire-and-forget on `GET /recipes/{id}`.
+- `ingredient_trending_stats` — recipe-derived popularity + substitution momentum.
+- `POST /popularity/refresh` recomputes all. `GET /ingredients/trending`. Search `sort_by: recent|popular|trending`.
+
+## Pipeline Observability
+
+- `GET /observability/pipeline?hours=N` — per-scope LLM stats, variant health, graph activity.
+- Admin `/pipeline-health` dashboard.
+
+## Recipe Import Pipeline
+- **Endpoint**: `POST /chat/import` with `kind: url|text|photo`.
+- **LLM scopes**: `recipe_import_transform`, `recipe_import_vision_extract`.
+- **Provenance**: `import_provenance` table, per-user source fingerprint dedup.
+- **Admin**: `/imports` page + dashboard Import Activity section.
+- **iOS**: Tab bar Import button → dialog → ImportView. Share extension via App Group + `alchemy://import`.
+
 ## Admin Stack (`apps/admin/`)
 - **Next.js 15** (App Router)
 - **Tailwind CSS + shadcn/ui** (Radix UI + CVA + tailwind-merge)
@@ -51,7 +83,7 @@ packages/shared/      Shared utilities
 - **Sonner** for toasts
 - Deployed via OpenNext on Cloudflare
 
-Admin route structure: `app/(admin)/` — dashboard, moderation, provider-model, changelog, image-pipeline, memory, request-trace, simulations, version-causality.
+Admin pages: dashboard, users, images, imports, development, provider-model, model-usage, models, prompts, rules, memory, recipes, ingredients, graph, metadata-pipeline, changelog, request-trace, pipeline-health, version-causality, api-docs, simulation-recipe, simulation-image, simulations.
 
 ## API Gateway (`infra/cloudflare/api-gateway/`)
 - Cloudflare Worker, TypeScript
@@ -61,9 +93,10 @@ Admin route structure: `app/(admin)/` — dashboard, moderation, provider-model,
 
 ## Backend (`supabase/`)
 - **Auth**: Supabase Auth (token-based; client uses `lib/auth.tsx`)
-- **DB**: Postgres — users, preferences, recipes, recipe_versions, collections, memories, events
+- **DB**: Postgres — users, preferences, recipes, recipe_versions, cookbook_entries, user_recipe_variants, user_recipe_variant_versions, collections, memories, events, recipe_view_events, ingredient_trending_stats, recipe_search_documents, graph_entities, graph_edges, ingredients, import_provenance
 - **Edge Functions** (`functions/v1/`): LLM gateway, structured output, prompt templates
 - LLM config (models, prompts, rules) lives in DB and is loaded at runtime — editable via admin UI
+- **LLM scopes**: `recipe_generate`, `recipe_search_interpret`, `recipe_canonicalize`, `recipe_personalize`, `recipe_import_transform`, `recipe_import_vision_extract`, `memory_extract`, `metadata_enrich`
 
 ## Security
 - No secrets in client code

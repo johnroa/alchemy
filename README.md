@@ -40,11 +40,12 @@ Native SwiftUI rewrite of the Expo mobile app. MVVM architecture with `@Observab
 | `SplashView` | Full-bleed kitchen image + ALCHEMY wordmark + loading spinner |
 | `AuthFlowView` | Sign in / Register with cross-fade transitions |
 | `OnboardingView` | Chat-based AI preference interview with progress bar |
-| `TabShell` | 3-tab container with custom floating pill tab bar |
-| `CookbookView` | Saved recipes — search, category filter chips, staggered 2-column grid |
+| `TabShell` | 3-tab container with custom floating pill tab bar + Import accessory |
+| `CookbookView` | Saved recipes with multi-dimensional filtering (cuisine, dietary, time, difficulty), staggered 2-column grid |
 | `GenerateView` | Chat panel + recipe canvas with Lottie animation during generation |
-| `ExploreView` | Full-bleed vertical card stack with paging + parallax |
-| `RecipeDetailView` | Parallax hero, ingredients, steps, nutrition, pairings, version history |
+| `ExploreView` | Full-bleed vertical card stack with sort picker (New/Popular/Trending), social proof badges, parallax |
+| `ImportView` | Recipe import flow — URL paste, text paste, photo capture |
+| `RecipeDetailView` | Parallax hero, ingredients, steps, nutrition, pairings, "What did my Sous Chef change?" substitution diffs |
 | `PreferencesView` | 9-field form — dietary, skill, equipment, cuisines, aversions |
 | `SettingsView` | Memory stats, changelog, account management |
 
@@ -52,13 +53,27 @@ Native SwiftUI rewrite of the Expo mobile app. MVVM architecture with `@Observab
 
 ```
 Alchemy/
-├── App/                    Entry point and app shell
+├── App/                    Entry point, routing, environment
+├── Core/
+│   ├── Auth/               AuthManager (@Observable, supabase-swift)
+│   └── Networking/         APIClient (URLSession + async/await), models
 ├── DesignSystem/
-│   ├── Components/         Shared SwiftUI building blocks
+│   ├── Components/         Button, TextField, SearchBar, FilterChip, RecipeCard, TabBar
+│   ├── Modifiers/          Glass (iOS 26), Haptics, Shimmer
 │   └── Theme/              Colors, Typography, Spacing
-├── Features/               Auth, Generate, Cookbook, Explore, Preferences, Settings
+├── Features/               One folder per screen (View + ViewModel pairs)
+│   ├── Auth/               AuthFlowView
+│   ├── Cookbook/            CookbookView with variant-based filtering
+│   ├── Explore/            ExploreView with popularity sort + social proof
+│   ├── Generate/           GenerateView + chat + candidate canvas
+│   ├── Import/             ImportView + ImportViewModel (URL/text/photo)
+│   ├── Onboarding/         OnboardingView — AI preference interview
+│   ├── Preferences/        PreferencesView
+│   ├── RecipeDetail/       RecipeDetailView + substitution diffs
+│   ├── Settings/           SettingsView
+│   └── Shell/              TabShell — tab bar + Import accessory
 ├── Models/                 Shared Swift domain models
-└── Resources/              Assets.xcassets, Info.plist, Lottie JSON
+└── Resources/              Assets.xcassets, Info.plist, Lottie JSON, entitlements
 ```
 
 ### Running the iOS app
@@ -93,22 +108,27 @@ Next.js 15 App Router. All pages under `app/(admin)/`:
 
 | Page | Description |
 |---|---|
-| `/dashboard` | KPI rollup — LLM cost, safety flags, image pipeline, activity feed |
+| `/dashboard` | KPI rollup — LLM cost, safety flags, image pipeline, import activity, activity feed |
 | `/users` | User roster with live search, status, and reset-memory action |
-| `/moderation` | Safety flag review |
 | `/recipes` | Split-panel recipe audit — coverage snapshot cards, velocity deltas, version timeline + prompt trace |
+| `/images` | Consolidated image pipeline — overview, live queue, shared assets/reuse provenance, QA tooling |
+| `/imports` | Recipe import telemetry — KPI cards, source/strategy breakdown, recent imports, failure details |
+| `/ingredients` | Canonical ingredient registry with semantic food icons, enrichment metadata, and ontology links |
+| `/graph` | Entity relationship graph — force-directed canvas with type filters, fullscreen, and confidence-ranked edges |
 | `/provider-model` | Model Assignments — LLM model routing per scope |
+| `/model-usage` | Model usage analytics |
 | `/models` | Model registry — available providers/models with pricing and context window |
 | `/prompts` | Prompt management per scope — active/inactive versions, inline editing |
 | `/rules` | Policy rules per scope — active/inactive versions, inline editing |
 | `/memory` | User memory snapshots + confidence/salience quality signals |
-| `/image-pipeline` | Image job queue with retry controls |
+| `/metadata-pipeline` | Metadata enrichment pipeline queue |
+| `/pipeline-health` | LLM pipeline observability — per-scope stats, variant health, graph activity |
 | `/simulations` | Seeded simulation runner — single or concurrent A/B with full trace, latency segments, and token deltas |
+| `/simulation-recipe` | Recipe-specific simulation runs |
+| `/simulation-image` | Image generation simulation and comparison |
 | `/development` | Destructive development reset console (dry-run preview + typed confirmation + run audit trail) |
 | `/request-trace` | Gateway event log — clickable rows, payload details, error highlighting |
 | `/changelog` | Changelog event audit with action/scope distribution charts |
-| `/ingredients` | Canonical ingredient registry with semantic food icons, enrichment metadata, and ontology links |
-| `/graph` | Entity relationship graph — force-directed canvas with type filters, fullscreen, and confidence-ranked edges |
 | `/version-causality` | Recipe version causality chains |
 | `/api-docs` | Auto-generated API reference from OpenAPI spec + admin route discovery |
 
@@ -132,6 +152,10 @@ No direct provider calls are allowed outside adapters.
 | `chat_ideation` | `POST /chat`, `POST /chat/{id}/messages` while no candidate is active | Conversational. Learns preferences and decides whether to trigger generation. |
 | `chat_generation` | `POST /chat/{id}/messages` when generation is triggered | Returns full `candidate_recipe_set` (max 3 components). |
 | `chat_iteration` | `POST /chat/{id}/messages` when candidate exists | Returns revised `candidate_recipe_set`. |
+| `recipe_canonicalize` | `POST /chat/{id}/commit` | Strips user-specific adaptations from chat candidate to produce canonical base recipe. |
+| `recipe_personalize` | `POST /recipes/{id}/variant/refresh`, auto on save | Materialises user's private variant from canonical base + preferences + manual edits. Graph-grounded with substitution diffs. |
+| `recipe_import_transform` | `POST /chat/import` | Transforms ImportedRecipeDocument → RecipePayload + AssistantReply in Alchemy's voice. |
+| `recipe_import_vision_extract` | `POST /chat/import` (photo kind) | Extracts recipe from cookbook page photo → ImportedRecipeDocument. |
 | `classify` | Async audit + normalization utilities | Used for non-blocking telemetry/helpers; not a blocking gate in the core chat loop. |
 | `ingredient_alias_normalize` | Canonical ingredient identity stage | Normalizes alias keys to canonical ingredient names. |
 | `ingredient_phrase_split` | Canonical ingredient identity stage | Splits compound ingredient phrases into atomic items. |
@@ -304,14 +328,30 @@ The migration chain is out of order relative to remote history. Fix by:
 | `0032_ingredient_line_parse_scope_v2` | Seed and activate `ingredient_line_parse` LLM scope for mention/qualifier parsing |
 | `0033_graph_relation_and_index_hardening` | Add expanded relation seeds and traversal/performance indexes for semantic graph reads |
 | `0034_semantic_constraints_and_consistency_tables` | Add semantic incompatibility rules and confidence/consistency guardrail tables |
+| `0035`–`0037` | Search document system, explore feed, preference pipeline refinements |
+| `0038_recipe_search_preview_projection` | Search preview projection for RecipePreview contract |
+| `0039_gpt_image_1_mini_billing_metadata` | Image model billing metadata |
+| `0040_candidate_time_recipe_images` | Candidate-time image enrollment and resolution |
+| `0041_refresh_development_reset_targets` | Refresh development reset preset targets |
+| `0042_image_pipeline_storage` | Image pipeline storage and shared asset reuse |
+| `0043_canonical_variants_cookbook` | Canonical recipes + private variants + cookbook architecture (v3.0.0) |
+| `0044_recipe_canonicalize_personalize_scopes` | Seed `recipe_canonicalize` + `recipe_personalize` LLM scopes |
+| `0045_search_safety_exclusions` | Search safety exclusion filters |
+| `0046_accumulated_manual_edits` | Manual edit accumulation for variant re-personalization |
+| `0047_backfill_cookbook_entries` | Backfill cookbook_entries from legacy recipe_saves |
+| `0048_drop_recipe_saves` | Drop legacy recipe_saves table |
+| `0049_variant_tags` | Structured variant tags (cuisine, dietary, technique, occasion, time, difficulty, key_ingredients) |
+| `0050_recipe_import` | Recipe import pipeline — import_provenance, fingerprint dedup, LLM scope seeds |
+| `0051_recipe_popularity` | Popularity scoring, view tracking, ingredient trending, search sort |
+| `0052_pipeline_observability` | Pipeline observability RPC for admin dashboard |
 
 ---
 
 ## Backend (`supabase/`)
 
 - **Auth**: Supabase Auth (token-based)
-- **DB**: Postgres — users, preferences, recipes, recipe_versions, collections, memories, events, changelog_events, image_jobs
-- **Edge Functions** (`functions/v1/`): LLM gateway with structured output, prompt injection, memory, and image generation
+- **DB**: Postgres — users, preferences, recipes, recipe_versions, cookbook_entries, user_recipe_variants, user_recipe_variant_versions, preference_change_log, collections, memories, events, changelog_events, image_jobs, recipe_search_documents, recipe_view_events, ingredient_trending_stats, graph_entities, graph_edges, ingredients, import_provenance
+- **Edge Functions** (`functions/v1/`): LLM gateway with structured output, prompt injection, memory, image generation, recipe canonicalization/personalization, import pipeline, popularity/trending
 
 ### Deploying edge functions
 

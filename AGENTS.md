@@ -62,6 +62,33 @@ curl https://api.cookwithalchemy.com/v1/healthz
 - Remove LLM call: remove callsite + wrapper + scope, add migration that deactivates scope config rows, and update docs/tests.
 - Never place direct provider endpoint calls outside `supabase/functions/_shared/llm-adapters/`.
 
+## Canonical Recipes + Private Variants ("Sous Chef")
+
+Core architecture: canonical (public, immutable) recipes + per-user private variants.
+
+- **Canonical**: created by `recipe_canonicalize` scope from chat output. Immutable, visible in Explore.
+- **Variants**: created by `recipe_personalize` scope. Private per user. Title stays canonical; content is personalized.
+- **Constraints vs preferences**: Constraints (dietary_restrictions, aversions) are retroactive — changes mark variants `stale`. Preferences (cuisines, equipment) are forward-only.
+- **Variant lifecycle**: `current` → `stale` → `processing` → `current`. Also `failed`, `needs_review`.
+- **Graph-grounded personalization**: queries knowledge graph for proven substitution patterns before LLM call.
+- **Substitution diffs**: structured records of ingredient swaps stored in provenance. Surfaced in iOS.
+- **Variant tags**: materialized JSONB tags for multi-dimensional Cookbook filtering.
+- **Tables**: `cookbook_entries`, `user_recipe_variants`, `user_recipe_variant_versions`, `preference_change_log`.
+- **Endpoints**: `GET /recipes/{id}/variant`, `POST /recipes/{id}/variant/refresh`, `POST /recipes/{id}/publish`, `GET /recipes/cookbook`.
+
+## Popularity & Trending
+
+- Pre-computed `popularity_score` and `trending_score` on `recipe_search_documents`. Weights: saves x3, variants x2, views x0.5.
+- `recipe_view_events` table — fire-and-forget on `GET /recipes/{id}`.
+- `ingredient_trending_stats` table — recipe-derived popularity + substitution momentum (-100 to +100).
+- `POST /popularity/refresh` — batch recompute. `GET /ingredients/trending?sort=trending|momentum`.
+- `POST /recipes/search` accepts `sort_by: recent|popular|trending`.
+
+## Pipeline Observability
+
+- `GET /observability/pipeline?hours=N` — per-scope LLM stats, variant health, graph activity.
+- Admin `/pipeline-health` dashboard with configurable time window.
+
 ## Recipe Import Pipeline
 - **Endpoint:** `POST /chat/import` — accepts url/text/photo kind, returns seeded ChatSession.
 - **LLM scopes:** `recipe_import_transform`, `recipe_import_vision_extract`. Prompts/rules managed via admin API only (not migration-seeded).
