@@ -13,6 +13,10 @@ export const getDashboardData = async (): Promise<{
   imageFailedCount: number;
   imageTotalCount: number;
   activeMemoryCount: number;
+  cookbookEntryCount: number;
+  recipeSaveCount: number;
+  variantCount: number;
+  staleVariantCount: number;
   recentErrors: Array<{ created_at: string; scope: string; reason: string }>;
   recentActivity: Array<{ created_at: string; scope: string; entity_type: string; action: string }>;
 }> => {
@@ -24,14 +28,20 @@ export const getDashboardData = async (): Promise<{
     { data: emptyOutputRows },
     { data: imageRows },
     { data: memoryRows },
-    { data: activityRows }
+    { data: activityRows },
+    { data: cookbookRows },
+    { data: recipeSaveRows },
+    { data: variantRows },
   ] = await Promise.all([
     client.from("v_llm_cost_latency_rollup").select("request_count,avg_latency_ms,total_cost_usd"),
     client.from("v_abuse_rate_limit_flags").select("created_at,scope,reason").order("created_at", { ascending: false }).limit(8),
     client.from("events").select("id").eq("event_type", "llm_call").contains("event_payload", { error_code: "llm_empty_output" }),
     client.from("image_requests").select("status"),
     client.from("memories").select("status"),
-    client.from("changelog_events").select("created_at,scope,entity_type,action").order("created_at", { ascending: false }).limit(10)
+    client.from("changelog_events").select("created_at,scope,entity_type,action").order("created_at", { ascending: false }).limit(10),
+    client.from("cookbook_entries").select("canonical_recipe_id"),
+    client.from("recipe_saves").select("recipe_id"),
+    client.from("user_recipe_variants").select("stale_status"),
   ]);
 
   const requestCount = (costRows ?? []).reduce((sum, row) => sum + Number(row.request_count ?? 0), 0);
@@ -59,6 +69,14 @@ export const getDashboardData = async (): Promise<{
   const imageTotalCount = resolvedImageRows.length;
   const activeMemoryCount = (memoryRows ?? []).filter((row) => row.status === "active").length;
 
+  const cookbookEntryCount = (cookbookRows ?? []).length;
+  const recipeSaveCount = (recipeSaveRows ?? []).length;
+  const allVariants = variantRows ?? [];
+  const variantCount = allVariants.length;
+  const staleVariantCount = allVariants.filter(
+    (v) => v.stale_status === "stale" || v.stale_status === "needs_review",
+  ).length;
+
   return {
     requestCount,
     avgLatencyMs,
@@ -71,6 +89,10 @@ export const getDashboardData = async (): Promise<{
     imageFailedCount,
     imageTotalCount,
     activeMemoryCount,
+    cookbookEntryCount,
+    recipeSaveCount,
+    variantCount,
+    staleVariantCount,
     recentErrors: (flagsRows ?? []).map((row) => ({
       created_at: row.created_at as string,
       scope: (row.scope as string) ?? "unknown",

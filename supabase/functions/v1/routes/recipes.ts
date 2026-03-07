@@ -633,24 +633,8 @@ export const handleRecipeRoutes = async (
         // Body is optional — empty request means default autopersonalize=true.
       }
 
-      // Dual-write: legacy recipe_saves + new cookbook_entries for backward compat.
-      // Once backfill migration is complete, recipe_saves write can be removed.
-      const { error: legacySaveError } = await client
-        .from("recipe_saves")
-        .upsert({ user_id: auth.userId, recipe_id: recipeId }, {
-          onConflict: "user_id,recipe_id",
-        });
-
-      if (legacySaveError) {
-        throw new ApiError(
-          500,
-          "recipe_save_failed",
-          "Could not save recipe",
-          legacySaveError.message,
-        );
-      }
-
-      // Create cookbook entry. Upsert so re-saving updates the timestamp.
+      // cookbook_entries is the canonical save table (backfilled in migration 0047).
+      // recipe_saves is deprecated — no longer written to.
       const { error: cookbookError } = await client
         .from("cookbook_entries")
         .upsert(
@@ -845,7 +829,7 @@ export const handleRecipeRoutes = async (
     }
 
     if (method === "DELETE") {
-      // Delete from both cookbook_entries and legacy recipe_saves.
+      // Delete from cookbook_entries (recipe_saves is deprecated).
       const { error: cookbookDeleteError } = await client
         .from("cookbook_entries")
         .delete()
@@ -858,21 +842,6 @@ export const handleRecipeRoutes = async (
           "cookbook_entry_delete_failed",
           "Could not remove cookbook entry",
           cookbookDeleteError.message,
-        );
-      }
-
-      const { error: legacyDeleteError } = await client
-        .from("recipe_saves")
-        .delete()
-        .eq("user_id", auth.userId)
-        .eq("recipe_id", recipeId);
-
-      if (legacyDeleteError) {
-        throw new ApiError(
-          500,
-          "recipe_unsave_failed",
-          "Could not unsave recipe",
-          legacyDeleteError.message,
         );
       }
 

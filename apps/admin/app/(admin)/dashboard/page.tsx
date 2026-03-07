@@ -1,6 +1,7 @@
 import {
   Activity,
   ArrowRight,
+  BookOpen,
   Brain,
   CheckCircle2,
   Clock,
@@ -8,6 +9,7 @@ import {
   Image as ImageIcon,
   ImageOff,
   ShieldAlert,
+  Sparkles,
   XCircle,
   Zap
 } from "lucide-react";
@@ -130,6 +132,43 @@ export default async function DashboardPage(): Promise<React.JSX.Element> {
             value={String(data.activeMemoryCount)}
             hint="Current active memory records"
             icon={Brain}
+          />
+        </div>
+      </section>
+
+      {/* Cookbook & Variants */}
+      <section>
+        <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">
+          Cookbook & Variants
+        </h2>
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <KpiCard
+            label="Cookbook Entries"
+            value={String(data.cookbookEntryCount)}
+            hint="Total cookbook_entries rows"
+            icon={BookOpen}
+          />
+          <KpiCard
+            label="Legacy Saves"
+            value={String(data.recipeSaveCount)}
+            hint={data.recipeSaveCount === data.cookbookEntryCount
+              ? "Fully migrated ✓"
+              : `${data.cookbookEntryCount - data.recipeSaveCount > 0 ? "+" : ""}${data.cookbookEntryCount - data.recipeSaveCount} delta`}
+            icon={BookOpen}
+            variant={data.recipeSaveCount === data.cookbookEntryCount ? "success" : "warning"}
+          />
+          <KpiCard
+            label="Variants"
+            value={String(data.variantCount)}
+            hint="Total personalised variants"
+            icon={Sparkles}
+          />
+          <KpiCard
+            label="Stale / Review"
+            value={String(data.staleVariantCount)}
+            hint="Variants needing re-materialisation"
+            icon={Sparkles}
+            variant={data.staleVariantCount > 0 ? "warning" : "success"}
           />
         </div>
       </section>

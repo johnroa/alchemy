@@ -6695,9 +6695,10 @@ const buildCookbookItems = async (
     );
   }
 
-  // Legacy fallback: if no cookbook_entries, read recipe_saves.
-  let recipeIds: string[];
-  let entryMap = new Map<
+  // After migration 0047, all recipe_saves are backfilled into
+  // cookbook_entries. No fallback needed.
+  const recipeIds = (cookbookRows ?? []).map((row) => row.canonical_recipe_id);
+  const entryMap = new Map<
     string,
     {
       autopersonalize: boolean;
@@ -6707,40 +6708,13 @@ const buildCookbookItems = async (
     }
   >();
 
-  if (cookbookRows && cookbookRows.length > 0) {
-    recipeIds = cookbookRows.map((row) => row.canonical_recipe_id);
-    for (const row of cookbookRows) {
-      entryMap.set(row.canonical_recipe_id, {
-        autopersonalize: row.autopersonalize ?? true,
-        active_variant_id: row.active_variant_id,
-        saved_at: row.saved_at ?? row.updated_at,
-        updated_at: row.updated_at,
-      });
-    }
-  } else {
-    const { data: saves, error: savesError } = await client
-      .from("recipe_saves")
-      .select("recipe_id, created_at")
-      .eq("user_id", userId);
-
-    if (savesError) {
-      throw new ApiError(
-        500,
-        "cookbook_saves_fetch_failed",
-        "Could not fetch saved recipes",
-        savesError.message,
-      );
-    }
-
-    recipeIds = (saves ?? []).map((row) => row.recipe_id);
-    for (const row of saves ?? []) {
-      entryMap.set(row.recipe_id, {
-        autopersonalize: true,
-        active_variant_id: null,
-        saved_at: row.created_at,
-        updated_at: row.created_at,
-      });
-    }
+  for (const row of cookbookRows ?? []) {
+    entryMap.set(row.canonical_recipe_id, {
+      autopersonalize: row.autopersonalize ?? true,
+      active_variant_id: row.active_variant_id,
+      saved_at: row.saved_at ?? row.updated_at,
+      updated_at: row.updated_at,
+    });
   }
 
   if (recipeIds.length === 0) {

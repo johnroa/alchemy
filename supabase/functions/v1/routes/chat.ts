@@ -1026,27 +1026,7 @@ export const handleChatRoutes = async (
           selectedMemoryIds,
         });
 
-        // Dual-write: legacy recipe_saves + new cookbook_entries.
-        // recipe_saves will be removed once backfill migration is complete.
-        const { error: saveError } = await client
-          .from("recipe_saves")
-          .upsert(
-            {
-              user_id: auth.userId,
-              recipe_id: saved.recipeId,
-            },
-            { onConflict: "user_id,recipe_id" },
-          );
-        if (saveError) {
-          throw new ApiError(
-            500,
-            "recipe_save_failed",
-            "Could not save committed recipe to cookbook",
-            saveError.message,
-          );
-        }
-
-        // Write cookbook_entries row. autopersonalize defaults to true.
+        // Save to cookbook_entries (recipe_saves is deprecated after backfill 0047).
         const { error: cookbookError } = await client
           .from("cookbook_entries")
           .upsert(
@@ -1059,10 +1039,11 @@ export const handleChatRoutes = async (
             { onConflict: "user_id,canonical_recipe_id" },
           );
         if (cookbookError) {
-          // Non-fatal — log but don't fail the commit if cookbook_entries write fails.
-          // The legacy recipe_saves path still works.
-          console.warn(
-            `[commit] cookbook_entries upsert failed for recipe ${saved.recipeId}: ${cookbookError.message}`,
+          throw new ApiError(
+            500,
+            "cookbook_entry_create_failed",
+            "Could not save committed recipe to cookbook",
+            cookbookError.message,
           );
         }
 
