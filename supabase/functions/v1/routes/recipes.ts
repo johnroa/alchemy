@@ -1097,6 +1097,15 @@ export const handleRecipeRoutes = async (
       // Body is optional for refresh.
     }
 
+    // 3. Check for existing variant row (including accumulated manual edits).
+    // Must be fetched before storedEdits reference and LLM call.
+    const { data: existingVariant } = await client
+      .from("user_recipe_variants")
+      .select("id, current_version_id, accumulated_manual_edits")
+      .eq("user_id", auth.userId)
+      .eq("canonical_recipe_id", recipeId)
+      .maybeSingle();
+
     // Load any previously stored manual edits for replay during
     // re-personalization (e.g., constraint change triggered refresh).
     const storedEdits = Array.isArray(existingVariant?.accumulated_manual_edits)
@@ -1106,7 +1115,7 @@ export const handleRecipeRoutes = async (
         }>)
       : [];
 
-    // 3. Query graph for known substitution patterns relevant to the
+    // 4. Query graph for known substitution patterns relevant to the
     //    user's constraints. These ground the LLM in proven patterns
     //    (e.g., "wheat flour → almond flour" for gluten-free) instead
     //    of reinventing substitutions from scratch each time.
@@ -1127,7 +1136,7 @@ export const handleRecipeRoutes = async (
         })
       : [];
 
-    // 4. Call LLM to materialise the personalised variant.
+    // 5. Call LLM to materialise the personalised variant.
     // Both new instructions and accumulated edits are sent so the LLM
     // can apply everything in one pass and detect conflicts.
     const result = await llmGateway.personalizeRecipe({
@@ -1143,14 +1152,6 @@ export const handleRecipeRoutes = async (
       accumulatedManualEdits: storedEdits.length > 0 ? storedEdits : undefined,
       modelOverrides: modelOverrides,
     });
-
-    // 4. Check for existing variant row (including accumulated manual edits).
-    const { data: existingVariant } = await client
-      .from("user_recipe_variants")
-      .select("id, current_version_id, accumulated_manual_edits")
-      .eq("user_id", auth.userId)
-      .eq("canonical_recipe_id", recipeId)
-      .maybeSingle();
 
     // 5. Compute preference fingerprint for stale detection.
     const fingerprint = await computePreferenceFingerprint(preferences);

@@ -48,7 +48,7 @@ struct CookbookEntryItem: Decodable, Identifiable, Hashable {
     let summary: String
     let imageUrl: String?
     let imageStatus: String
-    let category: String
+    let category: String?
     let visibility: String
     let updatedAt: String
     let quickStats: RecipeQuickStats?
@@ -96,7 +96,7 @@ struct RecipePreview: Decodable, Identifiable, Hashable {
     let summary: String
     let imageUrl: String?
     let imageStatus: String
-    let category: String
+    let category: String?
     let visibility: String
     let updatedAt: String
     let quickStats: RecipeQuickStats?
