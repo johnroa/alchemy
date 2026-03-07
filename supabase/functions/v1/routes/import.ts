@@ -297,7 +297,7 @@ export const handleImportRoutes = async (
   });
 
   const transformLatencyMs = Date.now() - transformStartedAt;
-  const transformed = transformResult.parsed;
+  const transformed = transformResult.result;
   const recipe: RecipePayload = transformed.recipe;
   const assistantReply = transformed.assistant_reply ?? {
     text: "Here's what I found! I've adapted this recipe for you. Feel free to make any changes.",
@@ -650,7 +650,7 @@ async function extractFromPhoto(
     images,
   });
 
-  const doc = result.parsed;
+  const doc = result.result;
 
   // Ensure required fields have defaults
   return {
