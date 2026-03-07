@@ -129,6 +129,48 @@ export type VariantStatus =
   | "needs_review"
   | "none";
 
+export type ChatCommitRecipe = {
+  component_id: string;
+  role: CandidateRecipeRole;
+  title: string;
+  recipe_id: string;
+  recipe_version_id: string;
+  variant_id: string | null;
+  variant_version_id: string | null;
+  variant_status: VariantStatus;
+};
+
+export type ChatCommitLink = {
+  id: string;
+  parent_recipe_id: string;
+  child_recipe_id: string;
+  relation_type: string;
+  position: number;
+};
+
+export type ChatCommitSummary = {
+  candidate_id: string;
+  revision: number;
+  committed_count: number;
+  recipes: ChatCommitRecipe[];
+  links: ChatCommitLink[];
+  post_save_options: string[];
+};
+
+export type ChatCommitClaim = {
+  candidate_id: string;
+  revision: number;
+  request_id: string;
+  claimed_at: string;
+};
+
+export type ChatCommittedCandidateRecord = {
+  candidate_id: string;
+  revision: number;
+  committed_at: string;
+  commit: ChatCommitSummary;
+};
+
 /**
  * Structured tag set computed from a variant's personalized content.
  * Multi-dimensional: cuisine, dietary, technique, occasion, time,
@@ -218,6 +260,8 @@ export type ChatSessionContext = {
   candidate_recipe_set?: CandidateRecipeSet | null;
   candidate_revision?: number;
   active_component_id?: string | null;
+  active_commit?: ChatCommitClaim | null;
+  last_committed_candidate?: ChatCommittedCandidateRecord | null;
   pending_preference_conflict?: PendingPreferenceConflict | null;
   thread_preference_overrides?: ThreadPreferenceOverrides | null;
 };
