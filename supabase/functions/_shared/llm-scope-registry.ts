@@ -261,6 +261,48 @@ export const LLM_SCOPE_REGISTRY = {
     fallback_policy: "deterministic_only",
     telemetry_tags: { task: "memory_conflict_resolve", criticality: "medium" },
   },
+
+  /**
+   * recipe_canonicalize: derives the canonical (public, immutable) base recipe
+   * from a personalized chat candidate. Strips stable user-specific adaptations
+   * (equipment temp adjustments, dietary substitutions) while preserving dish
+   * identity (title, core technique, flavour profile). Runs as the first phase
+   * of the two-phase commit on chat save.
+   *
+   * Input: personalized recipe payload + user preference context
+   * Output: canonical recipe payload (same schema as recipe_versions.payload)
+   */
+  recipe_canonicalize: {
+    output_contract: "recipe_canonicalize_v1",
+    mode: "generation",
+    retry_policy: {
+      max_attempts: 2,
+      retryable_codes: [...STRICT_JSON_RETRYABLE_CODES, ...STANDARD_RETRYABLE_CODES],
+    },
+    fallback_policy: "none",
+    telemetry_tags: { task: "recipe_canonicalize", criticality: "high" },
+  },
+
+  /**
+   * recipe_personalize: materialises a user's private variant from a canonical
+   * recipe base + the user's active constraint/preference profile + any explicit
+   * chat edits. Runs as the second phase of two-phase commit, and also for
+   * on-save auto-personalisation and stale variant refresh.
+   *
+   * Input: canonical payload, user preferences, optional manual edit diff
+   * Output: personalised recipe payload + structured tag diff + provenance record
+   */
+  recipe_personalize: {
+    output_contract: "recipe_personalize_v1",
+    mode: "generation",
+    retry_policy: {
+      max_attempts: 2,
+      retryable_codes: [...STRICT_JSON_RETRYABLE_CODES, ...STANDARD_RETRYABLE_CODES],
+    },
+    fallback_policy: "none",
+    telemetry_tags: { task: "recipe_personalize", criticality: "high" },
+  },
+
   ...LEGACY_LLM_SCOPE_REGISTRY,
 } as const satisfies Record<string, LlmScopeDefinition>;
 

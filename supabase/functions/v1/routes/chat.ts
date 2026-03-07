@@ -1026,6 +1026,8 @@ export const handleChatRoutes = async (
           selectedMemoryIds,
         });
 
+        // Dual-write: legacy recipe_saves + new cookbook_entries.
+        // recipe_saves will be removed once backfill migration is complete.
         const { error: saveError } = await client
           .from("recipe_saves")
           .upsert(
@@ -1044,12 +1046,41 @@ export const handleChatRoutes = async (
           );
         }
 
+        // Write cookbook_entries row. autopersonalize defaults to true.
+        const { error: cookbookError } = await client
+          .from("cookbook_entries")
+          .upsert(
+            {
+              user_id: auth.userId,
+              canonical_recipe_id: saved.recipeId,
+              autopersonalize: true,
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: "user_id,canonical_recipe_id" },
+          );
+        if (cookbookError) {
+          // Non-fatal — log but don't fail the commit if cookbook_entries write fails.
+          // The legacy recipe_saves path still works.
+          console.warn(
+            `[commit] cookbook_entries upsert failed for recipe ${saved.recipeId}: ${cookbookError.message}`,
+          );
+        }
+
+        // TODO: Phase 2 — call recipe_canonicalize then recipe_personalize here
+        // to implement the two-phase commit. For now, the personalized candidate
+        // is persisted directly as the canonical recipe (existing behavior).
+        // The variant_id/variant_version_id/variant_status fields will be
+        // populated once the LLM gateway wrappers are wired.
+
         return {
           component_id: component.component_id,
           role: component.role,
           title: component.title,
           recipe_id: saved.recipeId,
           recipe_version_id: saved.versionId,
+          variant_id: null as string | null,
+          variant_version_id: null as string | null,
+          variant_status: "none" as const,
           recipe: component.recipe,
         };
       }),
@@ -1061,6 +1092,9 @@ export const handleChatRoutes = async (
       title: component.title,
       recipe_id: component.recipe_id,
       recipe_version_id: component.recipe_version_id,
+      variant_id: component.variant_id,
+      variant_version_id: component.variant_version_id,
+      variant_status: component.variant_status,
     }));
 
     await attachCommittedCandidateImages({

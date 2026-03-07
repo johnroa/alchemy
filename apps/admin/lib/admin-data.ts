@@ -13,6 +13,9 @@ export { getLlmConfigData, getModelUsageData } from "./admin-data/llm";
 export {
   getRecipeAuditDetail,
   getRecipeAuditIndexData,
+  getRecipeCookbookEntries,
+  getVariantDetail,
+  getVariantStats,
 } from "./admin-data/recipes";
 
 export { getGraphData } from "./admin-data/graph";

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Alchemy API
-  version: 2.0.2
+  version: 3.0.0
   description: |
     API contract for Alchemy — an AI-driven recipe creation and management platform.
     Covers the user-facing v1 API at api.cookwithalchemy.com and the admin API at admin.cookwithalchemy.com.
@@ -144,7 +144,12 @@ paths:
           $ref: '#/components/responses/ErrorResponse'
   /recipes/cookbook:
     get:
-      summary: Saved cookbook recipes grouped with category precedence
+      summary: User cookbook with canonical + variant data
+      description: |
+        Returns the user's cookbook entries. Each entry includes canonical recipe
+        preview data plus variant status. When a variant exists, the preview
+        reflects the personalised version (title stays canonical, summary and
+        tags come from the variant).
       responses:
         '200':
           description: Cookbook response
@@ -157,7 +162,7 @@ paths:
                   items:
                     type: array
                     items:
-                      $ref: '#/components/schemas/RecipePreview'
+                      $ref: '#/components/schemas/CookbookEntry'
                   cookbook_insight:
                     type: [string, 'null']
         default:
@@ -185,24 +190,36 @@ paths:
           $ref: '#/components/responses/ErrorResponse'
   /recipes/{id}/save:
     post:
-      summary: Save a recipe to cookbook
+      summary: Save a canonical recipe to cookbook and optionally trigger variant materialisation
+      description: |
+        Creates a cookbook_entries row for the canonical recipe. If autopersonalize
+        is true (default) and the user has relevant constraint preferences, queues
+        async variant materialisation. Returns the cookbook entry state.
       parameters:
         - $ref: '#/components/parameters/RecipeId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                autopersonalize:
+                  type: boolean
+                  default: true
+                  description: Whether to auto-personalise the recipe using the user's constraint preferences.
       responses:
         '200':
-          description: Save status
+          description: Cookbook entry state
           content:
             application/json:
               schema:
-                type: object
-                required: [saved]
-                properties:
-                  saved:
-                    type: boolean
+                $ref: '#/components/schemas/SaveRecipeResponse'
         default:
           $ref: '#/components/responses/ErrorResponse'
     delete:
-      summary: Unsave a recipe
+      summary: Remove recipe from cookbook
+      description: Deletes the cookbook entry and associated variant data for this recipe.
       parameters:
         - $ref: '#/components/parameters/RecipeId'
       responses:
@@ -296,6 +313,104 @@ paths:
                 properties:
                   recipe:
                     $ref: '#/components/schemas/Recipe'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /recipes/{id}/variant:
+    get:
+      summary: Get the user's personalised variant for a canonical recipe
+      description: |
+        Returns the user's private variant of a canonical recipe, including the
+        personalised payload, adaptation summary, tag diff, and provenance data.
+        Returns 404 if the user has no variant for this recipe.
+      parameters:
+        - $ref: '#/components/parameters/RecipeId'
+        - in: query
+          name: units
+          required: false
+          schema:
+            type: string
+            enum: [source, metric, imperial]
+        - in: query
+          name: group_by
+          required: false
+          schema:
+            type: string
+            enum: [flat, category, component]
+        - in: query
+          name: inline_measurements
+          required: false
+          schema:
+            type: boolean
+      responses:
+        '200':
+          description: Personalised variant
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecipeVariant'
+        '404':
+          description: No variant exists for this user and recipe
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /recipes/{id}/variant/refresh:
+    post:
+      summary: Create or refresh the user's variant for a canonical recipe
+      description: |
+        Materialises (or re-materialises) the user's private variant from the
+        canonical recipe base plus the user's current preference profile. If the
+        variant has manual edits, attempts to reapply them after re-personalisation.
+        If reapplication conflicts, returns variant with status needs_review.
+      parameters:
+        - $ref: '#/components/parameters/RecipeId'
+      responses:
+        '200':
+          description: Variant materialisation result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VariantRefreshResponse'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /recipes/{id}/publish:
+    post:
+      summary: Publish a private variant as a new canonical recipe
+      description: |
+        Creates a new canonical recipe lineage from the user's private variant.
+        The new canonical has a derived_from graph edge to the original. The
+        variant remains in the user's cookbook unchanged.
+      parameters:
+        - $ref: '#/components/parameters/RecipeId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title:
+                  type: string
+                  description: Optional new title for the published recipe. If omitted, uses the original canonical title.
+      responses:
+        '200':
+          description: New canonical recipe
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [recipe_id, recipe_version_id, title]
+                properties:
+                  recipe_id:
+                    type: string
+                    format: uuid
+                  recipe_version_id:
+                    type: string
+                    format: uuid
+                  title:
+                    type: string
         default:
           $ref: '#/components/responses/ErrorResponse'
   /collections:
@@ -1383,6 +1498,8 @@ components:
         - memory_select
         - memory_summarize
         - memory_conflict_resolve
+        - recipe_canonicalize
+        - recipe_personalize
     ErrorEnvelope:
       type: object
       required: [code, message, request_id]
@@ -2202,8 +2319,10 @@ components:
           items:
             type: string
         preference_updates:
-          type: object
-          additionalProperties: true
+          type: array
+          items:
+            $ref: '#/components/schemas/PreferenceUpdate'
+          description: Preference changes extracted from this chat turn. iOS synthesises inline system cards from this.
         preference_conflict:
           $ref: '#/components/schemas/PreferenceConflictContext'
     PreferenceConflictContext:
@@ -2307,9 +2426,21 @@ components:
                       recipe_id:
                         type: string
                         format: uuid
+                        description: Canonical recipe ID.
                       recipe_version_id:
                         type: string
                         format: uuid
+                        description: Canonical recipe version ID.
+                      variant_id:
+                        type: [string, 'null']
+                        format: uuid
+                        description: The creator's private variant ID, if variant was materialised.
+                      variant_version_id:
+                        type: [string, 'null']
+                        format: uuid
+                        description: The creator's private variant version ID, if variant was materialised.
+                      variant_status:
+                        $ref: '#/components/schemas/VariantStatus'
                 links:
                   type: array
                   items:
@@ -2496,3 +2627,147 @@ components:
           type: integer
         is_inferred:
           type: boolean
+    VariantStatus:
+      type: string
+      enum: [current, stale, processing, failed, needs_review, none]
+      description: |
+        Lifecycle state of a user's recipe variant.
+        current = up to date, stale = needs re-personalisation,
+        processing = re-personalisation in progress, failed = retryable failure,
+        needs_review = manual edits conflict with new constraints,
+        none = no variant exists (user sees canonical).
+    CookbookEntry:
+      type: object
+      required: [canonical_recipe_id, title, summary, image_url, image_status, category, visibility, updated_at, variant_status, autopersonalize, saved_at]
+      properties:
+        canonical_recipe_id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        summary:
+          type: string
+          description: Variant summary if variant exists, otherwise canonical summary.
+        image_url:
+          type: [string, 'null']
+          format: uri
+        image_status:
+          type: string
+          enum: [pending, ready, failed]
+        category:
+          type: string
+        visibility:
+          type: string
+          enum: [public, private]
+        updated_at:
+          type: string
+          format: date-time
+        quick_stats:
+          oneOf:
+            - $ref: '#/components/schemas/RecipeQuickStats'
+            - type: 'null'
+        variant_status:
+          $ref: '#/components/schemas/VariantStatus'
+        active_variant_version_id:
+          type: [string, 'null']
+          format: uuid
+        personalized_at:
+          type: [string, 'null']
+          format: date-time
+          description: When the variant was last materialised. Null if no variant.
+        autopersonalize:
+          type: boolean
+        saved_at:
+          type: string
+          format: date-time
+        variant_tags:
+          type: array
+          items:
+            type: string
+          description: Tags from the variant (gluten-free, dairy-free, etc). Empty if no variant.
+    SaveRecipeResponse:
+      type: object
+      required: [saved, canonical_recipe_id, variant_status]
+      properties:
+        saved:
+          type: boolean
+        canonical_recipe_id:
+          type: string
+          format: uuid
+        variant_status:
+          $ref: '#/components/schemas/VariantStatus'
+        active_variant_version_id:
+          type: [string, 'null']
+          format: uuid
+    RecipeVariant:
+      type: object
+      required: [variant_id, variant_version_id, canonical_recipe_id, recipe, adaptation_summary, variant_status, derivation_kind, personalized_at]
+      properties:
+        variant_id:
+          type: string
+          format: uuid
+        variant_version_id:
+          type: string
+          format: uuid
+        canonical_recipe_id:
+          type: string
+          format: uuid
+        recipe:
+          $ref: '#/components/schemas/Recipe'
+        adaptation_summary:
+          type: string
+          description: Natural language summary of what was adapted and why.
+        variant_status:
+          $ref: '#/components/schemas/VariantStatus'
+        derivation_kind:
+          type: string
+          enum: [auto_personalized, manual_edit, mixed]
+        personalized_at:
+          type: string
+          format: date-time
+        tag_diff:
+          type: object
+          properties:
+            added:
+              type: array
+              items:
+                type: string
+            removed:
+              type: array
+              items:
+                type: string
+        provenance:
+          type: object
+          additionalProperties: true
+          description: Structured record of applied constraints, preferences, and manual edits.
+    VariantRefreshResponse:
+      type: object
+      required: [variant_id, variant_version_id, variant_status]
+      properties:
+        variant_id:
+          type: string
+          format: uuid
+        variant_version_id:
+          type: string
+          format: uuid
+        variant_status:
+          $ref: '#/components/schemas/VariantStatus'
+        adaptation_summary:
+          type: string
+    PreferenceUpdate:
+      type: object
+      required: [field, action, value, category]
+      properties:
+        field:
+          type: string
+          description: Which preference field changed (e.g. equipment, dietary_restrictions).
+        action:
+          type: string
+          enum: [added, removed, updated]
+        value:
+          type: string
+          description: The specific value that was added, removed, or updated.
+        category:
+          type: string
+          enum: [constraint, preference, rendering]
+          description: How this preference is classified for propagation.

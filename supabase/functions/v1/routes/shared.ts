@@ -111,7 +111,60 @@ export type RecipeViewOptions = {
 
 export type { RecipePreview, RecipeQuickStats };
 
+/**
+ * Variant lifecycle state. Tracks where a user's private variant sits in the
+ * materialisation pipeline.
+ * - current: variant is up to date with user's constraint preferences
+ * - stale: constraint preferences changed; needs re-personalisation
+ * - processing: re-personalisation is in progress
+ * - failed: re-personalisation failed (retryable)
+ * - needs_review: manual edits conflict with new constraints
+ * - none: no variant exists (user sees canonical)
+ */
+export type VariantStatus =
+  | "current"
+  | "stale"
+  | "processing"
+  | "failed"
+  | "needs_review"
+  | "none";
+
+/**
+ * A cookbook entry as returned by GET /recipes/cookbook. Includes canonical
+ * recipe preview data plus variant status. When a variant exists, summary
+ * and tags reflect the personalised version; title always stays canonical.
+ */
+export type CookbookEntry = {
+  canonical_recipe_id: string;
+  title: string;
+  summary: string;
+  image_url: string | null;
+  image_status: string;
+  category: string;
+  visibility: string;
+  updated_at: string;
+  quick_stats: RecipeQuickStats | null;
+  variant_status: VariantStatus;
+  active_variant_version_id: string | null;
+  personalized_at: string | null;
+  autopersonalize: boolean;
+  saved_at: string;
+  variant_tags: string[];
+};
+
+/** @deprecated Use CookbookEntry instead. Kept for backward compat during migration. */
 export type CookbookItem = RecipePreview;
+
+/**
+ * Structured preference update extracted from a chat turn. iOS uses these
+ * to synthesise inline "Preferences updated" system cards in the chat thread.
+ */
+export type PreferenceUpdate = {
+  field: string;
+  action: "added" | "removed" | "updated";
+  value: string;
+  category: "constraint" | "preference" | "rendering";
+};
 
 export type ChatLoopState = "ideation" | "candidate_presented" | "iterating";
 export type CandidateRecipeRole =
@@ -163,7 +216,7 @@ export type ChatResponseContext = {
   intent?: ChatIntent;
   changed_sections?: string[];
   personalization_notes?: string[];
-  preference_updates?: Record<string, JsonValue>;
+  preference_updates?: PreferenceUpdate[];
   preference_conflict?: PreferenceConflictContext;
 };
 

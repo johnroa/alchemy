@@ -1,6 +1,28 @@
 # Changelog
 
-## [Unreleased] — 2026-03-05
+## [Unreleased] — 2026-03-06
+
+### Canonical Recipes + Private Variants + Cookbook Architecture (v3.0.0)
+
+- **Breaking:** API version bumped to 3.0.0. Major architectural change separating canonical (public, immutable) recipes from per-user private variants.
+- Added `cookbook_entries` table replacing `recipe_saves` as the user-to-recipe relationship, with variant tracking and autopersonalise toggle.
+- Added `user_recipe_variants` table (one per user per canonical recipe) tracking variant lifecycle, preference fingerprint, and stale status.
+- Added `user_recipe_variant_versions` table for full variant version history with provenance, derivation kind, and lineage.
+- Added `preference_change_log` table for audit trail and retroactive propagation job driver.
+- Added `extended_preferences` and `propagation_overrides` JSONB columns to `preferences` table for new preference categories and per-user constraint/preference classification overrides.
+- Added `recipe_canonicalize` LLM scope — strips user-specific adaptations from a personalised chat candidate to produce the canonical base recipe.
+- Added `recipe_personalize` LLM scope — materialises a user's private variant from canonical base + preferences + explicit edits.
+- Seeded DB routes, prompts, and rules for both new scopes (gpt-4.1, temperature 0.3/0.4).
+- Added `derived_from` graph relation type for recipe family tree edges.
+- New API endpoints: `GET /recipes/{id}/variant`, `POST /recipes/{id}/variant/refresh`, `POST /recipes/{id}/publish`.
+- Updated `POST /recipes/{id}/save` to accept `autopersonalize` flag and return cookbook entry state with variant status.
+- Updated `GET /recipes/cookbook` to return `CookbookEntry` objects with variant status, personalised summaries, and variant tags.
+- Updated `CommitChatRecipesResponse` to include variant IDs and status per committed recipe.
+- Typed `ChatResponseContext.preference_updates` as `PreferenceUpdate[]` (was untyped object) for iOS inline preference-saved cards.
+- New schemas: `VariantStatus`, `CookbookEntry`, `SaveRecipeResponse`, `RecipeVariant`, `VariantRefreshResponse`, `PreferenceUpdate`.
+- RLS policies ensure variants and cookbook entries are private to the owning user.
+
+## 2026-03-05
 
 ### Candidate-Time Recipe Images + Admin Images Console
 

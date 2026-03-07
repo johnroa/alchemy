@@ -11,7 +11,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { getRecipeAuditDetail, getRecipeAuditIndexData } from "@/lib/admin-data";
+import { getRecipeAuditDetail, getRecipeAuditIndexData, getRecipeCookbookEntries, getVariantStats } from "@/lib/admin-data";
 import { cn } from "@/lib/utils";
 
 type RecipesPageSearchParams = {
@@ -196,7 +196,10 @@ export default async function RecipesPage({
   const selectedRecipeId = sortedRows.some((row) => row.id === requestedRecipeId)
     ? requestedRecipeId
     : sortedRows[0]?.id;
-  const detail = selectedRecipeId ? await getRecipeAuditDetail(selectedRecipeId) : null;
+  const [detail, cookbookEntries] = await Promise.all([
+    selectedRecipeId ? getRecipeAuditDetail(selectedRecipeId) : Promise.resolve(null),
+    selectedRecipeId ? getRecipeCookbookEntries(selectedRecipeId) : Promise.resolve([]),
+  ]);
   const unresolvedOwners = sortedRows.filter((row) => !row.owner_email).length;
   const loopState = detail?.chat ? getContextLoopState(detail.chat.context) : null;
   const candidateSummary = detail?.chat ? getContextCandidateSummary(detail.chat.context) : null;
@@ -506,7 +509,7 @@ export default async function RecipesPage({
                         {detail.recipe.title}
                       </CardTitle>
                       <CardDescription>
-                        {detail.recipe.owner_email ?? "Unknown owner"} · {detail.recipe.visibility}
+                        Created by {detail.recipe.owner_email ?? "Unknown"} · {detail.recipe.visibility}
                       </CardDescription>
                       <p className="mt-1 font-mono text-[11px] text-muted-foreground">{detail.recipe.id}</p>
                     </div>
@@ -587,6 +590,14 @@ export default async function RecipesPage({
                     </TabsTrigger>
                     <TabsTrigger value="causality">Revision Map</TabsTrigger>
                     <TabsTrigger value="canonical">Canonical Ingredients</TabsTrigger>
+                    <TabsTrigger value="cookbook">
+                      Cookbook
+                      {cookbookEntries.length > 0 && (
+                        <Badge variant="secondary" className="ml-1.5 text-[10px]">
+                          {cookbookEntries.length}
+                        </Badge>
+                      )}
+                    </TabsTrigger>
                     <TabsTrigger value="changes">
                       Changelog
                       {detail.changelog.length > 0 && (
@@ -879,6 +890,73 @@ export default async function RecipesPage({
                 </TabsContent>
 
                 {/* Changelog */}
+                {/* Cookbook — who has saved this recipe + variant status */}
+                <TabsContent value="cookbook">
+                  <Card>
+                    <CardContent className="p-0">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>User</TableHead>
+                            <TableHead>Variant Status</TableHead>
+                            <TableHead>Derivation</TableHead>
+                            <TableHead>Auto</TableHead>
+                            <TableHead>Saved</TableHead>
+                            <TableHead>Materialised</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {cookbookEntries.length === 0 ? (
+                            <TableRow>
+                              <TableCell colSpan={6} className="py-8 text-center text-muted-foreground">
+                                No cookbook entries. This recipe has not been saved by any user.
+                              </TableCell>
+                            </TableRow>
+                          ) : (
+                            cookbookEntries.map((entry) => (
+                              <TableRow key={entry.user_id}>
+                                <TableCell className="text-xs">
+                                  {entry.user_email ?? entry.user_id.slice(0, 8)}
+                                </TableCell>
+                                <TableCell>
+                                  <Badge
+                                    variant="outline"
+                                    className={cn(
+                                      "text-xs",
+                                      entry.variant_status === "current" && "border-emerald-300 bg-emerald-50 text-emerald-700",
+                                      entry.variant_status === "stale" && "border-amber-300 bg-amber-50 text-amber-700",
+                                      entry.variant_status === "processing" && "border-blue-300 bg-blue-50 text-blue-700",
+                                      entry.variant_status === "failed" && "border-red-300 bg-red-50 text-red-700",
+                                      entry.variant_status === "needs_review" && "border-purple-300 bg-purple-50 text-purple-700",
+                                      !entry.variant_status && "text-muted-foreground"
+                                    )}
+                                  >
+                                    {entry.variant_status ?? "none"}
+                                  </Badge>
+                                </TableCell>
+                                <TableCell className="text-xs text-muted-foreground">
+                                  {entry.derivation_kind ?? "—"}
+                                </TableCell>
+                                <TableCell className="text-xs">
+                                  {entry.autopersonalize ? "Yes" : "No"}
+                                </TableCell>
+                                <TableCell className="text-xs text-muted-foreground">
+                                  {new Date(entry.saved_at).toLocaleDateString()}
+                                </TableCell>
+                                <TableCell className="text-xs text-muted-foreground">
+                                  {entry.last_materialized_at
+                                    ? new Date(entry.last_materialized_at).toLocaleString()
+                                    : "—"}
+                                </TableCell>
+                              </TableRow>
+                            ))
+                          )}
+                        </TableBody>
+                      </Table>
+                    </CardContent>
+                  </Card>
+                </TabsContent>
+
                 <TabsContent value="changes">
                   <Card>
                     <CardContent className="p-0">

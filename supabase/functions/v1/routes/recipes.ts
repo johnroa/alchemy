@@ -9,6 +9,7 @@ import type {
 } from "../../_shared/types.ts";
 import type {
   CookbookItem,
+  CookbookEntry,
   ChatMessageView,
   ContextPack,
   PreferenceContext,
@@ -16,6 +17,7 @@ import type {
   RecipeViewOptions,
   RecipeView,
   RouteContext,
+  VariantStatus,
 } from "./shared.ts";
 
 type RecipesDeps = {
@@ -605,18 +607,53 @@ export const handleRecipeRoutes = async (
   ) {
     const recipeId = parseUuid(segments[1]);
     if (method === "POST") {
-      const { error } = await client
+      // Parse optional body for autopersonalize flag (defaults to true).
+      let autopersonalize = true;
+      try {
+        const body = await requireJsonBody<{ autopersonalize?: boolean }>(request);
+        if (typeof body.autopersonalize === "boolean") {
+          autopersonalize = body.autopersonalize;
+        }
+      } catch {
+        // Body is optional — empty request means default autopersonalize=true.
+      }
+
+      // Dual-write: legacy recipe_saves + new cookbook_entries for backward compat.
+      // Once backfill migration is complete, recipe_saves write can be removed.
+      const { error: legacySaveError } = await client
         .from("recipe_saves")
         .upsert({ user_id: auth.userId, recipe_id: recipeId }, {
           onConflict: "user_id,recipe_id",
         });
 
-      if (error) {
+      if (legacySaveError) {
         throw new ApiError(
           500,
           "recipe_save_failed",
           "Could not save recipe",
-          error.message,
+          legacySaveError.message,
+        );
+      }
+
+      // Create cookbook entry. Upsert so re-saving updates the timestamp.
+      const { error: cookbookError } = await client
+        .from("cookbook_entries")
+        .upsert(
+          {
+            user_id: auth.userId,
+            canonical_recipe_id: recipeId,
+            autopersonalize,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: "user_id,canonical_recipe_id" },
+        );
+
+      if (cookbookError) {
+        throw new ApiError(
+          500,
+          "cookbook_entry_create_failed",
+          "Could not create cookbook entry",
+          cookbookError.message,
         );
       }
 
@@ -624,12 +661,14 @@ export const handleRecipeRoutes = async (
         serviceClient,
         actorUserId: auth.userId,
         scope: "cookbook",
-        entityType: "recipe_save",
+        entityType: "cookbook_entry",
         entityId: recipeId,
         action: "saved",
         requestId,
+        afterJson: { autopersonalize } as unknown as JsonValue,
       });
 
+      // Ensure image processing for the recipe.
       const { data: recipeImageCheck, error: recipeImageCheckError } = await client
         .from("recipes")
         .select("current_version_id")
@@ -661,22 +700,48 @@ export const handleRecipeRoutes = async (
         });
       }
 
-      return respond(200, { saved: true });
+      // TODO: When autopersonalize is true and user has relevant constraint
+      // preferences, enqueue async variant materialisation job here. This will
+      // be implemented when the recipe_personalize LLM gateway wrapper is wired.
+      const variantStatus: VariantStatus = "none";
+
+      return respond(200, {
+        saved: true,
+        canonical_recipe_id: recipeId,
+        variant_status: variantStatus,
+        active_variant_version_id: null,
+      });
     }
 
     if (method === "DELETE") {
-      const { error } = await client
+      // Delete from both cookbook_entries and legacy recipe_saves.
+      const { error: cookbookDeleteError } = await client
+        .from("cookbook_entries")
+        .delete()
+        .eq("user_id", auth.userId)
+        .eq("canonical_recipe_id", recipeId);
+
+      if (cookbookDeleteError) {
+        throw new ApiError(
+          500,
+          "cookbook_entry_delete_failed",
+          "Could not remove cookbook entry",
+          cookbookDeleteError.message,
+        );
+      }
+
+      const { error: legacyDeleteError } = await client
         .from("recipe_saves")
         .delete()
         .eq("user_id", auth.userId)
         .eq("recipe_id", recipeId);
 
-      if (error) {
+      if (legacyDeleteError) {
         throw new ApiError(
           500,
           "recipe_unsave_failed",
           "Could not unsave recipe",
-          error.message,
+          legacyDeleteError.message,
         );
       }
 
@@ -684,7 +749,7 @@ export const handleRecipeRoutes = async (
         serviceClient,
         actorUserId: auth.userId,
         scope: "cookbook",
-        entityType: "recipe_save",
+        entityType: "cookbook_entry",
         entityId: recipeId,
         action: "unsaved",
         requestId,
@@ -692,6 +757,312 @@ export const handleRecipeRoutes = async (
 
       return respond(200, { saved: false });
     }
+  }
+
+  // ── GET /recipes/{id}/variant ──
+  // Returns the user's personalised variant for a canonical recipe.
+  if (
+    segments.length === 3 &&
+    segments[0] === "recipes" &&
+    segments[2] === "variant" &&
+    method === "GET"
+  ) {
+    const recipeId = parseUuid(segments[1]);
+
+    const { data: variant, error: variantError } = await client
+      .from("user_recipe_variants")
+      .select(
+        "id, current_version_id, base_canonical_version_id, preference_fingerprint, stale_status, last_materialized_at",
+      )
+      .eq("user_id", auth.userId)
+      .eq("canonical_recipe_id", recipeId)
+      .maybeSingle();
+
+    if (variantError) {
+      throw new ApiError(
+        500,
+        "variant_fetch_failed",
+        "Could not fetch variant",
+        variantError.message,
+      );
+    }
+
+    if (!variant || !variant.current_version_id) {
+      throw new ApiError(
+        404,
+        "variant_not_found",
+        "No variant exists for this user and recipe",
+      );
+    }
+
+    const { data: variantVersion, error: versionError } = await client
+      .from("user_recipe_variant_versions")
+      .select(
+        "id, payload, derivation_kind, provenance, source_canonical_version_id, created_at",
+      )
+      .eq("id", variant.current_version_id)
+      .single();
+
+    if (versionError || !variantVersion) {
+      throw new ApiError(
+        500,
+        "variant_version_fetch_failed",
+        "Could not fetch variant version",
+        versionError?.message,
+      );
+    }
+
+    const payload = variantVersion.payload as Record<string, JsonValue>;
+    const provenance = variantVersion.provenance as Record<string, JsonValue>;
+
+    // Apply rendering-only presentation options (units, groupBy, inline measurements).
+    const preferences = await getPreferences(client, auth.userId);
+    const viewOptions = resolvePresentationOptions({
+      query: url.searchParams,
+      presentationPreferences:
+        preferences.presentation_preferences as Record<string, unknown>,
+    });
+
+    // Build a recipe view from the variant payload using the same projection
+    // as canonical reads, but sourcing from the variant's payload.
+    const canonicalRecipe = await fetchRecipeView(
+      client,
+      recipeId,
+      true,
+      viewOptions,
+    );
+
+    // Overlay variant payload fields onto the canonical recipe view.
+    // The variant payload has the same structure as recipe_versions.payload.
+    const variantRecipe = {
+      ...canonicalRecipe,
+      summary: (payload.summary as string) ?? canonicalRecipe.summary,
+      ingredients: (payload.ingredients as JsonValue[]) ?? canonicalRecipe.ingredients,
+      steps: (payload.steps as JsonValue[]) ?? canonicalRecipe.steps,
+    };
+
+    return respond(200, {
+      variant_id: variant.id,
+      variant_version_id: variantVersion.id,
+      canonical_recipe_id: recipeId,
+      recipe: variantRecipe,
+      adaptation_summary:
+        (provenance.adaptation_summary as string) ?? "",
+      variant_status: variant.stale_status as VariantStatus,
+      derivation_kind: variantVersion.derivation_kind,
+      personalized_at:
+        variant.last_materialized_at ?? variantVersion.created_at,
+      tag_diff: (provenance.tag_diff as JsonValue) ?? { added: [], removed: [] },
+      provenance,
+    });
+  }
+
+  // ── POST /recipes/{id}/variant/refresh ──
+  // Creates or refreshes the user's variant. Placeholder that marks the intent;
+  // actual LLM personalisation will be wired when the recipe_personalize gateway
+  // wrapper is complete.
+  if (
+    segments.length === 4 &&
+    segments[0] === "recipes" &&
+    segments[2] === "variant" &&
+    segments[3] === "refresh" &&
+    method === "POST"
+  ) {
+    const recipeId = parseUuid(segments[1]);
+
+    // Verify the canonical recipe exists.
+    const { data: recipe, error: recipeError } = await client
+      .from("recipes")
+      .select("id, current_version_id")
+      .eq("id", recipeId)
+      .maybeSingle();
+
+    if (recipeError || !recipe || !recipe.current_version_id) {
+      throw new ApiError(
+        404,
+        "recipe_not_found",
+        "Canonical recipe not found",
+        recipeError?.message,
+      );
+    }
+
+    // Check for existing variant.
+    const { data: existingVariant } = await client
+      .from("user_recipe_variants")
+      .select("id, current_version_id, stale_status")
+      .eq("user_id", auth.userId)
+      .eq("canonical_recipe_id", recipeId)
+      .maybeSingle();
+
+    // TODO: Call recipe_personalize LLM scope to materialise the variant.
+    // For now, return the existing variant status or 'none' as a placeholder.
+    // The full pipeline will be: canonical payload + user preferences → LLM →
+    // variant payload + provenance → insert variant version → update variant.
+
+    if (existingVariant) {
+      return respond(200, {
+        variant_id: existingVariant.id,
+        variant_version_id: existingVariant.current_version_id,
+        variant_status: existingVariant.stale_status as VariantStatus,
+        adaptation_summary: null,
+      });
+    }
+
+    // No variant exists yet — return placeholder indicating materialisation needed.
+    return respond(200, {
+      variant_id: null,
+      variant_version_id: null,
+      variant_status: "none" as VariantStatus,
+      adaptation_summary: null,
+    });
+  }
+
+  // ── POST /recipes/{id}/publish ──
+  // Publishes a private variant as a new canonical recipe with derived_from edge.
+  if (
+    segments.length === 3 &&
+    segments[0] === "recipes" &&
+    segments[2] === "publish" &&
+    method === "POST"
+  ) {
+    const sourceRecipeId = parseUuid(segments[1]);
+
+    // Get the user's variant for this recipe.
+    const { data: variant, error: variantError } = await client
+      .from("user_recipe_variants")
+      .select("id, current_version_id, canonical_recipe_id")
+      .eq("user_id", auth.userId)
+      .eq("canonical_recipe_id", sourceRecipeId)
+      .maybeSingle();
+
+    if (variantError || !variant || !variant.current_version_id) {
+      throw new ApiError(
+        404,
+        "variant_not_found",
+        "No variant to publish for this recipe",
+        variantError?.message,
+      );
+    }
+
+    // Get the variant version payload.
+    const { data: variantVersion, error: vvError } = await client
+      .from("user_recipe_variant_versions")
+      .select("payload, source_canonical_version_id")
+      .eq("id", variant.current_version_id)
+      .single();
+
+    if (vvError || !variantVersion) {
+      throw new ApiError(
+        500,
+        "variant_version_fetch_failed",
+        "Could not fetch variant payload for publishing",
+        vvError?.message,
+      );
+    }
+
+    // Parse optional title override.
+    let newTitle: string | undefined;
+    try {
+      const body = await requireJsonBody<{ title?: string }>(request);
+      if (body.title?.trim()) {
+        newTitle = body.title.trim();
+      }
+    } catch {
+      // Body is optional.
+    }
+
+    const payload = variantVersion.payload as RecipePayload;
+    if (newTitle) {
+      payload.title = newTitle;
+    }
+
+    // Persist as a new canonical recipe.
+    const saved = await persistRecipe({
+      client,
+      serviceClient,
+      userId: auth.userId,
+      requestId,
+      payload,
+      diffSummary: `Published from variant of recipe ${sourceRecipeId}`,
+    });
+
+    // Create derived_from graph edge linking new canonical to source canonical.
+    // Uses service client to bypass RLS on graph tables.
+    const derivedFromTypeId = await resolveRelationTypeId(
+      serviceClient,
+      "derived_from",
+    );
+
+    // Create graph entities for both recipes if they don't exist,
+    // then create the edge. Best-effort — don't fail the publish on graph errors.
+    try {
+      // Ensure recipe entities exist in graph.
+      const sourceEntityResult = await serviceClient
+        .from("graph_entities")
+        .upsert(
+          {
+            entity_type: "recipe",
+            label: payload.title ?? "Untitled",
+            metadata: { recipe_id: saved.recipeId },
+          },
+          { onConflict: "entity_type,label" },
+        )
+        .select("id")
+        .single();
+
+      const targetEntityResult = await serviceClient
+        .from("graph_entities")
+        .select("id")
+        .eq("entity_type", "recipe")
+        .eq("metadata->>recipe_id", sourceRecipeId)
+        .maybeSingle();
+
+      if (sourceEntityResult.data && targetEntityResult.data) {
+        await serviceClient.from("graph_edges").upsert(
+          {
+            from_entity_id: sourceEntityResult.data.id,
+            to_entity_id: targetEntityResult.data.id,
+            relation_type_id: derivedFromTypeId,
+            source: "variant_publish",
+            confidence: 1.0,
+            metadata: {
+              source_recipe_id: sourceRecipeId,
+              published_recipe_id: saved.recipeId,
+            },
+          },
+          {
+            onConflict:
+              "from_entity_id,to_entity_id,relation_type_id,source",
+          },
+        );
+      }
+    } catch {
+      // Graph edge creation is best-effort. Log but don't fail the publish.
+      console.warn(
+        `[publish] Failed to create derived_from graph edge for recipe ${saved.recipeId}`,
+      );
+    }
+
+    await logChangelog({
+      serviceClient,
+      actorUserId: auth.userId,
+      scope: "cookbook",
+      entityType: "recipe",
+      entityId: saved.recipeId,
+      action: "published_from_variant",
+      requestId,
+      afterJson: {
+        source_recipe_id: sourceRecipeId,
+        new_recipe_id: saved.recipeId,
+        new_version_id: saved.versionId,
+      } as unknown as JsonValue,
+    });
+
+    return respond(200, {
+      recipe_id: saved.recipeId,
+      recipe_version_id: saved.versionId,
+      title: payload.title ?? "Untitled",
+    });
   }
 
   if (

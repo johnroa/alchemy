@@ -140,7 +140,13 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Saved cookbook recipes grouped with category precedence */
+        /**
+         * User cookbook with canonical + variant data
+         * @description Returns the user's cookbook entries. Each entry includes canonical recipe
+         *     preview data plus variant status. When a variant exists, the preview
+         *     reflects the personalised version (title stays canonical, summary and
+         *     tags come from the variant).
+         */
         get: {
             parameters: {
                 query?: never;
@@ -157,7 +163,7 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
-                            items: components["schemas"]["RecipePreview"][];
+                            items: components["schemas"]["CookbookEntry"][];
                             cookbook_insight: string | null;
                         };
                     };
@@ -227,7 +233,12 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Save a recipe to cookbook */
+        /**
+         * Save a canonical recipe to cookbook and optionally trigger variant materialisation
+         * @description Creates a cookbook_entries row for the canonical recipe. If autopersonalize
+         *     is true (default) and the user has relevant constraint preferences, queues
+         *     async variant materialisation. Returns the cookbook entry state.
+         */
         post: {
             parameters: {
                 query?: never;
@@ -237,23 +248,34 @@ export interface paths {
                 };
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /**
+                         * @description Whether to auto-personalise the recipe using the user's constraint preferences.
+                         * @default true
+                         */
+                        autopersonalize?: boolean;
+                    };
+                };
+            };
             responses: {
-                /** @description Save status */
+                /** @description Cookbook entry state */
                 200: {
                     headers: {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": {
-                            saved: boolean;
-                        };
+                        "application/json": components["schemas"]["SaveRecipeResponse"];
                     };
                 };
                 default: components["responses"]["ErrorResponse"];
             };
         };
-        /** Unsave a recipe */
+        /**
+         * Remove recipe from cookbook
+         * @description Deletes the cookbook entry and associated variant data for this recipe.
+         */
         delete: {
             parameters: {
                 query?: never;
@@ -401,6 +423,165 @@ export interface paths {
                 default: components["responses"]["ErrorResponse"];
             };
         };
+        trace?: never;
+    };
+    "/recipes/{id}/variant": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get the user's personalised variant for a canonical recipe
+         * @description Returns the user's private variant of a canonical recipe, including the
+         *     personalised payload, adaptation summary, tag diff, and provenance data.
+         *     Returns 404 if the user has no variant for this recipe.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    units?: "source" | "metric" | "imperial";
+                    group_by?: "flat" | "category" | "component";
+                    inline_measurements?: boolean;
+                };
+                header?: never;
+                path: {
+                    id: components["parameters"]["RecipeId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Personalised variant */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RecipeVariant"];
+                    };
+                };
+                /** @description No variant exists for this user and recipe */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorEnvelope"];
+                    };
+                };
+                default: components["responses"]["ErrorResponse"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/recipes/{id}/variant/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create or refresh the user's variant for a canonical recipe
+         * @description Materialises (or re-materialises) the user's private variant from the
+         *     canonical recipe base plus the user's current preference profile. If the
+         *     variant has manual edits, attempts to reapply them after re-personalisation.
+         *     If reapplication conflicts, returns variant with status needs_review.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["parameters"]["RecipeId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Variant materialisation result */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["VariantRefreshResponse"];
+                    };
+                };
+                default: components["responses"]["ErrorResponse"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/recipes/{id}/publish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Publish a private variant as a new canonical recipe
+         * @description Creates a new canonical recipe lineage from the user's private variant.
+         *     The new canonical has a derived_from graph edge to the original. The
+         *     variant remains in the user's cookbook unchanged.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["parameters"]["RecipeId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /** @description Optional new title for the published recipe. If omitted, uses the original canonical title. */
+                        title?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description New canonical recipe */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            recipe_id: string;
+                            /** Format: uuid */
+                            recipe_version_id: string;
+                            title: string;
+                        };
+                    };
+                };
+                default: components["responses"]["ErrorResponse"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/collections": {
@@ -1698,7 +1879,7 @@ export interface components {
          * @description Internal LLM pipeline scope key used for prompt/rule/model routing.
          * @enum {string}
          */
-        LlmScope: "chat_ideation" | "chat_generation" | "chat_iteration" | "generate" | "classify" | "ingredient_alias_normalize" | "ingredient_phrase_split" | "ingredient_enrich" | "recipe_metadata_enrich" | "ingredient_relation_infer" | "preference_normalize" | "equipment_filter" | "onboarding" | "image" | "image_quality_eval" | "memory_extract" | "memory_select" | "memory_summarize" | "memory_conflict_resolve";
+        LlmScope: "chat_ideation" | "chat_generation" | "chat_iteration" | "generate" | "classify" | "ingredient_alias_normalize" | "ingredient_phrase_split" | "ingredient_enrich" | "recipe_metadata_enrich" | "ingredient_relation_infer" | "preference_normalize" | "equipment_filter" | "onboarding" | "image" | "image_quality_eval" | "memory_extract" | "memory_select" | "memory_summarize" | "memory_conflict_resolve" | "recipe_canonicalize" | "recipe_personalize";
         ErrorEnvelope: {
             code: string;
             message: string;
@@ -2089,9 +2270,8 @@ export interface components {
             intent?: "in_scope_ideation" | "in_scope_generate" | "out_of_scope";
             changed_sections?: string[];
             personalization_notes?: string[];
-            preference_updates?: {
-                [key: string]: unknown;
-            };
+            /** @description Preference changes extracted from this chat turn. iOS synthesises inline system cards from this. */
+            preference_updates?: components["schemas"]["PreferenceUpdate"][];
             preference_conflict?: components["schemas"]["PreferenceConflictContext"];
         };
         PreferenceConflictContext: {
@@ -2134,10 +2314,27 @@ export interface components {
                     /** @enum {string} */
                     role: "main" | "side" | "appetizer" | "dessert" | "drink";
                     title: string;
-                    /** Format: uuid */
+                    /**
+                     * Format: uuid
+                     * @description Canonical recipe ID.
+                     */
                     recipe_id: string;
-                    /** Format: uuid */
+                    /**
+                     * Format: uuid
+                     * @description Canonical recipe version ID.
+                     */
                     recipe_version_id: string;
+                    /**
+                     * Format: uuid
+                     * @description The creator's private variant ID, if variant was materialised.
+                     */
+                    variant_id?: string | null;
+                    /**
+                     * Format: uuid
+                     * @description The creator's private variant version ID, if variant was materialised.
+                     */
+                    variant_version_id?: string | null;
+                    variant_status?: components["schemas"]["VariantStatus"];
                 }[];
                 links: {
                     /** Format: uuid */
@@ -2240,6 +2437,98 @@ export interface components {
             };
             evidence_count?: number;
             is_inferred?: boolean;
+        };
+        /**
+         * @description Lifecycle state of a user's recipe variant.
+         *     current = up to date, stale = needs re-personalisation,
+         *     processing = re-personalisation in progress, failed = retryable failure,
+         *     needs_review = manual edits conflict with new constraints,
+         *     none = no variant exists (user sees canonical).
+         * @enum {string}
+         */
+        VariantStatus: "current" | "stale" | "processing" | "failed" | "needs_review" | "none";
+        CookbookEntry: {
+            /** Format: uuid */
+            canonical_recipe_id: string;
+            title: string;
+            /** @description Variant summary if variant exists, otherwise canonical summary. */
+            summary: string;
+            /** Format: uri */
+            image_url: string | null;
+            /** @enum {string} */
+            image_status: "pending" | "ready" | "failed";
+            category: string;
+            /** @enum {string} */
+            visibility: "public" | "private";
+            /** Format: date-time */
+            updated_at: string;
+            quick_stats?: components["schemas"]["RecipeQuickStats"] | null;
+            variant_status: components["schemas"]["VariantStatus"];
+            /** Format: uuid */
+            active_variant_version_id?: string | null;
+            /**
+             * Format: date-time
+             * @description When the variant was last materialised. Null if no variant.
+             */
+            personalized_at?: string | null;
+            autopersonalize: boolean;
+            /** Format: date-time */
+            saved_at: string;
+            /** @description Tags from the variant (gluten-free, dairy-free, etc). Empty if no variant. */
+            variant_tags?: string[];
+        };
+        SaveRecipeResponse: {
+            saved: boolean;
+            /** Format: uuid */
+            canonical_recipe_id: string;
+            variant_status: components["schemas"]["VariantStatus"];
+            /** Format: uuid */
+            active_variant_version_id?: string | null;
+        };
+        RecipeVariant: {
+            /** Format: uuid */
+            variant_id: string;
+            /** Format: uuid */
+            variant_version_id: string;
+            /** Format: uuid */
+            canonical_recipe_id: string;
+            recipe: components["schemas"]["Recipe"];
+            /** @description Natural language summary of what was adapted and why. */
+            adaptation_summary: string;
+            variant_status: components["schemas"]["VariantStatus"];
+            /** @enum {string} */
+            derivation_kind: "auto_personalized" | "manual_edit" | "mixed";
+            /** Format: date-time */
+            personalized_at: string;
+            tag_diff?: {
+                added?: string[];
+                removed?: string[];
+            };
+            /** @description Structured record of applied constraints, preferences, and manual edits. */
+            provenance?: {
+                [key: string]: unknown;
+            };
+        };
+        VariantRefreshResponse: {
+            /** Format: uuid */
+            variant_id: string;
+            /** Format: uuid */
+            variant_version_id: string;
+            variant_status: components["schemas"]["VariantStatus"];
+            adaptation_summary?: string;
+        };
+        PreferenceUpdate: {
+            /** @description Which preference field changed (e.g. equipment, dietary_restrictions). */
+            field: string;
+            /** @enum {string} */
+            action: "added" | "removed" | "updated";
+            /** @description The specific value that was added, removed, or updated. */
+            value: string;
+            /**
+             * @description How this preference is classified for propagation.
+             * @enum {string}
+             */
+            category: "constraint" | "preference" | "rendering";
         };
     };
     responses: {

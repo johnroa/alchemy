@@ -554,3 +554,227 @@ export const getRecipeAuditDetail = async (recipeId: string): Promise<RecipeAudi
     changelog: Array.from(changelogById.values()).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
   };
 };
+
+// ── Cookbook + Variant admin data functions ──────────────────────────────────
+
+type CookbookEntryRow = {
+  user_id: string;
+  user_email: string | null;
+  canonical_recipe_id: string;
+  autopersonalize: boolean;
+  saved_at: string;
+  updated_at: string;
+  variant_id: string | null;
+  variant_status: string | null;
+  preference_fingerprint: string | null;
+  last_materialized_at: string | null;
+  derivation_kind: string | null;
+};
+
+type VariantDetailRow = {
+  variant_id: string;
+  user_id: string;
+  user_email: string | null;
+  canonical_recipe_id: string;
+  canonical_title: string;
+  stale_status: string;
+  preference_fingerprint: string | null;
+  base_canonical_version_id: string;
+  last_materialized_at: string | null;
+  created_at: string;
+  versions: Array<{
+    id: string;
+    parent_variant_version_id: string | null;
+    source_canonical_version_id: string;
+    derivation_kind: string;
+    provenance: Record<string, unknown>;
+    created_at: string;
+    payload_summary: {
+      title: string;
+      ingredient_count: number;
+      step_count: number;
+    };
+  }>;
+};
+
+/**
+ * Fetch all cookbook entries for a canonical recipe. Used in the recipe audit
+ * panel's Cookbook tab to show who has saved this recipe and their variant status.
+ */
+export const getRecipeCookbookEntries = async (
+  recipeId: string
+): Promise<CookbookEntryRow[]> => {
+  const client = getAdminClient();
+
+  const { data: entries, error } = await client
+    .from("cookbook_entries")
+    .select("user_id, canonical_recipe_id, autopersonalize, saved_at, updated_at")
+    .eq("canonical_recipe_id", recipeId)
+    .order("saved_at", { ascending: false });
+
+  if (error) {
+    if (!isSchemaMissingError(error)) throw new Error(error.message);
+    return [];
+  }
+
+  if (!entries || entries.length === 0) return [];
+
+  const userIds = Array.from(new Set(entries.map((e) => e.user_id)));
+
+  const [{ data: users }, { data: variants }] = await Promise.all([
+    client.from("users").select("id,email").in("id", userIds),
+    client
+      .from("user_recipe_variants")
+      .select("id, user_id, stale_status, preference_fingerprint, last_materialized_at, current_version_id")
+      .eq("canonical_recipe_id", recipeId)
+      .in("user_id", userIds),
+  ]);
+
+  const emailById = new Map((users ?? []).map((u) => [u.id, u.email]));
+  const variantByUser = new Map(
+    (variants ?? []).map((v) => [v.user_id, v])
+  );
+
+  // Fetch derivation_kind for variants that have a current version
+  const versionIds = (variants ?? [])
+    .map((v) => v.current_version_id)
+    .filter((id): id is string => Boolean(id));
+
+  let derivationByVersionId = new Map<string, string>();
+  if (versionIds.length > 0) {
+    const { data: versionData } = await client
+      .from("user_recipe_variant_versions")
+      .select("id, derivation_kind")
+      .in("id", versionIds);
+    derivationByVersionId = new Map(
+      (versionData ?? []).map((v) => [v.id, v.derivation_kind])
+    );
+  }
+
+  return entries.map((entry) => {
+    const variant = variantByUser.get(entry.user_id);
+    return {
+      user_id: entry.user_id,
+      user_email: emailById.get(entry.user_id) ?? null,
+      canonical_recipe_id: entry.canonical_recipe_id,
+      autopersonalize: entry.autopersonalize,
+      saved_at: entry.saved_at,
+      updated_at: entry.updated_at,
+      variant_id: variant?.id ?? null,
+      variant_status: variant?.stale_status ?? null,
+      preference_fingerprint: variant?.preference_fingerprint ?? null,
+      last_materialized_at: variant?.last_materialized_at ?? null,
+      derivation_kind: variant?.current_version_id
+        ? derivationByVersionId.get(variant.current_version_id) ?? null
+        : null,
+    };
+  });
+};
+
+/**
+ * Fetch full variant detail for the admin variant inspector. Shows the variant's
+ * version history with provenance and payload summaries for side-by-side comparison.
+ */
+export const getVariantDetail = async (
+  variantId: string
+): Promise<VariantDetailRow | null> => {
+  const client = getAdminClient();
+
+  const { data: variant, error } = await client
+    .from("user_recipe_variants")
+    .select("id, user_id, canonical_recipe_id, stale_status, preference_fingerprint, base_canonical_version_id, last_materialized_at, created_at")
+    .eq("id", variantId)
+    .maybeSingle();
+
+  if (error || !variant) return null;
+
+  const [{ data: user }, { data: recipe }, { data: versions }] = await Promise.all([
+    client.from("users").select("email").eq("id", variant.user_id).maybeSingle(),
+    client.from("recipes").select("title").eq("id", variant.canonical_recipe_id).maybeSingle(),
+    client
+      .from("user_recipe_variant_versions")
+      .select("id, parent_variant_version_id, source_canonical_version_id, derivation_kind, provenance, payload, created_at")
+      .eq("variant_id", variantId)
+      .order("created_at", { ascending: true }),
+  ]);
+
+  return {
+    variant_id: variant.id,
+    user_id: variant.user_id,
+    user_email: user?.email ?? null,
+    canonical_recipe_id: variant.canonical_recipe_id,
+    canonical_title: recipe?.title ?? "Unknown",
+    stale_status: variant.stale_status,
+    preference_fingerprint: variant.preference_fingerprint,
+    base_canonical_version_id: variant.base_canonical_version_id,
+    last_materialized_at: variant.last_materialized_at,
+    created_at: variant.created_at,
+    versions: (versions ?? []).map((v) => {
+      const payload = v.payload && typeof v.payload === "object" ? v.payload as Record<string, unknown> : {};
+      const ingredients = Array.isArray(payload["ingredients"]) ? payload["ingredients"] : [];
+      const steps = Array.isArray(payload["steps"]) ? payload["steps"] : [];
+      return {
+        id: v.id,
+        parent_variant_version_id: v.parent_variant_version_id,
+        source_canonical_version_id: v.source_canonical_version_id,
+        derivation_kind: v.derivation_kind,
+        provenance: v.provenance && typeof v.provenance === "object" && !Array.isArray(v.provenance) ? v.provenance as Record<string, unknown> : {},
+        created_at: v.created_at,
+        payload_summary: {
+          title: typeof payload["title"] === "string" ? payload["title"] : "Untitled",
+          ingredient_count: ingredients.length,
+          step_count: steps.length,
+        },
+      };
+    }),
+  };
+};
+
+/**
+ * Aggregate variant health stats for the admin dashboard and recipe coverage snapshot.
+ * Returns counts of cookbook entries, variants by status, and materialisation rates.
+ */
+export const getVariantStats = async (): Promise<{
+  cookbook_entries: number;
+  variants_total: number;
+  variants_current: number;
+  variants_stale: number;
+  variants_processing: number;
+  variants_failed: number;
+  variants_needs_review: number;
+}> => {
+  const client = getAdminClient();
+
+  const [cookbookResult, variantsResult] = await Promise.all([
+    client.from("cookbook_entries").select("user_id", { count: "exact", head: true }),
+    client.from("user_recipe_variants").select("stale_status"),
+  ]);
+
+  if (cookbookResult.error && !isSchemaMissingError(cookbookResult.error)) {
+    throw new Error(cookbookResult.error.message);
+  }
+
+  const variants = variantsResult.data ?? [];
+  const statusCounts = variants.reduce(
+    (acc, v) => {
+      const status = v.stale_status as string;
+      if (status === "current") acc.current += 1;
+      else if (status === "stale") acc.stale += 1;
+      else if (status === "processing") acc.processing += 1;
+      else if (status === "failed") acc.failed += 1;
+      else if (status === "needs_review") acc.needs_review += 1;
+      return acc;
+    },
+    { current: 0, stale: 0, processing: 0, failed: 0, needs_review: 0 }
+  );
+
+  return {
+    cookbook_entries: cookbookResult.count ?? 0,
+    variants_total: variants.length,
+    variants_current: statusCounts.current,
+    variants_stale: statusCounts.stale,
+    variants_processing: statusCounts.processing,
+    variants_failed: statusCounts.failed,
+    variants_needs_review: statusCounts.needs_review,
+  };
+};
