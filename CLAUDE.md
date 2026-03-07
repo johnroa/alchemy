@@ -44,6 +44,64 @@ packages/shared/      Shared utilities
 - Keep shared visual primitives under `apps/ios/Alchemy/DesignSystem/*`.
 - Preserve loading, empty, and error states for user-facing flows.
 
+## Recipe Import Pipeline
+- **Endpoint:** `POST /chat/import` with `kind: url|text|photo`.
+- **Flow:** Extract (URL scraper / vision LLM / raw text) → Transform via `recipe_import_transform` scope → Seed chat session with CandidateRecipeSet → Enroll image generation → Return ChatSessionResponse.
+- **LLM scopes:** `recipe_import_transform` (ImportedRecipeDocument → RecipePayload), `recipe_import_vision_extract` (cookbook photo → ImportedRecipeDocument). Prompts/rules managed via admin API only.
+- **Scraper:** `supabase/functions/_shared/recipe-scraper.ts` — Schema.org JSON-LD first, microdata fallback, OpenGraph fallback. No site-specific scrapers.
+- **Copyright:** Transform scope rewrites all text in Alchemy's voice. Source images never stored or reused.
+- **Dedup:** Per-user source fingerprint in `import_provenance` table. Re-importing same URL returns cached session.
+- **Admin:** Imports page at `/imports` with telemetry KPIs. Dashboard has Import Activity section.
+- **iOS:** Tab bar accessory button opens import dialog. Share extension uses App Group handoff + `alchemy://import` URL scheme.
+
+## Canonical Recipes + Private Variants ("Sous Chef")
+
+Core architecture separating public canonical recipes from per-user private variants.
+
+- **Canonical recipes**: immutable public base version. Created by `recipe_canonicalize` LLM scope which strips user-specific adaptations from chat output. Visible in Explore.
+- **User variants**: private personalized version per user per canonical recipe. Created by `recipe_personalize` LLM scope. Visible in Cookbook. Title stays canonical; ingredients/steps/summary are personalized.
+- **Preference categories**: "Constraints" (dietary_restrictions, aversions — retroactive, impact `preference_fingerprint`) vs "Preferences" (cuisines, equipment — forward-only). Constraint changes mark variants `stale` for re-personalization.
+- **Variant lifecycle**: `current` → `stale` (constraint changed) → `processing` → `current`. Also: `failed` (retry), `needs_review` (manual edits conflict with constraints).
+- **Manual edits**: `POST /recipes/{id}/variant/refresh` with `instructions` accumulates edits in `accumulated_manual_edits`. Replayed on re-personalization. Conflicts with constraints → `needs_review`.
+- **Graph-grounded personalization**: Before calling LLM, the system queries the knowledge graph for proven substitution patterns (`substitutes_for` edges with `source: variant_aggregation`) relevant to the user's constraints. These are passed as `graphSubstitutions` grounding context.
+- **Substitution diffs**: Every personalization produces structured `substitution_diffs` (original, replacement, constraint, reason) stored in variant version provenance. Surfaced in iOS "What did my Sous Chef change?" view.
+- **Substitution aggregation**: `POST /graph/substitution-aggregate` admin endpoint scans variant provenance, aggregates patterns across users, and creates/strengthens graph edges.
+- **Variant tags**: Structured JSONB tags (cuisine, dietary, technique, occasion, time, difficulty, key_ingredients) materialized on variants at personalization time. Powers multi-dimensional Cookbook filtering.
+
+### Key tables
+- `cookbook_entries` — user-to-canonical-recipe relationship (replaces old `recipe_saves`)
+- `user_recipe_variants` — one per user per canonical recipe, tracks lifecycle + preference fingerprint + variant_tags
+- `user_recipe_variant_versions` — full version history with provenance and substitution diffs
+- `preference_change_log` — audit trail for preference changes, drives retroactive propagation
+
+### Key endpoints
+- `GET /recipes/{id}/variant` — fetch variant detail with substitution diffs
+- `POST /recipes/{id}/variant/refresh` — create/refresh variant (optional `instructions` for manual edits)
+- `POST /recipes/{id}/publish` — publish variant as new canonical recipe
+- `GET /recipes/cookbook` — returns `CookbookEntry[]` with variant status and personalized summaries
+
+## Popularity & Trending
+
+Pre-computed popularity scores for recipes and ingredient trending stats.
+
+- **Signals**: save count (from `cookbook_entries`), variant count (from `user_recipe_variants`), unique view count (from `recipe_view_events`).
+- **Scores**: `popularity_score` (all-time weighted: saves x3, variants x2, views x0.5) and `trending_score` (7-day window same weights) on `recipe_search_documents`.
+- **View tracking**: Fire-and-forget insert to `recipe_view_events` on `GET /recipes/{id}`. Append-only, aggregated by `COUNT(DISTINCT user_id)`.
+- **Ingredient trending**: `ingredient_trending_stats` table with recipe-derived popularity (sum of recipe scores) and substitution momentum (sub-in vs sub-out from variant diffs). Momentum scaled -100 to +100.
+- **Batch refresh**: `refresh_recipe_popularity_stats()` RPC recomputes all stats. Triggered via `POST /popularity/refresh`.
+- **Search sort**: `POST /recipes/search` accepts `sort_by: recent|popular|trending`.
+- **iOS**: Explore sort picker, social proof badges on cards.
+
+### Key endpoints
+- `POST /popularity/refresh` — batch recompute all popularity + ingredient stats
+- `GET /ingredients/trending?sort=trending|momentum&limit=N` — trending ingredients
+
+## Pipeline Observability
+
+- **`GET /observability/pipeline?hours=N`** — aggregated per-scope LLM call stats (counts, latency percentiles, error rates, cost, tokens), variant health breakdown, and graph edge creation rate.
+- **Admin page**: `/pipeline-health` dashboard with summary cards, scope breakdown table, variant health grid, graph activity panel. Configurable time window (1h to 7d).
+- **Backed by**: `get_pipeline_observability_stats(p_hours)` RPC aggregating from `events` table + `user_recipe_variants` + `graph_edges`.
+
 ## Admin Stack (`apps/admin/`)
 - **Next.js 15** (App Router)
 - **Tailwind CSS + shadcn/ui** (Radix UI + CVA + tailwind-merge)
@@ -51,7 +109,7 @@ packages/shared/      Shared utilities
 - **Sonner** for toasts
 - Deployed via OpenNext on Cloudflare
 
-Admin route structure: `app/(admin)/` — dashboard, moderation, provider-model, changelog, image-pipeline, memory, request-trace, simulations, version-causality.
+Admin pages: dashboard, users, images, imports, development, provider-model, model-usage, models, prompts, rules, memory, recipes, ingredients, graph, metadata-pipeline, changelog, request-trace, pipeline-health, version-causality, api-docs, simulation-recipe, simulation-image, simulations.
 
 ## API Gateway (`infra/cloudflare/api-gateway/`)
 - Cloudflare Worker, TypeScript
@@ -61,9 +119,10 @@ Admin route structure: `app/(admin)/` — dashboard, moderation, provider-model,
 
 ## Backend (`supabase/`)
 - **Auth**: Supabase Auth (token-based; client uses `lib/auth.tsx`)
-- **DB**: Postgres — users, preferences, recipes, recipe_versions, collections, memories, events
+- **DB**: Postgres — users, preferences, recipes, recipe_versions, cookbook_entries, user_recipe_variants, user_recipe_variant_versions, collections, memories, events, recipe_view_events, ingredient_trending_stats, recipe_search_documents, graph_entities, graph_edges, ingredients, import_provenance
 - **Edge Functions** (`functions/v1/`): LLM gateway, structured output, prompt templates
 - LLM config (models, prompts, rules) lives in DB and is loaded at runtime — editable via admin UI
+- **LLM scopes**: `recipe_generate`, `recipe_search_interpret`, `recipe_canonicalize`, `recipe_personalize`, `recipe_import_transform`, `recipe_import_vision_extract`, `memory_extract`, `metadata_enrich`
 
 ## Security
 - No secrets in client code

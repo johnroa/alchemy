@@ -303,6 +303,52 @@ export const LLM_SCOPE_REGISTRY = {
     telemetry_tags: { task: "recipe_personalize", criticality: "high" },
   },
 
+  /**
+   * recipe_import_transform: converts an ImportedRecipeDocument (raw extracted
+   * recipe data from URL scraping, OCR, or pasted text) into a structured
+   * RecipePayload + AssistantReply.
+   *
+   * The prompt treats the source as factual reference only and rewrites into
+   * Alchemy wording — never reproducing source phrasing verbatim (copyright).
+   * Also enriches metadata (cuisine, difficulty, diet_tags, timing).
+   *
+   * Input: ImportedRecipeDocument JSON
+   * Output: { recipe: RecipePayload, assistant_reply: AssistantReply, response_context }
+   */
+  recipe_import_transform: {
+    output_contract: "recipe_import_transform_v1",
+    mode: "generation",
+    retry_policy: {
+      max_attempts: 2,
+      retryable_codes: [...STRICT_JSON_RETRYABLE_CODES, ...STANDARD_RETRYABLE_CODES],
+    },
+    fallback_policy: "none",
+    telemetry_tags: { task: "recipe_import_transform", criticality: "high" },
+  },
+
+  /**
+   * recipe_import_vision_extract: extracts recipe data from a cookbook-page
+   * photo or handwritten recipe image using a vision-capable model.
+   *
+   * Input: image (base64 or storage URL)
+   * Output: ImportedRecipeDocument JSON (which then flows through
+   *         recipe_import_transform for normalisation)
+   *
+   * Two-step flow (extract → transform) is preferred over single-step because
+   * the intermediate document enables confidence scoring, missing-field
+   * detection, and consistent normalisation across all source kinds.
+   */
+  recipe_import_vision_extract: {
+    output_contract: "recipe_import_vision_extract_v1",
+    mode: "generation",
+    retry_policy: {
+      max_attempts: 2,
+      retryable_codes: [...STRICT_JSON_RETRYABLE_CODES, ...STANDARD_RETRYABLE_CODES],
+    },
+    fallback_policy: "none",
+    telemetry_tags: { task: "recipe_import_vision_extract", criticality: "high" },
+  },
+
   ...LEGACY_LLM_SCOPE_REGISTRY,
 } as const satisfies Record<string, LlmScopeDefinition>;
 

@@ -57,10 +57,19 @@ curl https://api.cookwithalchemy.com/v1/healthz
 - After any code change: deploy the affected service. Don't ask the user to do it.
 
 ## LLM Call Workflow (Required)
-- Add LLM call: add scope in `supabase/functions/_shared/llm-scope-registry.ts`, add migration seeds for route/prompt/rule, add gateway wrapper using executor, wire callsite, add tests, update docs.
+- Add LLM call: add scope in `supabase/functions/_shared/llm-scope-registry.ts`, add migration seeds for model routes (prompts/rules via admin API), add gateway wrapper using executor, wire callsite, add tests, update docs.
 - Edit LLM call: prompt/rule/model edits through Admin API/UI only; if output contract changes, update validator/tests and OpenAPI examples if public behavior changes.
 - Remove LLM call: remove callsite + wrapper + scope, add migration that deactivates scope config rows, and update docs/tests.
 - Never place direct provider endpoint calls outside `supabase/functions/_shared/llm-adapters/`.
+
+## Recipe Import Pipeline
+- **Endpoint:** `POST /chat/import` — accepts url/text/photo kind, returns seeded ChatSession.
+- **LLM scopes:** `recipe_import_transform`, `recipe_import_vision_extract`. Prompts/rules managed via admin API only (not migration-seeded).
+- **Scraper module:** `supabase/functions/_shared/recipe-scraper.ts` — bounded URL fetcher + Schema.org/microdata/meta extraction.
+- **Import route:** `supabase/functions/v1/routes/import.ts` — fingerprint dedup, extraction, LLM transform, session seeding, image enrollment.
+- **Provenance:** `import_provenance` table tracks source, strategy, confidence, errors. Linked to `chat_sessions` and `recipe_versions`.
+- **Admin:** `/imports` page with telemetry. Dashboard has Import Activity section.
+- **iOS:** Tab bar accessory → dialog → ImportView. Share extension via App Group + `alchemy://import` URL scheme.
 
 ## API Contract & Spec Workflow (Required)
 

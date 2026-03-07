@@ -17,6 +17,10 @@ import Lottie
 ///   - POST /chat/{id}/commit — save all components to cookbook
 struct GenerateView: View {
     @Binding var selectedTab: AppTab
+    /// When set by TabShell after a successful import, GenerateView picks up
+    /// this seeded session and jumps straight to the `.presenting` phase,
+    /// bypassing the initial chat ideation flow. Cleared after consumption.
+    @Binding var importedSession: ChatSessionResponse?
 
     // MARK: - UI State
 
@@ -110,6 +114,11 @@ struct GenerateView: View {
         .ignoresSafeArea(.keyboard)
         .task { await loadGreeting() }
         .onDisappear { imagePollingTask?.cancel() }
+        .onChange(of: importedSession) { _, session in
+            guard let session else { return }
+            consumeImportedSession(session)
+            importedSession = nil
+        }
     }
 
     // MARK: - Background Content
@@ -522,6 +531,47 @@ struct GenerateView: View {
                 proxy.scrollTo(last.id, anchor: .bottom)
             }
         }
+    }
+
+    // MARK: - Import Session Handoff
+
+    /// Hydrates the Generate view from a pre-seeded imported ChatSession.
+    /// Skips the ideation/chat phase entirely and jumps to `.presenting`
+    /// with the imported recipe candidate set.
+    private func consumeImportedSession(_ session: ChatSessionResponse) {
+        chatSessionId = session.id
+        loopState = session.loopState
+        candidateSet = session.candidateRecipeSet
+
+        // Convert API messages to view messages
+        messages = session.messages.map { msg in
+            ChatMessage(
+                id: msg.id,
+                role: msg.role == "assistant" ? .chef : .user,
+                text: msg.content,
+                isLoading: false
+            )
+        }
+
+        // If a candidate was included, jump directly to presenting
+        if session.candidateRecipeSet != nil {
+            withAnimation(.easeInOut(duration: 0.4)) {
+                phase = .presenting
+                showAddToCookbook = true
+            }
+
+            // Start polling for generated images
+            refreshImagePolling()
+        }
+
+        // Capture suggestions from the assistant reply
+        if let suggestions = session.assistantReply?.suggestedNextActions,
+           !suggestions.isEmpty {
+            suggestedPlaceholder = suggestions.first
+            iterationSuggestions = suggestions
+        }
+
+        chatHasStarted = true
     }
 
     // MARK: - API Integration

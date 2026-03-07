@@ -50,6 +50,29 @@ targets:
       - package: Lottie
       - package: Supabase
         product: Supabase
+      - target: AlchemyShareExtension
+    entitlements:
+      path: Alchemy/Resources/Alchemy.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.com.cookwithalchemy.shared
+
+  AlchemyShareExtension:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: AlchemyShareExtension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.cookwithalchemy.app.share-extension
+        INFOPLIST_FILE: AlchemyShareExtension/Info.plist
+        GENERATE_INFOPLIST_FILE: false
+        SWIFT_VERSION: "6.0"
+    entitlements:
+      path: AlchemyShareExtension/AlchemyShareExtension.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.com.cookwithalchemy.shared
 
 schemes:
   Alchemy:

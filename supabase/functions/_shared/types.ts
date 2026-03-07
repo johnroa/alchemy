@@ -226,6 +226,65 @@ export type CandidateRecipeSet = {
   components: CandidateRecipeComponent[];
 };
 
+/**
+ * Intermediate representation between raw recipe extraction and LLM
+ * normalisation. All import sources (URL scraping, vision OCR, pasted text)
+ * produce this contract before it enters the `recipe_import_transform` scope.
+ *
+ * Fields are intentionally loose strings — the transform LLM is responsible
+ * for parsing them into structured `RecipePayload` fields.
+ */
+export type ImportedRecipeDocument = {
+  title?: string;
+  description?: string;
+  /** Raw ingredient strings, e.g. "1 cup flour, sifted" */
+  ingredients: string[];
+  /** Raw step/instruction strings before numbering or timer detection */
+  instructions: string[];
+  /** e.g. "4 servings", "6 portions" */
+  yields?: string;
+  /** ISO 8601 duration or raw string like "20 minutes" */
+  prepTime?: string;
+  cookTime?: string;
+  totalTime?: string;
+  author?: string;
+  cuisine?: string;
+  category?: string;
+  /** 0–1 float indicating how complete/reliable the extraction is */
+  confidence: number;
+  /** Field names that could not be extracted from the source */
+  missingFields: string[];
+  /** Which extraction path produced this document */
+  extractionStrategy:
+    | "json_ld"
+    | "microdata"
+    | "opengraph"
+    | "meta_fallback"
+    | "vision"
+    | "raw_text";
+  sourceUrl?: string;
+  sourceSiteName?: string;
+};
+
+/**
+ * Envelope returned by the `recipe_import_transform` LLM scope.
+ * Combines the normalised recipe with an assistant reply acknowledging the
+ * import and a response context for downstream chat flow integration.
+ */
+export type ImportTransformEnvelope = {
+  recipe: RecipePayload;
+  assistant_reply: AssistantReply;
+  response_context?: AssistantResponseContext;
+};
+
+/** Discriminated union for POST /chat/import request body. */
+export type ImportRequest =
+  | { kind: "url"; url: string; origin?: string }
+  | { kind: "text"; text: string; origin?: string }
+  | { kind: "photo"; photo_asset_ref: string; origin?: string };
+
+export type ImportSourceKind = "url" | "text" | "photo";
+
 export type GatewayConfig = {
   promptTemplate: string;
   rule: Record<string, JsonValue>;

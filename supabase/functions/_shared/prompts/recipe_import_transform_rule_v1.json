@@ -1,0 +1,10 @@
+{
+  "strict_json_only": true,
+  "response_contract": "recipe_import_transform_v1",
+  "required_keys": ["recipe", "assistant_reply", "response_context"],
+  "forbid_markdown": true,
+  "must_rewrite_instructions": true,
+  "copyright_compliance": "All instruction text and ingredient descriptions must be rewritten in Alchemy's voice. Never reproduce source phrasing verbatim.",
+  "source_faithful": true,
+  "notes": "Output must contain recipe payload with all required fields (title, servings, ingredients, steps), an assistant_reply acknowledging the import, and response_context with mode='import'. The recipe must be culinarily faithful to the source but linguistically original."
+}

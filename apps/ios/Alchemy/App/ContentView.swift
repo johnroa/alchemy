@@ -10,6 +10,9 @@ struct ContentView: View {
     @State var authManager = AuthManager.shared
     @State private var hasCompletedOnboarding = false
     @State private var isCheckingOnboarding = false
+    /// Pending import from the share extension, delivered via alchemy:// URL scheme.
+    /// Consumed by TabShell once the main app is ready.
+    @State private var pendingImportURL: URL?
 
     var body: some View {
         Group {
@@ -24,7 +27,7 @@ struct ContentView: View {
                 OnboardingView(hasCompletedOnboarding: $hasCompletedOnboarding)
                     .transition(.opacity)
             } else {
-                TabShell()
+                TabShell(pendingImportURL: $pendingImportURL)
                     .transition(.opacity)
             }
         }
@@ -33,6 +36,12 @@ struct ContentView: View {
         .animation(.easeInOut(duration: 0.3), value: isCheckingOnboarding)
         .task {
             await authManager.restoreSession()
+        }
+        .onOpenURL { url in
+            // Handle alchemy://import?kind=url|text|photo from share extension
+            if url.scheme == "alchemy" && url.host == "import" {
+                pendingImportURL = url
+            }
         }
         .onChange(of: authManager.isAuthenticated) { _, isAuth in
             if isAuth {

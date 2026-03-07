@@ -1,5 +1,6 @@
 import {
   Activity,
+  ArrowDownToLine,
   ArrowRight,
   BookOpen,
   Brain,
@@ -19,7 +20,7 @@ import { PageHeader } from "@/components/admin/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { getDashboardData } from "@/lib/admin-data";
+import { getDashboardData, getImportData } from "@/lib/admin-data";
 
 const formatCost = (usd: number): string => {
   if (usd === 0) return "$0.00";
@@ -36,7 +37,10 @@ const actionColor = (action: string): string => {
 };
 
 export default async function DashboardPage(): Promise<React.JSX.Element> {
-  const data = await getDashboardData();
+  const [data, importData] = await Promise.all([
+    getDashboardData(),
+    getImportData(),
+  ]);
 
   const hasErrors = data.safetyIncidentCount > 0 || data.imageFailedCount > 0;
   const hasWarnings = data.emptyOutputCount > 0 || data.imagePendingCount > 5;
@@ -169,6 +173,41 @@ export default async function DashboardPage(): Promise<React.JSX.Element> {
             hint="Variants needing re-materialisation"
             icon={Sparkles}
             variant={data.staleVariantCount > 0 ? "warning" : "success"}
+          />
+        </div>
+      </section>
+
+      {/* Import Activity */}
+      <section>
+        <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">
+          Import Activity
+        </h2>
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <KpiCard
+            label="Total Imports"
+            value={String(importData.totalImports)}
+            hint={`${importData.completedImports} completed, ${importData.failedImports} failed`}
+            icon={ArrowDownToLine}
+          />
+          <KpiCard
+            label="Success Rate"
+            value={importData.totalImports > 0 ? `${(importData.successRate * 100).toFixed(1)}%` : "—"}
+            hint={importData.totalImports === 0 ? "No imports yet" : `${importData.completedImports} of ${importData.totalImports}`}
+            icon={CheckCircle2}
+            variant={importData.totalImports === 0 ? "muted" : importData.successRate >= 0.8 ? "success" : importData.successRate >= 0.5 ? "warning" : "danger"}
+          />
+          <KpiCard
+            label="Avg Latency"
+            value={importData.avgTotalLatencyMs > 0 ? `${(importData.avgTotalLatencyMs / 1000).toFixed(1)}s` : "—"}
+            hint={importData.avgTotalLatencyMs > 0 ? `Extract: ${importData.avgExtractLatencyMs}ms · Transform: ${importData.avgTransformLatencyMs}ms` : "No data"}
+            icon={Clock}
+          />
+          <KpiCard
+            label="Source Breakdown"
+            value={importData.byKind.map((k) => `${k.count}`).join(" / ") || "—"}
+            hint={importData.byKind.map((k) => k.kind).join(" / ") || "URL / Text / Photo"}
+            icon={ArrowDownToLine}
+            variant="muted"
           />
         </div>
       </section>

@@ -56,10 +56,21 @@ curl https://api.cookwithalchemy.com/v1/healthz
 
 ## LLM Pipeline
 
-- **Add**: scope in `llm-scope-registry.ts` → migration seeds for route/prompt/rule → gateway wrapper via executor → wire callsite → tests → docs.
+- **Add**: scope in `llm-scope-registry.ts` → migration seeds model routes only → prompts/rules via admin API (`scripts/admin-api.sh prompt-create` / `rule-create`) → gateway wrapper via executor → wire callsite → tests → docs.
 - **Edit**: prompt/rule/model changes through Admin API/UI only. If output contract changes, update validators/tests and OpenAPI examples.
 - **Remove**: remove callsite + wrapper + scope → migration deactivating scope rows (don't hard-delete).
 - Direct provider endpoints only in `supabase/functions/_shared/llm-adapters/*`.
+
+## Recipe Import
+
+- **Endpoint**: `POST /chat/import` with `kind: url|text|photo`.
+- **Pipeline**: Extract (scraper/vision/raw) → Transform via `recipe_import_transform` LLM scope → Seed chat session → Enroll image gen → Return ChatSession.
+- **Route**: `supabase/functions/v1/routes/import.ts`
+- **Scraper**: `supabase/functions/_shared/recipe-scraper.ts` (JSON-LD → microdata → meta fallback)
+- **LLM scopes**: `recipe_import_transform`, `recipe_import_vision_extract` — prompts/rules via admin API, model routes via migration.
+- **Provenance**: `import_provenance` table, per-user source fingerprint dedup.
+- **Admin**: `/imports` page + dashboard Import Activity section.
+- **iOS**: Tab bar Import button → dialog → ImportView sheet. Share extension via App Group + `alchemy://import`.
 
 ## API Contract & Spec
 
@@ -100,6 +111,8 @@ Alchemy/
 │   ├── Modifiers/          Glass (iOS 26), Haptics, Shimmer
 │   └── Theme/              Colors, Typography, Spacing
 ├── Features/               One folder per screen (View + ViewModel pairs)
+│   ├── Import/             ImportView + ImportViewModel (URL/text/photo import)
+│   └── ...                 Cookbook, Generate, Explore, etc.
 └── Resources/              Assets.xcassets, Info.plist, Lottie JSON, entitlements
 ```
 

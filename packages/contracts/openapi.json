@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Alchemy API",
-    "version": "3.3.0",
+    "version": "3.4.0",
     "description": "API contract for Alchemy — an AI-driven recipe creation and management platform.\nCovers the user-facing v1 API at api.cookwithalchemy.com and the admin API at admin.cookwithalchemy.com.\n"
   },
   "servers": [

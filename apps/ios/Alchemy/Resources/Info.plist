@@ -28,5 +28,16 @@
 	<string>$(SUPABASE_ANON_KEY)</string>
 	<key>API_BASE_URL</key>
 	<string>$(API_BASE_URL)</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.cookwithalchemy.app</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>alchemy</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>

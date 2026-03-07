@@ -1,0 +1,8 @@
+{
+  "strict_json_only": true,
+  "response_contract": "recipe_import_vision_extract_v1",
+  "required_keys": ["ingredients", "instructions", "confidence", "missingFields", "extractionStrategy"],
+  "forbid_markdown": true,
+  "extraction_strategy_must_be": "vision",
+  "notes": "Output must be a valid ImportedRecipeDocument JSON. extractionStrategy must always be 'vision'. ingredients and instructions must be arrays of strings. confidence must be a float between 0 and 1."
+}
