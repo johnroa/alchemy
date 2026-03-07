@@ -2447,6 +2447,27 @@ export interface components {
          * @enum {string}
          */
         VariantStatus: "current" | "stale" | "processing" | "failed" | "needs_review" | "none";
+        /**
+         * @description Structured tags computed from the variant's personalized content.
+         *     Used for multi-dimensional cookbook filtering. Empty object if no
+         *     variant exists. Tags are re-computed on every variant materialization.
+         */
+        VariantTags: {
+            /** @description Cuisine tags (e.g. Italian, Thai, Mexican). */
+            cuisine?: string[];
+            /** @description Dietary tags (e.g. gluten-free, dairy-free, vegan). */
+            dietary?: string[];
+            /** @description Cooking technique tags (e.g. grilling, braising, sous-vide). */
+            technique?: string[];
+            /** @description Occasion tags (e.g. weeknight, holiday, meal-prep). */
+            occasion?: string[];
+            /** @description Total cook time in minutes. Null if unknown. */
+            time_minutes?: number | null;
+            /** @description Difficulty level (easy, medium, complex). Null if unknown. */
+            difficulty?: string | null;
+            /** @description Top ingredients from the variant (lowercased, max 8). */
+            key_ingredients?: string[];
+        };
         CookbookEntry: {
             /** Format: uuid */
             canonical_recipe_id: string;
@@ -2474,8 +2495,7 @@ export interface components {
             autopersonalize: boolean;
             /** Format: date-time */
             saved_at: string;
-            /** @description Tags from the variant (gluten-free, dairy-free, etc). Empty if no variant. */
-            variant_tags?: string[];
+            variant_tags?: components["schemas"]["VariantTags"];
         };
         SaveRecipeResponse: {
             saved: boolean;

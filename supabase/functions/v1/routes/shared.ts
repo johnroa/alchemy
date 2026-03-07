@@ -130,6 +130,22 @@ export type VariantStatus =
   | "none";
 
 /**
+ * Structured tag set computed from a variant's personalized content.
+ * Multi-dimensional: cuisine, dietary, technique, occasion, time,
+ * difficulty, and key ingredients. Empty object `{}` when no variant
+ * exists. Re-computed on every variant materialization.
+ */
+export type VariantTagSet = {
+  cuisine?: string[];
+  dietary?: string[];
+  technique?: string[];
+  occasion?: string[];
+  time_minutes?: number | null;
+  difficulty?: string | null;
+  key_ingredients?: string[];
+};
+
+/**
  * A cookbook entry as returned by GET /recipes/cookbook. Includes canonical
  * recipe preview data plus variant status. When a variant exists, summary
  * and tags reflect the personalised version; title always stays canonical.
@@ -149,7 +165,7 @@ export type CookbookEntry = {
   personalized_at: string | null;
   autopersonalize: boolean;
   saved_at: string;
-  variant_tags: string[];
+  variant_tags: VariantTagSet;
 };
 
 /** @deprecated Use CookbookEntry instead. Kept for backward compat during migration. */

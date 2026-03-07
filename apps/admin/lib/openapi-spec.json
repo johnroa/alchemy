@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Alchemy API",
-    "version": "3.0.0",
+    "version": "3.1.0",
     "description": "API contract for Alchemy — an AI-driven recipe creation and management platform.\nCovers the user-facing v1 API at api.cookwithalchemy.com and the admin API at admin.cookwithalchemy.com.\n"
   },
   "servers": [
@@ -4471,6 +4471,61 @@
         ],
         "description": "Lifecycle state of a user's recipe variant.\ncurrent = up to date, stale = needs re-personalisation,\nprocessing = re-personalisation in progress, failed = retryable failure,\nneeds_review = manual edits conflict with new constraints,\nnone = no variant exists (user sees canonical).\n"
       },
+      "VariantTags": {
+        "type": "object",
+        "description": "Structured tags computed from the variant's personalized content.\nUsed for multi-dimensional cookbook filtering. Empty object if no\nvariant exists. Tags are re-computed on every variant materialization.\n",
+        "properties": {
+          "cuisine": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Cuisine tags (e.g. Italian, Thai, Mexican)."
+          },
+          "dietary": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Dietary tags (e.g. gluten-free, dairy-free, vegan)."
+          },
+          "technique": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Cooking technique tags (e.g. grilling, braising, sous-vide)."
+          },
+          "occasion": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Occasion tags (e.g. weeknight, holiday, meal-prep)."
+          },
+          "time_minutes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Total cook time in minutes. Null if unknown."
+          },
+          "difficulty": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Difficulty level (easy, medium, complex). Null if unknown."
+          },
+          "key_ingredients": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Top ingredients from the variant (lowercased, max 8)."
+          }
+        }
+      },
       "CookbookEntry": {
         "type": "object",
         "required": [
@@ -4563,11 +4618,7 @@
             "format": "date-time"
           },
           "variant_tags": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "Tags from the variant (gluten-free, dairy-free, etc). Empty if no variant."
+            "$ref": "#/components/schemas/VariantTags"
           }
         }
       },

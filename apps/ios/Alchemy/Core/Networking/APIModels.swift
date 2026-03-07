@@ -10,6 +10,35 @@ struct CookbookResponse: Decodable {
     let cookbookInsight: String?
 }
 
+/// Structured tag set computed from a variant's personalized content.
+/// Multi-dimensional: cuisine, dietary, technique, occasion, time,
+/// difficulty, and key ingredients. Empty when no variant exists.
+struct VariantTags: Decodable, Hashable {
+    let cuisine: [String]?
+    let dietary: [String]?
+    let technique: [String]?
+    let occasion: [String]?
+    let timeMinutes: Int?
+    let difficulty: String?
+    let keyIngredients: [String]?
+
+    /// True when any tag category is populated.
+    var hasAnyTags: Bool {
+        (cuisine?.isEmpty == false) ||
+        (dietary?.isEmpty == false) ||
+        (technique?.isEmpty == false) ||
+        (occasion?.isEmpty == false) ||
+        (keyIngredients?.isEmpty == false) ||
+        timeMinutes != nil ||
+        difficulty != nil
+    }
+
+    /// All dietary + cuisine tags combined for quick badge display.
+    var badgeTags: [String] {
+        (dietary ?? []) + (cuisine ?? [])
+    }
+}
+
 /// A cookbook entry as returned by GET /recipes/cookbook. Includes canonical
 /// recipe preview data plus variant status. When a variant exists, summary
 /// and tags reflect the personalised version; title always stays canonical.
@@ -28,7 +57,7 @@ struct CookbookEntryItem: Decodable, Identifiable, Hashable {
     let personalizedAt: String?
     let autopersonalize: Bool
     let savedAt: String
-    let variantTags: [String]?
+    let variantTags: VariantTags?
 
     /// Identifiable conformance uses the canonical recipe ID.
     var id: String { canonicalRecipeId }
@@ -46,6 +75,16 @@ struct CookbookEntryItem: Decodable, Identifiable, Hashable {
     /// Whether the variant needs attention (stale, failed, or needs review).
     var variantNeedsAttention: Bool {
         variantStatus == "stale" || variantStatus == "failed" || variantStatus == "needs_review"
+    }
+
+    /// Effective difficulty for filtering — prefers variant tags, falls back to quickStats.
+    var effectiveDifficulty: String? {
+        variantTags?.difficulty ?? quickStats?.difficulty
+    }
+
+    /// Effective time in minutes for filtering — prefers variant tags, falls back to quickStats.
+    var effectiveTimeMinutes: Int? {
+        variantTags?.timeMinutes ?? quickStats?.timeMinutes
     }
 }
 

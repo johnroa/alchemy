@@ -126,6 +126,11 @@ type RecipesDeps = {
   computeSafetyExclusions: (
     preferences: PreferenceContext,
   ) => SearchSafetyExclusions | undefined;
+  computeVariantTags: (params: {
+    canonicalPayload: RecipePayload;
+    variantPayload: RecipePayload;
+    tagDiff: { added: string[]; removed: string[] };
+  }) => Record<string, unknown>;
 };
 
 export const handleRecipeRoutes = async (
@@ -163,6 +168,7 @@ export const handleRecipeRoutes = async (
     toJsonValue,
     computePreferenceFingerprint,
     computeSafetyExclusions,
+    computeVariantTags,
   } = deps;
 
   if (segments.length === 1 && segments[0] === "collections") {
@@ -773,7 +779,14 @@ export const handleRecipeRoutes = async (
 
               if (!newVersion) return;
 
-              // Create variant row with fingerprint.
+              // Compute variant tags for cookbook filtering.
+              const bgVariantTags = computeVariantTags({
+                canonicalPayload,
+                variantPayload: result.recipe,
+                tagDiff: result.tagDiff,
+              });
+
+              // Create variant row with fingerprint and tags.
               const { data: newVariant } = await serviceClient
                 .from("user_recipe_variants")
                 .insert({
@@ -782,6 +795,7 @@ export const handleRecipeRoutes = async (
                   current_version_id: newVersion.id,
                   base_canonical_version_id: canonicalVersion.id,
                   preference_fingerprint: bgFingerprint,
+                  variant_tags: bgVariantTags,
                   stale_status: "current",
                   last_materialized_at: new Date().toISOString(),
                 })
@@ -1094,6 +1108,13 @@ export const handleRecipeRoutes = async (
       ? "needs_review"
       : "current";
 
+    // Compute structured variant tags for cookbook filtering.
+    const variantTags = computeVariantTags({
+      canonicalPayload,
+      variantPayload: result.recipe,
+      tagDiff: result.tagDiff,
+    });
+
     // Build the updated accumulated manual edits list.
     // If new instructions were provided, append them.
     const updatedManualEdits = manualEditInstructions
@@ -1133,7 +1154,7 @@ export const handleRecipeRoutes = async (
 
     if (existingVariant) {
       // Update existing variant row with new version, fingerprint,
-      // stale status, and accumulated manual edits.
+      // stale status, accumulated manual edits, and computed tags.
       const { error: updateError } = await serviceClient
         .from("user_recipe_variants")
         .update({
@@ -1142,6 +1163,7 @@ export const handleRecipeRoutes = async (
           preference_fingerprint: fingerprint,
           stale_status: resolvedStaleStatus,
           accumulated_manual_edits: updatedManualEdits,
+          variant_tags: variantTags,
           last_materialized_at: new Date().toISOString(),
         })
         .eq("id", existingVariant.id);
@@ -1156,7 +1178,7 @@ export const handleRecipeRoutes = async (
       }
       variantId = existingVariant.id;
     } else {
-      // Create new variant row with fingerprint and any manual edits.
+      // Create new variant row with fingerprint, manual edits, and tags.
       const { data: newVariant, error: variantInsertError } = await serviceClient
         .from("user_recipe_variants")
         .insert({
@@ -1167,6 +1189,7 @@ export const handleRecipeRoutes = async (
           preference_fingerprint: fingerprint,
           stale_status: resolvedStaleStatus,
           accumulated_manual_edits: updatedManualEdits,
+          variant_tags: variantTags,
           last_materialized_at: new Date().toISOString(),
         })
         .select("id")

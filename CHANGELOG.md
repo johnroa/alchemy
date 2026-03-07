@@ -1,6 +1,16 @@
 # Changelog
 
-## [Unreleased] — 2026-03-06
+## [Unreleased] — 2026-03-07
+
+### Graph-Enabled Variant Tags + Cookbook Filtering (v3.1.0)
+
+- **Breaking (minor):** `variant_tags` in `CookbookEntry` changed from `string[]` to structured `VariantTags` object with `cuisine`, `dietary`, `technique`, `occasion`, `time_minutes`, `difficulty`, and `key_ingredients` fields for multi-dimensional cookbook filtering.
+- Added `VariantTags` OpenAPI schema.
+- Added `variant_tags` JSONB column to `user_recipe_variants` with GIN index for fast server-side filtering.
+- Variant tags are computed at materialization time from canonical recipe metadata + LLM tag diff (added/removed).
+- Tags are re-computed on every variant refresh (constraint change, manual edit, explicit refresh).
+- Dropped legacy `recipe_saves` table (all data was backfilled to `cookbook_entries` in prior migration).
+- iOS Cookbook view now supports multi-dimensional filtering by cuisine, dietary, time, difficulty, and key ingredients.
 
 ### Canonical Recipes + Private Variants + Cookbook Architecture (v3.0.0)
 
