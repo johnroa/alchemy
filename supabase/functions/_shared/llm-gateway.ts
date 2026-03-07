@@ -174,6 +174,13 @@ export type PersonalizeRecipeResult = {
   adaptationSummary: string;
   appliedAdaptations: JsonValue[];
   tagDiff: { added: string[]; removed: string[] };
+  /**
+   * Conflicts detected when reapplying manual edits during constraint-driven
+   * re-personalization. Each entry describes a manual edit that contradicts
+   * the current constraint set (e.g., "use butter" conflicts with dairy-free).
+   * When non-empty, the variant should be marked `needs_review`.
+   */
+  conflicts: string[];
 };
 
 type TokenAccum = { input: number; output: number; costUsd: number };
@@ -4603,9 +4610,11 @@ export const llmGateway = {
    *   - canonical_recipe: the canonical recipe payload (JSON)
    *   - user_preferences: structured preference profile
    *   - graph_substitutions (optional): known substitutions from knowledge graph
-   *   - manual_edit_instructions (optional): explicit user changes
+   *   - manual_edit_instructions (optional): explicit user changes for this call
+   *   - accumulated_manual_edits (optional): previously stored manual edits
+   *     to replay during re-personalization
    *
-   * Returns: { recipe, adaptation_summary, applied_adaptations, tag_diff }
+   * Returns: { recipe, adaptation_summary, applied_adaptations, tag_diff, conflicts }
    */
   async personalizeRecipe(params: {
     client: SupabaseClient;
@@ -4615,6 +4624,8 @@ export const llmGateway = {
     preferences: Record<string, JsonValue>;
     graphSubstitutions?: Record<string, JsonValue>[];
     manualEditInstructions?: string;
+    /** Previously stored manual edits to replay on re-personalization. */
+    accumulatedManualEdits?: Array<{ instruction: string; created_at: string }>;
     modelOverrides?: ModelOverrideMap;
   }): Promise<PersonalizeRecipeResult> {
     const startedAt = Date.now();
@@ -4655,6 +4666,14 @@ export const llmGateway = {
       }
       if (params.manualEditInstructions?.trim()) {
         userInput.manual_edit_instructions = params.manualEditInstructions;
+      }
+      // Feed accumulated manual edits for replay during re-personalization.
+      // These are prior user customizations that should be preserved across
+      // constraint changes. The LLM should reapply them if compatible, or
+      // flag conflicts in the "conflicts" output key.
+      if (params.accumulatedManualEdits?.length) {
+        userInput.accumulated_manual_edits =
+          params.accumulatedManualEdits.map((e) => e.instruction) as unknown as JsonValue;
       }
 
       const { result, inputTokens, outputTokens } = await callProvider<
@@ -4700,6 +4719,15 @@ export const llmGateway = {
           ? (result.tag_diff as { added?: string[]; removed?: string[] })
           : { added: [], removed: [] };
 
+      // Conflicts: manual edits that contradict the current constraint set.
+      // The LLM returns these when accumulated_manual_edits were provided
+      // but some conflict with the user's active constraints (e.g., "use
+      // butter" vs. dairy-free). Presence of conflicts → needs_review.
+      const conflicts = Array.isArray(result.conflicts)
+        ? (result.conflicts as JsonValue[])
+            .filter((c): c is string => typeof c === "string")
+        : [];
+
       await logLlmEvent(
         params.client,
         params.userId,
@@ -4711,6 +4739,10 @@ export const llmGateway = {
           adaptations_count: appliedAdaptations.length,
           tags_added: (tagDiff.added ?? []).length,
           tags_removed: (tagDiff.removed ?? []).length,
+          conflicts_count: conflicts.length,
+          has_manual_edits: Boolean(
+            params.manualEditInstructions || params.accumulatedManualEdits?.length,
+          ),
         },
         accum,
       );
@@ -4723,6 +4755,7 @@ export const llmGateway = {
           added: tagDiff.added ?? [],
           removed: tagDiff.removed ?? [],
         },
+        conflicts,
       };
     } catch (error) {
       const errorCode =

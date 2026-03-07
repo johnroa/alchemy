@@ -36,6 +36,8 @@ struct RecipeDetailView: View {
     @State private var isSaved = false
 
     @State private var tweakText = ""
+    @State private var isTweaking = false
+    @State private var tweakConflicts: [String]?
     @Environment(\.dismiss) private var dismiss
     @FocusState private var tweakBarFocused: Bool
 
@@ -169,15 +171,45 @@ struct RecipeDetailView: View {
             if showTweakBar {
                 VStack(spacing: 0) {
                     Spacer()
+
+                    // Conflict banner: shown when manual edits conflict
+                    // with current dietary constraints after re-personalization.
+                    if let conflicts = tweakConflicts, !conflicts.isEmpty {
+                        VStack(alignment: .leading, spacing: AlchemySpacing.xs) {
+                            Label("Needs Review", systemImage: "exclamationmark.triangle.fill")
+                                .font(AlchemyTypography.captionBold)
+                                .foregroundStyle(.orange)
+                            ForEach(conflicts, id: \.self) { conflict in
+                                Text("• \(conflict)")
+                                    .font(AlchemyTypography.caption)
+                                    .foregroundStyle(AlchemyColors.textSecondary)
+                            }
+                        }
+                        .padding(AlchemySpacing.md)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(.ultraThinMaterial)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .padding(.horizontal, AlchemySpacing.screenHorizontal)
+                        .padding(.bottom, AlchemySpacing.sm)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
+
                     GlassInputBar(
-                        placeholder: "Make changes, add a side, change servings",
+                        placeholder: isTweaking
+                            ? "Personalizing…"
+                            : "Make changes, add a side, change servings",
                         text: $tweakText,
                         onSubmit: {
+                            let instructions = tweakText.trimmingCharacters(in: .whitespacesAndNewlines)
+                            guard !instructions.isEmpty, !isTweaking else { return }
                             tweakText = ""
                             tweakBarFocused = false
+                            Task { await submitTweak(instructions) }
                         }
                     )
                     .focused($tweakBarFocused)
+                    .disabled(isTweaking)
+                    .opacity(isTweaking ? 0.6 : 1.0)
                     .background(
                         Ellipse()
                             .fill(.ultraThinMaterial)
@@ -445,6 +477,34 @@ struct RecipeDetailView: View {
         } catch {
             print("[RecipeDetailView] save failed: \(error)")
         }
+    }
+
+    /// Sends manual edit instructions to variant/refresh, then reloads
+    /// the recipe to show the updated variant. If conflicts are detected,
+    /// shows the conflict banner instead of silently applying.
+    private func submitTweak(_ instructions: String) async {
+        guard let id = detail?.id ?? recipeId else { return }
+        isTweaking = true
+        tweakConflicts = nil
+
+        do {
+            let response: VariantRefreshResponse = try await APIClient.shared.request(
+                "/recipes/\(id)/variant/refresh",
+                method: .post,
+                body: VariantEditRequest(instructions: instructions)
+            )
+
+            if let conflicts = response.conflicts, !conflicts.isEmpty {
+                withAnimation { tweakConflicts = conflicts }
+            }
+
+            // Reload the recipe to reflect the personalized variant.
+            await loadRecipe()
+        } catch {
+            print("[RecipeDetailView] tweak failed: \(error)")
+        }
+
+        isTweaking = false
     }
 }
 

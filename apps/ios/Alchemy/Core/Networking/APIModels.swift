@@ -221,6 +221,25 @@ struct RecipeNutrition: Decodable, Hashable {
     let sodiumMg: Double?
 }
 
+// MARK: - Variant Editing
+
+/// Request body for POST /recipes/{id}/variant/refresh with manual edit instructions.
+struct VariantEditRequest: Encodable {
+    let instructions: String
+}
+
+/// Response from POST /recipes/{id}/variant/refresh.
+/// Contains the resulting variant state and any conflicts detected.
+struct VariantRefreshResponse: Decodable {
+    let variantId: String
+    let variantVersionId: String
+    let variantStatus: String
+    let adaptationSummary: String
+    /// Manual edits that conflict with current constraints.
+    /// Non-empty → variant is in `needs_review` state.
+    let conflicts: [String]?
+}
+
 // MARK: - Chat / Generate
 
 /// Full chat session response from POST /chat, POST /chat/{id}/messages, etc.

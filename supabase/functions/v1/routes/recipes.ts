@@ -1062,7 +1062,18 @@ export const handleRecipeRoutes = async (
       // Body is optional for refresh.
     }
 
+    // Load any previously stored manual edits for replay during
+    // re-personalization (e.g., constraint change triggered refresh).
+    const storedEdits = Array.isArray(existingVariant?.accumulated_manual_edits)
+      ? (existingVariant.accumulated_manual_edits as Array<{
+          instruction: string;
+          created_at: string;
+        }>)
+      : [];
+
     // 3. Call LLM to materialise the personalised variant.
+    // Both new instructions and accumulated edits are sent so the LLM
+    // can apply everything in one pass and detect conflicts.
     const result = await llmGateway.personalizeRecipe({
       client,
       userId: auth.userId,
@@ -1070,13 +1081,14 @@ export const handleRecipeRoutes = async (
       canonicalPayload,
       preferences: preferenceContext,
       manualEditInstructions,
+      accumulatedManualEdits: storedEdits.length > 0 ? storedEdits : undefined,
       modelOverrides: modelOverrides,
     });
 
-    // 4. Check for existing variant row.
+    // 4. Check for existing variant row (including accumulated manual edits).
     const { data: existingVariant } = await client
       .from("user_recipe_variants")
-      .select("id, current_version_id")
+      .select("id, current_version_id, accumulated_manual_edits")
       .eq("user_id", auth.userId)
       .eq("canonical_recipe_id", recipeId)
       .maybeSingle();
@@ -1085,16 +1097,45 @@ export const handleRecipeRoutes = async (
     const fingerprint = await computePreferenceFingerprint(preferences);
 
     // 6. Persist: insert variant version, then upsert variant row.
+    // Include manual edit instructions in provenance for audit trail.
     const provenance: Record<string, JsonValue> = {
       adaptation_summary: result.adaptationSummary,
       applied_adaptations: result.appliedAdaptations as JsonValue,
       tag_diff: result.tagDiff as unknown as JsonValue,
       preference_fingerprint: fingerprint,
     };
+    if (manualEditInstructions) {
+      provenance.manual_edit_instructions = manualEditInstructions;
+    }
+    if (storedEdits.length > 0) {
+      provenance.replayed_manual_edits = storedEdits as unknown as JsonValue;
+    }
+    if (result.conflicts.length > 0) {
+      provenance.conflicts = result.conflicts as JsonValue;
+    }
 
-    const derivationKind = manualEditInstructions
-      ? "mixed"
-      : "auto_personalized";
+    // Derivation kind: manual_edit (only instructions, no prior auto),
+    // mixed (both), or auto_personalized (no manual involvement).
+    const hasManualInput = Boolean(manualEditInstructions) || storedEdits.length > 0;
+    const derivationKind = hasManualInput ? "mixed" : "auto_personalized";
+
+    // Conflicts → needs_review instead of current. The user will be
+    // prompted to resolve in Sous Chef.
+    const resolvedStaleStatus: string = result.conflicts.length > 0
+      ? "needs_review"
+      : "current";
+
+    // Build the updated accumulated manual edits list.
+    // If new instructions were provided, append them.
+    const updatedManualEdits = manualEditInstructions
+      ? [
+          ...storedEdits,
+          {
+            instruction: manualEditInstructions,
+            created_at: new Date().toISOString(),
+          },
+        ]
+      : storedEdits;
 
     // Insert the new variant version.
     const { data: newVersion, error: versionInsertError } = await serviceClient
@@ -1122,14 +1163,16 @@ export const handleRecipeRoutes = async (
     let variantId: string;
 
     if (existingVariant) {
-      // Update existing variant row with new version and current fingerprint.
+      // Update existing variant row with new version, fingerprint,
+      // stale status, and accumulated manual edits.
       const { error: updateError } = await serviceClient
         .from("user_recipe_variants")
         .update({
           current_version_id: newVersion.id,
           base_canonical_version_id: canonicalVersion.id,
           preference_fingerprint: fingerprint,
-          stale_status: "current",
+          stale_status: resolvedStaleStatus,
+          accumulated_manual_edits: updatedManualEdits,
           last_materialized_at: new Date().toISOString(),
         })
         .eq("id", existingVariant.id);
@@ -1144,7 +1187,7 @@ export const handleRecipeRoutes = async (
       }
       variantId = existingVariant.id;
     } else {
-      // Create new variant row with fingerprint at materialization time.
+      // Create new variant row with fingerprint and any manual edits.
       const { data: newVariant, error: variantInsertError } = await serviceClient
         .from("user_recipe_variants")
         .insert({
@@ -1153,7 +1196,8 @@ export const handleRecipeRoutes = async (
           current_version_id: newVersion.id,
           base_canonical_version_id: canonicalVersion.id,
           preference_fingerprint: fingerprint,
-          stale_status: "current",
+          stale_status: resolvedStaleStatus,
+          accumulated_manual_edits: updatedManualEdits,
           last_materialized_at: new Date().toISOString(),
         })
         .select("id")
@@ -1204,8 +1248,9 @@ export const handleRecipeRoutes = async (
     return respond(200, {
       variant_id: variantId,
       variant_version_id: newVersion.id,
-      variant_status: "current" as VariantStatus,
+      variant_status: resolvedStaleStatus as VariantStatus,
       adaptation_summary: result.adaptationSummary,
+      conflicts: result.conflicts.length > 0 ? result.conflicts : undefined,
     });
   }
 
