@@ -1,4 +1,5 @@
 import { ApiError } from "../_shared/errors.ts";
+import { llmGateway } from "../_shared/llm-gateway.ts";
 import { searchRecipes } from "./recipe-search.ts";
 import { handleRecipeRoutes } from "./routes/recipes.ts";
 import type { RecipePreview } from "./recipe-preview.ts";
@@ -497,6 +498,196 @@ Deno.test("GET /recipes/{id}/variant overlays personalized summary and descripti
   }
 });
 
+Deno.test("POST /recipes/{id}/variant/refresh uses serviceClient for personalization", async () => {
+  const canonicalPayload = {
+    title: "Spicy Salmon Rice Bowl",
+    summary: "Salmon bowl with glossy heat.",
+    description: "A long-form salmon bowl description.",
+    servings: 2,
+    ingredients: [],
+    steps: [],
+  };
+
+  const userClient = {
+    from(table: string) {
+      if (table === "recipes") {
+        return {
+          select(_columns: string) {
+            return {
+              eq(_column: string, _value: string) {
+                return {
+                  async maybeSingle() {
+                    return {
+                      data: { id: "recipe-123", current_version_id: "canonical-version-1" },
+                      error: null,
+                    };
+                  },
+                };
+              },
+            };
+          },
+        };
+      }
+
+      if (table === "recipe_versions") {
+        return {
+          select(_columns: string) {
+            return {
+              eq(_column: string, _value: string) {
+                return {
+                  async single() {
+                    return {
+                      data: { id: "canonical-version-1", payload: canonicalPayload },
+                      error: null,
+                    };
+                  },
+                };
+              },
+            };
+          },
+        };
+      }
+
+      if (table === "user_recipe_variants") {
+        const query = {
+          eq(_column: string, _value: string) {
+            return query;
+          },
+          async maybeSingle() {
+            return { data: null, error: null };
+          },
+        };
+
+        return {
+          select(_columns: string) {
+            return query;
+          },
+        };
+      }
+
+      throw new Error(`unexpected user table: ${table}`);
+    },
+  };
+
+  const serviceClient = {
+    from(table: string) {
+      if (table === "user_recipe_variant_versions") {
+        return {
+          insert(_payload: unknown) {
+            return {
+              select(_columns: string) {
+                return {
+                  async single() {
+                    return { data: { id: "variant-version-1" }, error: null };
+                  },
+                };
+              },
+            };
+          },
+          update(_payload: unknown) {
+            return {
+              eq(_column: string, _value: string) {
+                return Promise.resolve({ error: null });
+              },
+            };
+          },
+        };
+      }
+
+      if (table === "user_recipe_variants") {
+        return {
+          insert(_payload: unknown) {
+            return {
+              select(_columns: string) {
+                return {
+                  async single() {
+                    return { data: { id: "variant-1" }, error: null };
+                  },
+                };
+              },
+            };
+          },
+          update(_payload: unknown) {
+            return {
+              eq(_column: string, _value: string) {
+                return Promise.resolve({ error: null });
+              },
+            };
+          },
+        };
+      }
+
+      if (table === "cookbook_entries") {
+        return {
+          update(_payload: unknown) {
+            let eqCount = 0;
+            const query = {
+              eq(_column: string, _value: string) {
+                eqCount += 1;
+                return eqCount >= 2 ? Promise.resolve({ error: null }) : query;
+              },
+            };
+            return query;
+          },
+        };
+      }
+
+      throw new Error(`unexpected service table: ${table}`);
+    },
+  };
+
+  const originalPersonalizeRecipe = llmGateway.personalizeRecipe;
+  let receivedClient: unknown = null;
+
+  llmGateway.personalizeRecipe = async (params) => {
+    receivedClient = params.client;
+    return {
+      recipe: canonicalPayload,
+      adaptationSummary: "No changes needed for this user.",
+      appliedAdaptations: [],
+      tagDiff: { added: [], removed: [] },
+      substitutionDiffs: [],
+      conflicts: [],
+    };
+  };
+
+  try {
+    const response = await handleRecipeRoutes(
+      createRouteContext({
+        path: "/recipes/recipe-123/variant/refresh",
+        method: "POST",
+        body: {},
+        client: userClient,
+        serviceClient,
+      }) as never,
+      createDeps({
+        computePreferenceFingerprint: async () => "fingerprint-1",
+        computeVariantTags: () => ({}),
+        fetchGraphSubstitutions: async () => [],
+        logChangelog: async () => undefined,
+      }) as never,
+    );
+
+    if (!response || response.status !== 200) {
+      throw new Error("expected variant refresh response");
+    }
+
+    if (receivedClient !== serviceClient) {
+      throw new Error("expected personalization to receive serviceClient");
+    }
+
+    const body = await parseJson(response);
+    if (body.variant_id !== "variant-1") {
+      throw new Error("expected variant id from inserted row");
+    }
+    if (body.variant_status !== "current") {
+      throw new Error("expected current variant status");
+    }
+  } finally {
+    llmGateway.personalizeRecipe = originalPersonalizeRecipe;
+  }
+});
+
 Deno.test("POST /recipes/search with no query returns the explore feed and paginates to completion", async () => {
   const mock = createMockServiceClient([
     {
@@ -713,6 +904,25 @@ Deno.test("POST /recipes/{id}/save attaches the persisted version to the image p
             return {
               async upsert(payload: unknown, _options?: unknown) {
                 behaviorEvents.push(payload);
+                return { error: null };
+              },
+            };
+          }
+
+          if (table === "user_acquisition_profiles") {
+            return {
+              select(_columns: string) {
+                return {
+                  eq(_column: string, _value: string) {
+                    return {
+                      async maybeSingle() {
+                        return { data: null, error: null };
+                      },
+                    };
+                  },
+                };
+              },
+              async insert(_payload: unknown) {
                 return { error: null };
               },
             };

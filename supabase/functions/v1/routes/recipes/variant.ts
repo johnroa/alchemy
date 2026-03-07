@@ -249,7 +249,7 @@ export const handleVariantRoutes = async (
     // Both new instructions and accumulated edits are sent so the LLM
     // can apply everything in one pass and detect conflicts.
     const result = await llmGateway.personalizeRecipe({
-      client,
+      client: serviceClient,
       userId: auth.userId,
       requestId,
       canonicalPayload,
