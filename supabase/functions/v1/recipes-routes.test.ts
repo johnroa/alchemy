@@ -570,10 +570,13 @@ Deno.test("POST /recipes/{id}/variant/refresh uses serviceClient for personaliza
   };
 
   const serviceClient = {
+    insertedVariantId: null as string | null,
+    insertedVersionVariantId: null as string | null,
     from(table: string) {
       if (table === "user_recipe_variant_versions") {
         return {
-          insert(_payload: unknown) {
+          insert(payload: { variant_id?: string }) {
+            serviceClient.insertedVersionVariantId = payload.variant_id ?? null;
             return {
               select(_columns: string) {
                 return {
@@ -596,16 +599,9 @@ Deno.test("POST /recipes/{id}/variant/refresh uses serviceClient for personaliza
 
       if (table === "user_recipe_variants") {
         return {
-          insert(_payload: unknown) {
-            return {
-              select(_columns: string) {
-                return {
-                  async single() {
-                    return { data: { id: "variant-1" }, error: null };
-                  },
-                };
-              },
-            };
+          async insert(payload: { id?: string }) {
+            serviceClient.insertedVariantId = payload.id ?? null;
+            return { error: null };
           },
           update(_payload: unknown) {
             return {
@@ -677,11 +673,17 @@ Deno.test("POST /recipes/{id}/variant/refresh uses serviceClient for personaliza
     }
 
     const body = await parseJson(response);
-    if (body.variant_id !== "variant-1") {
+    if (body.variant_id !== serviceClient.insertedVariantId) {
       throw new Error("expected variant id from inserted row");
     }
     if (body.variant_status !== "current") {
       throw new Error("expected current variant status");
+    }
+    if (!serviceClient.insertedVariantId) {
+      throw new Error("expected variant row insert to provide an id");
+    }
+    if (serviceClient.insertedVersionVariantId !== serviceClient.insertedVariantId) {
+      throw new Error("expected version insert to reference the created variant id");
     }
   } finally {
     llmGateway.personalizeRecipe = originalPersonalizeRecipe;

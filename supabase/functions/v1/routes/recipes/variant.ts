@@ -314,11 +314,39 @@ export const handleVariantRoutes = async (
         ]
       : storedEdits;
 
+    let variantId = existingVariant?.id ?? crypto.randomUUID();
+
+    if (!existingVariant) {
+      const { error: variantInsertError } = await serviceClient
+        .from("user_recipe_variants")
+        .insert({
+          id: variantId,
+          user_id: auth.userId,
+          canonical_recipe_id: recipeId,
+          current_version_id: null,
+          base_canonical_version_id: canonicalVersion.id,
+          preference_fingerprint: fingerprint,
+          stale_status: resolvedStaleStatus,
+          accumulated_manual_edits: updatedManualEdits,
+          variant_tags: variantTags,
+          last_materialized_at: new Date().toISOString(),
+        });
+
+      if (variantInsertError) {
+        throw new ApiError(
+          500,
+          "variant_insert_failed",
+          "Could not create variant",
+          variantInsertError.message,
+        );
+      }
+    }
+
     // Insert the new variant version.
     const { data: newVersion, error: versionInsertError } = await serviceClient
       .from("user_recipe_variant_versions")
       .insert({
-        variant_id: existingVariant?.id ?? undefined,
+        variant_id: variantId,
         parent_variant_version_id: existingVariant?.current_version_id ?? null,
         source_canonical_version_id: canonicalVersion.id,
         payload: result.recipe as unknown as JsonValue,
@@ -336,8 +364,6 @@ export const handleVariantRoutes = async (
         versionInsertError?.message,
       );
     }
-
-    let variantId: string;
 
     if (existingVariant) {
       // Update existing variant row with new version, fingerprint,
@@ -363,40 +389,23 @@ export const handleVariantRoutes = async (
           updateError.message,
         );
       }
-      variantId = existingVariant.id;
     } else {
-      // Create new variant row with fingerprint, manual edits, and tags.
-      const { data: newVariant, error: variantInsertError } = await serviceClient
+      const { error: updateError } = await serviceClient
         .from("user_recipe_variants")
-        .insert({
-          user_id: auth.userId,
-          canonical_recipe_id: recipeId,
+        .update({
           current_version_id: newVersion.id,
-          base_canonical_version_id: canonicalVersion.id,
-          preference_fingerprint: fingerprint,
-          stale_status: resolvedStaleStatus,
-          accumulated_manual_edits: updatedManualEdits,
-          variant_tags: variantTags,
           last_materialized_at: new Date().toISOString(),
         })
-        .select("id")
-        .single();
+        .eq("id", variantId);
 
-      if (variantInsertError || !newVariant) {
+      if (updateError) {
         throw new ApiError(
           500,
-          "variant_insert_failed",
-          "Could not create variant",
-          variantInsertError?.message,
+          "variant_update_failed",
+          "Could not activate variant version",
+          updateError.message,
         );
       }
-      variantId = newVariant.id;
-
-      // Back-link the version to the newly created variant row.
-      await serviceClient
-        .from("user_recipe_variant_versions")
-        .update({ variant_id: variantId })
-        .eq("id", newVersion.id);
     }
 
     // Update the cookbook entry to point to the active variant.
