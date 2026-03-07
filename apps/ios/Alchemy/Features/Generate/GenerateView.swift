@@ -114,8 +114,8 @@ struct GenerateView: View {
         .ignoresSafeArea(.keyboard)
         .task { await loadGreeting() }
         .onDisappear { imagePollingTask?.cancel() }
-        .onChange(of: importedSession) { _, session in
-            guard let session else { return }
+        .onChange(of: importedSession?.id) { _, newId in
+            guard newId != nil, let session = importedSession else { return }
             consumeImportedSession(session)
             importedSession = nil
         }
@@ -543,12 +543,12 @@ struct GenerateView: View {
         loopState = session.loopState
         candidateSet = session.candidateRecipeSet
 
-        // Convert API messages to view messages
         messages = session.messages.map { msg in
             ChatMessage(
                 id: msg.id,
-                role: msg.role == "assistant" ? .chef : .user,
-                text: msg.content,
+                role: msg.role == "assistant" ? .assistant : .user,
+                content: msg.content,
+                createdAt: .now,
                 isLoading: false
             )
         }
