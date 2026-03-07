@@ -9,7 +9,7 @@ type Env = {
 const corsHeaders = {
   "access-control-allow-origin": "*",
   "access-control-allow-methods": "GET,POST,PATCH,DELETE,OPTIONS",
-  "access-control-allow-headers": "authorization,content-type,apikey,x-client-info,x-sim-model-overrides"
+  "access-control-allow-headers": "authorization,content-type,apikey,x-client-info,x-sim-model-overrides,x-timezone"
 };
 
 const errorEnvelope = (status: number, code: string, message: string, requestId: string) =>

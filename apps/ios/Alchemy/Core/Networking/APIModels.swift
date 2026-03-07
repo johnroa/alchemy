@@ -98,16 +98,20 @@ struct APIIngredient: Decodable, Identifiable, Hashable {
     let component: String?
 
     /// Formatted display string for the quantity column.
-    /// Prefers display_amount, falls back to "\(amount) \(unit)".
+    /// Combines the display_amount (or raw amount) with the unit.
+    /// display_amount carries the formatted numeric part (e.g. "1 1/2"),
+    /// while unit is always a separate field (e.g. "tbsp").
     var displayQuantity: String {
-        if let displayAmount, !displayAmount.isEmpty {
-            return displayAmount
-        }
-        let amountStr = amount?.stringValue ?? ""
+        let numericPart: String = {
+            if let displayAmount, !displayAmount.isEmpty {
+                return displayAmount
+            }
+            return amount?.stringValue ?? ""
+        }()
         if let unit, !unit.isEmpty {
-            return "\(amountStr) \(unit)"
+            return "\(numericPart) \(unit)"
         }
-        return amountStr
+        return numericPart
     }
 }
 

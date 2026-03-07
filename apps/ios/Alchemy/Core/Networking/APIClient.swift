@@ -94,6 +94,7 @@ final class APIClient {
         urlRequest.httpMethod = method.rawValue
         urlRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        urlRequest.setValue(TimeZone.current.identifier, forHTTPHeaderField: "X-Timezone")
 
         if let body {
             urlRequest.httpBody = try encoder.encode(body)

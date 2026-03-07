@@ -218,7 +218,20 @@ export const handleChatRoutes = async (
     method === "GET"
   ) {
     const userName = auth.fullName;
-    const hour = new Date().getUTCHours();
+    // Prefer the client's timezone (via X-Timezone header) so the greeting
+    // matches the user's local time, not UTC server time.
+    const clientTz = request.headers.get("x-timezone") ?? "UTC";
+    let hour: number;
+    try {
+      const formatter = new Intl.DateTimeFormat("en-US", {
+        timeZone: clientTz,
+        hour: "numeric",
+        hour12: false,
+      });
+      hour = parseInt(formatter.format(new Date()), 10);
+    } catch {
+      hour = new Date().getUTCHours();
+    }
     const timeOfDay = hour < 12
       ? "morning"
       : hour < 17
