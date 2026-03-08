@@ -434,11 +434,8 @@ export const getPreferences = async (
 export const normalizePreferenceStringArray = (
   value: unknown,
 ): string[] | undefined => {
-  // null means "don't touch this field" (iOS sends null for fields it
-  // doesn't want to change). Only explicit [] means "clear the list."
-  // This distinction is critical: the iOS Save button sends null for
-  // AI-managed fields like dietary_restrictions, and we must NOT
-  // interpret that as "clear all restrictions."
+  // null/undefined → "don't touch this field". iOS sends null for fields
+  // it doesn't want to change; we must NOT interpret that as "clear."
   if (value === null || value === undefined) {
     return undefined;
   }
@@ -446,9 +443,25 @@ export const normalizePreferenceStringArray = (
     return undefined;
   }
 
+  // The LLM sometimes emits arrays of objects instead of strings:
+  //   [{"diet_type": "pescatarian", "confidence": 0.99}]
+  // We extract the first string-valued property from each object as a
+  // fallback so these updates don't silently filter to [].
   const rawValues: string[] = typeof value === "string"
     ? [value]
-    : value.filter((item): item is string => typeof item === "string");
+    : value.flatMap((item) => {
+      if (typeof item === "string") {
+        return [item];
+      }
+      if (item && typeof item === "object" && !Array.isArray(item)) {
+        const obj = item as Record<string, unknown>;
+        const stringVal = Object.values(obj).find(
+          (v): v is string => typeof v === "string" && v.trim().length > 0,
+        );
+        return stringVal ? [stringVal] : [];
+      }
+      return [];
+    });
 
   const entries = rawValues
     .map((raw) => raw.trim())
@@ -462,6 +475,13 @@ export const normalizePreferenceStringArray = (
     }
     seen.add(key);
     uniqueEntries.push(entry);
+  }
+
+  // If the input array had items but none yielded valid strings
+  // (all were non-string objects we couldn't extract from), return
+  // undefined to avoid accidentally clearing the list.
+  if (uniqueEntries.length === 0 && Array.isArray(value) && value.length > 0) {
+    return undefined;
   }
 
   return uniqueEntries.slice(0, 32);
