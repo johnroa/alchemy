@@ -1,4 +1,7 @@
-import { dedupeCardsByContentSignature } from "./search/for-you.ts";
+import {
+  buildPresetAugmentedRetrievalText,
+  dedupeCardsByContentSignature,
+} from "./search/for-you.ts";
 import type { RecipePreview } from "./recipe-preview.ts";
 
 const buildCard = (overrides: Partial<RecipePreview> = {}): RecipePreview => ({
@@ -61,5 +64,31 @@ Deno.test("dedupeCardsByContentSignature keeps same-titled recipes when content 
 
   if (deduped.length !== 3) {
     throw new Error(`expected all cards to remain, received ${deduped.length}`);
+  }
+});
+
+Deno.test("buildPresetAugmentedRetrievalText keeps the base retrieval text when no preset is provided", () => {
+  const base = "Lean toward weeknight vegetarian dinners with bright acidity.";
+  const result = buildPresetAugmentedRetrievalText({
+    baseRetrievalText: base,
+    presetId: null,
+  });
+
+  if (result != base) {
+    throw new Error("expected retrieval text to stay unchanged without a preset");
+  }
+});
+
+Deno.test("buildPresetAugmentedRetrievalText appends the Explore preset without needing a second LLM pass", () => {
+  const result = buildPresetAugmentedRetrievalText({
+    baseRetrievalText: "Favor high-protein dinners with a short cleanup path.",
+    presetId: "Quick & Easy",
+  });
+
+  if (!result.includes("Favor high-protein dinners with a short cleanup path.")) {
+    throw new Error("expected the base retrieval text to remain intact");
+  }
+  if (!result.includes("Explore focus: Quick & Easy.")) {
+    throw new Error("expected the preset to be appended to the retrieval text");
   }
 });

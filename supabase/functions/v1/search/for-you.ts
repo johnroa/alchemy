@@ -2,6 +2,7 @@ import type { SupabaseClient } from "npm:@supabase/supabase-js@2";
 import { ApiError } from "../../_shared/errors.ts";
 import { llmGateway, type ModelOverrideMap } from "../../_shared/llm-gateway.ts";
 import type { JsonValue } from "../../_shared/types.ts";
+import { runInBackground } from "../lib/background-tasks.ts";
 import {
   asRecord,
   clampLimit,
@@ -11,7 +12,6 @@ import {
   filterSessionItems,
   normalizeRerankResult,
   normalizeScalarText,
-  normalizeSearchIntent,
   normalizeStoredCards,
   normalizeStringList,
   serializeSearchCard,
@@ -23,7 +23,7 @@ import {
   fetchSearchSession,
   paginateSessionItems,
 } from "./session-store.ts";
-import { buildInterpretSearchContext, fetchHybridCandidates } from "./retrieval.ts";
+import { fetchHybridCandidates } from "./retrieval.ts";
 import type {
   ExploreAlgorithmVersionRow,
   ForYouProfileState,
@@ -174,6 +174,21 @@ export const dedupeCardsByContentSignature = (
   }
 
   return result;
+};
+
+const isFallbackProfileJson = (value: JsonValue | null | undefined): boolean =>
+  normalizeScalarText(asRecord(value)?.generation_mode)?.toLowerCase() === "fallback";
+
+export const buildPresetAugmentedRetrievalText = (params: {
+  baseRetrievalText: string;
+  presetId: string | null;
+}): string => {
+  const presetText = normalizeScalarText(params.presetId);
+  if (!presetText) {
+    return params.baseRetrievalText;
+  }
+
+  return `${params.baseRetrievalText}. Explore focus: ${derivePresetText(presetText)}.`;
 };
 
 const normalizeAlgorithmConfig = (value: JsonValue): AlgorithmConfig => {
@@ -669,6 +684,7 @@ const shouldRebuildProfile = (params: {
   if (!params.profile) return true;
   if (params.profile.algorithm_version !== params.algorithmVersion) return true;
   if (!params.profile.retrieval_text.trim()) return true;
+  if (isFallbackProfileJson(params.profile.profile_json)) return true;
 
   const profileWatermark = parseTimestamp(params.profile.source_event_watermark);
   const sourceWatermark = parseTimestamp(params.sourceEventWatermark);
@@ -710,6 +726,139 @@ const upsertUserTasteProfile = async (
   }
 };
 
+const buildMaterializedProfileFromModel = async (params: {
+  serviceClient: SupabaseClient;
+  userId: string;
+  requestId: string;
+  algorithmVersion: string;
+  signals: RecipeSignalSummary;
+  preferences: Record<string, JsonValue>;
+  memorySnapshot: Record<string, JsonValue>;
+  activeMemories: JsonValue;
+  fallbackRetrievalText: string;
+  positiveRecipeSummaries: RecipeDocumentSummaryRow[];
+  modelOverrides?: ModelOverrideMap;
+}): Promise<TasteProfileMaterialized> => {
+  let profilePayload: unknown = null;
+  let fallbackPath: string | null = null;
+
+  try {
+    profilePayload = await llmGateway.buildExploreForYouProfile({
+      client: params.serviceClient,
+      userId: params.userId,
+      requestId: params.requestId,
+      context: {
+        preferences: params.preferences,
+        memory_snapshot: params.memorySnapshot,
+        active_memories: params.activeMemories,
+        signal_summary: params.signals.signalSummary,
+        recent_positive_recipes: params.positiveRecipeSummaries.map(toRecipeSnippet),
+        recent_events: params.signals.events.slice(0, 60).map((row) => ({
+          event_type: row.event_type,
+          occurred_at: row.occurred_at,
+          entity_id: row.entity_id,
+          payload: row.payload,
+        })) as unknown as JsonValue,
+        recent_semantic_facts: params.signals.facts.slice(0, 24).map((row) => ({
+          fact_type: row.fact_type,
+          fact_value: row.fact_value,
+          created_at: row.created_at,
+        })) as unknown as JsonValue,
+      },
+      modelOverrides: params.modelOverrides,
+    });
+  } catch {
+    fallbackPath = "profile_scope_failed";
+  }
+
+  const normalizedProfile = normalizeProfilePayload({
+    raw: profilePayload,
+    fallbackRetrievalText: params.fallbackRetrievalText,
+    computedSignalSummary: params.signals.signalSummary,
+  });
+  const profileJson = fallbackPath
+    ? { ...normalizedProfile.profileJson, generation_mode: "fallback" as JsonValue }
+    : { ...normalizedProfile.profileJson, generation_mode: "model" as JsonValue };
+
+  const embedding = await llmGateway.embedRecipeSearchQuery({
+    client: params.serviceClient,
+    userId: params.userId,
+    requestId: params.requestId,
+    inputText: normalizedProfile.retrievalText,
+    modelOverrides: params.modelOverrides,
+  });
+
+  return {
+    profileState: params.signals.profileState,
+    algorithmVersion: params.algorithmVersion,
+    retrievalText: normalizedProfile.retrievalText,
+    retrievalEmbedding: embedding.vector,
+    profileJson,
+    signalSummary: normalizedProfile.signalSummary,
+    sourceEventWatermark: params.signals.sourceEventWatermark,
+    rebuilt: true,
+    fallbackPath,
+  };
+};
+
+const buildFallbackMaterializedProfile = async (params: {
+  serviceClient: SupabaseClient;
+  userId: string;
+  requestId: string;
+  algorithmVersion: string;
+  signals: RecipeSignalSummary;
+  fallbackRetrievalText: string;
+  modelOverrides?: ModelOverrideMap;
+}): Promise<TasteProfileMaterialized> => {
+  const embedding = await llmGateway.embedRecipeSearchQuery({
+    client: params.serviceClient,
+    userId: params.userId,
+    requestId: params.requestId,
+    inputText: params.fallbackRetrievalText,
+    modelOverrides: params.modelOverrides,
+  });
+
+  return {
+    profileState: params.signals.profileState,
+    algorithmVersion: params.algorithmVersion,
+    retrievalText: params.fallbackRetrievalText,
+    retrievalEmbedding: embedding.vector,
+    profileJson: { generation_mode: "fallback" },
+    signalSummary: params.signals.signalSummary,
+    sourceEventWatermark: params.signals.sourceEventWatermark,
+    rebuilt: true,
+    fallbackPath: "profile_scope_deferred",
+  };
+};
+
+const scheduleUserTasteProfileRefresh = (params: {
+  serviceClient: SupabaseClient;
+  userId: string;
+  requestId: string;
+  algorithmVersion: string;
+  signals: RecipeSignalSummary;
+  preferences: Record<string, JsonValue>;
+  memorySnapshot: Record<string, JsonValue>;
+  activeMemories: JsonValue;
+  fallbackRetrievalText: string;
+  positiveRecipeSummaries: RecipeDocumentSummaryRow[];
+  modelOverrides?: ModelOverrideMap;
+}): void => {
+  runInBackground(
+    buildMaterializedProfileFromModel(params)
+      .then((profile) =>
+        upsertUserTasteProfile(params.serviceClient, params.userId, profile)
+      )
+      .catch((error) => {
+        console.error("explore_for_you_profile_refresh_failed", {
+          request_id: params.requestId,
+          user_id: params.userId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }),
+  );
+};
+
 const ensureUserTasteProfile = async (params: {
   serviceClient: SupabaseClient;
   userId: string;
@@ -741,9 +890,25 @@ const ensureUserTasteProfile = async (params: {
     sourceEventWatermark: params.signals.sourceEventWatermark,
   });
 
-  if (!rebuild && existingProfile) {
+  if (existingProfile) {
     const embedding = parseVectorString(existingProfile.retrieval_embedding);
-    if (embedding) {
+    if (embedding && existingProfile.retrieval_text.trim().length > 0) {
+      if (rebuild) {
+        scheduleUserTasteProfileRefresh({
+          serviceClient: params.serviceClient,
+          userId: params.userId,
+          requestId: params.requestId,
+          algorithmVersion: params.algorithmVersion,
+          signals: params.signals,
+          preferences: params.preferences,
+          memorySnapshot: params.memorySnapshot,
+          activeMemories: params.activeMemories,
+          fallbackRetrievalText,
+          positiveRecipeSummaries,
+          modelOverrides: params.modelOverrides,
+        });
+      }
+
       return {
         profileState: existingProfile.profile_state,
         algorithmVersion: existingProfile.algorithm_version,
@@ -758,96 +923,30 @@ const ensureUserTasteProfile = async (params: {
     }
   }
 
-  let profilePayload: unknown = null;
-  let fallbackPath: string | null = null;
-  try {
-    profilePayload = await llmGateway.buildExploreForYouProfile({
-      client: params.serviceClient,
-      userId: params.userId,
-      requestId: params.requestId,
-      context: {
-        preferences: params.preferences,
-        memory_snapshot: params.memorySnapshot,
-        active_memories: params.activeMemories,
-        signal_summary: params.signals.signalSummary,
-        recent_positive_recipes: positiveRecipeSummaries.map(toRecipeSnippet),
-        recent_events: params.signals.events.slice(0, 60).map((row) => ({
-          event_type: row.event_type,
-          occurred_at: row.occurred_at,
-          entity_id: row.entity_id,
-          payload: row.payload,
-        })) as unknown as JsonValue,
-        recent_semantic_facts: params.signals.facts.slice(0, 24).map((row) => ({
-          fact_type: row.fact_type,
-          fact_value: row.fact_value,
-          created_at: row.created_at,
-        })) as unknown as JsonValue,
-      },
-      modelOverrides: params.modelOverrides,
-    });
-  } catch {
-    fallbackPath = "profile_scope_failed";
-  }
-
-  const normalizedProfile = normalizeProfilePayload({
-    raw: profilePayload,
-    fallbackRetrievalText,
-    computedSignalSummary: params.signals.signalSummary,
-  });
-  const embedding = await llmGateway.embedRecipeSearchQuery({
-    client: params.serviceClient,
+  const fallbackProfile = await buildFallbackMaterializedProfile({
+    serviceClient: params.serviceClient,
     userId: params.userId,
     requestId: params.requestId,
-    inputText: normalizedProfile.retrievalText,
-    modelOverrides: params.modelOverrides,
-  });
-
-  const materialized: TasteProfileMaterialized = {
-    profileState: params.signals.profileState,
     algorithmVersion: params.algorithmVersion,
-    retrievalText: normalizedProfile.retrievalText,
-    retrievalEmbedding: embedding.vector,
-    profileJson: normalizedProfile.profileJson,
-    signalSummary: normalizedProfile.signalSummary,
-    sourceEventWatermark: params.signals.sourceEventWatermark,
-    rebuilt: true,
-    fallbackPath,
-  };
-  await upsertUserTasteProfile(params.serviceClient, params.userId, materialized);
-  return materialized;
-};
-
-const resolvePresetIntent = async (params: {
-  serviceClient: SupabaseClient;
-  userId: string;
-  requestId: string;
-  presetId: string;
-  preferences: Record<string, JsonValue>;
-  activeMemories: JsonValue;
-  modelOverrides?: ModelOverrideMap;
-}): Promise<RecipeSearchIntent> => {
-  const interpretedRaw = await llmGateway.interpretRecipeSearch({
-    client: params.serviceClient,
-    userId: params.userId,
-    requestId: params.requestId,
-    context: buildInterpretSearchContext({
-      surface: "explore",
-      appliedContext: "preset",
-      normalizedInput: derivePresetText(params.presetId),
-      presetId: params.presetId,
-      conversationContext: {
-        preferences: params.preferences,
-        selected_memories: params.activeMemories,
-      },
-    }),
+    signals: params.signals,
+    fallbackRetrievalText,
     modelOverrides: params.modelOverrides,
   });
-
-  return normalizeSearchIntent({
-    appliedContext: "preset",
-    normalizedInput: derivePresetText(params.presetId),
-    raw: interpretedRaw,
+  await upsertUserTasteProfile(params.serviceClient, params.userId, fallbackProfile);
+  scheduleUserTasteProfileRefresh({
+    serviceClient: params.serviceClient,
+    userId: params.userId,
+    requestId: params.requestId,
+    algorithmVersion: params.algorithmVersion,
+    signals: params.signals,
+    preferences: params.preferences,
+    memorySnapshot: params.memorySnapshot,
+    activeMemories: params.activeMemories,
+    fallbackRetrievalText,
+    positiveRecipeSummaries,
+    modelOverrides: params.modelOverrides,
   });
+  return fallbackProfile;
 };
 
 const normalizeRationaleTagsFromSession = (value: JsonValue): Record<string, string[]> => {
@@ -950,24 +1049,25 @@ export const getExploreForYouFeed = async (params: {
     activeMemories: params.activeMemories,
     modelOverrides: params.modelOverrides,
   });
-
-  let presetIntent: RecipeSearchIntent | null = null;
-  if (normalizeScalarText(params.presetId)) {
-    presetIntent = await resolvePresetIntent({
-      serviceClient: params.serviceClient,
+  const normalizedPresetId = normalizeScalarText(params.presetId);
+  const retrievalText = buildPresetAugmentedRetrievalText({
+    baseRetrievalText: tasteProfile.retrievalText,
+    presetId: normalizedPresetId,
+  });
+  const retrievalEmbedding = normalizedPresetId
+    ? (await llmGateway.embedRecipeSearchQuery({
+      client: params.serviceClient,
       userId: params.userId,
       requestId: params.requestId,
-      presetId: normalizeScalarText(params.presetId) as string,
-      preferences: params.preferences,
-      activeMemories: params.activeMemories,
+      inputText: retrievalText,
       modelOverrides: params.modelOverrides,
-    });
-  }
+    })).vector
+    : tasteProfile.retrievalEmbedding;
 
   const retrievalIntent: RecipeSearchIntent = {
-    normalized_query: tasteProfile.retrievalText,
-    applied_context: presetIntent ? "preset" : "for_you",
-    hard_filters: presetIntent?.hard_filters ?? {
+    normalized_query: retrievalText,
+    applied_context: normalizedPresetId ? "preset" : "for_you",
+    hard_filters: {
       cuisines: [],
       diet_tags: [],
       techniques: [],
@@ -986,7 +1086,7 @@ export const getExploreForYouFeed = async (params: {
     surface: "explore",
     snapshotCutoffIndexedAt: new Date().toISOString(),
     intent: retrievalIntent,
-    embeddingVector: tasteProfile.retrievalEmbedding,
+    embeddingVector: retrievalEmbedding,
     safetyExclusions: params.safetyExclusions,
     limit: algorithmConfig.candidatePoolLimit,
   }));
@@ -1010,7 +1110,7 @@ export const getExploreForYouFeed = async (params: {
           exploration_ratio: algorithmConfig.explorationRatio,
           profile: tasteProfile.profileJson,
           signal_summary: tasteProfile.signalSummary,
-          preset_id: normalizeScalarText(params.presetId),
+          preset_id: normalizedPresetId,
           hard_filters: retrievalIntent.hard_filters as unknown as JsonValue,
           recent_exposure_recipe_ids: [...signals.recentExposureRecipeIds],
           saved_recipe_ids: [...signals.savedRecipeIds],
@@ -1046,11 +1146,11 @@ export const getExploreForYouFeed = async (params: {
     serviceClient: params.serviceClient,
     userId: params.userId,
     surface: "explore",
-    appliedContext: presetIntent ? "preset" : "for_you",
-    normalizedInput: tasteProfile.retrievalText,
-    presetId: normalizeScalarText(params.presetId),
+    appliedContext: normalizedPresetId ? "preset" : "for_you",
+    normalizedInput: retrievalText,
+    presetId: normalizedPresetId,
     interpretedIntent: retrievalIntent,
-    queryEmbedding: serializeVector(tasteProfile.retrievalEmbedding),
+    queryEmbedding: serializeVector(retrievalEmbedding),
     snapshotCutoffIndexedAt: new Date().toISOString(),
     page1PromotedRecipeIds: page1Items.map((item) => item.id),
     hybridItems: orderedItems,
@@ -1073,7 +1173,7 @@ export const getExploreForYouFeed = async (params: {
 
   return {
     feed_id: feedId,
-    applied_context: presetIntent ? "preset" : "for_you",
+    applied_context: normalizedPresetId ? "preset" : "for_you",
     profile_state: tasteProfile.profileState,
     algorithm_version: algorithm.version,
     items: page1Items,
