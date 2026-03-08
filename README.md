@@ -438,6 +438,15 @@ wrangler secret put ADMIN_SIMULATION_USER_EMAIL
 
 All commands run from repo root (`/Users/john/Projects/alchemy`).
 
+### Execution Norms
+
+- Follow this file first for project-specific operational workflows. Do not substitute generic framework habits for documented repo procedure.
+- Operational precedence is: `README.md` -> `AGENTS.md` -> repo scripts/config -> ecosystem defaults.
+- If a documented deploy/build command fails, debug that documented path and repair it. Do not silently switch the final workflow to a different cwd or alternate command.
+- Alternate commands or direct service URLs may be used for diagnosis, but the final deploy should still run through the documented repo-root path.
+- Prefer validating against the documented public hosts (`api.cookwithalchemy.com`, `admin.cookwithalchemy.com`) before relying on lower-level worker/dev URLs.
+- If the documented workflow is incomplete or wrong, update the docs in the same change so the corrected path becomes the new default.
+
 ### One-time auth
 
 ```bash

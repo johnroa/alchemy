@@ -19,6 +19,16 @@ packages/shared/      Shared utilities (ingredient icon resolution, food icon ca
 - If `README.md` documents a project-specific workflow, follow it instead of assuming a standard/default approach.
 - If `README.md` and `AGENTS.md` appear to conflict, stop and flag the discrepancy explicitly.
 
+## Execution Norms
+- Treat repo-local instructions as higher priority than ecosystem defaults.
+- Operational precedence is: `README.md` -> `AGENTS.md` -> repo scripts/config -> generic tool/framework habits.
+- Do not switch to an alternate deploy or build path just because it unblocks the task faster.
+- If the documented command fails, debug the documented path first and fix the repo so the documented path works again.
+- Alternate commands, alternate working directories, direct worker URLs, or ad hoc recovery steps are for diagnosis only unless `README.md` explicitly blesses them.
+- Final deploys must use the documented commands from repo root. Do not treat a one-off workaround as the real workflow.
+- Verification should prefer the documented public surfaces first (`api.cookwithalchemy.com`, `admin.cookwithalchemy.com`) and only use lower-level URLs as supporting diagnostics.
+- If a documented workflow is wrong or incomplete, update `README.md` and `AGENTS.md` in the same change instead of relying on memory next time.
+
 ## Deployment
 
 All commands run from repo root (`/Users/john/Projects/alchemy`). **Always deploy after making changes — never tell the user to run commands.**

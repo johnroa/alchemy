@@ -147,6 +147,35 @@ const normalizeProfileState = (value: unknown): ForYouProfileState | null => {
     : null;
 };
 
+const buildCardContentSignature = (item: RecipeSearchCard): string | null => {
+  const title = normalizeScalarText(item.title)?.toLowerCase() ?? null;
+  const summary = normalizeScalarText(item.summary)?.toLowerCase() ?? null;
+  const imageUrl = normalizeScalarText(item.image_url) ?? null;
+
+  if (!title) return null;
+  return [title, summary ?? "", imageUrl ?? ""].join("|");
+};
+
+export const dedupeCardsByContentSignature = (
+  items: RecipeSearchCard[],
+): RecipeSearchCard[] => {
+  const seen = new Set<string>();
+  const result: RecipeSearchCard[] = [];
+
+  for (const item of items) {
+    const signature = buildCardContentSignature(item);
+    if (signature && seen.has(signature)) {
+      continue;
+    }
+    if (signature) {
+      seen.add(signature);
+    }
+    result.push(item);
+  }
+
+  return result;
+};
+
 const normalizeAlgorithmConfig = (value: JsonValue): AlgorithmConfig => {
   const record = asRecord(value);
   const candidatePoolLimit = Number(record?.candidate_pool_limit);
@@ -952,7 +981,7 @@ export const getExploreForYouFeed = async (params: {
     query_style: "mixed",
   };
 
-  const hybridItems = await fetchHybridCandidates({
+  const hybridItems = dedupeCardsByContentSignature(await fetchHybridCandidates({
     serviceClient: params.serviceClient,
     surface: "explore",
     snapshotCutoffIndexedAt: new Date().toISOString(),
@@ -960,7 +989,7 @@ export const getExploreForYouFeed = async (params: {
     embeddingVector: tasteProfile.retrievalEmbedding,
     safetyExclusions: params.safetyExclusions,
     limit: algorithmConfig.candidatePoolLimit,
-  });
+  }));
 
   let rerankUsed = false;
   let fallbackPath = tasteProfile.fallbackPath;

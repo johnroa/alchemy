@@ -2,12 +2,17 @@
 
 ## [Unreleased] — 2026-03-07
 
+### Documentation / Execution Discipline
+
+- Codified repo execution norms in `README.md` and `AGENTS.md` so deploy/build/debug precedence is explicit: repo docs first, documented repo-root workflows over ad hoc ecosystem recovery paths, and documentation updates required when the documented path is wrong.
+
 ### Explore `For You` Personalized Feed + Personalization Analytics (v3.7.0)
 
 - Added `POST /recipes/explore/for-you` as the dedicated personalized Explore feed endpoint, backed by user taste profiles, hybrid retrieval over `recipe_search_documents`, dedicated reranking, and cursor-backed search sessions.
 - Added `user_taste_profiles`, `explore_algorithm_versions`, and `explore_impression_outcomes` so Explore can track versioned serving behavior, lift, fallback rate, and why-tag distribution.
 - Added new LLM scopes `explore_for_you_profile` and `explore_for_you_rank`, seeded active model routes, and activated prompt/rule configs through the admin LLM control path.
 - Explore on iOS now opens on `For You`, uses personalized preset chips through the same endpoint, renders `why_tags`, and no longer uses the global `recent | popular | trending` sort flow.
+- Deduplicated materially identical Explore cards before reranking/page assembly so `For You` does not surface duplicate recipe cards in the same feed.
 - Added version-aware Explore feed telemetry (`explore_feed_served`, `explore_skipped_recipe`, `explore_hidden_recipe`) plus save attribution with `source_session_id` and `algorithm_version`.
 - Added Admin `/boards/personalization` and `/analytics/personalization` for current champion version, lift versus baseline, fallback/latency diagnostics, profile-state breakdowns, and why-tag distribution.
 - Added recommender spillover stats to `/boards/operations` so feed latency and fallback pressure are still visible from the operations surface without turning it into the main personalization console.
