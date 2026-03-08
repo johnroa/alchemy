@@ -121,6 +121,29 @@ Deno.test("buildIngredientGroups groups by component", () => {
   }
 });
 
+Deno.test("buildIngredientGroups uses fallback labels for missing category and component", () => {
+  const categoryGroups = buildIngredientGroups({
+    groupBy: "category",
+    ingredients: [
+      { name: "Salt", amount: 1, unit: "tsp", category: null },
+    ],
+  });
+  const componentGroups = buildIngredientGroups({
+    groupBy: "component",
+    ingredients: [
+      { name: "Salt", amount: 1, unit: "tsp", component: null },
+    ],
+  });
+
+  if (categoryGroups?.[0]?.label !== "Other") {
+    throw new Error("expected missing category to fall back to Other");
+  }
+
+  if (componentGroups?.[0]?.label !== "Main") {
+    throw new Error("expected missing component to fall back to Main");
+  }
+});
+
 Deno.test("projectInlineMeasurements appends inline measurement text", () => {
   const steps: RecipePayload["steps"] = [
     {
@@ -170,5 +193,16 @@ Deno.test("resolvePresentationOptions merges query and preferences", () => {
 
   if (!options.inlineMeasurements) {
     throw new Error("expected inline measurements to be enabled");
+  }
+});
+
+Deno.test("resolvePresentationOptions defaults group_by to component", () => {
+  const options = resolvePresentationOptions({
+    query: new URLSearchParams(),
+    presentationPreferences: {},
+  });
+
+  if (options.groupBy !== "component") {
+    throw new Error("expected default group_by to be component");
   }
 });

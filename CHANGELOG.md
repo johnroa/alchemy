@@ -1,6 +1,16 @@
 # Changelog
 
-## [Unreleased] — 2026-03-07
+## [Unreleased] — 2026-03-08
+
+### Ingredient Grouping End-to-End + Component Default (v3.7.3)
+
+- Made ingredient grouping a fully supported presentation feature across saved recipe detail and transient Sous Chef candidate previews, limited to `List`, `By Category`, and `By Component`.
+- Changed the default grouping fallback from `flat` to `component` when a user has no saved `recipe_group_by` preference, aligning backend behavior with the iOS preferences default.
+- Added explicit `component` typing to backend `RecipePayload.ingredients`, fixed personalized variant projection to rebuild render-time ingredient groups from the variant payload, and kept grouping as a derived view projection instead of stored source data.
+- Added a shared iOS `PresentationPreferencesStore` plus local candidate-grouping projection so generated recipes respect the current ingredient-grouping preference before save.
+- Updated the iOS recipe detail ingredients section to render grouped headers only when there are 2+ groups and otherwise collapse back to the flat list.
+- Updated active recipe-generation/import/personalization prompt configs to require inferable ingredient `category` and multi-part `component` labels so grouped rendering has reliable source metadata.
+- Updated OpenAPI to `3.7.3`, regenerated contracts/admin API docs, and added backend coverage for default grouping and variant group rebuilding.
 
 ### Shared Semantic Facets + Server-Owned Chips (v3.7.2)
 

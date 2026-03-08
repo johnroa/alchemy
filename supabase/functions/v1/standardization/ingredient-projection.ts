@@ -329,7 +329,7 @@ export const projectIngredientsForOutput = (params: {
       category: row?.category ?? ingredient.category,
       ingredient_id: row?.ingredient_id ?? null,
       normalized_status: row?.normalized_status,
-      component: row?.component ?? null
+      component: row?.component ?? ingredient.component ?? null
     };
   });
 };

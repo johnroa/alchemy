@@ -20,6 +20,7 @@ import {
   resolveRecipeImageUrl,
 } from "../recipe-images.ts";
 import {
+  type CanonicalRecipeIngredientRow,
   type RecipeViewOptions,
   defaultRecipeViewOptions,
   fetchCanonicalIngredientRows,
@@ -30,6 +31,51 @@ import { scheduleMetadataQueueDrain } from "./background-tasks.ts";
 import { logChangelog, resolveRelationTypeId } from "./user-profile.ts";
 import { toJsonValue } from "./chat-types.ts";
 import type { RecipeView, RecipeAttachmentView, ContextPack } from "./chat-types.ts";
+
+export const projectRecipePayloadForView = (params: {
+  payload: RecipePayload;
+  canonicalRows: CanonicalRecipeIngredientRow[];
+  options: RecipeViewOptions;
+}): Pick<
+  RecipeView,
+  | "description"
+  | "summary"
+  | "ingredients"
+  | "ingredient_groups"
+  | "steps"
+  | "notes"
+  | "pairings"
+  | "metadata"
+  | "emoji"
+> => {
+  const projectedIngredients = projectIngredientsForOutput({
+    sourceIngredients: params.payload.ingredients,
+    canonicalRows: params.canonicalRows,
+    units: params.options.units,
+  });
+  const ingredientGroups = buildIngredientGroups({
+    ingredients: projectedIngredients,
+    groupBy: params.options.groupBy,
+  });
+  const projectedSteps = projectInlineMeasurements({
+    steps: params.payload.steps,
+    units: params.options.units,
+    includeInlineMeasurements: params.options.inlineMeasurements,
+  });
+  const canonicalMetadata = canonicalizeRecipePayloadMetadata(params.payload);
+
+  return {
+    description: resolveRecipePayloadDescription(params.payload),
+    summary: resolveRecipePayloadSummary(params.payload),
+    ingredients: projectedIngredients,
+    ingredient_groups: ingredientGroups,
+    steps: projectedSteps,
+    notes: params.payload.notes,
+    pairings: params.payload.pairings ?? [],
+    metadata: canonicalMetadata ? toJsonValue(canonicalMetadata) : undefined,
+    emoji: params.payload.emoji ?? [],
+  };
+};
 
 /**
  * Fetch a fully-projected recipe view including optional attachments.
@@ -89,22 +135,11 @@ export const fetchRecipeView = async (
 
   const payload = version.payload as RecipePayload;
   const canonicalRows = await fetchCanonicalIngredientRows(client, version.id);
-  const projectedIngredients = projectIngredientsForOutput({
-    sourceIngredients: payload.ingredients,
+  const projectedPayload = projectRecipePayloadForView({
+    payload,
     canonicalRows,
-    units: options.units,
+    options,
   });
-  const ingredientGroups = buildIngredientGroups({
-    ingredients: projectedIngredients,
-    groupBy: options.groupBy,
-  });
-
-  const projectedSteps = projectInlineMeasurements({
-    steps: payload.steps,
-    units: options.units,
-    includeInlineMeasurements: options.inlineMeasurements,
-  });
-  const canonicalMetadata = canonicalizeRecipePayloadMetadata(payload);
 
   let attachments: RecipeAttachmentView[] = [];
   if (includeAttachments) {
@@ -171,16 +206,16 @@ export const fetchRecipeView = async (
   return {
     id: recipe.id,
     title: payload.title ?? recipe.title,
-    description: resolveRecipePayloadDescription(payload),
-    summary: resolveRecipePayloadSummary(payload),
+    description: projectedPayload.description,
+    summary: projectedPayload.summary,
     servings: payload.servings,
-    ingredients: projectedIngredients,
-    steps: projectedSteps,
-    ingredient_groups: ingredientGroups,
-    notes: payload.notes,
-    pairings: payload.pairings ?? [],
-    metadata: canonicalMetadata ? toJsonValue(canonicalMetadata) : undefined,
-    emoji: payload.emoji ?? [],
+    ingredients: projectedPayload.ingredients,
+    steps: projectedPayload.steps,
+    ingredient_groups: projectedPayload.ingredient_groups,
+    notes: projectedPayload.notes,
+    pairings: projectedPayload.pairings,
+    metadata: projectedPayload.metadata,
+    emoji: projectedPayload.emoji,
     image_url: resolveRecipeImageUrl(recipe.hero_image_url),
     image_status: resolveRecipeImageStatus(
       recipe.hero_image_url,

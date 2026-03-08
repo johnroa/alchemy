@@ -1,6 +1,7 @@
 import { ApiError } from "../_shared/errors.ts";
 import { llmGateway } from "../_shared/llm-gateway.ts";
 import { searchRecipes } from "./recipe-search.ts";
+import { resolvePresentationOptions as resolveRecipePresentationOptions } from "./recipe-standardization.ts";
 import { handleRecipeRoutes } from "./routes/recipes.ts";
 import type { RecipePreview } from "./recipe-preview.ts";
 import openapiSpec from "../../../packages/contracts/openapi.json" with {
@@ -273,7 +274,34 @@ const createRecipeDetailFetchView = () => ({
     "This pasta has the swagger of a restaurant special and the ease of something you can still pull together on a Tuesday, with corn, lemon, and basil doing all the right flirting.",
   summary: "Corn, lemon, and basil pasta.",
   servings: 4,
-  ingredients: [],
+  ingredients: [
+    {
+      name: "Rigatoni",
+      amount: 12,
+      unit: "oz",
+      category: "Pantry",
+      component: "Pasta",
+      ingredient_id: "ingredient-rigatoni",
+      normalized_status: "normalized",
+    },
+  ],
+  ingredient_groups: [
+    {
+      key: "pasta",
+      label: "Pasta",
+      ingredients: [
+        {
+          name: "Rigatoni",
+          amount: 12,
+          unit: "oz",
+          category: "Pantry",
+          component: "Pasta",
+          ingredient_id: "ingredient-rigatoni",
+          normalized_status: "normalized",
+        },
+      ],
+    },
+  ],
   steps: [],
   notes: undefined,
   pairings: [],
@@ -339,8 +367,39 @@ const createVariantRouteClient = () => ({
                         summary: "Corn, lemon, and basil pasta.",
                         description:
                           "The personalized version keeps the same breezy spirit but leans even brighter, the sort of bowl you want to eat by an open window with a glass of cold white wine.",
-                        ingredients: [],
-                        steps: [],
+                        ingredients: [
+                          {
+                            name: "Rigatoni",
+                            amount: 12,
+                            unit: "oz",
+                            category: "Pantry",
+                            component: "Pasta",
+                          },
+                          {
+                            name: "Sweet Corn",
+                            amount: 2,
+                            unit: "unit",
+                            category: "Produce",
+                            component: "Pasta",
+                          },
+                          {
+                            name: "Basil Butter",
+                            amount: 3,
+                            unit: "tbsp",
+                            category: "Dairy",
+                            component: "Sauce",
+                          },
+                        ],
+                        steps: [{ index: 1, instruction: "Toss everything together." }],
+                        notes: "Finish with lemon zest.",
+                        pairings: ["Cold white wine"],
+                        emoji: ["🍝"],
+                        metadata: {
+                          difficulty: "easy",
+                          health_score: 82,
+                          time_minutes: 25,
+                          items: 3,
+                        },
                       },
                       derivation_kind: "automatic",
                       provenance: {
@@ -350,6 +409,56 @@ const createVariantRouteClient = () => ({
                       source_canonical_version_id: "canonical-version-123",
                       created_at: "2026-03-07T13:00:00.000Z",
                     },
+                    error: null,
+                  };
+                },
+              };
+            },
+          };
+        },
+      };
+    }
+
+    if (table === "recipe_ingredients") {
+      return {
+        select(_columns: string) {
+          return {
+            eq(_column: string, _value: string) {
+              return {
+                async order(_orderColumn: string, _params: { ascending: boolean }) {
+                  return {
+                    data: [
+                      {
+                        id: "row-rigatoni",
+                        position: 0,
+                        ingredient_id: "ingredient-rigatoni",
+                        source_name: "Rigatoni",
+                        source_amount: 12,
+                        source_unit: "oz",
+                        normalized_amount_si: 340,
+                        normalized_unit: "g",
+                        unit_kind: "mass",
+                        normalized_status: "normalized",
+                        category: "Pantry",
+                        component: "Pasta",
+                        metadata: {},
+                      },
+                      {
+                        id: "row-corn",
+                        position: 1,
+                        ingredient_id: "ingredient-corn",
+                        source_name: "Sweet Corn",
+                        source_amount: 2,
+                        source_unit: "unit",
+                        normalized_amount_si: 2,
+                        normalized_unit: "unit",
+                        unit_kind: "count",
+                        normalized_status: "normalized",
+                        category: "Produce",
+                        component: "Pasta",
+                        metadata: {},
+                      },
+                    ],
                     error: null,
                   };
                 },
@@ -461,7 +570,7 @@ Deno.test("GET /recipes/{id} preserves distinct summary and long description fie
     createDeps({
       resolvePresentationOptions: () => ({
         units: "source",
-        groupBy: "flat",
+        groupBy: "component",
         inlineMeasurements: false,
       }),
       fetchRecipeView: async () => createRecipeDetailFetchView(),
@@ -484,7 +593,46 @@ Deno.test("GET /recipes/{id} preserves distinct summary and long description fie
   }
 });
 
-Deno.test("GET /recipes/{id}/variant overlays personalized summary and description", async () => {
+Deno.test("GET /recipes/{id} uses component grouping when no query or saved preference exists", async () => {
+  let receivedOptions: Record<string, unknown> | null = null;
+
+  const response = await handleRecipeRoutes(
+    createRouteContext({
+      path: "/recipes/recipe-123",
+      method: "GET",
+      serviceClient: {
+        from(table: string) {
+          if (table === "recipe_view_events") {
+            return {
+              async insert(_payload: unknown) {
+                return { error: null };
+              },
+            };
+          }
+
+          throw new Error(`unexpected table: ${table}`);
+        },
+      },
+    }) as never,
+    createDeps({
+      resolvePresentationOptions: resolveRecipePresentationOptions,
+      fetchRecipeView: async (_client: unknown, _recipeId: string, _enforceVisibility: boolean, viewOptions: unknown) => {
+        receivedOptions = viewOptions as Record<string, unknown>;
+        return createRecipeDetailFetchView();
+      },
+    }) as never,
+  );
+
+  if (!response || response.status !== 200) {
+    throw new Error("expected recipe detail response");
+  }
+
+  if (receivedOptions?.groupBy !== "component") {
+    throw new Error("expected default recipe detail grouping to be component");
+  }
+});
+
+Deno.test("GET /recipes/{id}/variant overlays personalized summary, description, and rebuilt ingredient groups", async () => {
   const response = await handleRecipeRoutes(
     createRouteContext({
       path: "/recipes/recipe-123/variant",
@@ -494,7 +642,7 @@ Deno.test("GET /recipes/{id}/variant overlays personalized summary and descripti
     createDeps({
       resolvePresentationOptions: () => ({
         units: "source",
-        groupBy: "flat",
+        groupBy: "component",
         inlineMeasurements: false,
       }),
       fetchRecipeView: async () => createRecipeDetailFetchView(),
@@ -516,6 +664,18 @@ Deno.test("GET /recipes/{id}/variant overlays personalized summary and descripti
       "The personalized version keeps the same breezy spirit but leans even brighter, the sort of bowl you want to eat by an open window with a glass of cold white wine."
   ) {
     throw new Error("expected personalized long description on variant response");
+  }
+
+  const ingredientGroups = recipe.ingredient_groups as Array<Record<string, unknown>> | undefined;
+  if (!Array.isArray(ingredientGroups) || ingredientGroups.length !== 2) {
+    throw new Error("expected rebuilt ingredient groups on variant response");
+  }
+  if (ingredientGroups[0]?.label !== "Pasta" || ingredientGroups[1]?.label !== "Sauce") {
+    throw new Error("expected personalized component groups");
+  }
+  const ingredients = recipe.ingredients as Array<Record<string, unknown>> | undefined;
+  if (!Array.isArray(ingredients) || ingredients[2]?.component !== "Sauce") {
+    throw new Error("expected personalized ingredient components");
   }
 });
 

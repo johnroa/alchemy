@@ -7,6 +7,7 @@ import SwiftUI
 /// recipe generation tab and losing context.
 struct PreferencesView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(PresentationPreferencesStore.self) private var presentationPreferencesStore
 
     /// Kept for call-site compatibility. Preference editing now happens inline
     /// on this screen instead of switching tabs.
@@ -62,9 +63,9 @@ struct PreferencesView: View {
     ]
 
     private static let groupingOptions: [(label: String, value: String)] = [
-        ("By Component", "component"),
+        ("List", "flat"),
         ("By Category", "category"),
-        ("Flat List", "flat"),
+        ("By Component", "component"),
     ]
 
     private static let verbosityOptions: [(label: String, value: String)] = [
@@ -872,6 +873,7 @@ struct PreferencesView: View {
         do {
             let loaded: PreferenceProfile = try await APIClient.shared.request("/preferences")
             profile = loaded
+            presentationPreferencesStore.apply(loaded)
             populateEditableState(from: loaded)
 
             // Debug: trace exactly what the API returned so we can
@@ -930,6 +932,7 @@ struct PreferencesView: View {
                 body: updated
             )
             profile = response
+            presentationPreferencesStore.apply(response)
             populateEditableState(from: response)
         } catch {
             errorMessage = "Failed to save. Please try again."
@@ -1110,4 +1113,3 @@ struct FlowLayout: Layout {
         return (CGSize(width: totalWidth, height: y + rowHeight), positions)
     }
 }
-

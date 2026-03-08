@@ -3,7 +3,7 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 63;
+	objectVersion = 77;
 	objects = {
 
 /* Begin PBXBuildFile section */
@@ -33,6 +33,7 @@
 		60968686BEA8C1AA49E0E1DB /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59C6013CE1030E98DF4E617B /* ContentView.swift */; };
 		67419F9DFC457F1F202E8B54 /* Supabase in Frameworks */ = {isa = PBXBuildFile; productRef = 768CD6AAFD77D3BB27D13150 /* Supabase */; };
 		698B3C7D3C46D818CB832386 /* GlassInputBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87391E8941518B7568F1F1D3 /* GlassInputBar.swift */; };
+		7456EADBF0FC5CC8347117C9 /* PresentationPreferencesStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 731863094EF948337DEBE99F /* PresentationPreferencesStore.swift */; };
 		76462F4E2FA531F493BFD81A /* ClipboardBanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB9DB9E35B45274A732B6943 /* ClipboardBanner.swift */; };
 		7C5265E1BA60220F06AB2E76 /* ImportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A7D97690AB17BAA8EF132F1 /* ImportView.swift */; };
 		92B2D41E5F1EF5194B385E98 /* TabShell.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1905F952E153213B82628C1E /* TabShell.swift */; };
@@ -45,6 +46,7 @@
 		C9397C3E69FB3E3AEA3A458F /* Recipe.swift in Sources */ = {isa = PBXBuildFile; fileRef = B797512F015EA11E3535ED6B /* Recipe.swift */; };
 		CD248ECF2EB4AF1A5BE5F346 /* AlchemyShareExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 588AA69EA05DFB3A31694F64 /* AlchemyShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		CF48116E892E4614B5C29EC1 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E5E7F9B8EADC528775CC62E /* OnboardingView.swift */; };
+		D9AF6CEDFF7628D12ABADA46 /* IngredientGrouping.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0F44AD58C0315286413FB56 /* IngredientGrouping.swift */; };
 		E5A8EB5ED02D01D086A172C1 /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B74A641FF9DAF32D4DF71C14 /* ShareViewController.swift */; };
 		E6D7A1B09ABAB6A8B49EA54D /* AuthManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 815B265102D0AC689E0800AB /* AuthManager.swift */; };
 		F205CC290343B5D206997842 /* AlchemyApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 680B4527FA728D679417F0A5 /* AlchemyApp.swift */; };
@@ -87,10 +89,10 @@
 		2EFB886BFCD48E94BCC03D46 /* ImportViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportViewModel.swift; sourceTree = "<group>"; };
 		31A803D819EE21D9B9F1C894 /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Release.xcconfig; sourceTree = "<group>"; };
 		3CBE1C0886A1C2E204748114 /* ProfileMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileMenu.swift; sourceTree = "<group>"; };
-		47F2029BC56872F28BD677E1 /* Alchemy.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Alchemy.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		47F2029BC56872F28BD677E1 /* Alchemy.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Alchemy.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		4A19FF6B7729BFE0C2694901 /* APIError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIError.swift; sourceTree = "<group>"; };
 		4CD75C625E706ECE7EB76187 /* GenerateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerateView.swift; sourceTree = "<group>"; };
-		588AA69EA05DFB3A31694F64 /* AlchemyShareExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = AlchemyShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		588AA69EA05DFB3A31694F64 /* AlchemyShareExtension.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = AlchemyShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		58C789C96CA6EF5F537CC575 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		59C6013CE1030E98DF4E617B /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		5DA9E3E09DF919C668A03C35 /* RecipeURLDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecipeURLDetector.swift; sourceTree = "<group>"; };
@@ -98,6 +100,7 @@
 		680B4527FA728D679417F0A5 /* AlchemyApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlchemyApp.swift; sourceTree = "<group>"; };
 		68F1901D9F8AEF2C890D5D53 /* CompactGauge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompactGauge.swift; sourceTree = "<group>"; };
 		6B23DB2CD81D8EA131F8420C /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		731863094EF948337DEBE99F /* PresentationPreferencesStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PresentationPreferencesStore.swift; sourceTree = "<group>"; };
 		79CEDA1BF840345FE7F300BC /* AlchemyLoadingIndicator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlchemyLoadingIndicator.swift; sourceTree = "<group>"; };
 		7BC730A13C51300795CEBCC2 /* Alchemy.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Alchemy.entitlements; sourceTree = "<group>"; };
 		7E5E7F9B8EADC528775CC62E /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
@@ -114,6 +117,7 @@
 		D8B08178F20A5FDCD50954CE /* AuthFlowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthFlowView.swift; sourceTree = "<group>"; };
 		D92723C258CA540A3F92B30C /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		DBB2A0915507D2539E028F35 /* AlchemySpacing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlchemySpacing.swift; sourceTree = "<group>"; };
+		E0F44AD58C0315286413FB56 /* IngredientGrouping.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IngredientGrouping.swift; sourceTree = "<group>"; };
 		E7D059A499F94C5F767F33CB /* alchemy-loading.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "alchemy-loading.json"; sourceTree = "<group>"; };
 		E8043174613A6F56CD380A47 /* ImportMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportMenu.swift; sourceTree = "<group>"; };
 		E9BC218713992D6BA03C55B5 /* AnimatedMeshBackground.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnimatedMeshBackground.swift; sourceTree = "<group>"; };
@@ -169,6 +173,8 @@
 			children = (
 				BF9411A10C6C201FDF50DFCC /* Auth */,
 				A1AE02657C78E5A6C631EB79 /* Networking */,
+				480BC4B3DB15FBC734860CB7 /* Preferences */,
+				CB04CB532C4A1A3FE40BD221 /* Recipes */,
 			);
 			path = Core;
 			sourceTree = "<group>";
@@ -196,6 +202,14 @@
 				0217F804B0511D28857FC816 /* CookbookView.swift */,
 			);
 			path = Cookbook;
+			sourceTree = "<group>";
+		};
+		480BC4B3DB15FBC734860CB7 /* Preferences */ = {
+			isa = PBXGroup;
+			children = (
+				731863094EF948337DEBE99F /* PresentationPreferencesStore.swift */,
+			);
+			path = Preferences;
 			sourceTree = "<group>";
 		};
 		4A9FFC7CB98F952C0C6DF274 /* Alchemy */ = {
@@ -352,6 +366,14 @@
 			);
 			sourceTree = "<group>";
 		};
+		CB04CB532C4A1A3FE40BD221 /* Recipes */ = {
+			isa = PBXGroup;
+			children = (
+				E0F44AD58C0315286413FB56 /* IngredientGrouping.swift */,
+			);
+			path = Recipes;
+			sourceTree = "<group>";
+		};
 		DE71F72FD93EDA982DE9AD00 /* Explore */ = {
 			isa = PBXGroup;
 			children = (
@@ -436,9 +458,11 @@
 				LastUpgradeCheck = 2600;
 				TargetAttributes = {
 					29DA350CDD1B219BFC6C59C4 = {
+						DevelopmentTeam = "";
 						ProvisioningStyle = Automatic;
 					};
 					E23B76932BACA64C301BBF11 = {
+						DevelopmentTeam = "";
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -459,6 +483,7 @@
 				5057434D94B3E59B5A973CEA /* XCRemoteSwiftPackageReference "sentry-cocoa" */,
 				6226B36222665EA20B944668 /* XCRemoteSwiftPackageReference "supabase-swift" */,
 			);
+			preferredProjectObjectVersion = 77;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -507,9 +532,11 @@
 				51A364514E744B4193F2DA7B /* ImportMenu.swift in Sources */,
 				7C5265E1BA60220F06AB2E76 /* ImportView.swift in Sources */,
 				3886968BF9A5F45351E8C2F6 /* ImportViewModel.swift in Sources */,
+				D9AF6CEDFF7628D12ABADA46 /* IngredientGrouping.swift in Sources */,
 				C443599D1A92A4DE6694A063 /* NutritionGauge.swift in Sources */,
 				CF48116E892E4614B5C29EC1 /* OnboardingView.swift in Sources */,
 				254C6E7CC41F99739F9F995E /* PreferencesView.swift in Sources */,
+				7456EADBF0FC5CC8347117C9 /* PresentationPreferencesStore.swift in Sources */,
 				313B3438DB832ED7AA62728E /* PreviewData.swift in Sources */,
 				34F7879C77B2E95210379E05 /* ProfileMenu.swift in Sources */,
 				C9397C3E69FB3E3AEA3A458F /* Recipe.swift in Sources */,
@@ -683,7 +710,6 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Alchemy/Resources/Alchemy.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				DEVELOPMENT_TEAM = 56XVQ8RLW6;
 				INFOPLIST_FILE = Alchemy/Resources/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -699,7 +725,6 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = AlchemyShareExtension/AlchemyShareExtension.entitlements;
-				DEVELOPMENT_TEAM = 56XVQ8RLW6;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = AlchemyShareExtension/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -721,7 +746,6 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Alchemy/Resources/Alchemy.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				DEVELOPMENT_TEAM = 56XVQ8RLW6;
 				INFOPLIST_FILE = Alchemy/Resources/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -737,7 +761,6 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = AlchemyShareExtension/AlchemyShareExtension.entitlements;
-				DEVELOPMENT_TEAM = 56XVQ8RLW6;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = AlchemyShareExtension/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (

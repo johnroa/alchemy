@@ -17,8 +17,20 @@ const recipePayload: RecipePayload = {
   description: "Bright and quick chicken dinner.",
   servings: 2,
   ingredients: [
-    { name: "Chicken thighs", amount: 1, unit: "lb" },
-    { name: "Lemon", amount: 1, unit: "whole" },
+    {
+      name: "Chicken thighs",
+      amount: 1,
+      unit: "lb",
+      category: "Protein",
+      component: "Chicken",
+    },
+    {
+      name: "Lemon",
+      amount: 1,
+      unit: "whole",
+      category: "Produce",
+      component: "Sauce",
+    },
   ],
   steps: [
     { index: 1, instruction: "Sear the chicken." },
@@ -59,7 +71,13 @@ const candidateSetFixture = (): CandidateRecipeSet => ({
       recipe: {
         ...recipePayload,
         title: "Herby Rice",
-        ingredients: [{ name: "Rice", amount: 1, unit: "cup" }],
+        ingredients: [{
+          name: "Rice",
+          amount: 1,
+          unit: "cup",
+          category: "Pantry",
+          component: "Rice",
+        }],
         steps: [{ index: 1, instruction: "Cook the rice." }],
       },
     },

@@ -117,7 +117,7 @@ export const resolvePresentationOptions = (params: {
   const groupBy: GroupByPreference =
     groupCandidate === "category" || groupCandidate === "component" || groupCandidate === "flat"
       ? groupCandidate
-      : "flat";
+      : "component";
 
   const inlineCandidate = toBoolean(queryInlineMeasurements) ?? prefInline;
 

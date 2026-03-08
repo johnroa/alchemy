@@ -82,7 +82,7 @@ export type RecipeIngredientMentionRow = {
 
 export const defaultRecipeViewOptions: RecipeViewOptions = {
   units: "source",
-  groupBy: "flat",
+  groupBy: "component",
   inlineMeasurements: false,
 };
 

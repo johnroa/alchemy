@@ -18,6 +18,7 @@ struct TabShell: View {
     /// Consumed on appear to trigger the import flow.
     @Binding var pendingImportURL: URL?
 
+    @State private var presentationPreferencesStore = PresentationPreferencesStore()
     @State private var selectedTab: AppTab = .cookbook
     @State private var showPreferences = false
     @State private var showSettings = false
@@ -85,8 +86,10 @@ struct TabShell: View {
             SettingsView()
         }
         .task {
+            await presentationPreferencesStore.loadIfNeeded()
             ExploreFeedPreloader.shared.preload()
         }
+        .environment(presentationPreferencesStore)
     }
 }
 

@@ -7,6 +7,8 @@ import type {
   RecipePayload,
 } from "../../../_shared/types.ts";
 import { materializeRecipeVariant } from "../../lib/variant-materialization.ts";
+import { fetchCanonicalIngredientRows } from "../../lib/recipe-enrichment.ts";
+import { projectRecipePayloadForView } from "../../lib/recipe-persistence.ts";
 import type { RouteContext, VariantStatus } from "../shared.ts";
 import type { RecipesDeps } from "./types.ts";
 
@@ -100,18 +102,32 @@ export const handleVariantRoutes = async (
       viewOptions,
     );
 
+    const canonicalRows = await fetchCanonicalIngredientRows(
+      client,
+      variant.base_canonical_version_id ??
+        variantVersion.source_canonical_version_id ??
+        canonicalRecipe.version.version_id,
+    );
+    const projectedVariantPayload = projectRecipePayloadForView({
+      payload: payload as RecipePayload,
+      canonicalRows,
+      options: viewOptions,
+    });
+
     // Overlay variant payload fields onto the canonical recipe view.
-    // The variant payload has the same structure as recipe_versions.payload.
+    // The variant payload has the same structure as recipe_versions.payload,
+    // but still needs the same render-time projection as canonical reads.
     const variantRecipe = {
       ...canonicalRecipe,
-      description: (payload.description as string) ??
-        (payload.summary as string) ??
-        canonicalRecipe.description,
-      summary: (payload.summary as string) ??
-        (payload.description as string) ??
-        canonicalRecipe.summary,
-      ingredients: (payload.ingredients as JsonValue[]) ?? canonicalRecipe.ingredients,
-      steps: (payload.steps as JsonValue[]) ?? canonicalRecipe.steps,
+      description: projectedVariantPayload.description,
+      summary: projectedVariantPayload.summary,
+      ingredients: projectedVariantPayload.ingredients,
+      ingredient_groups: projectedVariantPayload.ingredient_groups,
+      steps: projectedVariantPayload.steps,
+      notes: projectedVariantPayload.notes,
+      pairings: projectedVariantPayload.pairings,
+      metadata: projectedVariantPayload.metadata,
+      emoji: projectedVariantPayload.emoji,
     };
 
     return respond(200, {

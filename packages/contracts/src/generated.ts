@@ -61,7 +61,7 @@ export interface paths {
                 query?: {
                     /** @description Response projection for ingredient and inline measurement units. */
                     units?: "source" | "metric" | "imperial";
-                    /** @description Optional ingredient grouping strategy for response rendering. */
+                    /** @description Optional ingredient grouping strategy for response rendering. Defaults to component when omitted. */
                     group_by?: "flat" | "category" | "component";
                     /** @description Whether to append inline measurements directly inside step instructions. */
                     inline_measurements?: boolean;
@@ -576,6 +576,7 @@ export interface paths {
             parameters: {
                 query?: {
                     units?: "source" | "metric" | "imperial";
+                    /** @description Optional ingredient grouping strategy for response rendering. Defaults to component when omitted. */
                     group_by?: "flat" | "category" | "component";
                     inline_measurements?: boolean;
                 };

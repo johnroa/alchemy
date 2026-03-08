@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Alchemy API",
-    "version": "3.7.2",
+    "version": "3.7.3",
     "description": "API contract for Alchemy — an AI-driven recipe creation and management platform.\nCovers the user-facing v1 API at api.cookwithalchemy.com and the admin API at admin.cookwithalchemy.com.\n"
   },
   "servers": [
@@ -94,7 +94,7 @@
                 "component"
               ]
             },
-            "description": "Optional ingredient grouping strategy for response rendering."
+            "description": "Optional ingredient grouping strategy for response rendering. Defaults to component when omitted."
           },
           {
             "in": "query",
@@ -649,7 +649,8 @@
                 "category",
                 "component"
               ]
-            }
+            },
+            "description": "Optional ingredient grouping strategy for response rendering. Defaults to component when omitted."
           },
           {
             "in": "query",

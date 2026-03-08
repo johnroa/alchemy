@@ -32,6 +32,7 @@ struct GenerateView: View {
     /// Set by commitToCookbook() to pass recipe info to CookbookView
     /// for skeleton rendering. Cleared when the commit API finishes.
     @Binding var pendingSave: PendingSave?
+    @Environment(PresentationPreferencesStore.self) private var presentationPreferencesStore
 
     // MARK: - UI State
 
@@ -310,7 +311,8 @@ struct GenerateView: View {
                     detail: component.recipe.asDisplayDetail(
                         title: component.title,
                         imageUrl: component.imageUrl,
-                        imageStatus: component.imageStatus
+                        imageStatus: component.imageStatus,
+                        ingredientGrouping: presentationPreferencesStore.ingredientGrouping
                     ),
                     sourceSurface: "chat",
                     sourceSessionId: chatSessionId,
@@ -1063,7 +1065,8 @@ extension RecipePayload {
     func asDisplayDetail(
         title: String? = nil,
         imageUrl: String? = nil,
-        imageStatus: String = "pending"
+        imageStatus: String = "pending",
+        ingredientGrouping: String = IngredientGroupingMode.defaultMode.rawValue
     ) -> RecipeDetail {
         RecipeDetail(
             id: "candidate-\(UUID().uuidString.prefix(8))",
@@ -1073,7 +1076,10 @@ extension RecipePayload {
             servings: self.servings ?? 4,
             ingredients: self.ingredients ?? [],
             steps: self.steps ?? [],
-            ingredientGroups: nil,
+            ingredientGroups: IngredientGrouping.groups(
+                for: self.ingredients ?? [],
+                preference: ingredientGrouping
+            ),
             notes: self.notes,
             pairings: self.pairings ?? [],
             metadata: self.metadata,

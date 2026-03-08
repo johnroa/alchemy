@@ -166,6 +166,7 @@ export type RecipePayload = {
     display_amount?: string;
     preparation?: string;
     category?: string;
+    component?: string | null;
   }>;
   steps: Array<{
     index: number;

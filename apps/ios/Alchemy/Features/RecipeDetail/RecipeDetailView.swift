@@ -374,33 +374,61 @@ struct RecipeDetailView: View {
                 .font(AlchemyTypography.caption)
                 .foregroundStyle(AlchemyColors.textSecondary)
 
-            VStack(spacing: 0) {
-                ForEach(recipe.ingredients) { ingredient in
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(ingredient.name)
-                                .font(AlchemyTypography.ingredientName)
-                                .foregroundStyle(AlchemyColors.textPrimary)
+            if let groups = recipe.ingredientGroups, groups.count > 1 {
+                VStack(alignment: .leading, spacing: AlchemySpacing.lg) {
+                    ForEach(Array(groups.enumerated()), id: \.offset) { index, group in
+                        VStack(alignment: .leading, spacing: AlchemySpacing.sm) {
+                            Text(group.label)
+                                .font(AlchemyTypography.captionBold)
+                                .foregroundStyle(AlchemyColors.textSecondary)
 
-                            if let prep = ingredient.preparation, !prep.isEmpty {
-                                Text(prep)
-                                    .font(AlchemyTypography.caption)
-                                    .foregroundStyle(AlchemyColors.textTertiary)
-                            }
+                            ingredientRows(group.ingredients)
                         }
 
-                        Spacer()
-
-                        Text(ingredient.displayQuantity)
-                            .font(AlchemyTypography.ingredientQuantity)
-                            .foregroundStyle(AlchemyColors.textPrimary)
+                        if index < groups.count - 1 {
+                            Divider().overlay(AlchemyColors.separator)
+                        }
                     }
-                    .padding(.vertical, AlchemySpacing.md)
+                }
+            } else {
+                ingredientRows(recipe.ingredients)
+            }
+        }
+    }
 
+    private func ingredientRows(_ ingredients: [APIIngredient]) -> some View {
+        VStack(spacing: 0) {
+            ForEach(Array(ingredients.enumerated()), id: \.offset) { index, ingredient in
+                ingredientRow(ingredient)
+
+                if index < ingredients.count - 1 {
                     Divider().overlay(AlchemyColors.separator)
                 }
             }
         }
+    }
+
+    private func ingredientRow(_ ingredient: APIIngredient) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(ingredient.name)
+                    .font(AlchemyTypography.ingredientName)
+                    .foregroundStyle(AlchemyColors.textPrimary)
+
+                if let prep = ingredient.preparation, !prep.isEmpty {
+                    Text(prep)
+                        .font(AlchemyTypography.caption)
+                        .foregroundStyle(AlchemyColors.textTertiary)
+                }
+            }
+
+            Spacer()
+
+            Text(ingredient.displayQuantity)
+                .font(AlchemyTypography.ingredientQuantity)
+                .foregroundStyle(AlchemyColors.textPrimary)
+        }
+        .padding(.vertical, AlchemySpacing.md)
     }
 
     // MARK: - Steps
