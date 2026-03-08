@@ -434,13 +434,19 @@ export const getPreferences = async (
 export const normalizePreferenceStringArray = (
   value: unknown,
 ): string[] | undefined => {
-  if (typeof value !== "string" && !Array.isArray(value) && value !== null) {
+  // null means "don't touch this field" (iOS sends null for fields it
+  // doesn't want to change). Only explicit [] means "clear the list."
+  // This distinction is critical: the iOS Save button sends null for
+  // AI-managed fields like dietary_restrictions, and we must NOT
+  // interpret that as "clear all restrictions."
+  if (value === null || value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "string" && !Array.isArray(value)) {
     return undefined;
   }
 
-  const rawValues: string[] = value === null
-    ? []
-    : typeof value === "string"
+  const rawValues: string[] = typeof value === "string"
     ? [value]
     : value.filter((item): item is string => typeof item === "string");
 
@@ -471,11 +477,11 @@ export const normalizePreferencePatch = (
   const patchObject = candidate as Record<string, unknown>;
   const patch: Partial<PreferenceContext> = {};
 
+  // null means "don't touch" — only explicit string updates free_form.
+  // An empty string clears it.
   if (typeof patchObject.free_form === "string") {
     const freeForm = patchObject.free_form.trim();
     patch.free_form = freeForm.length > 0 ? freeForm : null;
-  } else if (patchObject.free_form === null) {
-    patch.free_form = null;
   }
 
   const dietaryPreferences = normalizePreferenceStringArray(
@@ -514,11 +520,10 @@ export const normalizePreferencePatch = (
     patch.aversions = aversions;
   }
 
+  // null means "don't touch" — only explicit string updates cooking_for.
   if (typeof patchObject.cooking_for === "string") {
     const cookingFor = patchObject.cooking_for.trim();
     patch.cooking_for = cookingFor.length > 0 ? cookingFor : null;
-  } else if (patchObject.cooking_for === null) {
-    patch.cooking_for = null;
   }
 
   const maxDifficulty = Number(patchObject.max_difficulty);
