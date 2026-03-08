@@ -495,6 +495,10 @@ export const normalizeRecipeShape = (candidate: unknown): RecipePayload | null =
           ingredient.category.trim().length > 0
         ? ingredient.category.trim()
         : null;
+      const component = typeof ingredient.component === "string" &&
+          ingredient.component.trim().length > 0
+        ? ingredient.component.trim()
+        : null;
 
       return {
         name,
@@ -503,6 +507,7 @@ export const normalizeRecipeShape = (candidate: unknown): RecipePayload | null =
         ...(displayAmount ? { display_amount: displayAmount } : {}),
         ...(preparation ? { preparation } : {}),
         ...(category ? { category } : {}),
+        ...(component ? { component } : {}),
       };
     })
     .filter((ingredient): ingredient is RecipePayload["ingredients"][number] =>
