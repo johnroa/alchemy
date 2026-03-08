@@ -1,7 +1,4 @@
-import {
-  assert,
-  assertEquals,
-} from "jsr:@std/assert";
+import { assert, assertEquals } from "jsr:@std/assert";
 import {
   buildMatchedChipIds,
   buildSuggestedChips,
@@ -52,6 +49,34 @@ Deno.test("normalizeRecipeSemanticProfile dedupes descriptors by normalized id",
     confidence: 0.92,
     evidence: "steps stay simple",
   });
+});
+
+Deno.test("normalizeRecipeSemanticProfile canonicalizes discovery axis aliases", () => {
+  const profile = normalizeRecipeSemanticProfile({
+    descriptors: [
+      {
+        axis: "health-framing",
+        label: "Healthy Meal",
+        confidence: 0.88,
+      },
+      {
+        axis: "meal-context",
+        label: "Weeknight Dinner",
+        confidence: 0.9,
+      },
+      {
+        axis: "social-setting",
+        label: "Family Friendly",
+        confidence: 0.86,
+      },
+    ],
+  });
+
+  assert(profile);
+  assertEquals(
+    profile.descriptors.map((descriptor) => descriptor.axis),
+    ["health", "occasion", "social_setting"],
+  );
 });
 
 Deno.test("mergeSemanticProfiles keeps the highest-confidence descriptor for each id", () => {
@@ -150,6 +175,61 @@ Deno.test("buildSuggestedChips returns broad axis coverage before repeating an a
   );
 });
 
+Deno.test("buildSuggestedChips hides technical axes, dedupes labels, and humanizes clunky legacy labels", () => {
+  const items = [
+    {
+      item_id: "recipe-1",
+      profile: normalizeRecipeSemanticProfile({
+        descriptors: [
+          { axis: "diet-compatibility", label: "Vegetarian", confidence: 0.96 },
+          { axis: "cuisine", label: "Vegetarian", confidence: 0.75 },
+          { axis: "effort", label: "Medium Effort", confidence: 0.93 },
+          { axis: "health-framing", label: "Healthy Meal", confidence: 0.88 },
+          { axis: "meal-context", label: "Weeknight Dinner", confidence: 0.87 },
+          {
+            axis: "social-setting",
+            label: "Family Friendly",
+            confidence: 0.85,
+          },
+          { axis: "serving-style", label: "Burger Style", confidence: 0.84 },
+          { axis: "technique", label: "Pulsing", confidence: 1 },
+          {
+            axis: "equipment",
+            label: "Cast Iron Skillet Required",
+            confidence: 0.92,
+          },
+          { axis: "course", label: "Main", confidence: 0.9 },
+        ],
+      }),
+    },
+  ];
+
+  const chips = buildSuggestedChips({ items, maxChips: 8 });
+
+  assertEquals(
+    chips.map((chip) => chip.label),
+    [
+      "Vegetarian",
+      "Medium",
+      "Healthy",
+      "Weeknight Dinner",
+      "Family Friendly",
+      "Burger Style",
+    ],
+  );
+  assertEquals(
+    chips.map((chip) => chip.id),
+    [
+      "diet:vegetarian",
+      "effort:medium_effort",
+      "health:healthy_meal",
+      "occasion:weeknight_dinner",
+      "social_setting:family_friendly",
+      "serving_style:burger_style",
+    ],
+  );
+});
+
 Deno.test("buildMatchedChipIds returns only chips present on the effective profile", () => {
   const profile = normalizeRecipeSemanticProfile({
     descriptors: [
@@ -162,7 +242,11 @@ Deno.test("buildMatchedChipIds returns only chips present on the effective profi
     profile,
     chips: [
       { id: "occasion:weeknight", label: "Weeknight", matched_count: 2 },
-      { id: "health:healthy_&_quick", label: "Healthy & Quick", matched_count: 1 },
+      {
+        id: "health:healthy_&_quick",
+        label: "Healthy & Quick",
+        matched_count: 1,
+      },
       { id: "mood:comfort_food", label: "Comfort Food", matched_count: 3 },
     ],
   });

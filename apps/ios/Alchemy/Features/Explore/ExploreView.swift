@@ -166,7 +166,7 @@ struct ExploreView: View {
                         )
                     }
                 } label: {
-                    Text("For You")
+                    Text("FOR YOU")
                         .font(.system(size: 18, weight: selectedChipId == nil ? .bold : .regular))
                         .foregroundStyle(.white.opacity(selectedChipId == nil ? 1.0 : 0.5))
                         .shadow(color: .black.opacity(0.4), radius: 3)
@@ -199,7 +199,7 @@ struct ExploreView: View {
                             )
                         }
                     } label: {
-                        Text(chip.label)
+                        Text(chip.label.uppercased())
                             .font(.system(size: 18, weight: isSelected ? .bold : .regular))
                             .foregroundStyle(.white.opacity(isSelected ? 1.0 : 0.5))
                             .shadow(color: .black.opacity(0.4), radius: 3)

@@ -47,6 +47,94 @@ const titleCaseToken = (value: string): string =>
     .map((item) => item.charAt(0).toUpperCase() + item.slice(1))
     .join(" ");
 
+const HIDDEN_DISCOVERY_AXES = new Set([
+  "course",
+  "equipment",
+  "technique",
+]);
+
+const DISCOVERY_AXIS_PRIORITY = new Map<string, number>([
+  ["diet", 140],
+  ["effort", 136],
+  ["cuisine", 132],
+  ["health", 128],
+  ["occasion", 124],
+  ["time_shape", 122],
+  ["mood", 118],
+  ["social_setting", 116],
+  ["comfort", 114],
+  ["flavor", 110],
+  ["texture", 108],
+  ["serving_style", 104],
+  ["cleanup_burden", 100],
+  ["season", 96],
+]);
+
+const labelKey = (value: string): string => normalizeDelimitedToken(value, "");
+
+const isDiscoverySurfaceDescriptor = (
+  descriptor: RecipeSemanticDescriptor,
+): boolean => {
+  const label = normalizeLabel(descriptor.label);
+  return Boolean(
+    label &&
+      !HIDDEN_DISCOVERY_AXES.has(descriptor.axis),
+  );
+};
+
+const discoveryAxisPriority = (axis: string): number =>
+  DISCOVERY_AXIS_PRIORITY.get(axis) ?? 40;
+
+const displayLabelForDescriptor = (
+  descriptor: RecipeSemanticDescriptor,
+): string => {
+  const label = normalizeLabel(descriptor.label) ??
+    titleCaseToken(descriptor.key);
+
+  if (descriptor.axis === "effort") {
+    if (
+      descriptor.key.includes("easy") ||
+      label.toLocaleLowerCase().includes("easy")
+    ) {
+      return "Easy";
+    }
+    if (
+      descriptor.key.includes("medium") ||
+      label.toLocaleLowerCase().includes("medium")
+    ) {
+      return "Medium";
+    }
+    if (
+      descriptor.key.includes("complex") ||
+      descriptor.key.includes("advanced") ||
+      label.toLocaleLowerCase().includes("complex") ||
+      label.toLocaleLowerCase().includes("advanced")
+    ) {
+      return "Complex";
+    }
+  }
+
+  if (descriptor.axis === "health") {
+    if (
+      descriptor.key === "healthy_meal" || descriptor.key === "leans_healthy"
+    ) {
+      return "Healthy";
+    }
+  }
+
+  if (descriptor.axis === "season") {
+    if (
+      descriptor.key === "all_season" ||
+      descriptor.key === "all_seasons" ||
+      descriptor.key === "year_round"
+    ) {
+      return "Year-Round";
+    }
+  }
+
+  return label;
+};
+
 const descriptorFromAxisValue = (input: {
   axis: string;
   label: string;
@@ -230,13 +318,16 @@ export const buildSuggestedChips = (params: {
   for (const item of params.items) {
     const seenForItem = new Set<string>();
     for (const descriptor of item.profile?.descriptors ?? []) {
+      if (!isDiscoverySurfaceDescriptor(descriptor)) {
+        continue;
+      }
       if (seenForItem.has(descriptor.id)) {
         continue;
       }
       seenForItem.add(descriptor.id);
 
       const next = aggregate.get(descriptor.id) ?? {
-        label: descriptor.label,
+        label: displayLabelForDescriptor(descriptor),
         axis: descriptor.axis,
         matchedIds: new Set<string>(),
         confidenceTotal: 0,
@@ -279,6 +370,11 @@ export const buildSuggestedChips = (params: {
       }),
     }))
     .sort((left, right) => {
+      const leftPriority = discoveryAxisPriority(left.axis);
+      const rightPriority = discoveryAxisPriority(right.axis);
+      if (rightPriority !== leftPriority) {
+        return rightPriority - leftPriority;
+      }
       const leftTop = left.entries[0]?.chip.matched_count ?? 0;
       const rightTop = right.entries[0]?.chip.matched_count ?? 0;
       if (rightTop !== leftTop) {
@@ -288,6 +384,7 @@ export const buildSuggestedChips = (params: {
     });
 
   const result: SuggestedChip[] = [];
+  const seenLabels = new Set<string>();
   let cursor = 0;
 
   while (result.length < maxChips) {
@@ -298,7 +395,12 @@ export const buildSuggestedChips = (params: {
       if (!entry) {
         continue;
       }
+      const normalizedLabelKey = labelKey(entry.chip.label);
+      if (!normalizedLabelKey || seenLabels.has(normalizedLabelKey)) {
+        continue;
+      }
       result.push(entry.chip);
+      seenLabels.add(normalizedLabelKey);
       appended = true;
       if (result.length >= maxChips) {
         break;

@@ -52,9 +52,13 @@ const normalizeFoldedText = (
     return "";
   }
 
-  const allowedCharacters =
-    `a-z0-9\\s${escapeForCharacterClass(preserveCharacters)}`;
-  const sanitized = lowered.replace(new RegExp(`[^${allowedCharacters}]`, "g"), " ");
+  const allowedCharacters = `a-z0-9\\s${
+    escapeForCharacterClass(preserveCharacters)
+  }`;
+  const sanitized = lowered.replace(
+    new RegExp(`[^${allowedCharacters}]`, "g"),
+    " ",
+  );
   const collapsedWhitespace = sanitized.replace(/\s+/g, separator);
 
   if (!separator) {
@@ -79,6 +83,23 @@ const normalizeDelimitedToken = (
     preserveCharacters,
   });
 
+const SEMANTIC_AXIS_ALIASES = new Map<string, string>([
+  ["diet_compatibility", "diet"],
+  ["dietary", "diet"],
+  ["dietary_flags", "diet"],
+  ["health_framing", "health"],
+  ["health_flags", "health"],
+  ["meal_context", "occasion"],
+  ["occasion_tags", "occasion"],
+  ["seasonality", "season"],
+  ["social", "social_setting"],
+  ["social_context", "social_setting"],
+  ["social_setting", "social_setting"],
+  ["serving_style", "serving_style"],
+  ["flavor_profile", "flavor"],
+  ["time", "time_shape"],
+]);
+
 const normalizeLabel = (value: unknown): string | null => {
   if (typeof value !== "string") {
     return null;
@@ -100,8 +121,11 @@ export const normalizeSemanticAxis = (value: unknown): string | null => {
   if (!normalized) {
     return null;
   }
-  const token = normalizeDelimitedToken(normalized);
-  return token.length > 0 ? token : null;
+  const token = normalizeFoldedText(normalized, {
+    separator: "_",
+  });
+  const aliased = SEMANTIC_AXIS_ALIASES.get(token) ?? token;
+  return aliased.length > 0 ? aliased : null;
 };
 
 export const normalizeSemanticKey = (value: unknown): string | null => {

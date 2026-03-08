@@ -217,7 +217,7 @@ struct CookbookView: View {
                         ]
                     )
                 } label: {
-                    Text("All")
+                    Text("ALL")
                         .font(.system(size: 18, weight: activeFilter == nil ? .bold : .regular))
                         .foregroundStyle(AlchemyColors.textPrimary.opacity(activeFilter == nil ? 1.0 : 0.4))
                 }
@@ -240,7 +240,7 @@ struct CookbookView: View {
                             ]
                         )
                     } label: {
-                        Text(chip.label)
+                        Text(chip.label.uppercased())
                             .font(.system(size: 18, weight: isSelected ? .bold : .regular))
                             .foregroundStyle(AlchemyColors.textPrimary.opacity(isSelected ? 1.0 : 0.4))
                     }
