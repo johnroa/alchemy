@@ -1556,6 +1556,13 @@ export const orchestrateChatTurn = async (params: {
     thread_preference_overrides: nextThreadOverrides,
     // Persist the pending flag so the /generate endpoint can pick it up.
     generation_pending: generationDeferred ? true : undefined,
+    // Preserve session-level fields set at creation time. Without this,
+    // updateChatSessionLoopContext overwrites the full context JSONB and
+    // drops workflow/entry_surface/preference_editing_intent, breaking
+    // the preference-editing chat flow on every turn after the first.
+    workflow: params.sessionContext.workflow,
+    entry_surface: params.sessionContext.entry_surface,
+    preference_editing_intent: params.sessionContext.preference_editing_intent,
   };
 
   return {
