@@ -129,6 +129,21 @@ export type ChatCommittedCandidateRecord = {
   commit: ChatCommitSummary;
 };
 
+export type PreferenceEditingIntent = {
+  key: string;
+  title?: string | null;
+  prompt?: string | null;
+  summary?: string | null;
+  propagation?: "retroactive" | "forward_only" | "none" | null;
+  system_image?: string | null;
+};
+
+export type ChatLaunchContext = {
+  workflow?: "preferences" | null;
+  entry_surface?: string | null;
+  preference_editing_intent?: PreferenceEditingIntent | null;
+};
+
 export type ChatSessionContext = {
   preferences?: PreferenceContext;
   memory_snapshot?: Record<string, JsonValue>;
@@ -141,6 +156,9 @@ export type ChatSessionContext = {
   last_committed_candidate?: ChatCommittedCandidateRecord | null;
   pending_preference_conflict?: PendingPreferenceConflict | null;
   thread_preference_overrides?: ThreadPreferenceOverrides | null;
+  workflow?: "preferences" | null;
+  entry_surface?: string | null;
+  preference_editing_intent?: PreferenceEditingIntent | null;
 };
 
 export type ChatUiHints = {
@@ -330,6 +348,76 @@ export const extractChatContext = (value: unknown): ChatSessionContext => {
     thread_preference_overrides: normalizeThreadPreferenceOverrides(
       raw.thread_preference_overrides,
     ),
+    workflow: raw.workflow === "preferences" ? "preferences" : null,
+    entry_surface: typeof raw.entry_surface === "string" &&
+        raw.entry_surface.trim().length > 0
+      ? raw.entry_surface.trim()
+      : null,
+    preference_editing_intent: normalizePreferenceEditingIntent(
+      raw.preference_editing_intent,
+    ),
+  };
+};
+
+export const normalizePreferenceEditingIntent = (
+  value: unknown,
+): PreferenceEditingIntent | null => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const raw = value as Record<string, unknown>;
+  if (typeof raw.key !== "string" || raw.key.trim().length === 0) {
+    return null;
+  }
+
+  const propagation = raw.propagation === "retroactive" ||
+      raw.propagation === "forward_only" || raw.propagation === "none"
+    ? raw.propagation
+    : null;
+
+  return {
+    key: raw.key.trim(),
+    title: typeof raw.title === "string" && raw.title.trim().length > 0
+      ? raw.title.trim()
+      : null,
+    prompt: typeof raw.prompt === "string" && raw.prompt.trim().length > 0
+      ? raw.prompt.trim()
+      : null,
+    summary: typeof raw.summary === "string" && raw.summary.trim().length > 0
+      ? raw.summary.trim()
+      : null,
+    propagation,
+    system_image:
+      typeof raw.system_image === "string" && raw.system_image.trim().length > 0
+        ? raw.system_image.trim()
+        : null,
+  };
+};
+
+export const normalizeChatLaunchContext = (
+  value: unknown,
+): ChatLaunchContext | null => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const raw = value as Record<string, unknown>;
+  const workflow = raw.workflow === "preferences" ? "preferences" : null;
+  const entrySurface =
+    typeof raw.entry_surface === "string" && raw.entry_surface.trim().length > 0
+      ? raw.entry_surface.trim()
+      : null;
+  const preferenceEditingIntent = normalizePreferenceEditingIntent(
+    raw.preference_editing_intent,
+  );
+
+  if (!workflow && !entrySurface && !preferenceEditingIntent) {
+    return null;
+  }
+
+  return {
+    workflow,
+    entry_surface: entrySurface,
+    preference_editing_intent: preferenceEditingIntent,
   };
 };
 
