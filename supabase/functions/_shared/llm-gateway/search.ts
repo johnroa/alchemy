@@ -11,6 +11,8 @@ import { ApiError } from "../errors.ts";
 import { executeEmbeddingScope, executeScope } from "../llm-executor.ts";
 import type { JsonValue } from "../types.ts";
 import type {
+  ExploreForYouProfileEnvelope,
+  ExploreForYouRankEnvelope,
   ModelOverrideMap,
   RecipeSearchEmbedding,
   RecipeSearchInterpretationEnvelope,
@@ -191,6 +193,123 @@ export async function rerankRecipeSearch(params: {
       "error",
       {
         task: "recipe_search_rerank_v1",
+        error_code: errorCode,
+      },
+      accum,
+    );
+    throw error;
+  }
+}
+
+export async function buildExploreForYouProfile(params: {
+  client: SupabaseClient;
+  userId: string;
+  requestId: string;
+  context: Record<string, JsonValue>;
+  modelOverrides?: ModelOverrideMap;
+}): Promise<ExploreForYouProfileEnvelope> {
+  const startedAt = Date.now();
+  const accum: TokenAccum = { input: 0, output: 0, costUsd: 0 };
+
+  try {
+    const { result, inputTokens, outputTokens, config } = await executeScope<
+      ExploreForYouProfileEnvelope
+    >({
+      client: params.client,
+      scope: "explore_for_you_profile",
+      userInput: params.context,
+      modelOverride: params.modelOverrides?.explore_for_you_profile,
+    });
+    addTokens(accum, inputTokens, outputTokens, config);
+
+    await logLlmEvent(
+      params.client,
+      params.userId,
+      params.requestId,
+      "explore_for_you_profile",
+      Date.now() - startedAt,
+      "ok",
+      { task: "explore_for_you_profile_v1" },
+      accum,
+    );
+
+    return result;
+  } catch (error) {
+    const errorCode = error instanceof ApiError
+      ? error.code
+      : "unknown_error";
+    await logLlmEvent(
+      params.client,
+      params.userId,
+      params.requestId,
+      "explore_for_you_profile",
+      Date.now() - startedAt,
+      "error",
+      {
+        task: "explore_for_you_profile_v1",
+        error_code: errorCode,
+      },
+      accum,
+    );
+    throw error;
+  }
+}
+
+export async function rerankExploreForYou(params: {
+  client: SupabaseClient;
+  userId: string;
+  requestId: string;
+  context: Record<string, JsonValue>;
+  timeoutMs: number;
+  modelOverrides?: ModelOverrideMap;
+}): Promise<ExploreForYouRankEnvelope> {
+  const startedAt = Date.now();
+  const accum: TokenAccum = { input: 0, output: 0, costUsd: 0 };
+
+  try {
+    const { result, inputTokens, outputTokens, config } = await executeScope<
+      ExploreForYouRankEnvelope
+    >({
+      client: params.client,
+      scope: "explore_for_you_rank",
+      userInput: params.context,
+      modelOverride: params.modelOverrides?.explore_for_you_rank,
+      modelConfigOverride: {
+        timeout_ms: params.timeoutMs,
+      },
+    });
+    addTokens(accum, inputTokens, outputTokens, config);
+
+    await logLlmEvent(
+      params.client,
+      params.userId,
+      params.requestId,
+      "explore_for_you_rank",
+      Date.now() - startedAt,
+      "ok",
+      {
+        task: "explore_for_you_rank_v1",
+        candidate_count: Array.isArray(params.context.candidates)
+          ? params.context.candidates.length
+          : null,
+      },
+      accum,
+    );
+
+    return result;
+  } catch (error) {
+    const errorCode = error instanceof ApiError
+      ? error.code
+      : "unknown_error";
+    await logLlmEvent(
+      params.client,
+      params.userId,
+      params.requestId,
+      "explore_for_you_rank",
+      Date.now() - startedAt,
+      "error",
+      {
+        task: "explore_for_you_rank_v1",
         error_code: errorCode,
       },
       accum,

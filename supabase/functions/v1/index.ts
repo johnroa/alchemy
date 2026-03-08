@@ -26,6 +26,7 @@ import {
 } from "./image-simulations.ts";
 import {
   backfillRecipeSearchDocuments,
+  getExploreForYouFeed,
   searchRecipes,
 } from "./recipe-search.ts";
 import {
@@ -449,6 +450,8 @@ Deno.serve(async (request) => {
     const recipeResponse = await handleRecipeRoutes(routeContext, {
       parseUuid,
       getPreferences,
+      getMemorySnapshot,
+      getActiveMemories,
       resolvePresentationOptions,
       fetchRecipeView,
       fetchChatMessages,
@@ -472,6 +475,22 @@ Deno.serve(async (request) => {
           cursor: input.cursor,
           limit: input.limit,
           sortBy: input.sortBy,
+          modelOverrides: input.modelOverrides,
+        });
+      },
+      getExploreForYouFeed: async (input) => {
+        return await getExploreForYouFeed({
+          serviceClient: input.serviceClient,
+          userId: input.userId,
+          requestId: input.requestId,
+          cursor: input.cursor,
+          limit: input.limit,
+          presetId: input.presetId,
+          preferences: input.preferences,
+          memorySnapshot: input.memorySnapshot,
+          activeMemories: input.activeMemories,
+          safetyExclusions: input.safetyExclusions,
+          modelOverrides: input.modelOverrides,
         });
       },
       toJsonValue,

@@ -11,6 +11,9 @@ export type {
   RecipeSearchIntent,
   RecipeSearchResponse,
   InternalRecipeSearchResponse,
+  ForYouFeedResponse,
+  InternalForYouFeedResponse,
+  ForYouProfileState,
   SearchSafetyExclusions,
   RecipeSearchSortBy,
 } from "./types.ts";
@@ -28,3 +31,4 @@ export {
 } from "./index-management.ts";
 
 export { searchRecipes } from "./query.ts";
+export { getExploreForYouFeed } from "./for-you.ts";

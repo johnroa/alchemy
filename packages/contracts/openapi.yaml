@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Alchemy API
-  version: 3.6.0
+  version: 3.7.0
   description: |
     API contract for Alchemy — an AI-driven recipe creation and management platform.
     Covers the user-facing v1 API at api.cookwithalchemy.com and the admin API at admin.cookwithalchemy.com.
@@ -173,10 +173,10 @@ paths:
           $ref: '#/components/responses/ErrorResponse'
   /recipes/search:
     post:
-      summary: Search public recipes for Explore and shared retrieval
+      summary: Search public recipes for explicit discovery and shared retrieval
       description: |
-        Canonical discovery endpoint for recipe search and Explore feed pagination.
-        When both `query` and `preset_id` are omitted or blank, this returns the Explore feed using the same cursor-backed search session infrastructure.
+        Explicit recipe search endpoint for typed discovery and shared retrieval flows.
+        Blank Explore feed usage is deprecated in favor of `/recipes/explore/for-you`.
       requestBody:
         required: true
         content:
@@ -190,6 +190,29 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/RecipeSearchResponse'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /recipes/explore/for-you:
+    post:
+      summary: Personalized Explore feed for the authenticated user
+      description: |
+        Returns the personalized Explore `For You` feed. This feed uses a cached
+        user taste profile, hybrid candidate retrieval over public recipe search
+        documents, and a dedicated personalized rerank. Explore preset filters
+        remain personalized within the narrowed candidate set.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ForYouFeedRequest'
+      responses:
+        '200':
+          description: Personalized Explore feed response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ForYouFeedResponse'
         default:
           $ref: '#/components/responses/ErrorResponse'
   /recipes/{id}/save:
@@ -1038,6 +1061,8 @@ paths:
               properties:
                 message:
                   type: string
+                launch_context:
+                  $ref: '#/components/schemas/ChatLaunchContext'
       responses:
         '200':
           description: Chat session created
@@ -2129,6 +2154,12 @@ components:
           format: double
           minimum: 0
           description: Recent weighted discovery score used to identify recipes gaining momentum.
+        why_tags:
+          type: array
+          maxItems: 4
+          items:
+            type: string
+          description: Short personalized explanation tags for Explore cards.
     RecipeSearchRequest:
       type: object
       properties:
@@ -2146,7 +2177,18 @@ components:
           type: string
           enum: [recent, popular, trending]
           default: recent
-          description: Sort order for the Explore feed. Only applies when query and preset_id are empty.
+          description: Legacy sort order for blank Explore feeds. Deprecated for the Explore client.
+    ForYouFeedRequest:
+      type: object
+      properties:
+        cursor:
+          type: string
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 20
+        preset_id:
+          type: [string, 'null']
     RecipeSearchNoMatch:
       type: object
       required: [code, message, suggested_action]
@@ -2167,6 +2209,31 @@ components:
         applied_context:
           type: string
           enum: [all, preset, query]
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/RecipePreview'
+        next_cursor:
+          type: [string, 'null']
+        no_match:
+          oneOf:
+            - $ref: '#/components/schemas/RecipeSearchNoMatch'
+            - type: 'null'
+    ForYouFeedResponse:
+      type: object
+      required: [feed_id, applied_context, profile_state, algorithm_version, items, next_cursor, no_match]
+      properties:
+        feed_id:
+          type: string
+          format: uuid
+        applied_context:
+          type: string
+          enum: [for_you, preset]
+        profile_state:
+          type: string
+          enum: [cold, warm, established]
+        algorithm_version:
+          type: string
         items:
           type: array
           items:
@@ -2473,6 +2540,21 @@ components:
         presentation_preferences:
           type: object
           additionalProperties: true
+        extended_preferences:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ExtendedPreferenceEntry'
+    ExtendedPreferenceEntry:
+      type: object
+      required: [values]
+      properties:
+        values:
+          type: array
+          items:
+            type: string
+        propagation:
+          type: string
+          enum: [retroactive, forward_only, none]
     AssistantReply:
       type: object
       required: [text]
@@ -2546,6 +2628,33 @@ components:
     ChatLoopState:
       type: string
       enum: [ideation, candidate_presented, iterating]
+    PreferenceEditingIntent:
+      type: object
+      required: [key]
+      properties:
+        key:
+          type: string
+        title:
+          type: string
+        prompt:
+          type: string
+        summary:
+          type: string
+        propagation:
+          type: string
+          enum: [retroactive, forward_only, none]
+        system_image:
+          type: string
+    ChatLaunchContext:
+      type: object
+      properties:
+        workflow:
+          type: string
+          enum: [preferences]
+        entry_surface:
+          type: string
+        preference_editing_intent:
+          $ref: '#/components/schemas/PreferenceEditingIntent'
     ChatResponseContext:
       type: object
       properties:
@@ -2988,6 +3097,12 @@ components:
         source_surface:
           type: [string, 'null']
           description: Optional originating UI surface for first-party attribution (for example explore or cookbook).
+        source_session_id:
+          type: [string, 'null']
+          description: Optional upstream feed or session identifier for attribution and downstream cook joins.
+        algorithm_version:
+          type: [string, 'null']
+          description: Optional Explore algorithm version when the save originated from For You.
     BehaviorTelemetryEvent:
       type: object
       required: [event_id, event_type]
@@ -3003,8 +3118,11 @@ components:
             - auth_completed
             - onboarding_started
             - onboarding_completed
+            - explore_feed_served
             - explore_impression
             - explore_opened_recipe
+            - explore_skipped_recipe
+            - explore_hidden_recipe
             - explore_saved_recipe
             - chat_session_started
             - chat_turn_submitted

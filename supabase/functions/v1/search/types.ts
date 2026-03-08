@@ -7,8 +7,9 @@ import type { RecipePreview } from "../recipe-preview.ts";
 // ---------------------------------------------------------------------------
 
 export type RecipeSearchSurface = "explore" | "chat";
-export type RecipeSearchAppliedContext = "all" | "preset" | "query";
+export type RecipeSearchAppliedContext = "all" | "preset" | "query" | "for_you";
 export type RecipeSearchDifficulty = "easy" | "medium" | "complex";
+export type ForYouProfileState = "cold" | "warm" | "established";
 
 export type RecipeSearchCard = RecipePreview;
 
@@ -50,6 +51,25 @@ export type RecipeSearchResponse = {
   items: RecipeSearchCard[];
   next_cursor: string | null;
   no_match: RecipeSearchNoMatch | null;
+};
+
+export type ForYouFeedResponse = {
+  feed_id: string;
+  applied_context: "for_you" | "preset";
+  profile_state: ForYouProfileState;
+  algorithm_version: string;
+  items: RecipeSearchCard[];
+  next_cursor: string | null;
+  no_match: RecipeSearchNoMatch | null;
+};
+
+export type InternalForYouFeedResponse = ForYouFeedResponse & {
+  internal: {
+    rerank_used: boolean;
+    candidate_count: number;
+    fallback_path: string | null;
+    rationale_tags_by_recipe: Record<string, string[]>;
+  };
 };
 
 export type InternalRecipeSearchResponse = RecipeSearchResponse & {
@@ -94,6 +114,9 @@ export type RecipeSearchSessionRow = {
   snapshot_cutoff_indexed_at: string;
   page1_promoted_recipe_ids: string[] | null;
   hybrid_items: JsonValue;
+  algorithm_version: string | null;
+  profile_state: ForYouProfileState | null;
+  rationale_tags_by_recipe: JsonValue;
   expires_at: string;
 };
 
@@ -163,6 +186,37 @@ export type SearchSessionCreateInput = {
   snapshotCutoffIndexedAt: string;
   page1PromotedRecipeIds?: string[];
   hybridItems?: RecipeSearchCard[];
+  algorithmVersion?: string | null;
+  profileState?: ForYouProfileState | null;
+  rationaleTagsByRecipe?: Record<string, string[]>;
+};
+
+export type UserTasteProfileRow = {
+  user_id: string;
+  profile_state: ForYouProfileState;
+  algorithm_version: string;
+  retrieval_text: string;
+  retrieval_embedding: string | null;
+  profile_json: JsonValue;
+  signal_summary: JsonValue;
+  source_event_watermark: string | null;
+  last_built_at: string;
+};
+
+export type ExploreAlgorithmVersionRow = {
+  version: string;
+  status: "draft" | "active" | "retired";
+  label: string;
+  notes: string | null;
+  profile_scope: string;
+  profile_scope_version: number;
+  rank_scope: string;
+  rank_scope_version: number;
+  novelty_policy: string;
+  config: JsonValue;
+  is_active: boolean;
+  activated_at: string | null;
+  retired_at: string | null;
 };
 
 // ---------------------------------------------------------------------------

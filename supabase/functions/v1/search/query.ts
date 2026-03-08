@@ -6,21 +6,14 @@ import type {
   AllFeedCursor,
   InternalRecipeSearchResponse,
   RecipeSearchAppliedContext,
-  RecipeSearchCard,
   RecipeSearchConversationContext,
   RecipeSearchIntent,
-  RecipeSearchResponse,
-  RecipeSearchSessionRow,
   RecipeSearchSortBy,
   RecipeSearchSurface,
   SearchSafetyExclusions,
-  SearchSessionCreateInput,
-  SearchRpcRow,
 } from "./types.ts";
 import {
-  HYBRID_CANDIDATE_LIMIT,
   PAGE1_RERANK_LIMIT,
-  SEARCH_SESSION_TTL_MS,
 } from "./types.ts";
 import {
   buildNoMatch,
@@ -29,8 +22,6 @@ import {
   derivePresetText,
   encodeSearchCursor,
   filterSessionItems,
-  mapRpcRowToCard,
-  mergeUnique,
   normalizeRerankResult,
   normalizeSearchIntent,
   normalizeSearchText,
@@ -38,274 +29,18 @@ import {
   serializeSearchCard,
   serializeVector,
 } from "./filters.ts";
-
-// ---------------------------------------------------------------------------
-// Session management — create, fetch, log
-// ---------------------------------------------------------------------------
-
-const createSearchSession = async (
-  params: SearchSessionCreateInput,
-): Promise<string> => {
-  const expiresAt = new Date(Date.now() + SEARCH_SESSION_TTL_MS).toISOString();
-  const { data, error } = await params.serviceClient
-    .from("recipe_search_sessions")
-    .insert({
-      owner_user_id: params.userId,
-      surface: params.surface,
-      applied_context: params.appliedContext,
-      normalized_input: params.normalizedInput,
-      preset_id: params.presetId,
-      interpreted_intent: params.interpretedIntent
-        ? (params.interpretedIntent as unknown as JsonValue)
-        : {},
-      query_embedding: params.queryEmbedding,
-      snapshot_cutoff_indexed_at: params.snapshotCutoffIndexedAt,
-      page1_promoted_recipe_ids: params.page1PromotedRecipeIds ?? [],
-      hybrid_items: (params.hybridItems ?? []).map(serializeSearchCard),
-      expires_at: expiresAt,
-    })
-    .select(
-      "id",
-    )
-    .single();
-
-  if (error || !data?.id) {
-    throw new ApiError(
-      500,
-      "recipe_search_session_create_failed",
-      "Could not create search session",
-      error?.message,
-    );
-  }
-
-  return data.id;
-};
-
-const fetchSearchSession = async (params: {
-  serviceClient: SupabaseClient;
-  userId: string;
-  searchId: string;
-}): Promise<RecipeSearchSessionRow> => {
-  const { data, error } = await params.serviceClient
-    .from("recipe_search_sessions")
-    .select(
-      "id,owner_user_id,surface,applied_context,normalized_input,preset_id,interpreted_intent,query_embedding,snapshot_cutoff_indexed_at,page1_promoted_recipe_ids,hybrid_items,expires_at",
-    )
-    .eq("id", params.searchId)
-    .eq("owner_user_id", params.userId)
-    .maybeSingle();
-
-  if (error || !data) {
-    throw new ApiError(
-      404,
-      "recipe_search_session_not_found",
-      "Search session was not found",
-      error?.message,
-    );
-  }
-
-  if (new Date(data.expires_at).getTime() < Date.now()) {
-    throw new ApiError(
-      410,
-      "recipe_search_session_expired",
-      "Search session has expired",
-    );
-  }
-
-  return data as RecipeSearchSessionRow;
-};
-
-const logSearchEvent = async (params: {
-  serviceClient: SupabaseClient;
-  userId: string;
-  requestId: string;
-  searchId: string;
-  surface: RecipeSearchSurface;
-  appliedContext: RecipeSearchAppliedContext;
-  normalizedInput: string | null;
-  latencyMs: number;
-  candidateCount: number;
-  rerankUsed: boolean;
-  noMatch: boolean;
-}): Promise<void> => {
-  const { error } = await params.serviceClient.from("events").insert({
-    user_id: params.userId,
-    event_type: "recipe_search",
-    request_id: params.requestId,
-    latency_ms: params.latencyMs,
-    event_payload: {
-      search_id: params.searchId,
-      surface: params.surface,
-      applied_context: params.appliedContext,
-      normalized_input: params.normalizedInput,
-      candidate_count: params.candidateCount,
-      rerank_used: params.rerankUsed,
-      no_match: params.noMatch,
-    },
-  });
-
-  if (error) {
-    console.error("recipe_search_event_failed", error);
-  }
-};
-
-// ---------------------------------------------------------------------------
-// Feed / candidate fetching
-// ---------------------------------------------------------------------------
-
-const fetchAllFeedPage = async (params: {
-  serviceClient: SupabaseClient;
-  searchId: string;
-  surface: RecipeSearchSurface;
-  snapshotCutoffIndexedAt: string;
-  limit: number;
-  cursor: AllFeedCursor | null;
-  safetyExclusions?: SearchSafetyExclusions;
-  sortBy?: RecipeSearchSortBy;
-}): Promise<Pick<RecipeSearchResponse, "items" | "next_cursor" | "no_match">> => {
-  const { data, error } = await params.serviceClient.rpc(
-    "list_recipe_search_documents",
-    {
-      p_snapshot_cutoff_indexed_at: params.snapshotCutoffIndexedAt,
-      p_explore_only: params.surface === "explore",
-      p_limit: params.limit + 1,
-      p_cursor_indexed_at: params.cursor?.last_indexed_at ?? null,
-      p_cursor_recipe_id: params.cursor?.last_recipe_id ?? null,
-      p_exclude_ingredient_names:
-        params.safetyExclusions?.excludeIngredients ?? [],
-      p_require_diet_tags: params.safetyExclusions?.requireDietTags ?? [],
-      p_sort_by: params.sortBy ?? "recent",
-    },
-  );
-
-  if (error) {
-    throw new ApiError(
-      500,
-      "recipe_search_all_feed_failed",
-      "Could not load the explore feed",
-      error.message,
-    );
-  }
-
-  const rows = Array.isArray(data) ? data as SearchRpcRow[] : [];
-  const pageRows = rows.slice(0, params.limit);
-  const items = pageRows.map(mapRpcRowToCard);
-  const lastRow = pageRows[pageRows.length - 1];
-  const nextCursor = rows.length > params.limit && lastRow
-    ? encodeSearchCursor({
-      v: 1,
-      kind: "all",
-      search_id: params.searchId,
-      last_indexed_at: lastRow.indexed_at,
-      last_recipe_id: lastRow.recipe_id,
-    })
-    : null;
-
-  return {
-    items,
-    next_cursor: nextCursor,
-    no_match: items.length === 0 ? buildNoMatch("all") : null,
-  };
-};
-
-const fetchHybridCandidates = async (params: {
-  serviceClient: SupabaseClient;
-  surface: RecipeSearchSurface;
-  snapshotCutoffIndexedAt: string;
-  intent: RecipeSearchIntent;
-  embeddingVector: number[];
-  safetyExclusions?: SearchSafetyExclusions;
-}): Promise<RecipeSearchCard[]> => {
-  // Merge user's safety exclusions with the query-derived hard filters.
-  // Safety exclusions come from stored user preferences (allergies,
-  // dietary restrictions) and must always apply regardless of what the
-  // user typed in the search query.
-  const mergedExcludeIngredients = mergeUnique(
-    params.intent.hard_filters.exclude_ingredients,
-    params.safetyExclusions?.excludeIngredients ?? [],
-  );
-
-  const { data, error } = await params.serviceClient.rpc(
-    "hybrid_search_recipe_documents",
-    {
-      p_query_text: params.intent.normalized_query,
-      p_query_embedding: serializeVector(params.embeddingVector),
-      p_snapshot_cutoff_indexed_at: params.snapshotCutoffIndexedAt,
-      p_explore_only: params.surface === "explore",
-      p_limit: HYBRID_CANDIDATE_LIMIT,
-      p_cuisine_tags: params.intent.hard_filters.cuisines,
-      p_diet_tags: params.intent.hard_filters.diet_tags,
-      p_technique_tags: params.intent.hard_filters.techniques,
-      p_exclude_ingredient_names: mergedExcludeIngredients,
-      p_max_time_minutes: params.intent.hard_filters.max_time_minutes,
-      p_max_difficulty: params.intent.hard_filters.max_difficulty,
-    },
-  );
-
-  if (error) {
-    throw new ApiError(
-      500,
-      "recipe_search_hybrid_failed",
-      "Could not load recipe search candidates",
-      error.message,
-    );
-  }
-
-  return Array.isArray(data)
-    ? (data as SearchRpcRow[]).map(mapRpcRowToCard)
-    : [];
-};
-
-// ---------------------------------------------------------------------------
-// Query-specific helpers
-// ---------------------------------------------------------------------------
-
-const buildInterpretSearchContext = (params: {
-  surface: RecipeSearchSurface;
-  appliedContext: RecipeSearchAppliedContext;
-  normalizedInput: string;
-  presetId: string | null;
-  conversationContext?: RecipeSearchConversationContext;
-}): Record<string, JsonValue> => {
-  return {
-    surface: params.surface,
-    applied_context: params.appliedContext,
-    normalized_input: params.normalizedInput,
-    preset_id: params.presetId,
-    latest_user_message: params.conversationContext?.latest_user_message ?? null,
-    thread: params.conversationContext?.thread as unknown as JsonValue ?? null,
-    preferences: params.conversationContext?.preferences ?? null,
-    selected_memories: params.conversationContext?.selected_memories ?? null,
-    active_recipe: params.conversationContext?.active_recipe ?? null,
-    candidate_recipe_set: params.conversationContext?.candidate_recipe_set ??
-      null,
-  };
-};
-
-const paginateSessionItems = (params: {
-  searchId: string;
-  items: RecipeSearchCard[];
-  promotedRecipeIds: string[];
-  offset: number;
-  limit: number;
-}): Pick<RecipeSearchResponse, "items" | "next_cursor" | "no_match"> => {
-  const remainingItems = filterSessionItems(params.items, params.promotedRecipeIds);
-  const pageItems = remainingItems.slice(params.offset, params.offset + params.limit);
-  const nextCursor = remainingItems.length > params.offset + params.limit
-    ? encodeSearchCursor({
-      v: 1,
-      kind: "session",
-      search_id: params.searchId,
-      offset: params.offset + params.limit,
-    })
-    : null;
-
-  return {
-    items: pageItems,
-    next_cursor: nextCursor,
-    no_match: pageItems.length === 0 ? buildNoMatch("query") : null,
-  };
-};
+import {
+  applyRationaleTagsToCards,
+  createSearchSession,
+  fetchSearchSession,
+  logRecipeSearchEvent,
+  paginateSessionItems,
+} from "./session-store.ts";
+import {
+  buildInterpretSearchContext,
+  fetchAllFeedPage,
+  fetchHybridCandidates,
+} from "./retrieval.ts";
 
 // ---------------------------------------------------------------------------
 // Main search entry point
@@ -342,7 +77,17 @@ export const searchRecipes = async (params: {
       userId: params.userId,
       searchId: decodedCursor.search_id,
     });
-    const items = normalizeStoredCards(session.hybrid_items);
+    const rationaleTagsByRecipe = (
+      typeof session.rationale_tags_by_recipe === "object" &&
+        session.rationale_tags_by_recipe !== null &&
+        !Array.isArray(session.rationale_tags_by_recipe)
+    )
+      ? session.rationale_tags_by_recipe as Record<string, string[]>
+      : {};
+    const items = applyRationaleTagsToCards(
+      normalizeStoredCards(session.hybrid_items),
+      rationaleTagsByRecipe,
+    );
     const promotedRecipeIds = Array.isArray(session.page1_promoted_recipe_ids)
       ? session.page1_promoted_recipe_ids
       : [];
@@ -352,9 +97,10 @@ export const searchRecipes = async (params: {
       promotedRecipeIds,
       offset: decodedCursor.offset,
       limit,
+      noMatchContext: session.applied_context,
     });
 
-    await logSearchEvent({
+    await logRecipeSearchEvent({
       serviceClient: params.serviceClient,
       userId: params.userId,
       requestId: params.requestId,
@@ -382,7 +128,7 @@ export const searchRecipes = async (params: {
         }),
         rerank_used: promotedRecipeIds.length > 0,
         candidate_count: items.length,
-        rationale_tags_by_recipe: {},
+        rationale_tags_by_recipe: rationaleTagsByRecipe,
       },
     };
   }
@@ -404,7 +150,7 @@ export const searchRecipes = async (params: {
       sortBy: params.sortBy,
     });
 
-    await logSearchEvent({
+    await logRecipeSearchEvent({
       serviceClient: params.serviceClient,
       userId: params.userId,
       requestId: params.requestId,
@@ -470,7 +216,7 @@ export const searchRecipes = async (params: {
       sortBy: params.sortBy,
     });
 
-    await logSearchEvent({
+    await logRecipeSearchEvent({
       serviceClient: params.serviceClient,
       userId: params.userId,
       requestId: params.requestId,
@@ -591,7 +337,7 @@ export const searchRecipes = async (params: {
     : null;
   const noMatch = hybridItems.length === 0 ? buildNoMatch(appliedContext) : null;
 
-  await logSearchEvent({
+  await logRecipeSearchEvent({
     serviceClient: params.serviceClient,
     userId: params.userId,
     requestId: params.requestId,

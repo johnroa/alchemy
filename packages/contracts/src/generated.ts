@@ -189,9 +189,9 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Search public recipes for Explore and shared retrieval
-         * @description Canonical discovery endpoint for recipe search and Explore feed pagination.
-         *     When both `query` and `preset_id` are omitted or blank, this returns the Explore feed using the same cursor-backed search session infrastructure.
+         * Search public recipes for explicit discovery and shared retrieval
+         * @description Explicit recipe search endpoint for typed discovery and shared retrieval flows.
+         *     Blank Explore feed usage is deprecated in favor of `/recipes/explore/for-you`.
          */
         post: {
             parameters: {
@@ -213,6 +213,53 @@ export interface paths {
                     };
                     content: {
                         "application/json": components["schemas"]["RecipeSearchResponse"];
+                    };
+                };
+                default: components["responses"]["ErrorResponse"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/recipes/explore/for-you": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Personalized Explore feed for the authenticated user
+         * @description Returns the personalized Explore `For You` feed. This feed uses a cached
+         *     user taste profile, hybrid candidate retrieval over public recipe search
+         *     documents, and a dedicated personalized rerank. Explore preset filters
+         *     remain personalized within the narrowed candidate set.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["ForYouFeedRequest"];
+                };
+            };
+            responses: {
+                /** @description Personalized Explore feed response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ForYouFeedResponse"];
                     };
                 };
                 default: components["responses"]["ErrorResponse"];
@@ -1574,6 +1621,7 @@ export interface paths {
                 content: {
                     "application/json": {
                         message: string;
+                        launch_context?: components["schemas"]["ChatLaunchContext"];
                     };
                 };
             };
@@ -2345,6 +2393,8 @@ export interface components {
              * @description Recent weighted discovery score used to identify recipes gaining momentum.
              */
             trending_score?: number;
+            /** @description Short personalized explanation tags for Explore cards. */
+            why_tags?: string[];
         };
         RecipeSearchRequest: {
             query?: string;
@@ -2352,11 +2402,16 @@ export interface components {
             cursor?: string;
             limit?: number;
             /**
-             * @description Sort order for the Explore feed. Only applies when query and preset_id are empty.
+             * @description Legacy sort order for blank Explore feeds. Deprecated for the Explore client.
              * @default recent
              * @enum {string}
              */
             sort_by: "recent" | "popular" | "trending";
+        };
+        ForYouFeedRequest: {
+            cursor?: string;
+            limit?: number;
+            preset_id?: string | null;
         };
         RecipeSearchNoMatch: {
             code: string;
@@ -2368,6 +2423,18 @@ export interface components {
             search_id: string;
             /** @enum {string} */
             applied_context: "all" | "preset" | "query";
+            items: components["schemas"]["RecipePreview"][];
+            next_cursor: string | null;
+            no_match: components["schemas"]["RecipeSearchNoMatch"] | null;
+        };
+        ForYouFeedResponse: {
+            /** Format: uuid */
+            feed_id: string;
+            /** @enum {string} */
+            applied_context: "for_you" | "preset";
+            /** @enum {string} */
+            profile_state: "cold" | "warm" | "established";
+            algorithm_version: string;
             items: components["schemas"]["RecipePreview"][];
             next_cursor: string | null;
             no_match: components["schemas"]["RecipeSearchNoMatch"] | null;
@@ -2522,6 +2589,14 @@ export interface components {
             presentation_preferences?: {
                 [key: string]: unknown;
             };
+            extended_preferences?: {
+                [key: string]: components["schemas"]["ExtendedPreferenceEntry"];
+            };
+        };
+        ExtendedPreferenceEntry: {
+            values: string[];
+            /** @enum {string} */
+            propagation?: "retroactive" | "forward_only" | "none";
         };
         AssistantReply: {
             text: string;
@@ -2561,6 +2636,21 @@ export interface components {
         };
         /** @enum {string} */
         ChatLoopState: "ideation" | "candidate_presented" | "iterating";
+        PreferenceEditingIntent: {
+            key: string;
+            title?: string;
+            prompt?: string;
+            summary?: string;
+            /** @enum {string} */
+            propagation?: "retroactive" | "forward_only" | "none";
+            system_image?: string;
+        };
+        ChatLaunchContext: {
+            /** @enum {string} */
+            workflow?: "preferences";
+            entry_surface?: string;
+            preference_editing_intent?: components["schemas"]["PreferenceEditingIntent"];
+        };
         ChatResponseContext: {
             mode?: string;
             /** @enum {string} */
@@ -2810,12 +2900,16 @@ export interface components {
             autopersonalize: boolean;
             /** @description Optional originating UI surface for first-party attribution (for example explore or cookbook). */
             source_surface?: string | null;
+            /** @description Optional upstream feed or session identifier for attribution and downstream cook joins. */
+            source_session_id?: string | null;
+            /** @description Optional Explore algorithm version when the save originated from For You. */
+            algorithm_version?: string | null;
         };
         BehaviorTelemetryEvent: {
             /** @description Client-generated idempotency key for the behavior event. */
             event_id: string;
             /** @enum {string} */
-            event_type: "app_first_open" | "app_session_started" | "auth_completed" | "onboarding_started" | "onboarding_completed" | "explore_impression" | "explore_opened_recipe" | "explore_saved_recipe" | "chat_session_started" | "chat_turn_submitted" | "chat_turn_resolved" | "chat_iteration_requested" | "chat_candidate_selected" | "chat_commit_completed" | "cookbook_viewed" | "cookbook_search_applied" | "cookbook_chip_applied" | "cookbook_recipe_opened" | "cookbook_recipe_unsaved" | "recipe_detail_opened" | "recipe_detail_heartbeat" | "recipe_detail_closed" | "recipe_saved" | "recipe_unsaved" | "recipe_cooked_inferred" | "ingredient_substitution_applied";
+            event_type: "app_first_open" | "app_session_started" | "auth_completed" | "onboarding_started" | "onboarding_completed" | "explore_feed_served" | "explore_impression" | "explore_opened_recipe" | "explore_skipped_recipe" | "explore_hidden_recipe" | "explore_saved_recipe" | "chat_session_started" | "chat_turn_submitted" | "chat_turn_resolved" | "chat_iteration_requested" | "chat_candidate_selected" | "chat_commit_completed" | "cookbook_viewed" | "cookbook_search_applied" | "cookbook_chip_applied" | "cookbook_recipe_opened" | "cookbook_recipe_unsaved" | "recipe_detail_opened" | "recipe_detail_heartbeat" | "recipe_detail_closed" | "recipe_saved" | "recipe_unsaved" | "recipe_cooked_inferred" | "ingredient_substitution_applied";
             /**
              * @description Optional explicit surface override. When omitted, the API applies the canonical surface for the event type.
              * @enum {string}

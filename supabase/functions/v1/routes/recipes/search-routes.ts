@@ -1,6 +1,8 @@
 import {
   requireJsonBody,
 } from "../../../_shared/errors.ts";
+import type { JsonValue } from "../../../_shared/types.ts";
+import { getInstallIdFromHeaders, logBehaviorEvents } from "../../lib/behavior-events.ts";
 import type { RouteContext } from "../shared.ts";
 import type { RecipesDeps } from "./types.ts";
 
@@ -9,7 +11,81 @@ export const handleSearchRoutes = async (
   deps: RecipesDeps,
 ): Promise<Response | null> => {
   const { request, segments, method, auth, client, serviceClient, requestId, respond } = context;
-  const { getPreferences, computeSafetyExclusions, searchRecipes } = deps;
+  const {
+    getPreferences,
+    getMemorySnapshot,
+    getActiveMemories,
+    computeSafetyExclusions,
+    searchRecipes,
+    getExploreForYouFeed,
+  } = deps;
+
+  if (
+    segments.length === 3 &&
+    segments[0] === "recipes" &&
+    segments[1] === "explore" &&
+    segments[2] === "for-you" &&
+    method === "POST"
+  ) {
+    const startedAt = Date.now();
+    const body = await requireJsonBody<{
+      cursor?: string;
+      limit?: number;
+      preset_id?: string | null;
+    }>(request);
+    const installId = getInstallIdFromHeaders(request);
+
+    const isCursorRequest = typeof body.cursor === "string" && body.cursor.trim().length > 0;
+    const preferences = isCursorRequest
+      ? null
+      : await getPreferences(client, auth.userId);
+    const safetyExclusions = preferences ? computeSafetyExclusions(preferences) : undefined;
+    const [memorySnapshot, activeMemories] = isCursorRequest
+      ? [{}, []]
+      : await Promise.all([
+        getMemorySnapshot(client, auth.userId),
+        getActiveMemories(client, auth.userId, 12),
+      ]);
+
+    const response = await getExploreForYouFeed({
+      serviceClient,
+      userId: auth.userId,
+      requestId,
+      cursor: body.cursor ?? null,
+      limit: typeof body.limit === "number" ? body.limit : null,
+      presetId: body.preset_id ?? null,
+      preferences: (preferences ?? {}) as Record<string, JsonValue>,
+      memorySnapshot,
+      activeMemories: activeMemories as unknown as JsonValue,
+      safetyExclusions,
+      modelOverrides: context.modelOverrides,
+    });
+    const { internal, ...publicResponse } = response;
+
+    await logBehaviorEvents({
+      serviceClient,
+      events: [{
+        eventId: crypto.randomUUID(),
+        userId: auth.userId,
+        installId,
+        eventType: "explore_feed_served",
+        surface: "explore",
+        sessionId: response.feed_id,
+        algorithmVersion: response.algorithm_version,
+        payload: {
+          applied_context: response.applied_context,
+          preset_id: body.preset_id ?? null,
+          profile_state: response.profile_state,
+          candidate_count: internal.candidate_count,
+          rerank_used: internal.rerank_used,
+          fallback_path: internal.fallback_path,
+          feed_latency_ms: Date.now() - startedAt,
+        },
+      }],
+    });
+
+    return respond(200, publicResponse);
+  }
 
   if (
     segments.length === 2 &&
@@ -48,6 +124,7 @@ export const handleSearchRoutes = async (
       limit: typeof body.limit === "number" ? body.limit : null,
       safetyExclusions,
       sortBy,
+      modelOverrides: context.modelOverrides,
     });
 
     return respond(200, response);

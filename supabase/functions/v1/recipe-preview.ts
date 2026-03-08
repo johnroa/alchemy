@@ -30,6 +30,7 @@ export type RecipePreview = {
   variant_count?: number;
   popularity_score?: number;
   trending_score?: number;
+  why_tags?: string[];
 };
 
 export type RecipeCategoryCandidate = {
@@ -100,6 +101,24 @@ const normalizeFiniteNumber = (value: unknown): number | null => {
   }
 
   return parsed;
+};
+
+const normalizeStringList = (value: unknown): string[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of value) {
+    const normalized = normalizeScalarText(entry);
+    if (!normalized) continue;
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(normalized);
+  }
+  return result;
 };
 
 const normalizeDifficulty = (
@@ -185,6 +204,7 @@ export const buildRecipePreview = (input: {
   variant_count?: number | null;
   popularity_score?: unknown;
   trending_score?: unknown;
+  why_tags?: unknown;
 }): RecipePreview => {
   const preview: RecipePreview = {
     id: input.id,
@@ -218,6 +238,10 @@ export const buildRecipePreview = (input: {
   if (trendingScore !== null && trendingScore > 0) {
     preview.trending_score = trendingScore;
   }
+  const whyTags = normalizeStringList(input.why_tags).slice(0, 4);
+  if (whyTags.length > 0) {
+    preview.why_tags = whyTags;
+  }
   return preview;
 };
 
@@ -246,6 +270,7 @@ export const normalizeRecipePreview = (value: unknown): RecipePreview | null => 
     variant_count: normalizeFiniteInteger(record.variant_count),
     popularity_score: normalizeFiniteNumber(record.popularity_score),
     trending_score: normalizeFiniteNumber(record.trending_score),
+    why_tags: record.why_tags,
   });
 };
 
@@ -275,6 +300,9 @@ export const serializeRecipePreview = (
   }
   if (typeof item.trending_score === "number") {
     serialized.trending_score = item.trending_score;
+  }
+  if (Array.isArray(item.why_tags) && item.why_tags.length > 0) {
+    serialized.why_tags = item.why_tags;
   }
 
   return serialized;

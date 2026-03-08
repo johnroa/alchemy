@@ -1,0 +1,14 @@
+{
+  "strict_json_only": true,
+  "response_contract": "explore_for_you_profile_v1",
+  "required_keys": [
+    "retrieval_text",
+    "profile_summary",
+    "focus_axes",
+    "novelty_axes",
+    "avoid_axes",
+    "anchor_recipes"
+  ],
+  "forbid_markdown": true,
+  "notes": "Produce a retrieval-oriented taste profile grounded in the provided preferences, memories, behavior signals, and semantic facts. Do not invent unsupported constraints."
+}

@@ -108,6 +108,8 @@ struct RecipePreview: Decodable, Identifiable, Hashable {
     let popularityScore: Double?
     /// Recent weighted growth score from the search index.
     let trendingScore: Double?
+    /// Short personalized explanation tags for the Explore card.
+    let whyTags: [String]?
 
     /// Derives a URL from the image_url string, returns nil when pending/failed.
     var resolvedImageURL: URL? {
@@ -515,8 +517,40 @@ struct PreferenceUpdate: Decodable {
 }
 
 /// Request body for POST /chat (new session) and POST /chat/{id}/messages
+/// `launchContext` is only sent when a surface like Preferences wants a fresh,
+/// purpose-built chat loop instead of reusing the generic recipe ideation flow.
+/// That gives the backend enough context to keep follow-up questions focused on
+/// a single preference category without polluting the main Sous Chef thread.
+enum PreferencePropagation: String, Codable, Hashable {
+    case retroactive
+    case forwardOnly = "forward_only"
+    case none
+}
+
+struct PreferenceEditingIntent: Codable, Hashable, Identifiable {
+    var id: String { key }
+    let key: String
+    let title: String
+    let prompt: String
+    let summary: String
+    let propagation: PreferencePropagation
+    let systemImage: String
+}
+
+struct ChatLaunchContext: Encodable {
+    let workflow: String?
+    let entrySurface: String?
+    let preferenceEditingIntent: PreferenceEditingIntent?
+}
+
 struct ChatMessageRequest: Encodable {
     let message: String
+    let launchContext: ChatLaunchContext?
+
+    init(message: String, launchContext: ChatLaunchContext? = nil) {
+        self.message = message
+        self.launchContext = launchContext
+    }
 }
 
 /// Request body for POST /chat/import.
@@ -587,8 +621,8 @@ struct OnboardingStateResponse: Decodable {
 /// Each key (e.g. "spice_tolerance") maps to an array of freeform values
 /// and a propagation mode ("constraint" = retroactive, "preference" = forward-only).
 struct ExtendedPreferenceEntry: Codable {
-    let values: [String]
-    let propagation: String?
+    var values: [String]
+    var propagation: String?
 }
 
 struct PreferenceProfile: Codable {
@@ -605,6 +639,10 @@ struct PreferenceProfile: Codable {
     /// Structured JSONB for preference categories beyond the typed columns.
     /// Keyed by category slug (e.g. "spice_tolerance", "health_goals").
     var extendedPreferences: [String: ExtendedPreferenceEntry]?
+
+    /// Rendering-only recipe presentation settings. These should never change
+    /// the underlying recipe, only how Alchemy formats the recipe for this user.
+    var presentationPreferences: [String: AnyCodableValue]?
 }
 
 // MARK: - Memories
@@ -650,20 +688,38 @@ struct AddToCollectionRequest: Encodable {
 
 // MARK: - Search / Explore
 
-/// Request body for POST /recipes/search (Explore feed + search)
+/// Request body for POST /recipes/search for explicit typed recipe search.
 struct RecipeSearchRequest: Encodable {
     let query: String?
     let presetId: String?
     let cursor: String?
     let limit: Int?
-    /// Sort order for Explore feed: "recent" (default), "popular", "trending".
+    /// Legacy sort hint retained for backward compatibility on explicit search flows.
     let sortBy: String?
+}
+
+/// Request body for POST /recipes/explore/for-you.
+struct ForYouFeedRequest: Encodable {
+    let cursor: String?
+    let limit: Int?
+    let presetId: String?
 }
 
 /// Response from POST /recipes/search
 struct RecipeSearchResponse: Decodable {
     let searchId: String
     let appliedContext: String
+    let items: [RecipePreview]
+    let nextCursor: String?
+    let noMatch: RecipeSearchNoMatch?
+}
+
+/// Response from POST /recipes/explore/for-you.
+struct ForYouFeedResponse: Decodable {
+    let feedId: String
+    let appliedContext: String
+    let profileState: String
+    let algorithmVersion: String
     let items: [RecipePreview]
     let nextCursor: String?
     let noMatch: RecipeSearchNoMatch?
@@ -751,6 +807,8 @@ struct InstallTelemetryBatchRequest: Encodable {
 struct SaveRecipeRequest: Encodable {
     let autopersonalize: Bool?
     let sourceSurface: String?
+    let sourceSessionId: String?
+    let algorithmVersion: String?
 }
 
 // MARK: - Changelog
@@ -811,6 +869,24 @@ enum AnyCodableValue: Codable, Hashable {
         case .double(let v): return String(v)
         case .bool(let v): return String(v)
         case .null: return nil
+        }
+    }
+
+    var boolValue: Bool? {
+        switch self {
+        case .bool(let value): return value
+        case .string(let value):
+            switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+            case "true", "yes", "1", "on": return true
+            case "false", "no", "0", "off": return false
+            default: return nil
+            }
+        case .int(let value):
+            return value != 0
+        case .double(let value):
+            return value != 0
+        case .null:
+            return nil
         }
     }
 }

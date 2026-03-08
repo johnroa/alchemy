@@ -118,6 +118,20 @@ export type RecipeSearchRerankEnvelope = {
   rationale_tags_by_recipe?: unknown;
 };
 
+export type ExploreForYouProfileEnvelope = {
+  retrieval_text?: unknown;
+  profile_summary?: unknown;
+  focus_axes?: unknown;
+  novelty_axes?: unknown;
+  avoid_axes?: unknown;
+  anchor_recipes?: unknown;
+};
+
+export type ExploreForYouRankEnvelope = {
+  ordered_recipe_ids?: unknown;
+  rationale_tags_by_recipe?: unknown;
+};
+
 export type IngredientSemanticRelation = {
   from_canonical_name: string;
   to_canonical_name: string;

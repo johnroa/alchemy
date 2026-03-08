@@ -1,5 +1,6 @@
 import type {
   JsonValue,
+  MemoryRecord,
   RecipePayload,
 } from "../../../_shared/types.ts";
 import type {
@@ -20,6 +21,15 @@ export type RecipesDeps = {
     client: RouteContext["client"],
     userId: string,
   ) => Promise<PreferenceContext>;
+  getMemorySnapshot: (
+    client: RouteContext["client"],
+    userId: string,
+  ) => Promise<Record<string, JsonValue>>;
+  getActiveMemories: (
+    client: RouteContext["client"],
+    userId: string,
+    limit: number,
+  ) => Promise<MemoryRecord[]>;
   resolvePresentationOptions: (input: {
     query: URLSearchParams;
     presentationPreferences: Record<string, unknown>;
@@ -103,6 +113,8 @@ export type RecipesDeps = {
     cursor?: string | null;
     limit?: number | null;
     sortBy?: "recent" | "popular" | "trending";
+    safetyExclusions?: SearchSafetyExclusions;
+    modelOverrides?: RouteContext["modelOverrides"];
   }) => Promise<{
     search_id: string;
     applied_context: "all" | "preset" | "query";
@@ -113,6 +125,37 @@ export type RecipesDeps = {
       message: string;
       suggested_action: string;
     } | null;
+  }>;
+  getExploreForYouFeed: (input: {
+    serviceClient: RouteContext["serviceClient"];
+    userId: string;
+    requestId: string;
+    cursor?: string | null;
+    limit?: number | null;
+    presetId?: string | null;
+    preferences: Record<string, JsonValue>;
+    memorySnapshot: Record<string, JsonValue>;
+    activeMemories: JsonValue;
+    safetyExclusions?: SearchSafetyExclusions;
+    modelOverrides?: RouteContext["modelOverrides"];
+  }) => Promise<{
+    feed_id: string;
+    applied_context: "for_you" | "preset";
+    profile_state: "cold" | "warm" | "established";
+    algorithm_version: string;
+    items: RecipePreview[];
+    next_cursor: string | null;
+    no_match: {
+      code: string;
+      message: string;
+      suggested_action: string;
+    } | null;
+    internal: {
+      rerank_used: boolean;
+      candidate_count: number;
+      fallback_path: string | null;
+      rationale_tags_by_recipe: Record<string, string[]>;
+    };
   }>;
   toJsonValue: (value: unknown) => JsonValue;
   computePreferenceFingerprint: (

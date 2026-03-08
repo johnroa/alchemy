@@ -25,7 +25,7 @@ const BOARD_LINKS = [
   {
     href: "/boards/personalization",
     title: "Personalization",
-    description: "Reserved for ranking lift, preference learning velocity, and negative-feedback loops.",
+    description: "For You version lift, cold-start coverage, fallback pressure, and ranking-quality signals.",
     icon: Sparkles,
   },
 ];

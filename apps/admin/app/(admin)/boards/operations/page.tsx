@@ -4,7 +4,7 @@ import { FilterBar } from "@/components/admin/filter-bar";
 import { OperationsBoardTrendChart } from "@/components/admin/operations-board-trend-chart";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { DEFAULT_ANALYTICS_QUERY, parseAnalyticsQueryState } from "@/lib/admin-analytics";
-import { getOperationsBoardData } from "@/lib/admin-data";
+import { getOperationsBoardData, getPersonalizationBoardData } from "@/lib/admin-data";
 import { formatCost, formatMs, formatPercent, toShortInteger } from "@/lib/format";
 
 export default async function OperationsBoardPage({
@@ -14,7 +14,10 @@ export default async function OperationsBoardPage({
 }): Promise<React.JSX.Element> {
   const params = await searchParams;
   const query = parseAnalyticsQueryState(params, DEFAULT_ANALYTICS_QUERY);
-  const { snapshot, llmDaily, byAction, recentErrors } = await getOperationsBoardData(query);
+  const [{ snapshot, llmDaily, byAction, recentErrors }, personalization] = await Promise.all([
+    getOperationsBoardData(query),
+    getPersonalizationBoardData(query),
+  ]);
 
   const heroStats: BoardHeroStat[] = [
     {
@@ -88,6 +91,22 @@ export default async function OperationsBoardPage({
       hint: "Pending images, failed images, stale variants, and failed imports.",
       icon: Siren,
       tone: snapshot.summary.pipelineFailureBacklog > 0 ? "warning" : "muted",
+    },
+    {
+      label: "Explore Feed Latency",
+      value: formatMs(personalization.summary.medianFeedLatencyMs),
+      hint: "Median personalized Explore feed latency. Drill into Personalization for version splits.",
+      tone: personalization.summary.medianFeedLatencyMs != null && personalization.summary.medianFeedLatencyMs > 2000
+        ? "warning"
+        : "muted",
+      href: "/analytics/personalization",
+    },
+    {
+      label: "Explore Fallback Rate",
+      value: formatPercent(personalization.summary.fallbackRate, 1),
+      hint: "Feed serves that degraded from profile or rerank logic.",
+      tone: personalization.summary.fallbackRate > 0.1 ? "warning" : "muted",
+      href: "/analytics/personalization",
     },
   ];
 

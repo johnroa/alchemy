@@ -41,6 +41,10 @@ export {
   getOperationsBoardData,
 } from "./admin-data/boards";
 export {
+  buildPersonalizationSnapshot,
+  getPersonalizationBoardData,
+} from "./admin-data/personalization";
+export {
   getImagePipelineData,
   getMetadataPipelineData,
 } from "./admin-data/pipelines";

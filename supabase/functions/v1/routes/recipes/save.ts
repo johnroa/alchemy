@@ -7,7 +7,11 @@ import type {
   JsonValue,
   RecipePayload,
 } from "../../../_shared/types.ts";
-import { getInstallIdFromHeaders, logBehaviorEvents } from "../../lib/behavior-events.ts";
+import {
+  getInstallIdFromHeaders,
+  logBehaviorEvents,
+  type BehaviorEventInput,
+} from "../../lib/behavior-events.ts";
 import type { RouteContext, VariantStatus } from "../shared.ts";
 import type { RecipesDeps } from "./types.ts";
 
@@ -42,16 +46,26 @@ export const handleSaveRoutes = async (
       // Parse optional body for autopersonalize flag (defaults to true).
       let autopersonalize = true;
       let sourceSurface: string | null = null;
+      let sourceSessionId: string | null = null;
+      let algorithmVersion: string | null = null;
       try {
         const body = await requireJsonBody<{
           autopersonalize?: boolean;
           source_surface?: string;
+          source_session_id?: string;
+          algorithm_version?: string;
         }>(request);
         if (typeof body.autopersonalize === "boolean") {
           autopersonalize = body.autopersonalize;
         }
         if (typeof body.source_surface === "string" && body.source_surface.trim().length > 0) {
           sourceSurface = body.source_surface.trim();
+        }
+        if (typeof body.source_session_id === "string" && body.source_session_id.trim().length > 0) {
+          sourceSessionId = body.source_session_id.trim();
+        }
+        if (typeof body.algorithm_version === "string" && body.algorithm_version.trim().length > 0) {
+          algorithmVersion = body.algorithm_version.trim();
         }
       } catch {
         // Body is optional — empty request means default autopersonalize=true.
@@ -91,20 +105,41 @@ export const handleSaveRoutes = async (
         afterJson: { autopersonalize } as unknown as JsonValue,
       });
 
-      await logBehaviorEvents({
-        serviceClient,
-        events: [{
+      const behaviorEvents: BehaviorEventInput[] = [{
           eventId: crypto.randomUUID(),
           userId: auth.userId,
           installId,
           eventType: "recipe_saved",
+          sessionId: sourceSessionId,
           entityType: "recipe",
           entityId: recipeId,
           sourceSurface,
+          algorithmVersion,
           payload: {
             autopersonalize,
+            source_session_id: sourceSessionId,
           },
-        }],
+        }];
+      if (sourceSurface === "explore") {
+        behaviorEvents.push({
+          eventId: crypto.randomUUID(),
+          userId: auth.userId,
+          installId,
+          eventType: "explore_saved_recipe",
+          sessionId: sourceSessionId,
+          entityType: "recipe",
+          entityId: recipeId,
+          sourceSurface,
+          algorithmVersion,
+          payload: {
+            source_session_id: sourceSessionId,
+          },
+        });
+      }
+
+      await logBehaviorEvents({
+        serviceClient,
+        events: behaviorEvents,
       });
 
       // Ensure image processing for the recipe.

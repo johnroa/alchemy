@@ -2,6 +2,24 @@
 
 ## [Unreleased] — 2026-03-07
 
+### Explore `For You` Personalized Feed + Personalization Analytics (v3.7.0)
+
+- Added `POST /recipes/explore/for-you` as the dedicated personalized Explore feed endpoint, backed by user taste profiles, hybrid retrieval over `recipe_search_documents`, dedicated reranking, and cursor-backed search sessions.
+- Added `user_taste_profiles`, `explore_algorithm_versions`, and `explore_impression_outcomes` so Explore can track versioned serving behavior, lift, fallback rate, and why-tag distribution.
+- Added new LLM scopes `explore_for_you_profile` and `explore_for_you_rank`, seeded active model routes, and activated prompt/rule configs through the admin LLM control path.
+- Explore on iOS now opens on `For You`, uses personalized preset chips through the same endpoint, renders `why_tags`, and no longer uses the global `recent | popular | trending` sort flow.
+- Added version-aware Explore feed telemetry (`explore_feed_served`, `explore_skipped_recipe`, `explore_hidden_recipe`) plus save attribution with `source_session_id` and `algorithm_version`.
+- Added Admin `/boards/personalization` and `/analytics/personalization` for current champion version, lift versus baseline, fallback/latency diagnostics, profile-state breakdowns, and why-tag distribution.
+- Added recommender spillover stats to `/boards/operations` so feed latency and fallback pressure are still visible from the operations surface without turning it into the main personalization console.
+- Updated OpenAPI to `3.7.0`, regenerated contracts/admin docs, and added targeted backend/admin tests plus iOS build verification for the new For You path.
+
+### Preferences Embedded Sous Chef Chat (v3.6.1)
+
+- Added focused `launch_context` support on `POST /chat` so product surfaces like Preferences can start a dedicated workflow-specific chat session instead of reusing the generic recipe loop.
+- Documented `extended_preferences` on `PreferenceProfile` and the new preference-edit intent contract in OpenAPI.
+- Rebuilt iOS Preferences around direct settings, display-only recipe formatting, and an embedded minimized Sous Chef chat that expands in-place for category-specific editing.
+- Tightened prompt preference packing so stored preferences are truncated and summarized before prompt injection, including compact display-preference context.
+
 ### Acquisition-Ready Telemetry + Acquisition Board (v3.6.0)
 
 - Added anonymous install-scoped telemetry via `POST /telemetry/install` for `app_first_open` and `app_session_started` before auth.

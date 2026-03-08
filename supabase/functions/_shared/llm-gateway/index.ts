@@ -48,8 +48,10 @@ import {
   inferIngredientRelations,
 } from "./ingredients.ts";
 import {
+  buildExploreForYouProfile,
   embedRecipeSearchQuery,
   interpretRecipeSearch,
+  rerankExploreForYou,
   rerankRecipeSearch,
 } from "./search.ts";
 import {
@@ -412,6 +414,10 @@ export const llmGateway = {
   interpretRecipeSearch,
 
   rerankRecipeSearch,
+
+  buildExploreForYouProfile,
+
+  rerankExploreForYou,
 
   inferIngredientRelations,
 

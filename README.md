@@ -18,6 +18,10 @@ packages/shared/      Shared utilities
 - **API**: `https://api.cookwithalchemy.com/v1/*`
 - **Admin**: `https://admin.cookwithalchemy.com`
 
+## Current TODOs
+
+- Open [TODO.md](/Users/john/Projects/alchemy/TODO.md) for the remaining work after the shipped acquisition-ready telemetry slice.
+
 ---
 
 ## iOS App (`apps/ios/`)
@@ -44,7 +48,7 @@ Native SwiftUI rewrite of the Expo mobile app. MVVM architecture with `@Observab
 | `TabShell` | 3-tab container with custom floating pill tab bar + Import accessory |
 | `CookbookView` | Saved recipes with multi-dimensional filtering (cuisine, dietary, time, difficulty), staggered 2-column grid |
 | `GenerateView` | Chat panel + recipe canvas with Lottie animation during generation |
-| `ExploreView` | Full-bleed vertical card stack with sort picker (New/Popular/Trending), social proof badges, parallax |
+| `ExploreView` | Full-bleed vertical discovery feed with `For You` personalization, dynamic preset chips, why-tags, and explicit search |
 | `ImportView` | Recipe import flow — URL paste, text paste, photo capture |
 | `RecipeDetailView` | Parallax hero, ingredients, steps, nutrition, pairings, "What did my Sous Chef change?" substitution diffs |
 | `PreferencesView` | 9-field form — dietary, skill, equipment, cuisines, aversions |
@@ -65,7 +69,7 @@ Alchemy/
 ├── Features/               One folder per screen (View + ViewModel pairs)
 │   ├── Auth/               AuthFlowView
 │   ├── Cookbook/            CookbookView with variant-based filtering
-│   ├── Explore/            ExploreView with popularity sort + social proof
+│   ├── Explore/            ExploreView with personalized `For You` feed + explicit search
 │   ├── Generate/           GenerateView + chat + candidate canvas
 │   ├── Import/             ImportView + ImportViewModel (URL/text/photo)
 │   ├── Onboarding/         OnboardingView — AI preference interview
@@ -138,7 +142,8 @@ Next.js 15 App Router. All pages under `app/(admin)/`:
 | `/boards/acquisition` | Install funnels, sign-in/onboarding conversion, first recipe/save/cook milestones, and install-week returning-cook retention |
 | `/boards/engagement` | North-star cooking, acceptance, cookbook revisit, and repeat-cook KPIs |
 | `/boards/operations` | Generation latency, defect rate, queue pressure, failure backlog, and cost KPIs |
-| `/boards/personalization` | Placeholder for ranking lift and preference-learning metrics as rollups mature |
+| `/boards/personalization` | Explore algorithm version, lift vs baseline, novelty share, cold-start coverage, and fallback diagnostics |
+| `/analytics/personalization` | Per-version feed funnel, fallback reasons, why-tag distribution, and profile-state/acquisition breakouts |
 | `/simulations` | Seeded simulation runner — single or concurrent A/B with full trace, latency segments, and token deltas |
 | `/simulation-recipe` | Recipe-specific simulation runs |
 | `/simulation-image` | Image generation simulation and comparison |
@@ -151,9 +156,11 @@ Next.js 15 App Router. All pages under `app/(admin)/`:
 ### Executive boards and first-party telemetry
 
 - Boards are intentionally distinct from Analytics pages. Boards are fixed executive KPI surfaces; Analytics remains the drill-down layer.
-- The shipped executive board set is `/boards/acquisition`, `/boards/engagement`, and `/boards/operations`, with `/boards/personalization` reserved until ranking-ready rollups stabilize.
+- The shipped executive board set is `/boards/acquisition`, `/boards/engagement`, `/boards/operations`, and `/boards/personalization`.
 - First-party product behavior is stored in append-only `behavior_events` and `behavior_semantic_facts` tables.
 - Launch attribution and install cohorts are stored in `install_profiles` and `user_acquisition_profiles`.
+- Explore personalization caches live in `user_taste_profiles`, and versioned recommender rollouts live in `explore_algorithm_versions`.
+- Personalized Explore performance is analyzed through `explore_impression_outcomes`, which joins feed serves, impressions, opens, saves, and inferred cooks.
 - The authenticated client ingestion endpoint for batched product events is `POST /telemetry/behavior`.
 - The anonymous pre-auth install ingestion endpoint is `POST /telemetry/install`.
 - iOS generates a stable local `install_id` on first launch and propagates it through both telemetry endpoints plus the `X-Install-Id` request header for authenticated API calls.
@@ -250,7 +257,8 @@ curl -X POST https://admin.cookwithalchemy.com/api/admin/llm/prompts \
 
 1. Add call:
 - add scope definition in `llm-scope-registry.ts`
-- add migration seed rows for `llm_model_routes`, `llm_prompts`, `llm_rules`
+- add migration seed rows for `llm_model_routes`
+- create/activate prompt + rule through Admin API/UI (or `scripts/admin-api.sh`)
 - add/update gateway wrapper to execute via `llm-executor.ts`
 - wire callsite in `supabase/functions/v1/index.ts` or related service
 - add tests + docs
@@ -272,11 +280,11 @@ Migrations live in `supabase/migrations/` and are numbered sequentially (`0001_`
 | Change | Use |
 |---|---|
 | New table or schema change | Migration |
-| New scope with initial route/prompt/rule | Migration |
+| New scope with initial model route | Migration |
 | Bulk seed / backfill | Migration |
 | Changing an active model for an existing scope | Admin UI / API |
-| Editing a prompt for an existing scope | Admin UI / API |
-| Tweaking a rule for an existing scope | Admin UI / API |
+| Creating or editing prompts for a scope | Admin UI / API |
+| Creating or editing rules for a scope | Admin UI / API |
 
 ### Writing a migration
 
@@ -370,14 +378,18 @@ The migration chain is out of order relative to remote history. Fix by:
 | `0050_recipe_import` | Recipe import pipeline — import_provenance, fingerprint dedup, LLM scope seeds |
 | `0051_recipe_popularity` | Popularity scoring, view tracking, ingredient trending, search sort |
 | `0052_pipeline_observability` | Pipeline observability RPC for admin dashboard |
+| `0053_behavior_telemetry` | First-party product behavior ledger and ingestion substrate |
+| `0054_restore_search_preview_projection` | Search preview projection compatibility fix after telemetry rollout |
+| `0055_acquisition_profiles` | Install-scoped attribution, acquisition milestones, and acquisition board backing tables |
+| `0056_explore_for_you` | Taste profiles, algorithm version registry, Explore impression outcomes, and For You session metadata |
 
 ---
 
 ## Backend (`supabase/`)
 
 - **Auth**: Supabase Auth (token-based)
-- **DB**: Postgres — users, preferences, recipes, recipe_versions, cookbook_entries, user_recipe_variants, user_recipe_variant_versions, preference_change_log, collections, memories, events, changelog_events, image_jobs, recipe_search_documents, recipe_view_events, ingredient_trending_stats, graph_entities, graph_edges, ingredients, import_provenance
-- **Edge Functions** (`functions/v1/`): LLM gateway with structured output, prompt injection, memory, image generation, recipe canonicalization/personalization, import pipeline, popularity/trending
+- **DB**: Postgres — users, preferences, recipes, recipe_versions, cookbook_entries, user_recipe_variants, user_recipe_variant_versions, preference_change_log, collections, memories, events, behavior_events, behavior_semantic_facts, install_profiles, user_acquisition_profiles, user_taste_profiles, explore_algorithm_versions, recipe_search_documents, recipe_view_events, ingredient_trending_stats, graph_entities, graph_edges, ingredients, import_provenance
+- **Edge Functions** (`functions/v1/`): LLM gateway with structured output, prompt injection, memory, image generation, recipe canonicalization/personalization, import pipeline, acquisition telemetry, and personalized Explore retrieval/reranking
 
 ### Deploying edge functions
 

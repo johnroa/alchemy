@@ -1,0 +1,10 @@
+{
+  "strict_json_only": true,
+  "response_contract": "explore_for_you_rank_v1",
+  "required_keys": [
+    "ordered_recipe_ids",
+    "rationale_tags_by_recipe"
+  ],
+  "forbid_markdown": true,
+  "notes": "Return every provided candidate id exactly once in ranked order and provide terse why-tags suitable for Explore UI rendering."
+}

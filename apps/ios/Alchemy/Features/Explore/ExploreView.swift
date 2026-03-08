@@ -3,30 +3,33 @@ import NukeUI
 
 /// Explore screen — TikTok/Reels-style vertical discovery feed.
 ///
-/// Powered by POST /recipes/search. When both query and preset_id are empty,
-/// the API returns an Explore feed. Filters and search text are sent as query
-/// or preset_id to get filtered results. Results paginate via cursor.
+/// Powered by POST /recipes/explore/for-you for the default personalized feed
+/// and POST /recipes/search for explicit text search only.
 ///
 /// Architecture: two-layer ZStack.
 ///   Layer 1 (back): Full-screen paging ScrollView with containerRelativeFrame.
 ///   Layer 2 (front): Floating header, filters, context label, search bar.
 struct ExploreView: View {
     @State private var previews: [RecipePreview] = []
-    @State private var selectedFilter = "All"
-    @State private var selectedSort: ExploreSortMode = .recent
+    @State private var selectedFilter = "For You"
     @State private var searchText = ""
     @State private var selectedRecipeId: String?
     @State private var showPreferences = false
     @State private var showSettings = false
     @State private var isLoading = false
-    @State private var contextLabel = "Exploring all recipes"
+    @State private var contextLabel = "Personalized for you"
     @State private var nextCursor: String?
-    @State private var searchId: String?
     @State private var feedSessionId = UUID().uuidString
+    @State private var feedAlgorithmVersion: String?
+    @State private var feedProfileState: String?
+    @State private var isSearchMode = false
+    @State private var activeFeedFilter = "For You"
+    @State private var activeFeedIsSearchMode = false
     @State private var seenImpressionKeys: Set<String> = []
-    @State private var trendingIngredients: [IngredientTrendingStat] = []
+    @State private var openedImpressionKeys: Set<String> = []
+    @State private var skippedImpressionKeys: Set<String> = []
 
-    private let filters = PreviewData.exploreFilters
+    private let filters = ["For You"] + PreviewData.exploreFilters.filter { $0 != "All" }
 
     var body: some View {
         NavigationStack {
@@ -46,6 +49,9 @@ struct ExploreView: View {
                                 if preview.id == previews.last?.id {
                                     Task { await loadMore() }
                                 }
+                            }
+                            .onDisappear {
+                                trackExploreSkip(preview: preview, rank: index)
                             }
                         }
 
@@ -69,7 +75,6 @@ struct ExploreView: View {
                                 .foregroundStyle(.white)
                                 .shadow(color: .black.opacity(0.5), radius: 4)
                             Spacer()
-                            sortPicker
                             ImportMenu()
                             ProfileMenu(
                                 onPreferences: { showPreferences = true },
@@ -122,45 +127,15 @@ struct ExploreView: View {
                     recipeId: recipeId,
                     sourceSurface: "explore",
                     sourceSessionId: feedSessionId,
+                    algorithmVersion: feedAlgorithmVersion,
                     showAddToCookbook: true
                 )
             }
             .sheet(isPresented: $showPreferences) { PreferencesView() }
             .sheet(isPresented: $showSettings) { SettingsView() }
             .task {
-                await loadFeed()
-                await loadTrendingIngredients()
+                await loadForYouFeed()
             }
-        }
-    }
-
-    // MARK: - Sort Picker
-
-    private var sortPicker: some View {
-        Menu {
-            ForEach(ExploreSortMode.allCases) { mode in
-                Button {
-                    guard selectedSort != mode else { return }
-                    selectedSort = mode
-                    Task { await loadFeed(sortMode: mode) }
-                } label: {
-                    Label(mode.label, systemImage: mode.icon)
-                    if selectedSort == mode {
-                        Image(systemName: "checkmark")
-                    }
-                }
-            }
-        } label: {
-            HStack(spacing: 4) {
-                Image(systemName: selectedSort.icon)
-                    .font(.system(size: 14, weight: .semibold))
-                Text(selectedSort.shortLabel)
-                    .font(.system(size: 14, weight: .semibold))
-            }
-            .foregroundStyle(.white.opacity(0.85))
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(.ultraThinMaterial, in: Capsule())
         }
     }
 
@@ -177,11 +152,11 @@ struct ExploreView: View {
                             searchText = ""
                         }
                         Task {
-                            await loadFeed(
-                                preset: filter == "All" ? nil : filter,
-                                context: filter == "All"
-                                    ? "Exploring all recipes"
-                                    : "Exploring \(filter.lowercased()) recipes"
+                            await loadForYouFeed(
+                                preset: filter == "For You" ? nil : filter,
+                                context: filter == "For You"
+                                    ? "Personalized for you"
+                                    : "Personalized \(filter.lowercased()) picks"
                             )
                         }
                     } label: {
@@ -219,48 +194,48 @@ struct ExploreView: View {
         guard !query.isEmpty else { return }
         withAnimation { selectedFilter = "" }
         Task {
-            await loadFeed(
+            await loadSearchFeed(
                 query: query,
                 context: "Exploring \(query.lowercased())..."
             )
         }
     }
 
-    /// Loads the explore feed from POST /recipes/search.
-    /// When no query or preset is provided, returns the default explore feed.
-    /// sortMode controls ordering: recent (default), popular, or trending.
-    private func loadFeed(
-        query: String? = nil,
+    private func resetFeedTracking() {
+        seenImpressionKeys = []
+        openedImpressionKeys = []
+        skippedImpressionKeys = []
+    }
+
+    private func loadForYouFeed(
         preset: String? = nil,
-        context: String = "Exploring all recipes",
-        sortMode: ExploreSortMode? = nil
+        context: String = "Personalized for you"
     ) async {
         isLoading = true
-        let effectiveSort = sortMode ?? selectedSort
-        contextLabel = effectiveSort == .recent
-            ? context
-            : "\(effectiveSort.label) recipes"
+        isSearchMode = false
+        contextLabel = context
         nextCursor = nil
 
         do {
-            let response: RecipeSearchResponse = try await APIClient.shared.request(
-                "/recipes/search",
+            let response: ForYouFeedResponse = try await APIClient.shared.request(
+                "/recipes/explore/for-you",
                 method: .post,
-                body: RecipeSearchRequest(
-                    query: query,
-                    presetId: preset,
+                body: ForYouFeedRequest(
                     cursor: nil,
                     limit: 10,
-                    sortBy: effectiveSort.rawValue
+                    presetId: preset,
                 )
             )
 
             withAnimation {
                 previews = response.items
                 nextCursor = response.nextCursor
-                searchId = response.searchId
-                feedSessionId = response.searchId
-                seenImpressionKeys = []
+                feedSessionId = response.feedId
+                feedAlgorithmVersion = response.algorithmVersion
+                feedProfileState = response.profileState
+                activeFeedFilter = preset ?? "For You"
+                activeFeedIsSearchMode = false
+                resetFeedTracking()
                 isLoading = false
             }
 
@@ -269,7 +244,50 @@ struct ExploreView: View {
             }
         } catch {
             withAnimation { isLoading = false }
-            print("[ExploreView] loadFeed error: \(error)")
+            print("[ExploreView] loadForYouFeed error: \(error)")
+        }
+    }
+
+    private func loadSearchFeed(
+        query: String,
+        context: String
+    ) async {
+        isLoading = true
+        isSearchMode = true
+        contextLabel = context
+        nextCursor = nil
+
+        do {
+            let response: RecipeSearchResponse = try await APIClient.shared.request(
+                "/recipes/search",
+                method: .post,
+                body: RecipeSearchRequest(
+                    query: query,
+                    presetId: nil,
+                    cursor: nil,
+                    limit: 10,
+                    sortBy: nil
+                )
+            )
+
+            withAnimation {
+                previews = response.items
+                nextCursor = response.nextCursor
+                feedSessionId = response.searchId
+                feedAlgorithmVersion = nil
+                feedProfileState = nil
+                activeFeedFilter = "search"
+                activeFeedIsSearchMode = true
+                resetFeedTracking()
+                isLoading = false
+            }
+
+            if let noMatch = response.noMatch {
+                contextLabel = noMatch.message
+            }
+        } catch {
+            withAnimation { isLoading = false }
+            print("[ExploreView] loadSearchFeed error: \(error)")
         }
     }
 
@@ -278,105 +296,126 @@ struct ExploreView: View {
         guard let cursor = nextCursor, !isLoading else { return }
 
         do {
-            let response: RecipeSearchResponse = try await APIClient.shared.request(
-                "/recipes/search",
-                method: .post,
-                body: RecipeSearchRequest(
-                    query: nil,
-                    presetId: nil,
-                    cursor: cursor,
-                    limit: 10,
-                    sortBy: selectedSort.rawValue
+            if activeFeedIsSearchMode {
+                let response: RecipeSearchResponse = try await APIClient.shared.request(
+                    "/recipes/search",
+                    method: .post,
+                    body: RecipeSearchRequest(
+                        query: nil,
+                        presetId: nil,
+                        cursor: cursor,
+                        limit: 10,
+                        sortBy: nil
+                    )
                 )
-            )
 
-            withAnimation {
-                previews.append(contentsOf: response.items)
-                nextCursor = response.nextCursor
-                searchId = response.searchId
+                withAnimation {
+                    previews.append(contentsOf: response.items)
+                    nextCursor = response.nextCursor
+                    feedSessionId = response.searchId
+                    activeFeedFilter = "search"
+                    activeFeedIsSearchMode = true
+                }
+            } else {
+                let response: ForYouFeedResponse = try await APIClient.shared.request(
+                    "/recipes/explore/for-you",
+                    method: .post,
+                    body: ForYouFeedRequest(
+                        cursor: cursor,
+                        limit: 10,
+                        presetId: activeFeedFilter == "For You" ? nil : activeFeedFilter
+                    )
+                )
+
+                withAnimation {
+                    previews.append(contentsOf: response.items)
+                    nextCursor = response.nextCursor
+                    feedSessionId = response.feedId
+                    feedAlgorithmVersion = response.algorithmVersion
+                    feedProfileState = response.profileState
+                    activeFeedFilter = selectedFilter == "" ? "For You" : selectedFilter
+                    activeFeedIsSearchMode = false
+                }
             }
         } catch {
             print("[ExploreView] loadMore error: \(error)")
         }
     }
 
-    /// Fetches trending ingredient stats for the trending section.
-    private func loadTrendingIngredients() async {
-        do {
-            let response: IngredientTrendingResponse = try await APIClient.shared.request(
-                "/ingredients/trending?limit=10",
-                method: .get
-            )
-            withAnimation { trendingIngredients = response.items }
-        } catch {
-            print("[ExploreView] loadTrendingIngredients error: \(error)")
+    private func feedFilterValue() -> String {
+        if activeFeedIsSearchMode {
+            return "search"
         }
+        return activeFeedFilter
     }
 
     private func trackExploreImpression(preview: RecipePreview, rank: Int) {
-        let sessionId = searchId ?? feedSessionId
-        let key = "\(sessionId)::\(preview.id)"
+        let key = "\(feedSessionId)::\(preview.id)"
         guard seenImpressionKeys.insert(key).inserted else { return }
 
+        let whyTags = preview.whyTags ?? []
         BehaviorTelemetry.shared.track(
             eventType: "explore_impression",
             surface: "explore",
-            sessionId: sessionId,
+            sessionId: feedSessionId,
             entityType: "recipe",
             entityId: preview.id,
+            algorithmVersion: feedAlgorithmVersion,
             payload: [
                 "rank": .int(rank),
-                "sort": .string(selectedSort.rawValue),
-                "filter": .string(selectedFilter),
+                "filter": .string(feedFilterValue()),
+                "preset_id": activeFeedFilter == "For You" || activeFeedIsSearchMode ? .null : .string(activeFeedFilter),
+                "profile_state": feedProfileState.map(AnyCodableValue.string) ?? .null,
+                "applied_context": .string(activeFeedIsSearchMode ? "query" : (activeFeedFilter == "For You" ? "for_you" : "preset")),
                 "has_query": .bool(!searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty),
                 "save_count": preview.saveCount.map(AnyCodableValue.int) ?? .null,
                 "variant_count": preview.variantCount.map(AnyCodableValue.int) ?? .null,
+                "why_tag_1": whyTags.first.map(AnyCodableValue.string) ?? .null,
+                "why_tag_2": whyTags.dropFirst().first.map(AnyCodableValue.string) ?? .null,
             ]
         )
     }
 
     private func trackExploreOpen(preview: RecipePreview, rank: Int) {
+        let key = "\(feedSessionId)::\(preview.id)"
+        openedImpressionKeys.insert(key)
+
         BehaviorTelemetry.shared.track(
             eventType: "explore_opened_recipe",
             surface: "explore",
-            sessionId: searchId ?? feedSessionId,
+            sessionId: feedSessionId,
             entityType: "recipe",
             entityId: preview.id,
+            algorithmVersion: feedAlgorithmVersion,
             payload: [
                 "rank": .int(rank),
-                "sort": .string(selectedSort.rawValue),
-                "filter": .string(selectedFilter),
+                "filter": .string(feedFilterValue()),
+                "preset_id": activeFeedFilter == "For You" || activeFeedIsSearchMode ? .null : .string(activeFeedFilter),
+                "profile_state": feedProfileState.map(AnyCodableValue.string) ?? .null,
             ]
         )
     }
-}
 
-// MARK: - Sort Mode
+    private func trackExploreSkip(preview: RecipePreview, rank: Int) {
+        let key = "\(feedSessionId)::\(preview.id)"
+        guard seenImpressionKeys.contains(key) else { return }
+        guard !openedImpressionKeys.contains(key) else { return }
+        guard skippedImpressionKeys.insert(key).inserted else { return }
 
-/// Explore feed sort options. Maps to the API's sort_by parameter.
-enum ExploreSortMode: String, CaseIterable, Identifiable {
-    case recent
-    case popular
-    case trending
-
-    var id: String { rawValue }
-
-    var label: String {
-        switch self {
-        case .recent: return "New"
-        case .popular: return "Popular"
-        case .trending: return "Trending"
-        }
-    }
-
-    var shortLabel: String { label }
-
-    var icon: String {
-        switch self {
-        case .recent: return "clock"
-        case .popular: return "heart.fill"
-        case .trending: return "flame.fill"
-        }
+        BehaviorTelemetry.shared.track(
+            eventType: "explore_skipped_recipe",
+            surface: "explore",
+            sessionId: feedSessionId,
+            entityType: "recipe",
+            entityId: preview.id,
+            algorithmVersion: feedAlgorithmVersion,
+            payload: [
+                "rank": .int(rank),
+                "filter": .string(feedFilterValue()),
+                "preset_id": activeFeedFilter == "For You" || activeFeedIsSearchMode ? .null : .string(activeFeedFilter),
+                "profile_state": feedProfileState.map(AnyCodableValue.string) ?? .null,
+            ]
+        )
     }
 }
 
@@ -430,6 +469,19 @@ private struct ExploreCardView: View {
                             .foregroundStyle(.white.opacity(0.85))
                             .lineLimit(2)
                             .shadow(color: .black.opacity(0.3), radius: 4, x: 0, y: 1)
+
+                        if let whyTags = preview.whyTags, !whyTags.isEmpty {
+                            HStack(spacing: AlchemySpacing.xs) {
+                                ForEach(Array(whyTags.prefix(2)), id: \.self) { tag in
+                                    Text(tag)
+                                        .font(.system(size: 12, weight: .semibold))
+                                        .foregroundStyle(.white.opacity(0.92))
+                                        .padding(.horizontal, 10)
+                                        .padding(.vertical, 6)
+                                        .background(.ultraThinMaterial, in: Capsule())
+                                }
+                            }
+                        }
 
                         if let socialProof = preview.socialProofText {
                             HStack(spacing: AlchemySpacing.xs) {

@@ -1,6 +1,5 @@
 import SwiftUI
 import NukeUI
-import Lottie
 
 /// Full recipe detail view with hero image, sticky scroll title, ingredient table,
 /// steps, and floating tweak chat bar.
@@ -23,6 +22,8 @@ struct RecipeDetailView: View {
     var sourceSurface: String? = nil
     /// Upstream session identifier, such as an Explore search ID.
     var sourceSessionId: String? = nil
+    /// Upstream algorithm version for attribution when this detail came from For You.
+    var algorithmVersion: String? = nil
 
     /// Whether this view should show "Add to Cookbook" (save) action
     var showAddToCookbook: Bool = false
@@ -73,6 +74,7 @@ struct RecipeDetailView: View {
         recipeId: String,
         sourceSurface: String? = nil,
         sourceSessionId: String? = nil,
+        algorithmVersion: String? = nil,
         showAddToCookbook: Bool = false,
         showShareButton: Bool = true,
         showTweakBar: Bool = true,
@@ -83,6 +85,7 @@ struct RecipeDetailView: View {
         self.preloadedDetail = nil
         self.sourceSurface = sourceSurface
         self.sourceSessionId = sourceSessionId
+        self.algorithmVersion = algorithmVersion
         self.showAddToCookbook = showAddToCookbook
         self.showShareButton = showShareButton
         self.showTweakBar = showTweakBar
@@ -95,6 +98,7 @@ struct RecipeDetailView: View {
         detail: RecipeDetail,
         sourceSurface: String? = nil,
         sourceSessionId: String? = nil,
+        algorithmVersion: String? = nil,
         showAddToCookbook: Bool = false,
         showShareButton: Bool = true,
         showTweakBar: Bool = true,
@@ -105,6 +109,7 @@ struct RecipeDetailView: View {
         self.preloadedDetail = detail
         self.sourceSurface = sourceSurface
         self.sourceSessionId = sourceSessionId
+        self.algorithmVersion = algorithmVersion
         self.showAddToCookbook = showAddToCookbook
         self.showShareButton = showShareButton
         self.showTweakBar = showTweakBar
@@ -156,9 +161,7 @@ struct RecipeDetailView: View {
     private var loadingView: some View {
         ZStack {
             AlchemyColors.background.ignoresSafeArea()
-            LottieView(animation: .named("alchemy-loading"))
-                .playing(loopMode: .loop)
-                .frame(width: 80, height: 80)
+            AlchemyLoadingIndicator()
         }
     }
 
@@ -536,7 +539,9 @@ struct RecipeDetailView: View {
                 method: .post,
                 body: SaveRecipeRequest(
                     autopersonalize: nil,
-                    sourceSurface: sourceSurface
+                    sourceSurface: sourceSurface,
+                    sourceSessionId: sourceSessionId,
+                    algorithmVersion: algorithmVersion
                 )
             )
             withAnimation { isSaved = true }
@@ -815,6 +820,7 @@ struct RecipeDetailView: View {
             entityType: "recipe",
             entityId: recipeId,
             sourceSurface: sourceSurface,
+            algorithmVersion: algorithmVersion,
             payload: enrichedPayload.isEmpty ? nil : enrichedPayload
         )
     }

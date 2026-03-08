@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Alchemy API",
-    "version": "3.6.0",
+    "version": "3.6.1",
     "description": "API contract for Alchemy — an AI-driven recipe creation and management platform.\nCovers the user-facing v1 API at api.cookwithalchemy.com and the admin API at admin.cookwithalchemy.com.\n"
   },
   "servers": [
@@ -1678,6 +1678,9 @@
                 "properties": {
                   "message": {
                     "type": "string"
+                  },
+                  "launch_context": {
+                    "$ref": "#/components/schemas/ChatLaunchContext"
                   }
                 }
               }
@@ -4078,6 +4081,34 @@
           "presentation_preferences": {
             "type": "object",
             "additionalProperties": true
+          },
+          "extended_preferences": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ExtendedPreferenceEntry"
+            }
+          }
+        }
+      },
+      "ExtendedPreferenceEntry": {
+        "type": "object",
+        "required": [
+          "values"
+        ],
+        "properties": {
+          "values": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "propagation": {
+            "type": "string",
+            "enum": [
+              "retroactive",
+              "forward_only",
+              "none"
+            ]
           }
         }
       },
@@ -4206,6 +4237,54 @@
           "candidate_presented",
           "iterating"
         ]
+      },
+      "PreferenceEditingIntent": {
+        "type": "object",
+        "required": [
+          "key"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "propagation": {
+            "type": "string",
+            "enum": [
+              "retroactive",
+              "forward_only",
+              "none"
+            ]
+          },
+          "system_image": {
+            "type": "string"
+          }
+        }
+      },
+      "ChatLaunchContext": {
+        "type": "object",
+        "properties": {
+          "workflow": {
+            "type": "string",
+            "enum": [
+              "preferences"
+            ]
+          },
+          "entry_surface": {
+            "type": "string"
+          },
+          "preference_editing_intent": {
+            "$ref": "#/components/schemas/PreferenceEditingIntent"
+          }
+        }
       },
       "ChatResponseContext": {
         "type": "object",

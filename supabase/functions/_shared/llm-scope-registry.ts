@@ -151,6 +151,26 @@ export const LLM_SCOPE_REGISTRY = {
     fallback_policy: "none",
     telemetry_tags: { task: "recipe_search_rerank", criticality: "medium" },
   },
+  explore_for_you_profile: {
+    output_contract: "explore_for_you_profile_v1",
+    mode: "classification",
+    retry_policy: {
+      max_attempts: 2,
+      retryable_codes: [...STRICT_JSON_RETRYABLE_CODES, ...STANDARD_RETRYABLE_CODES],
+    },
+    fallback_policy: "none",
+    telemetry_tags: { task: "explore_for_you_profile", criticality: "high" },
+  },
+  explore_for_you_rank: {
+    output_contract: "explore_for_you_rank_v1",
+    mode: "classification",
+    retry_policy: {
+      max_attempts: 2,
+      retryable_codes: [...STRICT_JSON_RETRYABLE_CODES, ...STANDARD_RETRYABLE_CODES],
+    },
+    fallback_policy: "none",
+    telemetry_tags: { task: "explore_for_you_rank", criticality: "high" },
+  },
   ingredient_relation_infer: {
     output_contract: "ingredient_relation_infer_v1",
     mode: "classification",

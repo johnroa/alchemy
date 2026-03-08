@@ -25,6 +25,7 @@ Edge function implementing `/v1/*` routes.
 - `GET /v1/recipes/{id}/history`
 - `GET /v1/recipes/cookbook`
 - `POST /v1/recipes/search`
+- `POST /v1/recipes/explore/for-you`
 - `POST /v1/recipes/{id}/attachments`
 - `PATCH /v1/recipes/{id}/attachments/{attachment_id}`
 - `DELETE /v1/recipes/{id}/attachments/{attachment_id}`
@@ -70,6 +71,8 @@ Edge function implementing `/v1/*` routes.
   - `recipe_search_embed`
   - `recipe_search_interpret`
   - `recipe_search_rerank`
+  - `explore_for_you_profile`
+  - `explore_for_you_rank`
   - `preference_normalize`
   - `equipment_filter`
 

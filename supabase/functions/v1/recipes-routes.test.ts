@@ -11,7 +11,7 @@ type StoredSearchSession = {
   id: string;
   owner_user_id: string;
   surface: "explore" | "chat";
-  applied_context: "all" | "preset" | "query";
+  applied_context: "all" | "preset" | "query" | "for_you";
   normalized_input: string | null;
   preset_id: string | null;
   interpreted_intent: unknown;
@@ -19,6 +19,9 @@ type StoredSearchSession = {
   snapshot_cutoff_indexed_at: string;
   page1_promoted_recipe_ids: string[];
   hybrid_items: unknown[];
+  algorithm_version?: string | null;
+  profile_state?: string | null;
+  rationale_tags_by_recipe?: unknown;
   expires_at: string;
 };
 
@@ -159,6 +162,8 @@ const createDeps = (overrides: Record<string, unknown> = {}) => ({
     max_difficulty: 1,
     presentation_preferences: {},
   }),
+  getMemorySnapshot: async () => ({}),
+  getActiveMemories: async () => [],
   resolvePresentationOptions: unused,
   fetchRecipeView: unused,
   fetchChatMessages: unused,
@@ -172,6 +177,7 @@ const createDeps = (overrides: Record<string, unknown> = {}) => ({
   ensurePersistedRecipeImageRequest: unused,
   scheduleImageQueueDrain: unused,
   searchRecipes,
+  getExploreForYouFeed: unused,
   toJsonValue: (value: unknown) => value,
   computeSafetyExclusions: () => undefined,
   ...overrides,
@@ -839,6 +845,103 @@ Deno.test("POST /recipes/search rejects invalid cursors", async () => {
   }
   if (error.status !== 400 || error.code !== "recipe_search_cursor_invalid") {
     throw new Error("expected recipe_search_cursor_invalid");
+  }
+});
+
+Deno.test("POST /recipes/explore/for-you returns the personalized feed and logs feed-served telemetry", async () => {
+  const behaviorEvents: unknown[] = [];
+
+  const response = await handleRecipeRoutes(
+    createRouteContext({
+      path: "/recipes/explore/for-you",
+      method: "POST",
+      body: { preset_id: "Healthy", limit: 10 },
+      serviceClient: {
+        from(table: string) {
+          if (table === "behavior_events") {
+            return {
+              async upsert(payload: unknown) {
+                behaviorEvents.push(payload);
+                return { error: null };
+              },
+            };
+          }
+
+          if (table === "user_acquisition_profiles") {
+            return {
+              select(_columns: string) {
+                return {
+                  eq(_column: string, _value: string) {
+                    return {
+                      async maybeSingle() {
+                        return { data: null, error: null };
+                      },
+                    };
+                  },
+                };
+              },
+              async insert(_payload: unknown) {
+                return { error: null };
+              },
+            };
+          }
+
+          throw new Error(`unexpected table: ${table}`);
+        },
+      },
+    }) as never,
+    createDeps({
+      getExploreForYouFeed: async () => ({
+        feed_id: "feed-1",
+        applied_context: "preset",
+        profile_state: "warm",
+        algorithm_version: "for_you_v1",
+        items: [{
+          id: "recipe-1",
+          title: "Lemon Tahini Bowls",
+          summary: "Fast grain bowls with a bright tahini finish.",
+          image_url: null,
+          image_status: "pending",
+          category: "Dinner",
+          visibility: "public",
+          updated_at: "2026-03-07T00:00:00.000Z",
+          quick_stats: null,
+          why_tags: ["Quick cleanup", "Leans healthy"],
+        }],
+        next_cursor: null,
+        no_match: null,
+        internal: {
+          rerank_used: true,
+          candidate_count: 24,
+          fallback_path: null,
+          rationale_tags_by_recipe: { "recipe-1": ["Quick cleanup", "Leans healthy"] },
+        },
+      }),
+    }) as never,
+  );
+
+  if (!response || response.status !== 200) {
+    throw new Error("expected For You response");
+  }
+
+  const body = await parseJson(response);
+  if (body.feed_id !== "feed-1" || body.algorithm_version !== "for_you_v1") {
+    throw new Error("expected feed metadata in response");
+  }
+  if (!Array.isArray(body.items) || body.items.length !== 1) {
+    throw new Error("expected personalized feed items");
+  }
+
+  const loggedPayload = behaviorEvents[0];
+  if (!Array.isArray(loggedPayload) || loggedPayload.length !== 1) {
+    throw new Error("expected explore_feed_served behavior event");
+  }
+  const loggedEvent = loggedPayload[0] as Record<string, unknown>;
+  if (loggedEvent["event_type"] !== "explore_feed_served") {
+    throw new Error("expected explore_feed_served event type");
+  }
+  if (loggedEvent["algorithm_version"] !== "for_you_v1") {
+    throw new Error("expected algorithm version on feed-served telemetry");
   }
 });
 
