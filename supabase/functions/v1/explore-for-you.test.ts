@@ -1,4 +1,5 @@
 import {
+  attemptHotPathRerank,
   buildPresetAugmentedRetrievalText,
   dedupeCardsByContentSignature,
 } from "./search/for-you.ts";
@@ -90,5 +91,30 @@ Deno.test("buildPresetAugmentedRetrievalText appends the Explore preset without 
   }
   if (!result.includes("Explore focus: Quick & Easy.")) {
     throw new Error("expected the preset to be appended to the retrieval text");
+  }
+});
+
+Deno.test("attemptHotPathRerank returns timeout when rerank misses the hot-path budget", async () => {
+  const rerankTask = new Promise((resolve) => setTimeout(() => resolve("late"), 25));
+  const outcome = await attemptHotPathRerank({
+    rerankTask,
+    timeoutMs: 5,
+  });
+
+  if (outcome.kind !== "timeout") {
+    throw new Error(`expected timeout outcome, received ${outcome.kind}`);
+  }
+
+  await rerankTask;
+});
+
+Deno.test("attemptHotPathRerank surfaces rerank errors without hanging the feed", async () => {
+  const outcome = await attemptHotPathRerank({
+    rerankTask: Promise.reject(new Error("rerank failed")),
+    timeoutMs: 20,
+  });
+
+  if (outcome.kind !== "error") {
+    throw new Error(`expected error outcome, received ${outcome.kind}`);
   }
 });

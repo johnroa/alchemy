@@ -106,6 +106,7 @@ const DEFAULT_CANDIDATE_POOL_LIMIT = 160;
 const DEFAULT_RERANK_LIMIT = 30;
 const DEFAULT_EXPLORATION_RATIO = 0.2;
 const DEFAULT_FRESHNESS_WINDOW_HOURS = 48;
+const RERANK_HOT_PATH_BUDGET_MS = 1_200;
 
 const parseTimestamp = (value: string | null | undefined): number | null => {
   if (!value) return null;
@@ -962,6 +963,30 @@ const normalizeRationaleTagsFromSession = (value: JsonValue): Record<string, str
   return result;
 };
 
+export const attemptHotPathRerank = async (params: {
+  rerankTask: Promise<unknown>;
+  timeoutMs: number;
+}): Promise<
+  | { kind: "result"; value: unknown }
+  | { kind: "timeout" }
+  | { kind: "error"; error: unknown }
+> => {
+  let timeoutId: number | null = null;
+  const timeoutPromise = new Promise<{ kind: "timeout" }>((resolve) => {
+    timeoutId = setTimeout(() => resolve({ kind: "timeout" }), params.timeoutMs);
+  });
+
+  const task = params.rerankTask
+    .then((value) => ({ kind: "result" as const, value }))
+    .catch((error) => ({ kind: "error" as const, error }));
+
+  const outcome = await Promise.race([task, timeoutPromise]);
+  if (timeoutId != null) {
+    clearTimeout(timeoutId);
+  }
+  return outcome;
+};
+
 export const getExploreForYouFeed = async (params: {
   serviceClient: SupabaseClient;
   userId: string;
@@ -1098,28 +1123,34 @@ export const getExploreForYouFeed = async (params: {
 
   if (hybridItems.length > 1) {
     const rerankCandidates = hybridItems.slice(0, algorithmConfig.page1RerankLimit);
-    try {
-      const rerankRaw = await llmGateway.rerankExploreForYou({
-        client: params.serviceClient,
-        userId: params.userId,
-        requestId: params.requestId,
-        timeoutMs: 2_200,
-        context: {
-          algorithm_version: algorithm.version,
-          profile_state: tasteProfile.profileState,
-          exploration_ratio: algorithmConfig.explorationRatio,
-          profile: tasteProfile.profileJson,
-          signal_summary: tasteProfile.signalSummary,
-          preset_id: normalizedPresetId,
-          hard_filters: retrievalIntent.hard_filters as unknown as JsonValue,
-          recent_exposure_recipe_ids: [...signals.recentExposureRecipeIds],
-          saved_recipe_ids: [...signals.savedRecipeIds],
-          candidates: rerankCandidates.map(serializeSearchCard),
-        },
-        modelOverrides: params.modelOverrides,
-      });
+    const rerankTask = llmGateway.rerankExploreForYou({
+      client: params.serviceClient,
+      userId: params.userId,
+      requestId: params.requestId,
+      timeoutMs: RERANK_HOT_PATH_BUDGET_MS,
+      context: {
+        algorithm_version: algorithm.version,
+        profile_state: tasteProfile.profileState,
+        exploration_ratio: algorithmConfig.explorationRatio,
+        profile: tasteProfile.profileJson,
+        signal_summary: tasteProfile.signalSummary,
+        preset_id: normalizedPresetId,
+        hard_filters: retrievalIntent.hard_filters as unknown as JsonValue,
+        recent_exposure_recipe_ids: [...signals.recentExposureRecipeIds],
+        saved_recipe_ids: [...signals.savedRecipeIds],
+        candidates: rerankCandidates.map(serializeSearchCard),
+      },
+      modelOverrides: params.modelOverrides,
+    });
+
+    const rerankOutcome = await attemptHotPathRerank({
+      rerankTask,
+      timeoutMs: RERANK_HOT_PATH_BUDGET_MS,
+    });
+
+    if (rerankOutcome.kind === "result") {
       const reranked = normalizeRerankResult({
-        raw: rerankRaw,
+        raw: rerankOutcome.value,
         candidates: rerankCandidates,
       });
       rerankUsed = true;
@@ -1128,8 +1159,13 @@ export const getExploreForYouFeed = async (params: {
         ...reranked.orderedItems,
         ...hybridItems.slice(rerankCandidates.length),
       ];
-    } catch {
-      fallbackPath = fallbackPath ?? "rank_scope_failed";
+    } else {
+      if (rerankOutcome.kind === "timeout") {
+        fallbackPath = fallbackPath ?? "rank_scope_timeout";
+        void rerankTask.catch(() => undefined);
+      } else {
+        fallbackPath = fallbackPath ?? "rank_scope_failed";
+      }
     }
   }
 

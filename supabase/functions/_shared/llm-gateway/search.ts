@@ -277,6 +277,10 @@ export async function rerankExploreForYou(params: {
       modelConfigOverride: {
         timeout_ms: params.timeoutMs,
       },
+      retryPolicyOverride: {
+        max_attempts: 1,
+        retryable_codes: [],
+      },
     });
     addTokens(accum, inputTokens, outputTokens, config);
 

@@ -343,6 +343,8 @@ Outputs:
 
 The rerank is intentionally separate from the generic search rerank. Explore is not treated as a search sort.
 
+The request path uses a tight rerank hot-path budget. If rerank does not return quickly enough, the feed falls back immediately to retrieval order instead of making the client wait on a long model timeout.
+
 If reranking fails:
 
 - the request still succeeds
