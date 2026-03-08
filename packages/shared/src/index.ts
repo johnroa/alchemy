@@ -50,3 +50,13 @@ export {
   getImageSimulationScenarioById,
   type ImageSimulationScenario
 } from "./image-simulation-catalog";
+export {
+  buildSemanticDescriptorId,
+  normalizeRecipeSemanticProfile,
+  normalizeSemanticAxis,
+  normalizeSemanticDescriptor,
+  normalizeSemanticKey,
+  type RecipeSemanticDescriptor,
+  type RecipeSemanticProfile,
+  type SuggestedChip,
+} from "./recipe-semantics";

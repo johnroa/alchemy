@@ -2,6 +2,13 @@
 
 ## [Unreleased] — 2026-03-07
 
+### Shared Semantic Facets + Server-Owned Chips (v3.7.2)
+
+- Added high-recall semantic descriptor support to recipe metadata enrichment so canonical recipes can persist a structured `semantic_profile` inventory for downstream chip generation.
+- Moved Cookbook and Explore chip generation to the server, with `suggested_chips` on both cookbook and personalized Explore responses plus per-entry `matched_chip_ids` for local cookbook filtering.
+- Wired Explore to accept `chip_id` while keeping `preset_id` compatibility plumbing, and updated iOS to render server-provided chips instead of hard-coded Explore presets or client-side cookbook heuristics.
+- Stored variant semantic overlays inside `variant_tags.semantic_profile`, surfaced canonical semantics and variant semantic labels in Admin recipe inspection, and added metadata-pipeline/admin analytics visibility for descriptor volume and chip usage.
+- Updated OpenAPI to `3.7.2`, regenerated contracts/admin API docs, and added targeted backend/admin changes for the new shared semantic contract.
 ### Memory Writeback Activation + Retrieval Operations (v3.7.1)
 
 - Turned on automatic non-blocking memory queue draining after chat session creation and message turns so enqueued memory work now realizes the intended writeback pipeline during normal usage.

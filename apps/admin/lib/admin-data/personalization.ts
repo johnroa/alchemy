@@ -54,6 +54,12 @@ type AcquisitionProfileRow = {
   signed_in_at: string | null;
 };
 
+type ChipEventRow = {
+  event_type: string | null;
+  occurred_at: string | null;
+  payload: unknown;
+};
+
 export type PersonalizationSeriesPoint = {
   bucketStart: string;
   label: string;
@@ -260,6 +266,19 @@ const loadFeedServedRows = async (query: AnalyticsQueryState): Promise<FeedServe
     eq: ["event_type", "explore_feed_served"],
   });
 
+const loadChipEvents = async (
+  query: AnalyticsQueryState,
+  eventType: "explore_chip_applied" | "cookbook_chip_applied",
+): Promise<ChipEventRow[]> =>
+  await pagedSelect<ChipEventRow>({
+    table: "behavior_events",
+    countColumn: "event_id",
+    columns: "event_type,occurred_at,payload",
+    windowColumn: "occurred_at",
+    windowStart: new Date(Date.now() - getHoursForRange(query.range) * 60 * 60 * 1000).toISOString(),
+    eq: ["event_type", eventType],
+  });
+
 const loadImpressionOutcomes = async (query: AnalyticsQueryState): Promise<ImpressionOutcomeRow[]> => {
   const client = getAdminClient();
   const windowStart = new Date(Date.now() - getHoursForRange(query.range) * 60 * 60 * 1000).toISOString();
@@ -335,6 +354,7 @@ export const buildPersonalizationSnapshot = (input: {
   impressionRows: ImpressionOutcomeRow[];
   tasteProfiles: TasteProfileRow[];
   acquisitionProfiles: AcquisitionProfileRow[];
+  chipEvents: ChipEventRow[];
 }) => {
   const { buckets } = buildBuckets(input.query);
   const series = createSeries(buckets);
@@ -361,6 +381,8 @@ export const buildPersonalizationSnapshot = (input: {
 
   const impressionsByVersion = new Map<string, ImpressionOutcomeRow[]>();
   const whyTagCounts = new Map<string, number>();
+  const exploreChipCounts = new Map<string, number>();
+  const cookbookChipCounts = new Map<string, number>();
   const profileStateBreakdown = new Map<string, { impressions: number; saves: number; cooks: number }>();
   const presetBreakdown = new Map<string, { impressions: number; saves: number; cooks: number }>();
   const lifecycleBreakdown = new Map<string, { impressions: number; saves: number; cooks: number }>();
@@ -409,6 +431,24 @@ export const buildPersonalizationSnapshot = (input: {
     acquisitionEntry.saves += row.saved ? 1 : 0;
     acquisitionEntry.cooks += row.cooked ? 1 : 0;
     acquisitionBreakdown.set(acquisitionKey, acquisitionEntry);
+  }
+
+  for (const row of input.chipEvents) {
+    const payload = toRecord(row.payload as never);
+    const chipLabel = normalizeLabel(
+      typeof payload["chip_label"] === "string"
+        ? payload["chip_label"]
+        : typeof payload["chip"] === "string"
+        ? payload["chip"]
+        : typeof payload["chip_id"] === "string"
+        ? payload["chip_id"]
+        : null,
+      "unknown"
+    );
+    const target = row.event_type === "cookbook_chip_applied"
+      ? cookbookChipCounts
+      : exploreChipCounts;
+    target.set(chipLabel, (target.get(chipLabel) ?? 0) + 1);
   }
 
   const buildVersionRow = (versionKey: string, label: string, isActive: boolean) => {
@@ -563,16 +603,26 @@ export const buildPersonalizationSnapshot = (input: {
         cookRate: safeRatio(value.cooks, value.impressions),
       }))
       .sort((left, right) => right.impressions - left.impressions),
+    exploreChipRows: [...exploreChipCounts.entries()]
+      .map(([chip, uses]) => ({ chip, uses }))
+      .sort((left, right) => right.uses - left.uses)
+      .slice(0, 12),
+    cookbookChipRows: [...cookbookChipCounts.entries()]
+      .map(([chip, uses]) => ({ chip, uses }))
+      .sort((left, right) => right.uses - left.uses)
+      .slice(0, 12),
     coldStartComparison,
   };
 };
 
 export const getPersonalizationBoardData = async (query: AnalyticsQueryState) => {
-  const [versions, feedServedRows, impressionRows, tasteProfiles] = await Promise.all([
+  const [versions, feedServedRows, impressionRows, tasteProfiles, exploreChipEvents, cookbookChipEvents] = await Promise.all([
     loadAlgorithmVersions(),
     loadFeedServedRows(query),
     loadImpressionOutcomes(query),
     loadTasteProfiles(),
+    loadChipEvents(query, "explore_chip_applied"),
+    loadChipEvents(query, "cookbook_chip_applied"),
   ]);
   const userIds = [...new Set([
     ...feedServedRows.map((row) => row.user_id).filter((value): value is string => Boolean(value)),
@@ -587,5 +637,6 @@ export const getPersonalizationBoardData = async (query: AnalyticsQueryState) =>
     impressionRows,
     tasteProfiles,
     acquisitionProfiles,
+    chipEvents: [...exploreChipEvents, ...cookbookChipEvents],
   });
 };

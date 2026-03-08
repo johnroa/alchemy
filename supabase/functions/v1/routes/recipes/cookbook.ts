@@ -11,7 +11,12 @@ export const handleCookbookRoutes = async (
   deps: RecipesDeps,
 ): Promise<Response | null> => {
   const { request, segments, method, auth, client, serviceClient, requestId, respond } = context;
-  const { parseUuid, logChangelog, buildCookbookItems, buildCookbookInsightDeterministic } = deps;
+  const {
+    parseUuid,
+    logChangelog,
+    buildCookbookFeed,
+    buildCookbookInsightDeterministic,
+  } = deps;
 
   // ── GET/POST /collections ──
   if (segments.length === 1 && segments[0] === "collections") {
@@ -118,9 +123,16 @@ export const handleCookbookRoutes = async (
     segments[1] === "cookbook" &&
     method === "GET"
   ) {
-    const items = await buildCookbookItems(client, auth.userId);
+    const { items, suggestedChips } = await buildCookbookFeed(
+      client,
+      auth.userId,
+    );
     const cookbookInsight = buildCookbookInsightDeterministic(items);
-    return respond(200, { items, cookbook_insight: cookbookInsight });
+    return respond(200, {
+      items,
+      suggested_chips: suggestedChips,
+      cookbook_insight: cookbookInsight,
+    });
   }
 
   return null;

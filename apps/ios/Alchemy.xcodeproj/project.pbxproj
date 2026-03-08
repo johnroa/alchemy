@@ -10,7 +10,6 @@
 		0102A7DABC96D0AF3534FE85 /* RecipeDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 635F4D1E11354088D7E60332 /* RecipeDetailView.swift */; };
 		09F9CB80C3738977CD00F63B /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D92723C258CA540A3F92B30C /* SettingsView.swift */; };
 		0CC44F91B845E0A2A59565C2 /* AnimatedMeshBackground.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9BC218713992D6BA03C55B5 /* AnimatedMeshBackground.swift */; };
-		0D54B7F2A6C9437FBB3F7E1A /* AlchemyLoadingIndicator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E5D3C44B0CB42C1A4A3F9E8 /* AlchemyLoadingIndicator.swift */; };
 		13D3D15DE40CEB19C2055317 /* NukeUI in Frameworks */ = {isa = PBXBuildFile; productRef = 8D91DB8AD300F7012A81FA10 /* NukeUI */; };
 		18E73A73E21723DD2702F997 /* APIModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6846E9DD30BF0EE67FFB668 /* APIModels.swift */; };
 		1BCAA1BF4DDE155C7DFDC1AD /* CompactGauge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68F1901D9F8AEF2C890D5D53 /* CompactGauge.swift */; };
@@ -24,7 +23,9 @@
 		388321F43D6C4881E4D57F44 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 6B23DB2CD81D8EA131F8420C /* Assets.xcassets */; };
 		3886968BF9A5F45351E8C2F6 /* ImportViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2EFB886BFCD48E94BCC03D46 /* ImportViewModel.swift */; };
 		3A51B8D2AC4FDC9BD9E34F47 /* AlchemyColors.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C28B61F4E21CEE9BBC0973A /* AlchemyColors.swift */; };
+		491373F0B9EBED654EC452C0 /* AlchemyLoadingIndicator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79CEDA1BF840345FE7F300BC /* AlchemyLoadingIndicator.swift */; };
 		4A522F0FAC7B7669D0DBE472 /* AlchemySpacing.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBB2A0915507D2539E028F35 /* AlchemySpacing.swift */; };
+		4DA6C50AC4197FD4778D22AF /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = 6E52E636901BDFB3D54DAC16 /* Sentry */; };
 		51A364514E744B4193F2DA7B /* ImportMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8043174613A6F56CD380A47 /* ImportMenu.swift */; };
 		53C737CD4B44A340BC9F64A9 /* GenerateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CD75C625E706ECE7EB76187 /* GenerateView.swift */; };
 		581098E885FA7B26E26C5ECB /* RecipeCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6AA8D5FB7A26CA063097587 /* RecipeCardView.swift */; };
@@ -36,7 +37,6 @@
 		7C5265E1BA60220F06AB2E76 /* ImportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A7D97690AB17BAA8EF132F1 /* ImportView.swift */; };
 		92B2D41E5F1EF5194B385E98 /* TabShell.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1905F952E153213B82628C1E /* TabShell.swift */; };
 		9F99918ACFA548C23B11F940 /* Lottie in Frameworks */ = {isa = PBXBuildFile; productRef = 92C2805B6E32180FC1015CF1 /* Lottie */; };
-		A1D4D25A9B2F4D3AA7C18E11 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = A1D4D25C9B2F4D3AA7C18E11 /* Sentry */; };
 		A6DB3E6D49457E675F369DEB /* RecipeURLDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DA9E3E09DF919C668A03C35 /* RecipeURLDetector.swift */; };
 		A8F2490B77EECF2BFF284BAC /* SupabaseManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B8F424DA5D2661C4CB5914A /* SupabaseManager.swift */; };
 		ABD002AB352654AB6DE0B7DE /* CookbookView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0217F804B0511D28857FC816 /* CookbookView.swift */; };
@@ -83,7 +83,6 @@
 		1905F952E153213B82628C1E /* TabShell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabShell.swift; sourceTree = "<group>"; };
 		1A7D97690AB17BAA8EF132F1 /* ImportView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportView.swift; sourceTree = "<group>"; };
 		1C28B61F4E21CEE9BBC0973A /* AlchemyColors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlchemyColors.swift; sourceTree = "<group>"; };
-		1E5D3C44B0CB42C1A4A3F9E8 /* AlchemyLoadingIndicator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlchemyLoadingIndicator.swift; sourceTree = "<group>"; };
 		20A4C7C99FB3A4527D8BD1AA /* NutritionGauge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NutritionGauge.swift; sourceTree = "<group>"; };
 		2EFB886BFCD48E94BCC03D46 /* ImportViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportViewModel.swift; sourceTree = "<group>"; };
 		31A803D819EE21D9B9F1C894 /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Release.xcconfig; sourceTree = "<group>"; };
@@ -99,6 +98,7 @@
 		680B4527FA728D679417F0A5 /* AlchemyApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlchemyApp.swift; sourceTree = "<group>"; };
 		68F1901D9F8AEF2C890D5D53 /* CompactGauge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompactGauge.swift; sourceTree = "<group>"; };
 		6B23DB2CD81D8EA131F8420C /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		79CEDA1BF840345FE7F300BC /* AlchemyLoadingIndicator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlchemyLoadingIndicator.swift; sourceTree = "<group>"; };
 		7BC730A13C51300795CEBCC2 /* Alchemy.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Alchemy.entitlements; sourceTree = "<group>"; };
 		7E5E7F9B8EADC528775CC62E /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
 		815B265102D0AC689E0800AB /* AuthManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthManager.swift; sourceTree = "<group>"; };
@@ -131,7 +131,7 @@
 				13D3D15DE40CEB19C2055317 /* NukeUI in Frameworks */,
 				9F99918ACFA548C23B11F940 /* Lottie in Frameworks */,
 				67419F9DFC457F1F202E8B54 /* Supabase in Frameworks */,
-				A1D4D25A9B2F4D3AA7C18E11 /* Sentry in Frameworks */,
+				4DA6C50AC4197FD4778D22AF /* Sentry in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -282,7 +282,7 @@
 		87D393C6F8B37EE0DD94C4B3 /* Components */ = {
 			isa = PBXGroup;
 			children = (
-				1E5D3C44B0CB42C1A4A3F9E8 /* AlchemyLoadingIndicator.swift */,
+				79CEDA1BF840345FE7F300BC /* AlchemyLoadingIndicator.swift */,
 				E9BC218713992D6BA03C55B5 /* AnimatedMeshBackground.swift */,
 				AE34608B8617C7346206908A /* ChatBubble.swift */,
 				FB9DB9E35B45274A732B6943 /* ClipboardBanner.swift */,
@@ -403,7 +403,7 @@
 				8D91DB8AD300F7012A81FA10 /* NukeUI */,
 				92C2805B6E32180FC1015CF1 /* Lottie */,
 				768CD6AAFD77D3BB27D13150 /* Supabase */,
-				A1D4D25C9B2F4D3AA7C18E11 /* Sentry */,
+				6E52E636901BDFB3D54DAC16 /* Sentry */,
 			);
 			productName = Alchemy;
 			productReference = 47F2029BC56872F28BD677E1 /* Alchemy.app */;
@@ -456,8 +456,8 @@
 			packageReferences = (
 				A0B459FC528A7C26DFA6238B /* XCRemoteSwiftPackageReference "lottie-ios" */,
 				0A924F8C1492FAC0E30AC65F /* XCRemoteSwiftPackageReference "Nuke" */,
+				5057434D94B3E59B5A973CEA /* XCRemoteSwiftPackageReference "sentry-cocoa" */,
 				6226B36222665EA20B944668 /* XCRemoteSwiftPackageReference "supabase-swift" */,
-				A1D4D25B9B2F4D3AA7C18E11 /* XCRemoteSwiftPackageReference "sentry-cocoa" */,
 			);
 			projectDirPath = "";
 			projectRoot = "";
@@ -489,8 +489,8 @@
 				F5372D3CC30E4886B6B137EE /* APIError.swift in Sources */,
 				18E73A73E21723DD2702F997 /* APIModels.swift in Sources */,
 				F205CC290343B5D206997842 /* AlchemyApp.swift in Sources */,
-				0D54B7F2A6C9437FBB3F7E1A /* AlchemyLoadingIndicator.swift in Sources */,
 				3A51B8D2AC4FDC9BD9E34F47 /* AlchemyColors.swift in Sources */,
+				491373F0B9EBED654EC452C0 /* AlchemyLoadingIndicator.swift in Sources */,
 				4A522F0FAC7B7669D0DBE472 /* AlchemySpacing.swift in Sources */,
 				298E8D59DB41594A075B7D81 /* AlchemyTypography.swift in Sources */,
 				0CC44F91B845E0A2A59565C2 /* AnimatedMeshBackground.swift in Sources */,
@@ -793,20 +793,20 @@
 				minimumVersion = 12.0.0;
 			};
 		};
+		5057434D94B3E59B5A973CEA /* XCRemoteSwiftPackageReference "sentry-cocoa" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/getsentry/sentry-cocoa";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 9.1.0;
+			};
+		};
 		6226B36222665EA20B944668 /* XCRemoteSwiftPackageReference "supabase-swift" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/supabase/supabase-swift";
 			requirement = {
 				kind = upToNextMajorVersion;
 				minimumVersion = 2.0.0;
-			};
-		};
-		A1D4D25B9B2F4D3AA7C18E11 /* XCRemoteSwiftPackageReference "sentry-cocoa" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/getsentry/sentry-cocoa";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 9.1.0;
 			};
 		};
 		A0B459FC528A7C26DFA6238B /* XCRemoteSwiftPackageReference "lottie-ios" */ = {
@@ -820,6 +820,11 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		6E52E636901BDFB3D54DAC16 /* Sentry */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5057434D94B3E59B5A973CEA /* XCRemoteSwiftPackageReference "sentry-cocoa" */;
+			productName = Sentry;
+		};
 		768CD6AAFD77D3BB27D13150 /* Supabase */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 6226B36222665EA20B944668 /* XCRemoteSwiftPackageReference "supabase-swift" */;
@@ -834,11 +839,6 @@
 			isa = XCSwiftPackageProductDependency;
 			package = A0B459FC528A7C26DFA6238B /* XCRemoteSwiftPackageReference "lottie-ios" */;
 			productName = Lottie;
-		};
-		A1D4D25C9B2F4D3AA7C18E11 /* Sentry */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = A1D4D25B9B2F4D3AA7C18E11 /* XCRemoteSwiftPackageReference "sentry-cocoa" */;
-			productName = Sentry;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

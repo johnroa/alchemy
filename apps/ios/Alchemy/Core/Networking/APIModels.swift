@@ -7,7 +7,14 @@ import Foundation
 /// not plain RecipePreview.
 struct CookbookResponse: Decodable {
     let items: [CookbookEntryItem]
+    let suggestedChips: [SuggestedChip]
     let cookbookInsight: String?
+}
+
+struct SuggestedChip: Decodable, Identifiable, Hashable {
+    let id: String
+    let label: String
+    let matchedCount: Int
 }
 
 /// Structured tag set computed from a variant's personalized content.
@@ -58,6 +65,7 @@ struct CookbookEntryItem: Decodable, Identifiable, Hashable {
     let autopersonalize: Bool
     let savedAt: String
     let variantTags: VariantTags?
+    let matchedChipIds: [String]
 
     /// Identifiable conformance uses the canonical recipe ID.
     var id: String { canonicalRecipeId }
@@ -703,6 +711,7 @@ struct ForYouFeedRequest: Encodable {
     let cursor: String?
     let limit: Int?
     let presetId: String?
+    let chipId: String?
 }
 
 /// Response from POST /recipes/search
@@ -721,6 +730,7 @@ struct ForYouFeedResponse: Decodable {
     let profileState: String
     let algorithmVersion: String
     let items: [RecipePreview]
+    let suggestedChips: [SuggestedChip]
     let nextCursor: String?
     let noMatch: RecipeSearchNoMatch?
 }

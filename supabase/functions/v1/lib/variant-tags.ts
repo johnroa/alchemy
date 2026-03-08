@@ -11,7 +11,9 @@
  */
 
 import type { RecipePayload } from "../../_shared/types.ts";
+import type { RecipeSemanticProfile } from "../../../../packages/shared/src/recipe-semantics.ts";
 import type { VariantTagSet } from "../routes/shared.ts";
+import { extractSemanticProfileFromPayload } from "./semantic-facets.ts";
 
 /**
  * Structured variant tags computed from canonical recipe metadata and
@@ -25,6 +27,7 @@ export type VariantTags = {
   time_minutes: number | null;
   difficulty: string | null;
   key_ingredients: string[];
+  semantic_profile?: RecipeSemanticProfile;
 };
 
 /**
@@ -126,6 +129,10 @@ export const computeVariantTags = (params: {
     }
   }
 
+  const semanticProfile = extractSemanticProfileFromPayload(
+    params.variantPayload,
+  );
+
   return {
     cuisine: [...cuisine],
     dietary: [...dietary],
@@ -134,6 +141,7 @@ export const computeVariantTags = (params: {
     time_minutes: timeMinutes,
     difficulty,
     key_ingredients: keyIngredients,
+    ...(semanticProfile ? { semantic_profile: semanticProfile } : {}),
   };
 };
 

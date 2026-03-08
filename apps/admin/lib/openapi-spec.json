@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Alchemy API",
-    "version": "3.7.1",
+    "version": "3.7.2",
     "description": "API contract for Alchemy — an AI-driven recipe creation and management platform.\nCovers the user-facing v1 API at api.cookwithalchemy.com and the admin API at admin.cookwithalchemy.com.\n"
   },
   "servers": [
@@ -251,6 +251,7 @@
                   "type": "object",
                   "required": [
                     "items",
+                    "suggested_chips",
                     "cookbook_insight"
                   ],
                   "properties": {
@@ -258,6 +259,12 @@
                       "type": "array",
                       "items": {
                         "$ref": "#/components/schemas/CookbookEntry"
+                      }
+                    },
+                    "suggested_chips": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SuggestedChip"
                       }
                     },
                     "cookbook_insight": {
@@ -3570,6 +3577,12 @@
               "string",
               "null"
             ]
+          },
+          "chip_id": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -3646,6 +3659,7 @@
           "profile_state",
           "algorithm_version",
           "items",
+          "suggested_chips",
           "next_cursor",
           "no_match"
         ],
@@ -3678,6 +3692,12 @@
               "$ref": "#/components/schemas/RecipePreview"
             }
           },
+          "suggested_chips": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SuggestedChip"
+            }
+          },
           "next_cursor": {
             "type": [
               "string",
@@ -3693,6 +3713,26 @@
                 "type": "null"
               }
             ]
+          }
+        }
+      },
+      "SuggestedChip": {
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "matched_count"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "matched_count": {
+            "type": "integer",
+            "minimum": 0
           }
         }
       },
@@ -5226,7 +5266,8 @@
           "updated_at",
           "variant_status",
           "autopersonalize",
-          "saved_at"
+          "saved_at",
+          "matched_chip_ids"
         ],
         "properties": {
           "canonical_recipe_id": {
@@ -5306,6 +5347,12 @@
           },
           "variant_tags": {
             "$ref": "#/components/schemas/VariantTags"
+          },
+          "matched_chip_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       },
@@ -5401,6 +5448,7 @@
               "cookbook_viewed",
               "cookbook_search_applied",
               "cookbook_chip_applied",
+              "explore_chip_applied",
               "cookbook_recipe_opened",
               "cookbook_recipe_unsaved",
               "recipe_detail_opened",

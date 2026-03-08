@@ -46,12 +46,15 @@ export const getMetadataPipelineData = async (): Promise<{
     locked_at: string | null;
     locked_by: string | null;
     updated_at: string;
+    semantic_descriptor_count: number;
+    semantic_axis_count: number;
+    recipe_enrichment_rejections: number;
   }>;
 }> => {
   const client = getAdminClient();
   const { data: jobs, error: jobsError } = await client
     .from("recipe_metadata_jobs")
-    .select("id,recipe_id,recipe_version_id,status,attempts,max_attempts,next_attempt_at,last_error,locked_at,locked_by,updated_at")
+    .select("id,recipe_id,recipe_version_id,status,attempts,max_attempts,next_attempt_at,last_error,locked_at,locked_by,updated_at,metadata")
     .order("updated_at", { ascending: false })
     .limit(250);
 
@@ -75,19 +78,40 @@ export const getMetadataPipelineData = async (): Promise<{
   const titleByRecipeId = new Map((recipes ?? []).map((recipe) => [recipe.id, recipe.title]));
 
   return {
-    jobs: (jobs ?? []).map((job) => ({
-      id: String(job.id),
-      recipe_id: String(job.recipe_id),
-      recipe_version_id: String(job.recipe_version_id),
-      recipe_title: titleByRecipeId.get(String(job.recipe_id)) ?? null,
-      status: String(job.status),
-      attempts: Number(job.attempts ?? 0),
-      max_attempts: Number(job.max_attempts ?? 0),
-      next_attempt_at: String(job.next_attempt_at),
-      last_error: job.last_error ? String(job.last_error) : null,
-      locked_at: job.locked_at ? String(job.locked_at) : null,
-      locked_by: job.locked_by ? String(job.locked_by) : null,
-      updated_at: String(job.updated_at)
-    }))
+    jobs: (jobs ?? []).map((job) => {
+      const metadata = job.metadata &&
+          typeof job.metadata === "object" &&
+          !Array.isArray(job.metadata)
+        ? job.metadata as Record<string, unknown>
+        : null;
+      const semanticAxes = Array.isArray(metadata?.["semantic_axes"])
+        ? metadata["semantic_axes"] as unknown[]
+        : [];
+      const rejectionCounts = metadata?.["rejection_counts"] &&
+          typeof metadata["rejection_counts"] === "object" &&
+          !Array.isArray(metadata["rejection_counts"])
+        ? metadata["rejection_counts"] as Record<string, unknown>
+        : null;
+
+      return {
+        id: String(job.id),
+        recipe_id: String(job.recipe_id),
+        recipe_version_id: String(job.recipe_version_id),
+        recipe_title: titleByRecipeId.get(String(job.recipe_id)) ?? null,
+        status: String(job.status),
+        attempts: Number(job.attempts ?? 0),
+        max_attempts: Number(job.max_attempts ?? 0),
+        next_attempt_at: String(job.next_attempt_at),
+        last_error: job.last_error ? String(job.last_error) : null,
+        locked_at: job.locked_at ? String(job.locked_at) : null,
+        locked_by: job.locked_by ? String(job.locked_by) : null,
+        updated_at: String(job.updated_at),
+        semantic_descriptor_count: Number(metadata?.["semantic_descriptor_count"] ?? 0) || 0,
+        semantic_axis_count: semanticAxes.length,
+        recipe_enrichment_rejections: Number(
+          rejectionCounts?.["recipe_enrichment"] ?? 0,
+        ) || 0,
+      };
+    }),
   };
 };

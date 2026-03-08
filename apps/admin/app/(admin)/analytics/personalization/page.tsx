@@ -251,6 +251,68 @@ export default async function AnalyticsPersonalizationPage({
           </Table>
         </BoardTableCard>
       </div>
+
+      <div className="grid gap-4 xl:grid-cols-2">
+        <BoardTableCard
+          title="Top Explore Chips"
+          description="Most-used server-generated Explore chip labels in this window."
+        >
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Chip</TableHead>
+                <TableHead className="text-right">Uses</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {data.exploreChipRows.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={2} className="py-10 text-center text-muted-foreground">
+                    No Explore chip interactions recorded in this window.
+                  </TableCell>
+                </TableRow>
+              ) : (
+                data.exploreChipRows.map((row) => (
+                  <TableRow key={row.chip}>
+                    <TableCell>{row.chip}</TableCell>
+                    <TableCell className="text-right tabular-nums">{toShortInteger(row.uses)}</TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </BoardTableCard>
+
+        <BoardTableCard
+          title="Top Cookbook Chips"
+          description="Most-used cookbook filter chips after server-side semantic generation."
+        >
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Chip</TableHead>
+                <TableHead className="text-right">Uses</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {data.cookbookChipRows.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={2} className="py-10 text-center text-muted-foreground">
+                    No cookbook chip interactions recorded in this window.
+                  </TableCell>
+                </TableRow>
+              ) : (
+                data.cookbookChipRows.map((row) => (
+                  <TableRow key={row.chip}>
+                    <TableCell>{row.chip}</TableCell>
+                    <TableCell className="text-right tabular-nums">{toShortInteger(row.uses)}</TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </BoardTableCard>
+      </div>
     </div>
   );
 }

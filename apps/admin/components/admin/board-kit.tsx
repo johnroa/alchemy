@@ -131,23 +131,27 @@ export function BoardChartCard({
   action,
   children,
 }: {
-  title: string;
-  description: string;
+  title?: string;
+  description?: string;
   action?: React.ReactNode;
   children: React.ReactNode;
 }): React.JSX.Element {
+  const hasHeader = Boolean(title || description || action);
+
   return (
     <Card className="rounded-[1.6rem] border-border/60 bg-[linear-gradient(180deg,rgba(11,17,28,0.98)_0%,rgba(7,12,20,0.94)_100%)] shadow-sm">
-      <CardHeader className="pb-3">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="space-y-1">
-            <CardTitle className="text-base tracking-tight">{title}</CardTitle>
-            <CardDescription>{description}</CardDescription>
+      {hasHeader ? (
+        <CardHeader className="pb-3">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="space-y-1">
+              {title ? <CardTitle className="text-base tracking-tight">{title}</CardTitle> : null}
+              {description ? <CardDescription>{description}</CardDescription> : null}
+            </div>
+            {action}
           </div>
-          {action}
-        </div>
-      </CardHeader>
-      <CardContent className="pt-0">{children}</CardContent>
+        </CardHeader>
+      ) : null}
+      <CardContent className={hasHeader ? "pt-0" : undefined}>{children}</CardContent>
     </Card>
   );
 }

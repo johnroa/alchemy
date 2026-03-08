@@ -3,8 +3,8 @@ import SwiftUI
 /// Dark-only color palette for Alchemy.
 ///
 /// Naming convention: semantic purpose, not visual description.
-/// The palette uses deep navy/charcoal backgrounds with warm amber accents
-/// to evoke a premium kitchen atmosphere.
+/// The palette uses solid black backgrounds with pure white accents
+/// for a monochrome, Liquid-Glass-forward aesthetic.
 enum AlchemyColors {
 
     // MARK: - Backgrounds
@@ -20,22 +20,23 @@ enum AlchemyColors {
 
     // MARK: - Text
 
-    /// Primary text — warm white, not pure white to reduce eye strain
-    static let textPrimary = Color(red: 0.95, green: 0.93, blue: 0.90)
+    /// Primary text — pure white
+    static let textPrimary = Color.white
 
-    /// Secondary text — muted cream for subtitles and metadata
-    static let textSecondary = Color(red: 0.65, green: 0.63, blue: 0.60)
+    /// Secondary text — medium white for subtitles and metadata
+    static let textSecondary = Color.white.opacity(0.6)
 
     /// Tertiary text — low emphasis labels and placeholders
-    static let textTertiary = Color(red: 0.45, green: 0.43, blue: 0.40)
+    static let textTertiary = Color.white.opacity(0.35)
 
     // MARK: - Accent
 
-    /// Warm amber accent for CTAs, highlights, and active states
-    static let accent = Color(red: 0.925, green: 0.580, blue: 0.290)
+    /// Primary accent — clean white. Keeps everything monochrome;
+    /// Liquid Glass provides the visual depth.
+    static let accent = Color.white
 
     /// Muted accent for secondary interactive elements
-    static let accentMuted = Color(red: 0.925, green: 0.580, blue: 0.290).opacity(0.6)
+    static let accentMuted = Color.white.opacity(0.6)
 
     // MARK: - Semantic
 

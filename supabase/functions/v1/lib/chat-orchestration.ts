@@ -17,6 +17,7 @@
  */
 
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2";
+import { normalizeRecipeSemanticProfile } from "../../../../packages/shared/src/recipe-semantics.ts";
 import { ApiError } from "../../_shared/errors.ts";
 import type {
   AssistantReply,
@@ -44,7 +45,12 @@ import {
   normalizeThreadPreferenceOverrides,
 } from "../chat-preference-conflicts.ts";
 import { sanitizeModelPreferencePatch } from "../preference-auto-update.ts";
-import type { CookbookEntry, VariantStatus, VariantTagSet } from "../routes/shared.ts";
+import type {
+  CookbookEntry,
+  SuggestedChip,
+  VariantStatus,
+  VariantTagSet,
+} from "../routes/shared.ts";
 import type { PreferenceContext } from "./preferences.ts";
 import {
   applyModelPreferenceUpdates,
@@ -52,6 +58,12 @@ import {
   normalizePreferencePatchDeterministic,
   normalizePreferencePatch,
 } from "./preferences.ts";
+import {
+  buildMatchedChipIds,
+  buildSuggestedChips,
+  extractSemanticProfileFromPayload,
+  mergeSemanticProfiles,
+} from "./semantic-facets.ts";
 import { flattenVariantTags } from "./variant-tags.ts";
 import type {
   ChatMessageView,
@@ -564,12 +576,61 @@ export const buildThreadForPrompt = (
   }));
 };
 
+/**
+ * Builds a natural-language instruction injected into the LLM context when the
+ * chat session is a preference-editing workflow. This tells the model:
+ * 1) Do NOT generate recipes — this is strictly a preferences conversation.
+ * 2) Which preference category the user is editing.
+ * 3) Ask probing follow-up questions to gather nuanced preferences.
+ * 4) Emit preference_updates in response_context when the user states a preference.
+ */
+const buildPreferenceWorkflowInstruction = (
+  context: ChatSessionContext,
+): string => {
+  const intent = context.preference_editing_intent as
+    | { key?: string; title?: string; prompt?: string }
+    | null;
+  const category = intent?.title ?? "general preferences";
+  const key = intent?.key ?? "unknown";
+
+  return [
+    `CRITICAL: This is a PREFERENCE EDITING session, NOT a recipe generation session.`,
+    `The user is on the Preferences screen editing their "${category}" (key: ${key}).`,
+    ``,
+    `YOUR ROLE: You are a knowledgeable sous chef learning about the user's kitchen, lifestyle, and tastes so you can personalize every future recipe. You are NOT here to suggest dishes or menus.`,
+    ``,
+    `HOW TO RESPOND:`,
+    `1. Acknowledge what the user told you with genuine expertise and enthusiasm.`,
+    `2. Explain CONCRETELY how this preference will affect their recipes going forward. Examples:`,
+    `   - Equipment: "That's a powerful oven — I'll adjust temperatures down ~25°F for most bakes and tell you exactly which oven mode to use per dish."`,
+    `   - Dietary: "Got it — I'll never include shellfish and will always flag shared-equipment cross-contamination risks."`,
+    `   - Cuisine: "Love it — I'll weight your feed toward those cuisines and pull authentic techniques into other dishes too."`,
+    `   - Aversions: "Noted — cilantro is gone from every recipe. I'll suggest parsley or Thai basil as alternatives."`,
+    `3. Ask a focused follow-up to deepen the preference — probe for nuance, boundaries, or related context.`,
+    `   - "Do you usually use the convection or conventional oven for everyday cooking?"`,
+    `   - "Any other equipment I should know about — stand mixer, sous vide, outdoor grill?"`,
+    `4. When you have enough information, confirm what you saved and let them know: "All set — I've saved your ${category}. Tap another category or keep chatting!"`,
+    ``,
+    `STRICT RULES:`,
+    `- NEVER ask "what are you thinking of cooking?" or suggest making a recipe.`,
+    `- NEVER set trigger_recipe to true.`,
+    `- NEVER return a candidate_recipe_set or recipe object.`,
+    `- When the user states clear preferences, emit them as preference_updates in response_context.`,
+    `- Keep every response focused on understanding and saving their ${category}.`,
+  ].join("\n");
+};
+
 const buildCompactChatContext = (
   context: ChatSessionContext,
 ): Record<string, JsonValue> => ({
   loop_state: context.loop_state ?? "ideation",
   candidate_revision: context.candidate_revision ?? 0,
   active_component_id: context.active_component_id ?? null,
+  workflow: context.workflow ?? null,
+  entry_surface: context.entry_surface ?? null,
+  preference_editing_intent: context.preference_editing_intent
+    ? context.preference_editing_intent as unknown as JsonValue
+    : null,
   pending_preference_conflict: context.pending_preference_conflict
     ? context.pending_preference_conflict as unknown as JsonValue
     : null,
@@ -796,10 +857,10 @@ const mergeRecipeIntoCandidate = (
  *   cookbook_entries → recipe IDs → recipes + recipe_versions (canonical)
  *   → user_recipe_variants (variant status) → merge into CookbookEntry[]
  */
-export const buildCookbookItems = async (
+const buildCookbookData = async (
   client: SupabaseClient,
   userId: string,
-): Promise<CookbookEntry[]> => {
+): Promise<{ items: CookbookEntry[]; suggestedChips: SuggestedChip[] }> => {
   // Read from cookbook_entries (new table). Falls back to recipe_saves if
   // no cookbook_entries exist yet (pre-migration users).
   const { data: cookbookRows, error: cbError } = await client
@@ -841,7 +902,7 @@ export const buildCookbookItems = async (
   }
 
   if (recipeIds.length === 0) {
-    return [];
+    return { items: [], suggestedChips: [] };
   }
 
   // Load canonical recipe data.
@@ -930,6 +991,38 @@ export const buildCookbookItems = async (
     }
   }
 
+  const variantVersionIds = Array.from(
+    new Set(
+      [...variantByRecipe.values()]
+        .map((variant) => variant.current_version_id)
+        .filter((id): id is string => Boolean(id)),
+    ),
+  );
+
+  let variantVersionById = new Map<string, RecipePayload>();
+  if (variantVersionIds.length > 0) {
+    const { data: variantVersions, error: variantVersionsError } = await client
+      .from("user_recipe_variant_versions")
+      .select("id,payload")
+      .in("id", variantVersionIds);
+
+    if (variantVersionsError) {
+      throw new ApiError(
+        500,
+        "cookbook_variant_version_fetch_failed",
+        "Could not load cookbook variant versions",
+        variantVersionsError.message,
+      );
+    }
+
+    variantVersionById = new Map(
+      (variantVersions ?? []).map((version) => [
+        version.id,
+        version.payload as RecipePayload,
+      ]),
+    );
+  }
+
   // Load categories (same as before).
   const [{ data: userCategories }, { data: autoCategories }] = await Promise
     .all([
@@ -954,9 +1047,13 @@ export const buildCookbookItems = async (
     autoCategories ?? [],
   );
 
-  return recipes.map((recipe): CookbookEntry => {
+  const draftItems = recipes.map((recipe) => {
     const payload = recipe.current_version_id
       ? versionById.get(recipe.current_version_id)
+      : undefined;
+    const variant = variantByRecipe.get(recipe.id);
+    const variantPayload = variant?.current_version_id
+      ? variantVersionById.get(variant.current_version_id)
       : undefined;
     const userCategory = userCategoryByRecipe.get(recipe.id);
     const autoCategory = autoCategoryByRecipe.get(recipe.id);
@@ -964,13 +1061,27 @@ export const buildCookbookItems = async (
       ? canonicalizeRecipePayloadMetadata(payload)
       : undefined;
     const entry = entryMap.get(recipe.id);
-    const variant = variantByRecipe.get(recipe.id);
 
     const variantStatus: VariantStatus = variant
       ? (variant.stale_status as VariantStatus)
       : "none";
 
+    const canonicalSemanticProfile = extractSemanticProfileFromPayload(payload);
+    const variantSemanticProfile = extractSemanticProfileFromPayload(
+      variantPayload,
+    ) ?? normalizeRecipeSemanticProfile(
+      (
+        variant?.variant_tags as Record<string, JsonValue> | undefined
+      )?.semantic_profile,
+    );
+    const effectiveSemanticProfile = mergeSemanticProfiles(
+      canonicalSemanticProfile,
+      variantSemanticProfile,
+    );
+
     return {
+      item_id: recipe.id,
+      profile: effectiveSemanticProfile,
       canonical_recipe_id: recipe.id,
       title: payload?.title ?? recipe.title,
       summary: payload ? resolveRecipePayloadSummary(payload) : "",
@@ -989,8 +1100,40 @@ export const buildCookbookItems = async (
       autopersonalize: entry?.autopersonalize ?? true,
       saved_at: entry?.saved_at ?? recipe.updated_at,
       variant_tags: flattenVariantTags(variant?.variant_tags),
+      matched_chip_ids: [],
     };
   });
+
+  const suggestedChips = buildSuggestedChips({
+    items: draftItems.map((item) => ({
+      item_id: item.item_id,
+      profile: item.profile,
+    })),
+  });
+
+  const items = draftItems.map(({ item_id: _itemId, profile, ...item }) => ({
+    ...item,
+    matched_chip_ids: buildMatchedChipIds({
+      profile,
+      chips: suggestedChips,
+    }),
+  }));
+
+  return { items, suggestedChips };
+};
+
+export const buildCookbookFeed = async (
+  client: SupabaseClient,
+  userId: string,
+): Promise<{ items: CookbookEntry[]; suggestedChips: SuggestedChip[] }> =>
+  await buildCookbookData(client, userId);
+
+export const buildCookbookItems = async (
+  client: SupabaseClient,
+  userId: string,
+): Promise<CookbookEntry[]> => {
+  const { items } = await buildCookbookData(client, userId);
+  return items;
 };
 
 const normalizeCookbookInsight = (
@@ -1132,7 +1275,11 @@ export const orchestrateChatTurn = async (params: {
   const promptPreferencesNaturalLanguage = buildNaturalLanguagePreferenceContext(
     effectivePromptPreferences,
   );
-  const scopeHint = params.existingCandidate
+  const isPreferenceEditingWorkflow = params.sessionContext.workflow ===
+    "preferences";
+  const scopeHint = isPreferenceEditingWorkflow
+    ? "chat_ideation"
+    : params.existingCandidate
     ? "chat_iteration"
     : currentPendingConflict
     ? "chat_generation"
@@ -1143,6 +1290,14 @@ export const orchestrateChatTurn = async (params: {
     ) ??
       params.existingCandidate?.components[0] ??
       null;
+
+  // When the user is editing preferences from the Preferences screen,
+  // inject a strong behavioral instruction so the LLM stays in preference
+  // discovery mode and never tries to generate a recipe. The intent tells
+  // the model exactly which preference category the user is editing.
+  const preferenceWorkflowInstruction = isPreferenceEditingWorkflow
+    ? buildPreferenceWorkflowInstruction(params.sessionContext)
+    : null;
 
   let assistantChatResponse = await converseChatWithRetry({
     client: params.serviceClient,
@@ -1166,10 +1321,30 @@ export const orchestrateChatTurn = async (params: {
       preferences: effectivePromptPreferences,
       preferences_natural_language: promptPreferencesNaturalLanguage,
       selected_memories: params.contextPack.selectedMemories,
+      ...(preferenceWorkflowInstruction
+        ? { preference_workflow_instruction: preferenceWorkflowInstruction }
+        : {}),
     },
     scopeHint,
     modelOverrides: params.modelOverrides,
   });
+
+  // Hard guard: if this is a preference-editing workflow, strip any recipe
+  // generation output the LLM may have produced despite instructions. The
+  // preference chat must never produce recipes or candidate sets.
+  if (isPreferenceEditingWorkflow) {
+    assistantChatResponse = {
+      ...assistantChatResponse,
+      trigger_recipe: false,
+      recipe: undefined,
+      candidate_recipe_set: undefined,
+      response_context: {
+        ...(assistantChatResponse.response_context ?? {}),
+        mode: "ideation",
+        intent: "in_scope_ideation",
+      },
+    };
+  }
 
   const intent = getChatIntentFromResponse(assistantChatResponse);
   const isOutOfScope = intent === "out_of_scope";
@@ -1182,6 +1357,7 @@ export const orchestrateChatTurn = async (params: {
     assistantChatResponse.response_context?.mode === "generation";
 
   if (
+    !isPreferenceEditingWorkflow &&
     scopeHint === "chat_ideation" && !params.existingCandidate &&
     !isOutOfScope && !isPreferenceConflict && explicitGenerationIntent
   ) {

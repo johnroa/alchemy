@@ -22,6 +22,9 @@ type MetadataJob = {
   locked_at: string | null;
   locked_by: string | null;
   updated_at: string;
+  semantic_descriptor_count: number;
+  semantic_axis_count: number;
+  recipe_enrichment_rejections: number;
 };
 
 const statusConfig: Record<string, { badge: string; dot: string }> = {
@@ -70,6 +73,7 @@ export function MetadataJobsTable({ jobs }: { jobs: MetadataJob[] }): React.JSX.
           <TableHead>Status</TableHead>
           <TableHead>Recipe</TableHead>
           <TableHead>Attempts</TableHead>
+          <TableHead>Semantics</TableHead>
           <TableHead>Next Attempt</TableHead>
           <TableHead>Lock</TableHead>
           <TableHead>Error</TableHead>
@@ -97,6 +101,11 @@ export function MetadataJobsTable({ jobs }: { jobs: MetadataJob[] }): React.JSX.
                 <span className="text-xs tabular-nums text-muted-foreground">
                   {job.attempts}/{job.max_attempts}
                 </span>
+              </TableCell>
+              <TableCell className="text-xs text-muted-foreground">
+                {job.semantic_descriptor_count > 0
+                  ? `${job.semantic_descriptor_count} desc · ${job.semantic_axis_count} axes`
+                  : `${job.recipe_enrichment_rejections} drops`}
               </TableCell>
               <TableCell className="text-xs text-muted-foreground">{new Date(job.next_attempt_at).toLocaleString()}</TableCell>
               <TableCell className="text-xs text-muted-foreground">

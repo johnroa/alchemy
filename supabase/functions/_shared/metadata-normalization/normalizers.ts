@@ -1,4 +1,5 @@
 import type { JsonValue, RecipePayload } from "../types.ts";
+import { normalizeRecipeSemanticProfile } from "../../../../packages/shared/src/recipe-semantics.ts";
 import type {
   RecipeDifficulty,
   RecipeMetadataNormalizationIssue,
@@ -542,6 +543,13 @@ export const normalizeRecipeMetadata = (params: {
   const practical = sanitizePractical(metadata.practical);
   if (practical) {
     normalized.practical = practical;
+  }
+
+  const semanticProfile = normalizeRecipeSemanticProfile(
+    metadata.semantic_profile,
+  );
+  if (semanticProfile) {
+    normalized.semantic_profile = semanticProfile as unknown as JsonValue;
   }
 
   const complexityScore = parseFiniteNumber(metadata.complexity_score);

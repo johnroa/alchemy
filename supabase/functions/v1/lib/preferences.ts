@@ -270,25 +270,126 @@ export const normalizedRawPreferenceText = (
 export const joinCanonicalPreferenceList = (values: string[]): string =>
   values.join(", ");
 
+const MAX_PROMPT_LIST_ITEMS = 5;
+const MAX_PROMPT_FIELD_CHARS = 140;
+const MAX_PROMPT_FREE_FORM_CHARS = 220;
+
+const truncatePreferenceSummary = (
+  value: string,
+  maxChars: number,
+): string => {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxChars) {
+    return normalized;
+  }
+  return `${normalized.slice(0, Math.max(0, maxChars - 1)).trimEnd()}…`;
+};
+
+const compactPreferenceListForPrompt = (values: string[]): string => {
+  if (values.length === 0) {
+    return "";
+  }
+  const limited = values.slice(0, MAX_PROMPT_LIST_ITEMS);
+  const summary = limited.join(", ");
+  if (values.length <= MAX_PROMPT_LIST_ITEMS) {
+    return truncatePreferenceSummary(summary, MAX_PROMPT_FIELD_CHARS);
+  }
+  return truncatePreferenceSummary(
+    `${summary}, plus ${values.length - MAX_PROMPT_LIST_ITEMS} more`,
+    MAX_PROMPT_FIELD_CHARS,
+  );
+};
+
+const buildPresentationPreferenceSummary = (
+  preferences: PreferenceContext,
+): string => {
+  const parts: string[] = [];
+  const units = typeof preferences.presentation_preferences?.["recipe_units"] ===
+      "string"
+    ? preferences.presentation_preferences["recipe_units"]
+    : null;
+  const groupBy =
+    typeof preferences.presentation_preferences?.["recipe_group_by"] === "string"
+      ? preferences.presentation_preferences["recipe_group_by"]
+      : null;
+  const temperatureUnit =
+    typeof preferences.presentation_preferences?.["recipe_temperature_unit"] ===
+        "string"
+      ? preferences.presentation_preferences["recipe_temperature_unit"]
+      : null;
+  const verbosity =
+    typeof preferences.presentation_preferences?.[
+        "recipe_instruction_verbosity"
+      ] === "string"
+      ? preferences.presentation_preferences["recipe_instruction_verbosity"]
+      : null;
+  const inlineMeasurements =
+    typeof preferences.presentation_preferences?.[
+        "recipe_inline_measurements"
+      ] === "boolean"
+      ? preferences.presentation_preferences["recipe_inline_measurements"]
+      : null;
+
+  if (units) parts.push(`units ${units}`);
+  if (temperatureUnit) parts.push(`temperature ${temperatureUnit}`);
+  if (groupBy) parts.push(`grouping ${groupBy}`);
+  if (typeof inlineMeasurements === "boolean") {
+    parts.push(
+      inlineMeasurements ? "inline measurements on" : "inline measurements off",
+    );
+  }
+  if (verbosity) parts.push(`instructions ${verbosity}`);
+
+  return truncatePreferenceSummary(parts.join("; "), MAX_PROMPT_FIELD_CHARS);
+};
+
 export const buildNaturalLanguagePreferenceContext = (
   preferences: PreferenceContext,
 ): Record<string, JsonValue> => ({
-  chef_profile: preferences.free_form ?? "",
-  cooking_for: preferences.cooking_for ?? "",
+  chef_profile: preferences.free_form
+    ? truncatePreferenceSummary(
+      preferences.free_form,
+      MAX_PROMPT_FREE_FORM_CHARS,
+    )
+    : "",
+  cooking_for: preferences.cooking_for
+    ? truncatePreferenceSummary(preferences.cooking_for, 80)
+    : "",
   skill_level: preferences.skill_level,
   max_difficulty: preferences.max_difficulty,
   dietary_preferences:
-    normalizedRawPreferenceText(preferences, "dietary_preferences") ??
-      joinCanonicalPreferenceList(preferences.dietary_preferences),
+    normalizedRawPreferenceText(preferences, "dietary_preferences")
+      ? truncatePreferenceSummary(
+        normalizedRawPreferenceText(preferences, "dietary_preferences")!,
+        MAX_PROMPT_FIELD_CHARS,
+      )
+      : compactPreferenceListForPrompt(preferences.dietary_preferences),
   dietary_restrictions:
-    normalizedRawPreferenceText(preferences, "dietary_restrictions") ??
-      joinCanonicalPreferenceList(preferences.dietary_restrictions),
-  special_equipment: normalizedRawPreferenceText(preferences, "equipment") ??
-    joinCanonicalPreferenceList(preferences.equipment),
-  cuisines: normalizedRawPreferenceText(preferences, "cuisines") ??
-    joinCanonicalPreferenceList(preferences.cuisines),
-  disliked_ingredients: normalizedRawPreferenceText(preferences, "aversions") ??
-    joinCanonicalPreferenceList(preferences.aversions),
+    normalizedRawPreferenceText(preferences, "dietary_restrictions")
+      ? truncatePreferenceSummary(
+        normalizedRawPreferenceText(preferences, "dietary_restrictions")!,
+        MAX_PROMPT_FIELD_CHARS,
+      )
+      : compactPreferenceListForPrompt(preferences.dietary_restrictions),
+  special_equipment: normalizedRawPreferenceText(preferences, "equipment")
+    ? truncatePreferenceSummary(
+      normalizedRawPreferenceText(preferences, "equipment")!,
+      MAX_PROMPT_FIELD_CHARS,
+    )
+    : compactPreferenceListForPrompt(preferences.equipment),
+  cuisines: normalizedRawPreferenceText(preferences, "cuisines")
+    ? truncatePreferenceSummary(
+      normalizedRawPreferenceText(preferences, "cuisines")!,
+      MAX_PROMPT_FIELD_CHARS,
+    )
+    : compactPreferenceListForPrompt(preferences.cuisines),
+  disliked_ingredients: normalizedRawPreferenceText(preferences, "aversions")
+    ? truncatePreferenceSummary(
+      normalizedRawPreferenceText(preferences, "aversions")!,
+      MAX_PROMPT_FIELD_CHARS,
+    )
+    : compactPreferenceListForPrompt(preferences.aversions),
+  display_preferences: buildPresentationPreferenceSummary(preferences),
 });
 
 export const getPreferences = async (
@@ -580,20 +681,27 @@ export const applyModelPreferenceUpdates = async (params: {
     return params.currentPreferences;
   }
 
+  // CRITICAL: Only update the fields the LLM actually changed. The old
+  // approach did a full-row upsert with { ...currentPreferences, ...safePatch },
+  // but currentPreferences can be stale (loaded at session start, not at
+  // this turn). A stale upsert would overwrite good data with old empty values.
+  // Using .update() with only safePatch ensures we never wipe fields the LLM
+  // didn't explicitly touch.
+  const { data, error } = await params.client
+    .from("preferences")
+    .update({
+      ...safePatch,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("user_id", params.userId)
+    .select("*")
+    .single();
+
+  // Build the merged view for in-memory use downstream
   const nextPreferences: PreferenceContext = {
     ...params.currentPreferences,
     ...safePatch,
   };
-
-  const { data, error } = await params.client
-    .from("preferences")
-    .upsert({
-      user_id: params.userId,
-      ...nextPreferences,
-      updated_at: new Date().toISOString(),
-    })
-    .select("*")
-    .single();
 
   if (error) {
     console.error("preferences_auto_update_failed", error);

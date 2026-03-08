@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Alchemy API
-  version: 3.7.1
+  version: 3.7.2
   description: |
     API contract for Alchemy — an AI-driven recipe creation and management platform.
     Covers the user-facing v1 API at api.cookwithalchemy.com and the admin API at admin.cookwithalchemy.com.
@@ -161,12 +161,16 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [items, cookbook_insight]
+                required: [items, suggested_chips, cookbook_insight]
                 properties:
                   items:
                     type: array
                     items:
                       $ref: '#/components/schemas/CookbookEntry'
+                  suggested_chips:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/SuggestedChip'
                   cookbook_insight:
                     type: [string, 'null']
         default:
@@ -2243,6 +2247,8 @@ components:
           maximum: 20
         preset_id:
           type: [string, 'null']
+        chip_id:
+          type: [string, 'null']
     RecipeSearchNoMatch:
       type: object
       required: [code, message, suggested_action]
@@ -2275,7 +2281,7 @@ components:
             - type: 'null'
     ForYouFeedResponse:
       type: object
-      required: [feed_id, applied_context, profile_state, algorithm_version, items, next_cursor, no_match]
+      required: [feed_id, applied_context, profile_state, algorithm_version, items, suggested_chips, next_cursor, no_match]
       properties:
         feed_id:
           type: string
@@ -2292,12 +2298,27 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/RecipePreview'
+        suggested_chips:
+          type: array
+          items:
+            $ref: '#/components/schemas/SuggestedChip'
         next_cursor:
           type: [string, 'null']
         no_match:
           oneOf:
             - $ref: '#/components/schemas/RecipeSearchNoMatch'
             - type: 'null'
+    SuggestedChip:
+      type: object
+      required: [id, label, matched_count]
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+        matched_count:
+          type: integer
+          minimum: 0
     RecipeVersion:
       type: object
       required: [version_id, recipe_id, created_at]
@@ -3112,7 +3133,7 @@ components:
           description: Top ingredients from the variant (lowercased, max 8).
     CookbookEntry:
       type: object
-      required: [canonical_recipe_id, title, summary, image_url, image_status, category, visibility, updated_at, variant_status, autopersonalize, saved_at]
+      required: [canonical_recipe_id, title, summary, image_url, image_status, category, visibility, updated_at, variant_status, autopersonalize, saved_at, matched_chip_ids]
       properties:
         canonical_recipe_id:
           type: string
@@ -3156,6 +3177,10 @@ components:
           format: date-time
         variant_tags:
           $ref: '#/components/schemas/VariantTags'
+        matched_chip_ids:
+          type: array
+          items:
+            type: string
     SaveRecipeResponse:
       type: object
       required: [saved, canonical_recipe_id, variant_status]
@@ -3216,6 +3241,7 @@ components:
             - cookbook_viewed
             - cookbook_search_applied
             - cookbook_chip_applied
+            - explore_chip_applied
             - cookbook_recipe_opened
             - cookbook_recipe_unsaved
             - recipe_detail_opened

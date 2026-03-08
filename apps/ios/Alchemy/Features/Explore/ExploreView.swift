@@ -11,7 +11,8 @@ import NukeUI
 ///   Layer 2 (front): Floating header, filters, context label, search bar.
 struct ExploreView: View {
     @State private var previews: [RecipePreview] = []
-    @State private var selectedFilter = "For You"
+    @State private var suggestedChips: [SuggestedChip] = []
+    @State private var selectedChipId: String?
     @State private var searchText = ""
     @State private var selectedRecipeId: String?
     @State private var showPreferences = false
@@ -23,14 +24,11 @@ struct ExploreView: View {
     @State private var feedAlgorithmVersion: String?
     @State private var feedProfileState: String?
     @State private var isSearchMode = false
-    @State private var activeFeedFilter = "For You"
+    @State private var activeFeedChipId: String?
     @State private var activeFeedIsSearchMode = false
     @State private var seenImpressionKeys: Set<String> = []
     @State private var openedImpressionKeys: Set<String> = []
     @State private var skippedImpressionKeys: Set<String> = []
-
-    private let filters = ["For You"] + PreviewData.exploreFilters.filter { $0 != "All" }
-
     var body: some View {
         NavigationStack {
             ZStack {
@@ -144,25 +142,66 @@ struct ExploreView: View {
     private var filterChips: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: AlchemySpacing.lg) {
-                ForEach(filters, id: \.self) { filter in
+                Button {
+                    guard selectedChipId != nil else { return }
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        selectedChipId = nil
+                        searchText = ""
+                    }
+                    BehaviorTelemetry.shared.track(
+                        eventType: "explore_chip_applied",
+                        surface: "explore",
+                        sessionId: feedSessionId,
+                        payload: [
+                            "chip_id": .null,
+                            "chip_label": .string("For You"),
+                            "selected": .bool(true),
+                        ]
+                    )
+                    Task {
+                        await loadForYouFeed(
+                            chipId: nil,
+                            chipLabel: nil,
+                            context: "Personalized for you"
+                        )
+                    }
+                } label: {
+                    Text("For You")
+                        .font(.system(size: 18, weight: selectedChipId == nil ? .bold : .regular))
+                        .foregroundStyle(.white.opacity(selectedChipId == nil ? 1.0 : 0.5))
+                        .shadow(color: .black.opacity(0.4), radius: 3)
+                }
+                .buttonStyle(.plain)
+
+                ForEach(suggestedChips) { chip in
+                    let isSelected = selectedChipId == chip.id
                     Button {
-                        guard selectedFilter != filter else { return }
+                        guard !isSelected else { return }
                         withAnimation(.easeInOut(duration: 0.2)) {
-                            selectedFilter = filter
+                            selectedChipId = chip.id
                             searchText = ""
                         }
+                        BehaviorTelemetry.shared.track(
+                            eventType: "explore_chip_applied",
+                            surface: "explore",
+                            sessionId: feedSessionId,
+                            payload: [
+                                "chip_id": .string(chip.id),
+                                "chip_label": .string(chip.label),
+                                "selected": .bool(true),
+                            ]
+                        )
                         Task {
                             await loadForYouFeed(
-                                preset: filter == "For You" ? nil : filter,
-                                context: filter == "For You"
-                                    ? "Personalized for you"
-                                    : "Personalized \(filter.lowercased()) picks"
+                                chipId: chip.id,
+                                chipLabel: chip.label,
+                                context: "Personalized around \(chip.label.lowercased())"
                             )
                         }
                     } label: {
-                        Text(filter)
-                            .font(.system(size: 18, weight: selectedFilter == filter ? .bold : .regular))
-                            .foregroundStyle(.white.opacity(selectedFilter == filter ? 1.0 : 0.5))
+                        Text(chip.label)
+                            .font(.system(size: 18, weight: isSelected ? .bold : .regular))
+                            .foregroundStyle(.white.opacity(isSelected ? 1.0 : 0.5))
                             .shadow(color: .black.opacity(0.4), radius: 3)
                     }
                     .buttonStyle(.plain)
@@ -192,7 +231,7 @@ struct ExploreView: View {
     private func applySearch() {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return }
-        withAnimation { selectedFilter = "" }
+        withAnimation { selectedChipId = nil }
         Task {
             await loadSearchFeed(
                 query: query,
@@ -208,25 +247,29 @@ struct ExploreView: View {
     }
 
     private func loadForYouFeed(
-        preset: String? = nil,
+        chipId: String? = nil,
+        chipLabel: String? = nil,
         context: String = "Personalized for you"
     ) async {
         isSearchMode = false
         contextLabel = context
         nextCursor = nil
 
-        if let cached = ExploreFeedPreloader.shared.cachedResponse(for: preset) {
-            applyForYouResponse(cached, preset: preset)
+        if let cached = ExploreFeedPreloader.shared.cachedResponse(for: chipId) {
+            applyForYouResponse(cached, chipId: chipId)
             contextLabel = context
-            ExploreFeedPreloader.shared.preload(preset: preset, force: true)
+            ExploreFeedPreloader.shared.preload(chipId: chipId, force: true)
             return
         }
 
         isLoading = true
 
         do {
-            let response = try await ExploreFeedPreloader.shared.load(preset: preset)
-            applyForYouResponse(response, preset: preset)
+            let response = try await ExploreFeedPreloader.shared.load(chipId: chipId)
+            applyForYouResponse(response, chipId: chipId)
+            if chipLabel == nil && chipId != nil {
+                contextLabel = "Personalized around this theme"
+            }
 
             if let noMatch = response.noMatch {
                 contextLabel = noMatch.message
@@ -237,14 +280,16 @@ struct ExploreView: View {
         }
     }
 
-    private func applyForYouResponse(_ response: ForYouFeedResponse, preset: String?) {
+    private func applyForYouResponse(_ response: ForYouFeedResponse, chipId: String?) {
         withAnimation {
             previews = response.items
+            suggestedChips = response.suggestedChips
+            selectedChipId = chipId
             nextCursor = response.nextCursor
             feedSessionId = response.feedId
             feedAlgorithmVersion = response.algorithmVersion
             feedProfileState = response.profileState
-            activeFeedFilter = preset ?? "For You"
+            activeFeedChipId = chipId
             activeFeedIsSearchMode = false
             resetFeedTracking()
             isLoading = false
@@ -279,7 +324,7 @@ struct ExploreView: View {
                 feedSessionId = response.searchId
                 feedAlgorithmVersion = nil
                 feedProfileState = nil
-                activeFeedFilter = "search"
+                activeFeedChipId = nil
                 activeFeedIsSearchMode = true
                 resetFeedTracking()
                 isLoading = false
@@ -316,7 +361,7 @@ struct ExploreView: View {
                     previews.append(contentsOf: response.items)
                     nextCursor = response.nextCursor
                     feedSessionId = response.searchId
-                    activeFeedFilter = "search"
+                    activeFeedChipId = nil
                     activeFeedIsSearchMode = true
                 }
             } else {
@@ -326,17 +371,18 @@ struct ExploreView: View {
                     body: ForYouFeedRequest(
                         cursor: cursor,
                         limit: 10,
-                        presetId: activeFeedFilter == "For You" ? nil : activeFeedFilter
+                        presetId: nil,
+                        chipId: activeFeedChipId
                     )
                 )
 
                 withAnimation {
                     previews.append(contentsOf: response.items)
+                    suggestedChips = response.suggestedChips
                     nextCursor = response.nextCursor
                     feedSessionId = response.feedId
                     feedAlgorithmVersion = response.algorithmVersion
                     feedProfileState = response.profileState
-                    activeFeedFilter = selectedFilter == "" ? "For You" : selectedFilter
                     activeFeedIsSearchMode = false
                 }
             }
@@ -349,7 +395,7 @@ struct ExploreView: View {
         if activeFeedIsSearchMode {
             return "search"
         }
-        return activeFeedFilter
+        return activeFeedChipId ?? "for_you"
     }
 
     private func trackExploreImpression(preview: RecipePreview, rank: Int) {
@@ -367,9 +413,10 @@ struct ExploreView: View {
             payload: [
                 "rank": .int(rank),
                 "filter": .string(feedFilterValue()),
-                "preset_id": activeFeedFilter == "For You" || activeFeedIsSearchMode ? .null : .string(activeFeedFilter),
+                "preset_id": activeFeedChipId.map(AnyCodableValue.string) ?? .null,
+                "chip_id": activeFeedChipId.map(AnyCodableValue.string) ?? .null,
                 "profile_state": feedProfileState.map(AnyCodableValue.string) ?? .null,
-                "applied_context": .string(activeFeedIsSearchMode ? "query" : (activeFeedFilter == "For You" ? "for_you" : "preset")),
+                "applied_context": .string(activeFeedIsSearchMode ? "query" : (activeFeedChipId == nil ? "for_you" : "preset")),
                 "has_query": .bool(!searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty),
                 "save_count": preview.saveCount.map(AnyCodableValue.int) ?? .null,
                 "variant_count": preview.variantCount.map(AnyCodableValue.int) ?? .null,
@@ -393,7 +440,8 @@ struct ExploreView: View {
             payload: [
                 "rank": .int(rank),
                 "filter": .string(feedFilterValue()),
-                "preset_id": activeFeedFilter == "For You" || activeFeedIsSearchMode ? .null : .string(activeFeedFilter),
+                "preset_id": activeFeedChipId.map(AnyCodableValue.string) ?? .null,
+                "chip_id": activeFeedChipId.map(AnyCodableValue.string) ?? .null,
                 "profile_state": feedProfileState.map(AnyCodableValue.string) ?? .null,
             ]
         )
@@ -415,7 +463,8 @@ struct ExploreView: View {
             payload: [
                 "rank": .int(rank),
                 "filter": .string(feedFilterValue()),
-                "preset_id": activeFeedFilter == "For You" || activeFeedIsSearchMode ? .null : .string(activeFeedFilter),
+                "preset_id": activeFeedChipId.map(AnyCodableValue.string) ?? .null,
+                "chip_id": activeFeedChipId.map(AnyCodableValue.string) ?? .null,
                 "profile_state": feedProfileState.map(AnyCodableValue.string) ?? .null,
             ]
         )

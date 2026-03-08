@@ -56,13 +56,14 @@ struct RecipeCardView: View {
             .frame(minWidth: 0, maxWidth: .infinity, minHeight: cardHeight, maxHeight: cardHeight)
             .clipped()
 
-            // Darker overlay — 50% opacity for strong text contrast
-            Color.black.opacity(0.50)
+            // Light scrim so the image stays vibrant. The bottom gradient
+            // handles text readability; the full overlay just takes the edge
+            // off bright photos.
+            Color.black.opacity(0.15)
 
-            // Bottom gradient for extra text area contrast
             LinearGradient(
-                colors: [.clear, .black.opacity(0.5)],
-                startPoint: .center,
+                colors: [.clear, .clear, .black.opacity(0.55)],
+                startPoint: .top,
                 endPoint: .bottom
             )
 

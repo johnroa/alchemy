@@ -29,6 +29,9 @@ packages:
   Supabase:
     url: https://github.com/supabase/supabase-swift
     from: "2.0.0"
+  Sentry:
+    url: https://github.com/getsentry/sentry-cocoa
+    from: "9.1.0"
 
 targets:
   Alchemy:
@@ -50,6 +53,7 @@ targets:
       - package: Lottie
       - package: Supabase
         product: Supabase
+      - package: Sentry
       - target: AlchemyShareExtension
     entitlements:
       path: Alchemy/Resources/Alchemy.entitlements

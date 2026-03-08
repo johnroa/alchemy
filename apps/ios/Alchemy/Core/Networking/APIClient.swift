@@ -443,23 +443,23 @@ final class ExploreFeedPreloader {
 
     private init() {}
 
-    func cachedResponse(for preset: String?) -> ForYouFeedResponse? {
-        let key = cacheKey(for: preset)
+    func cachedResponse(for chipId: String?) -> ForYouFeedResponse? {
+        let key = cacheKey(for: chipId)
         guard let entry = cache[key], isFresh(entry) else {
             return nil
         }
         return entry.response
     }
 
-    func preload(preset: String? = nil, force: Bool = false) {
-        let normalizedPreset = normalizedPresetValue(preset)
-        let key = cacheKey(for: normalizedPreset)
+    func preload(chipId: String? = nil, force: Bool = false) {
+        let normalizedChipId = normalizedChipIdValue(chipId)
+        let key = cacheKey(for: normalizedChipId)
         if !force, let entry = cache[key], isFresh(entry) {
             return
         }
         guard inFlight[key] == nil else { return }
 
-        let task = makeLoadTask(for: normalizedPreset)
+        let task = makeLoadTask(for: normalizedChipId)
         inFlight[key] = task
 
         Task { @MainActor in
@@ -473,9 +473,9 @@ final class ExploreFeedPreloader {
         }
     }
 
-    func load(preset: String? = nil) async throws -> ForYouFeedResponse {
-        let normalizedPreset = normalizedPresetValue(preset)
-        let key = cacheKey(for: normalizedPreset)
+    func load(chipId: String? = nil) async throws -> ForYouFeedResponse {
+        let normalizedChipId = normalizedChipIdValue(chipId)
+        let key = cacheKey(for: normalizedChipId)
 
         if let entry = cache[key], isFresh(entry) {
             return entry.response
@@ -485,7 +485,7 @@ final class ExploreFeedPreloader {
             return try await existingTask.value
         }
 
-        let task = makeLoadTask(for: normalizedPreset)
+        let task = makeLoadTask(for: normalizedChipId)
         inFlight[key] = task
         defer { inFlight[key] = nil }
 
@@ -494,7 +494,7 @@ final class ExploreFeedPreloader {
         return response
     }
 
-    private func makeLoadTask(for preset: String?) -> Task<ForYouFeedResponse, Error> {
+    private func makeLoadTask(for chipId: String?) -> Task<ForYouFeedResponse, Error> {
         Task {
             try await APIClient.shared.request(
                 "/recipes/explore/for-you",
@@ -502,20 +502,21 @@ final class ExploreFeedPreloader {
                 body: ForYouFeedRequest(
                     cursor: nil,
                     limit: 10,
-                    presetId: preset
+                    presetId: nil,
+                    chipId: chipId
                 )
             )
         }
     }
 
-    private func normalizedPresetValue(_ preset: String?) -> String? {
-        guard let preset else { return nil }
-        let trimmed = preset.trimmingCharacters(in: .whitespacesAndNewlines)
+    private func normalizedChipIdValue(_ chipId: String?) -> String? {
+        guard let chipId else { return nil }
+        let trimmed = chipId.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
     }
 
-    private func cacheKey(for preset: String?) -> String {
-        preset?.lowercased() ?? "__for_you__"
+    private func cacheKey(for chipId: String?) -> String {
+        chipId?.lowercased() ?? "__for_you__"
     }
 
     private func isFresh(_ entry: CacheEntry) -> Bool {

@@ -1,5 +1,6 @@
 import { getAdminClient } from "@/lib/supabase-admin";
 import { isSchemaMissingError } from "./shared";
+import { normalizeRecipeSemanticProfile } from "@alchemy/shared/recipe-semantics";
 
 export type RecipeAuditIndexRow = {
   id: string;
@@ -107,6 +108,19 @@ export type RecipeAuditDetail = {
     position: number;
     updated_at: string;
   }>;
+  current_semantics: {
+    descriptors: Array<{
+      id: string;
+      axis: string;
+      label: string;
+      confidence: number;
+      evidence?: string;
+    }>;
+    axis_counts: Array<{
+      axis: string;
+      count: number;
+    }>;
+  } | null;
 };
 
 export const getRecipeAuditIndexData = async (
@@ -418,6 +432,32 @@ export const getRecipeAuditDetail = async (recipeId: string): Promise<RecipeAudi
     };
   });
 
+  const currentVersionPayload = recipe.current_version_id
+    ? versionRows.find((version) => version.id === recipe.current_version_id)?.payload
+    : null;
+  const currentSemantics = normalizeRecipeSemanticProfile(
+    currentVersionPayload &&
+      typeof currentVersionPayload === "object" &&
+      !Array.isArray(currentVersionPayload)
+      ? (
+        (currentVersionPayload as { metadata?: unknown }).metadata &&
+            typeof (currentVersionPayload as { metadata?: unknown }).metadata === "object" &&
+            !Array.isArray((currentVersionPayload as { metadata?: unknown }).metadata)
+          ? ((currentVersionPayload as { metadata?: Record<string, unknown> }).metadata ?? {})["semantic_profile"]
+          : null
+      )
+      : null
+  );
+  const currentSemanticsAxisCounts = currentSemantics
+    ? Array.from(
+        currentSemantics.descriptors.reduce((acc, descriptor) => {
+          acc.set(descriptor.axis, (acc.get(descriptor.axis) ?? 0) + 1);
+          return acc;
+        }, new Map<string, number>())
+      ).map(([axis, count]) => ({ axis, count }))
+        .sort((left, right) => right.count - left.count || left.axis.localeCompare(right.axis))
+    : [];
+
   const attachmentRows = (links ?? []).map((link) => ({
     id: link.id,
     relation_type: relationById.get(link.relation_type_id) ?? "unknown_relation",
@@ -551,6 +591,18 @@ export const getRecipeAuditDetail = async (recipeId: string): Promise<RecipeAudi
       position: Number(row.position ?? 0),
       updated_at: String(row.updated_at)
     })),
+    current_semantics: currentSemantics
+      ? {
+          descriptors: currentSemantics.descriptors.map((descriptor) => ({
+            id: descriptor.id,
+            axis: descriptor.axis,
+            label: descriptor.label,
+            confidence: descriptor.confidence,
+            ...(descriptor.evidence ? { evidence: descriptor.evidence } : {})
+          })),
+          axis_counts: currentSemanticsAxisCounts
+        }
+      : null,
     changelog: Array.from(changelogById.values()).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
   };
 };
@@ -569,6 +621,7 @@ export type CookbookEntryRow = {
   preference_fingerprint: string | null;
   last_materialized_at: string | null;
   derivation_kind: string | null;
+  variant_semantic_labels: string[];
 };
 
 type VariantDetailRow = {
@@ -625,7 +678,7 @@ export const getRecipeCookbookEntries = async (
     client.from("users").select("id,email").in("id", userIds),
     client
       .from("user_recipe_variants")
-      .select("id, user_id, stale_status, preference_fingerprint, last_materialized_at, current_version_id")
+      .select("id, user_id, stale_status, preference_fingerprint, last_materialized_at, current_version_id, variant_tags")
       .eq("canonical_recipe_id", recipeId)
       .in("user_id", userIds),
   ]);
@@ -667,6 +720,13 @@ export const getRecipeCookbookEntries = async (
       derivation_kind: variant?.current_version_id
         ? derivationByVersionId.get(variant.current_version_id) ?? null
         : null,
+      variant_semantic_labels: normalizeRecipeSemanticProfile(
+        variant?.variant_tags &&
+          typeof variant.variant_tags === "object" &&
+          !Array.isArray(variant.variant_tags)
+          ? (variant.variant_tags as Record<string, unknown>)["semantic_profile"]
+          : null
+      )?.descriptors.map((descriptor) => descriptor.label) ?? [],
     };
   });
 };

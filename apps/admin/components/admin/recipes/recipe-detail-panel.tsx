@@ -139,6 +139,7 @@ export function RecipeDetailPanel({ detail, cookbookEntries }: RecipeDetailPanel
             </TabsTrigger>
             <TabsTrigger value="causality">Revision Map</TabsTrigger>
             <TabsTrigger value="canonical">Canonical Ingredients</TabsTrigger>
+            <TabsTrigger value="semantics">Semantics</TabsTrigger>
             <TabsTrigger value="cookbook">
               Cookbook
               {cookbookEntries.length > 0 && (
@@ -438,6 +439,68 @@ export function RecipeDetailPanel({ detail, cookbookEntries }: RecipeDetailPanel
           </Card>
         </TabsContent>
 
+        <TabsContent value="semantics">
+          <div className="grid gap-4 xl:grid-cols-[280px_minmax(0,1fr)]">
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base">Axis Coverage</CardTitle>
+                <CardDescription>Canonical semantic descriptor counts by axis.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-2 pt-0">
+                {detail.current_semantics?.axis_counts.length ? (
+                  detail.current_semantics.axis_counts.map((entry) => (
+                    <div key={entry.axis} className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+                      <span className="font-medium">{entry.axis}</span>
+                      <Badge variant="secondary">{entry.count}</Badge>
+                    </div>
+                  ))
+                ) : (
+                  <p className="text-sm text-muted-foreground">No canonical semantic profile is stored on the current recipe version.</p>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base">Canonical Descriptor Inventory</CardTitle>
+                <CardDescription>High-confidence metadata-enrichment descriptors that now drive Explore and Cookbook chips.</CardDescription>
+              </CardHeader>
+              <CardContent className="p-0">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Label</TableHead>
+                      <TableHead>Axis</TableHead>
+                      <TableHead className="text-right">Confidence</TableHead>
+                      <TableHead>Evidence</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {detail.current_semantics?.descriptors.length ? (
+                      detail.current_semantics.descriptors.map((descriptor) => (
+                        <TableRow key={descriptor.id}>
+                          <TableCell className="font-medium">{descriptor.label}</TableCell>
+                          <TableCell className="text-xs text-muted-foreground">{descriptor.axis}</TableCell>
+                          <TableCell className="text-right tabular-nums">{descriptor.confidence.toFixed(2)}</TableCell>
+                          <TableCell className="max-w-[320px] text-xs text-muted-foreground">
+                            {descriptor.evidence ?? "—"}
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    ) : (
+                      <TableRow>
+                        <TableCell colSpan={4} className="py-8 text-center text-muted-foreground">
+                          No semantic descriptors stored for the current canonical version.
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+          </div>
+        </TabsContent>
+
         {/* Cookbook — who has saved this recipe + variant status */}
         <TabsContent value="cookbook">
           <Card>
@@ -448,6 +511,7 @@ export function RecipeDetailPanel({ detail, cookbookEntries }: RecipeDetailPanel
                     <TableHead>User</TableHead>
                     <TableHead>Variant Status</TableHead>
                     <TableHead>Derivation</TableHead>
+                    <TableHead>Variant Semantics</TableHead>
                     <TableHead>Auto</TableHead>
                     <TableHead>Saved</TableHead>
                     <TableHead>Materialised</TableHead>
@@ -456,7 +520,7 @@ export function RecipeDetailPanel({ detail, cookbookEntries }: RecipeDetailPanel
                 <TableBody>
                   {cookbookEntries.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={6} className="py-8 text-center text-muted-foreground">
+                      <TableCell colSpan={7} className="py-8 text-center text-muted-foreground">
                         No cookbook entries. This recipe has not been saved by any user.
                       </TableCell>
                     </TableRow>
@@ -484,6 +548,11 @@ export function RecipeDetailPanel({ detail, cookbookEntries }: RecipeDetailPanel
                         </TableCell>
                         <TableCell className="text-xs text-muted-foreground">
                           {entry.derivation_kind ?? "—"}
+                        </TableCell>
+                        <TableCell className="max-w-[260px] text-xs text-muted-foreground">
+                          {entry.variant_semantic_labels.length > 0
+                            ? entry.variant_semantic_labels.slice(0, 4).join(" • ")
+                            : "—"}
                         </TableCell>
                         <TableCell className="text-xs">
                           {entry.autopersonalize ? "Yes" : "No"}

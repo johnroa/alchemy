@@ -14,6 +14,7 @@ import {
   upsertMetadataGraph,
   ENRICHMENT_PERSIST_CONFIDENCE,
 } from "./recipe-enrichment.ts";
+import { extractSemanticProfileFromPayload } from "./semantic-facets.ts";
 import { isRlsError } from "./routing-utils.ts";
 import {
   canonicalizeRecipePayloadMetadata,
@@ -546,7 +547,16 @@ export const processMetadataJobs = async (params: {
         },
       });
 
+      const semanticProfile = extractSemanticProfileFromPayload(payload);
       const readyMetadata = {
+        semantic_descriptor_count: semanticProfile?.descriptors.length ?? 0,
+        semantic_axes: Array.from(
+          new Set(
+            (semanticProfile?.descriptors ?? []).map((descriptor) =>
+              descriptor.axis
+            ),
+          ),
+        ),
         categories,
         keywords,
         nutrition: payload.metadata?.nutrition ?? null,

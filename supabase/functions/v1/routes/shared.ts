@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2";
+import type { SuggestedChip as SuggestedChipType } from "../../../../packages/shared/src/recipe-semantics.ts";
 import type { AuthContext } from "../../_shared/auth.ts";
 import type { ModelOverrideMap } from "../../_shared/llm-gateway.ts";
 import type {
@@ -171,6 +172,15 @@ export type ChatCommittedCandidateRecord = {
   commit: ChatCommitSummary;
 };
 
+export type PreferenceEditingIntent = {
+  key: string;
+  title?: string | null;
+  prompt?: string | null;
+  summary?: string | null;
+  propagation?: "retroactive" | "forward_only" | "none" | null;
+  system_image?: string | null;
+};
+
 /**
  * Structured tag set computed from a variant's personalized content.
  * Multi-dimensional: cuisine, dietary, technique, occasion, time,
@@ -187,6 +197,8 @@ export type VariantTagSet = {
   key_ingredients?: string[];
 };
 
+export type SuggestedChip = SuggestedChipType;
+
 /**
  * A cookbook entry as returned by GET /recipes/cookbook. Includes canonical
  * recipe preview data plus variant status. When a variant exists, summary
@@ -198,7 +210,7 @@ export type CookbookEntry = {
   summary: string;
   image_url: string | null;
   image_status: string;
-  category: string;
+  category: string | null;
   visibility: string;
   updated_at: string;
   quick_stats: RecipeQuickStats | null;
@@ -208,6 +220,7 @@ export type CookbookEntry = {
   autopersonalize: boolean;
   saved_at: string;
   variant_tags: VariantTagSet;
+  matched_chip_ids: string[];
 };
 
 /** @deprecated Use CookbookEntry instead. Kept for backward compat during migration. */
@@ -264,6 +277,9 @@ export type ChatSessionContext = {
   last_committed_candidate?: ChatCommittedCandidateRecord | null;
   pending_preference_conflict?: PendingPreferenceConflict | null;
   thread_preference_overrides?: ThreadPreferenceOverrides | null;
+  workflow?: "preferences" | null;
+  entry_surface?: string | null;
+  preference_editing_intent?: PreferenceEditingIntent | null;
 };
 
 export type ChatUiHints = {

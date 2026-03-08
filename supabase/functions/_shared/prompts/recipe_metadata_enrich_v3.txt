@@ -1,0 +1,37 @@
+Enrich a recipe with strict structured metadata.
+Return ONLY one JSON object with keys: confidence, metadata.
+
+Confidence:
+- confidence must be a number from 0 to 1.
+- Be conservative. If the recipe does not support a claim, omit the field rather than guessing.
+
+metadata rules:
+- Emit ONLY canonical RecipeMetadata schema keys.
+- Never emit alias keys such as difficulty_level, health, total_time_minutes, item_count, ingredient_count, meal_type, dish_type, dietary_flags, equipment_required, or cooking_methods.
+- Allowed top-level keys are: vibe, flavor_profile, flavor_axes, spice_level, nutrition, difficulty, skill_level, complexity_score, health_score, time_minutes, items, quick_stats, allergens, allergen_flags, diet_tags, health_flags, substitutions, timing, cuisine_tags, occasion_tags, cuisine, course_type, seasonality, techniques, equipment, pairing_rationale, serving_notes, storage_reheat_profile, practical, semantic_profile.
+- difficulty must be exactly easy, medium, or complex when present.
+- health_score must be an integer from 1 to 100 when present.
+- If you emit quick_stats, it must contain exactly time_minutes, difficulty, health_score, and items.
+- timing may contain only prep_minutes, cook_minutes, and total_minutes.
+
+semantic_profile rules:
+- semantic_profile must be an object with exactly one key: descriptors.
+- descriptors must be an array of descriptor objects.
+- Each descriptor object may contain only: axis, key, label, confidence, evidence.
+- axis and key must be lowercase slug-style tokens using letters, numbers, and dashes only.
+- label must be short, human-friendly, and ready to render as a chip in Cookbook or Explore.
+- confidence must be a number from 0 to 1 for that descriptor.
+- evidence should be a short factual note grounded in the recipe, not a justification essay.
+
+Descriptor generation goal:
+- Generate as many descriptors as are both high-confidence and genuinely useful.
+- Prefer clever, actionably helpful descriptors over generic tags.
+- Cover multiple angles when supported by the recipe: cuisine, mood, health framing, effort, occasion, social setting, texture or flavor profile, time shape, cleanup burden, seasonality, comfort level, date-night, family-style, weeknight, hosting, meal-prep, lunchbox, and other high-signal dimensions.
+- It is valid to include descriptors that are naturally compositional and chip-ready, such as "Healthy & Quick", "Family Style", "Date-Night Worthy", or "Asian Inspired", but only when the recipe clearly supports them.
+- Do not artificially cap the descriptor count. Return a large, diverse inventory when the evidence is strong.
+- Do not emit weak, obvious, redundant, or unsupported descriptors.
+- Do not emit descriptors that merely restate "recipe", "food", "delicious", "tasty", or similarly generic concepts.
+- Do not infer dietary compatibility, cuisine, difficulty, or time claims unless the recipe content supports them.
+- Prefer omission over speculation.
+
+Output JSON only. No markdown.

@@ -119,4 +119,72 @@ describe("getModelUsageData", () => {
       [1000, 1000],
     ]);
   });
+
+  it("sorts actions by the requested metric", async () => {
+    mockState.eventCount = 5;
+    mockState.eventRows = [
+      {
+        id: "event-generate-1",
+        created_at: new Date().toISOString(),
+        token_input: 600,
+        token_output: 400,
+        token_total: 1000,
+        cost_usd: 0.2,
+        latency_ms: 300,
+        event_payload: { scope: "chat_generation" },
+      },
+      {
+        id: "event-generate-2",
+        created_at: new Date().toISOString(),
+        token_input: 500,
+        token_output: 500,
+        token_total: 1000,
+        cost_usd: 0.2,
+        latency_ms: 300,
+        event_payload: { scope: "chat_generation" },
+      },
+      {
+        id: "event-chat-1",
+        created_at: new Date().toISOString(),
+        token_input: 200,
+        token_output: 100,
+        token_total: 300,
+        cost_usd: 0.4,
+        latency_ms: 300,
+        event_payload: { scope: "chat_ideation" },
+      },
+      {
+        id: "event-chat-2",
+        created_at: new Date().toISOString(),
+        token_input: 150,
+        token_output: 150,
+        token_total: 300,
+        cost_usd: 0.4,
+        latency_ms: 300,
+        event_payload: { scope: "chat_ideation" },
+      },
+      {
+        id: "event-chat-3",
+        created_at: new Date().toISOString(),
+        token_input: 150,
+        token_output: 150,
+        token_total: 300,
+        cost_usd: 0.4,
+        latency_ms: 300,
+        event_payload: { scope: "chat_ideation" },
+      },
+    ];
+
+    const byCalls = await getModelUsageData({ rangeDays: 30, actionSort: "total_calls" });
+    expect(byCalls.byAction.map((row) => row.scope)).toEqual(["chat_ideation", "chat_generation"]);
+
+    const byTokens = await getModelUsageData({ rangeDays: 30, actionSort: "total_tokens" });
+    expect(byTokens.byAction.map((row) => row.scope)).toEqual(["chat_generation", "chat_ideation"]);
+
+    const byCost = await getModelUsageData({ rangeDays: 30, actionSort: "total_cost" });
+    expect(byCost.byAction.map((row) => row.scope)).toEqual(["chat_ideation", "chat_generation"]);
+
+    const byCostPerCall = await getModelUsageData({ rangeDays: 30, actionSort: "cost_per_call" });
+    expect(byCostPerCall.byAction.map((row) => row.scope)).toEqual(["chat_ideation", "chat_generation"]);
+  });
 });

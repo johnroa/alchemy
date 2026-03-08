@@ -1,0 +1,12 @@
+---
+description: Prefer correct fixes over temporary patches
+alwaysApply: true
+---
+
+# Execution Discipline
+
+- Do not choose a temporary, partial, or "fast" fix when the user expects the correct fix.
+- If a proper fix requires changes across contracts, migrations, generated data, backend logic, or UI, do the proper fix.
+- Do not ship compatibility band-aids in place of restoring the source-of-truth contract unless the user explicitly asks for a temporary workaround.
+- When a regression is caused by a broken contract, fix the contract at the correct layer first.
+- If there is any doubt between "quick patch" and "right fix", choose the right fix.

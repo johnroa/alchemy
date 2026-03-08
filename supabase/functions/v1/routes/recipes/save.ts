@@ -2,7 +2,6 @@ import {
   ApiError,
   requireJsonBody,
 } from "../../../_shared/errors.ts";
-import { llmGateway } from "../../../_shared/llm-gateway.ts";
 import type {
   JsonValue,
   RecipePayload,
@@ -12,6 +11,8 @@ import {
   logBehaviorEvents,
   type BehaviorEventInput,
 } from "../../lib/behavior-events.ts";
+import { runInBackground } from "../../lib/background-tasks.ts";
+import { materializeRecipeVariant } from "../../lib/variant-materialization.ts";
 import type { RouteContext, VariantStatus } from "../shared.ts";
 import type { RecipesDeps } from "./types.ts";
 
@@ -202,113 +203,20 @@ export const handleSaveRoutes = async (
 
               if (!canonicalVersion) return;
 
-              const canonicalPayload = canonicalVersion.payload as RecipePayload;
-              const preferenceContext: Record<string, JsonValue> = {
-                dietary_preferences: preferences.dietary_preferences as unknown as JsonValue,
-                dietary_restrictions: preferences.dietary_restrictions as unknown as JsonValue,
-                skill_level: preferences.skill_level as unknown as JsonValue,
-                equipment: preferences.equipment as unknown as JsonValue,
-                cuisines: preferences.cuisines as unknown as JsonValue,
-                aversions: preferences.aversions as unknown as JsonValue,
-                cooking_for: (preferences.cooking_for ?? null) as unknown as JsonValue,
-                max_difficulty: preferences.max_difficulty as unknown as JsonValue,
-                presentation_preferences: preferences.presentation_preferences as unknown as JsonValue,
-              };
-
-              // Query graph for proven substitution patterns.
-              const bgConstraints = [
-                ...(Array.isArray(preferences.dietary_restrictions)
-                  ? preferences.dietary_restrictions
-                  : []),
-                ...(Array.isArray(preferences.aversions)
-                  ? preferences.aversions
-                  : []),
-              ].map((c) => String(c).toLowerCase());
-
-              const bgGraphSubs = bgConstraints.length > 0
-                ? await fetchGraphSubstitutions({
-                    serviceClient,
-                    recipeVersionId: canonicalVersion.id,
-                    constraints: bgConstraints,
-                  })
-                : [];
-
-              const result = await llmGateway.personalizeRecipe({
-                client,
+              await materializeRecipeVariant({
+                llmClient: client,
+                serviceClient,
                 userId: auth.userId,
                 requestId,
-                canonicalPayload,
-                preferences: preferenceContext,
-                graphSubstitutions: bgGraphSubs.length > 0
-                  ? bgGraphSubs
-                  : undefined,
+                recipeId,
+                canonicalVersionId: canonicalVersion.id,
+                canonicalPayload: canonicalVersion.payload,
+                preferences,
+                computePreferenceFingerprint,
+                computeVariantTags,
+                fetchGraphSubstitutions,
                 modelOverrides,
               });
-
-              // Fingerprint at materialization time for stale detection.
-              const bgFingerprint = await computePreferenceFingerprint(preferences);
-
-              const provenance: Record<string, JsonValue> = {
-                adaptation_summary: result.adaptationSummary,
-                applied_adaptations: result.appliedAdaptations as JsonValue,
-                tag_diff: result.tagDiff as unknown as JsonValue,
-                substitution_diffs: result.substitutionDiffs as unknown as JsonValue,
-                preference_fingerprint: bgFingerprint,
-              };
-
-              // Insert variant version.
-              const { data: newVersion } = await serviceClient
-                .from("user_recipe_variant_versions")
-                .insert({
-                  source_canonical_version_id: canonicalVersion.id,
-                  payload: result.recipe as unknown as JsonValue,
-                  derivation_kind: "auto_personalized",
-                  provenance,
-                })
-                .select("id")
-                .single();
-
-              if (!newVersion) return;
-
-              // Compute variant tags for cookbook filtering.
-              const bgVariantTags = computeVariantTags({
-                canonicalPayload,
-                variantPayload: result.recipe,
-                tagDiff: result.tagDiff,
-              });
-
-              // Create variant row with fingerprint and tags.
-              const { data: newVariant } = await serviceClient
-                .from("user_recipe_variants")
-                .insert({
-                  user_id: auth.userId,
-                  canonical_recipe_id: recipeId,
-                  current_version_id: newVersion.id,
-                  base_canonical_version_id: canonicalVersion.id,
-                  preference_fingerprint: bgFingerprint,
-                  variant_tags: bgVariantTags,
-                  stale_status: "current",
-                  last_materialized_at: new Date().toISOString(),
-                })
-                .select("id")
-                .single();
-
-              if (!newVariant) return;
-
-              // Link version to variant and cookbook entry.
-              await serviceClient
-                .from("user_recipe_variant_versions")
-                .update({ variant_id: newVariant.id })
-                .eq("id", newVersion.id);
-
-              await serviceClient
-                .from("cookbook_entries")
-                .update({
-                  active_variant_id: newVariant.id,
-                  updated_at: new Date().toISOString(),
-                })
-                .eq("user_id", auth.userId)
-                .eq("canonical_recipe_id", recipeId);
             } catch (err) {
               console.error("variant_auto_materialization_failed", {
                 request_id: requestId,
@@ -319,9 +227,7 @@ export const handleSaveRoutes = async (
             }
           })();
 
-          // runInBackground is injected via deps to use EdgeRuntime.waitUntil.
-          // Since we don't have it as a dep, fire-and-forget with void.
-          void variantTask;
+          runInBackground(variantTask);
         }
       }
 

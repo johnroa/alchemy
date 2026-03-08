@@ -1,8 +1,12 @@
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2";
 import { ApiError } from "../../_shared/errors.ts";
 import { llmGateway, type ModelOverrideMap } from "../../_shared/llm-gateway.ts";
-import type { JsonValue } from "../../_shared/types.ts";
+import type { JsonValue, RecipePayload } from "../../_shared/types.ts";
 import { runInBackground } from "../lib/background-tasks.ts";
+import {
+  buildSuggestedChips,
+  extractSemanticProfileFromPayload,
+} from "../lib/semantic-facets.ts";
 import {
   asRecord,
   clampLimit,
@@ -157,6 +161,82 @@ const buildCardContentSignature = (item: RecipeSearchCard): string | null => {
   if (!title) return null;
   return [title, summary ?? "", imageUrl ?? ""].join("|");
 };
+
+const loadSemanticProfilesForRecipes = async (params: {
+  serviceClient: SupabaseClient;
+  recipeIds: string[];
+}) => {
+  const uniqueRecipeIds = Array.from(
+    new Set(
+      params.recipeIds.filter((recipeId) => recipeId.trim().length > 0),
+    ),
+  );
+
+  if (uniqueRecipeIds.length === 0) {
+    return new Map<string, ReturnType<typeof extractSemanticProfileFromPayload>>();
+  }
+
+  const { data: recipeRows, error: recipesError } = await params.serviceClient
+    .from("recipes")
+    .select("id,current_version_id")
+    .in("id", uniqueRecipeIds);
+
+  if (recipesError) {
+    throw new ApiError(
+      500,
+      "explore_semantic_profiles_recipe_fetch_failed",
+      "Could not load recipe semantic profiles",
+      recipesError.message,
+    );
+  }
+
+  const currentVersionIds = Array.from(
+    new Set(
+      (recipeRows ?? [])
+        .map((row) => row.current_version_id)
+        .filter((id): id is string => Boolean(id)),
+    ),
+  );
+
+  let payloadByVersionId = new Map<string, RecipePayload>();
+  if (currentVersionIds.length > 0) {
+    const { data: versionRows, error: versionError } = await params.serviceClient
+      .from("recipe_versions")
+      .select("id,payload")
+      .in("id", currentVersionIds);
+
+    if (versionError) {
+      throw new ApiError(
+        500,
+        "explore_semantic_profiles_version_fetch_failed",
+        "Could not load recipe version payloads for Explore semantics",
+        versionError.message,
+      );
+    }
+
+    payloadByVersionId = new Map(
+      (versionRows ?? []).map((row) => [row.id, row.payload as RecipePayload]),
+    );
+  }
+
+  return new Map(
+    (recipeRows ?? []).map((row) => [
+      row.id,
+      row.current_version_id
+        ? extractSemanticProfileFromPayload(payloadByVersionId.get(row.current_version_id))
+        : undefined,
+    ]),
+  );
+};
+
+const itemMatchesChipId = (params: {
+  chipId: string;
+  recipeId: string;
+  profileByRecipeId: Map<string, ReturnType<typeof extractSemanticProfileFromPayload>>;
+}): boolean =>
+  params.profileByRecipeId.get(params.recipeId)?.descriptors.some((descriptor) =>
+    descriptor.id === params.chipId
+  ) ?? false;
 
 export const dedupeCardsByContentSignature = (
   items: RecipeSearchCard[],
@@ -995,6 +1075,7 @@ export const getExploreForYouFeed = async (params: {
   cursor?: string | null;
   limit?: number | null;
   presetId?: string | null;
+  chipId?: string | null;
   preferences: Record<string, JsonValue>;
   memorySnapshot: Record<string, JsonValue>;
   activeMemories: JsonValue;
@@ -1011,18 +1092,41 @@ export const getExploreForYouFeed = async (params: {
     throw new ApiError(400, "recipe_search_cursor_invalid", "Cursor is invalid");
   }
 
-  const buildResponseFromSession = (
+  const normalizedChipId = normalizeScalarText(params.chipId);
+
+  const buildResponseFromSession = async (
     session: Awaited<ReturnType<typeof fetchSearchSession>>,
     offset: number,
-  ): InternalForYouFeedResponse => {
+  ): Promise<InternalForYouFeedResponse> => {
     const rationaleTagsByRecipe = normalizeRationaleTagsFromSession(
       session.rationale_tags_by_recipe,
     );
-    const items = applyRationaleTagsToCards(
+    const allItems = applyRationaleTagsToCards(
       normalizeStoredCards(session.hybrid_items),
       rationaleTagsByRecipe,
     );
-    const promotedRecipeIds = Array.isArray(session.page1_promoted_recipe_ids)
+    const profileByRecipeId = await loadSemanticProfilesForRecipes({
+      serviceClient: params.serviceClient,
+      recipeIds: allItems.map((item) => item.id),
+    });
+    const suggestedChips = buildSuggestedChips({
+      items: allItems.map((item) => ({
+        item_id: item.id,
+        profile: profileByRecipeId.get(item.id),
+      })),
+    });
+    const items = normalizedChipId
+      ? allItems.filter((item) =>
+        itemMatchesChipId({
+          chipId: normalizedChipId,
+          recipeId: item.id,
+          profileByRecipeId,
+        })
+      )
+      : allItems;
+    const promotedRecipeIds = normalizedChipId
+      ? []
+      : Array.isArray(session.page1_promoted_recipe_ids)
       ? session.page1_promoted_recipe_ids
       : [];
     const page = paginateSessionItems({
@@ -1041,11 +1145,12 @@ export const getExploreForYouFeed = async (params: {
       profile_state: session.profile_state ?? "cold",
       algorithm_version: session.algorithm_version ?? "for_you_v1",
       items: page.items,
+      suggested_chips: suggestedChips,
       next_cursor: page.next_cursor,
       no_match: page.no_match,
       internal: {
         rerank_used: promotedRecipeIds.length > 0,
-        candidate_count: items.length,
+        candidate_count: allItems.length,
         fallback_path: null,
         rationale_tags_by_recipe: rationaleTagsByRecipe,
       },
@@ -1061,7 +1166,7 @@ export const getExploreForYouFeed = async (params: {
     if (session.applied_context !== "for_you" && session.applied_context !== "preset") {
       throw new ApiError(400, "recipe_search_cursor_invalid", "Cursor is invalid");
     }
-    return buildResponseFromSession(session, decodedCursor.offset);
+    return await buildResponseFromSession(session, decodedCursor.offset);
   }
 
   const algorithm = await loadActiveExploreAlgorithmVersion(params.serviceClient);
@@ -1098,7 +1203,7 @@ export const getExploreForYouFeed = async (params: {
     algorithmVersion: algorithm.version,
   });
   if (cachedSession) {
-    return buildResponseFromSession(cachedSession, 0);
+    return await buildResponseFromSession(cachedSession, 0);
   }
   const retrievalEmbedding = normalizedPresetId
     ? (await llmGateway.embedRecipeSearchQuery({
@@ -1191,13 +1296,34 @@ export const getExploreForYouFeed = async (params: {
   }
 
   orderedItems = applyRationaleTagsToCards(orderedItems, rationaleTagsByRecipe);
-  const page1Items = selectPage1Items({
-    orderedItems,
-    limit: Math.min(limit, algorithmConfig.page1Limit),
-    savedRecipeIds: signals.savedRecipeIds,
-    recentExposureRecipeIds: signals.recentExposureRecipeIds,
-    suppressSavedOnPage1: algorithmConfig.suppressSavedOnPage1,
+  const profileByRecipeId = await loadSemanticProfilesForRecipes({
+    serviceClient: params.serviceClient,
+    recipeIds: orderedItems.map((item) => item.id),
   });
+  const suggestedChips = buildSuggestedChips({
+    items: orderedItems.map((item) => ({
+      item_id: item.id,
+      profile: profileByRecipeId.get(item.id),
+    })),
+  });
+  const chipFilteredItems = normalizedChipId
+    ? orderedItems.filter((item) =>
+      itemMatchesChipId({
+        chipId: normalizedChipId,
+        recipeId: item.id,
+        profileByRecipeId,
+      })
+    )
+    : orderedItems;
+  const page1Items = normalizedChipId
+    ? chipFilteredItems.slice(0, limit)
+    : selectPage1Items({
+      orderedItems,
+      limit: Math.min(limit, algorithmConfig.page1Limit),
+      savedRecipeIds: signals.savedRecipeIds,
+      recentExposureRecipeIds: signals.recentExposureRecipeIds,
+      suppressSavedOnPage1: algorithmConfig.suppressSavedOnPage1,
+    });
 
   const feedId = await createSearchSession({
     serviceClient: params.serviceClient,
@@ -1216,10 +1342,19 @@ export const getExploreForYouFeed = async (params: {
     rationaleTagsByRecipe,
   });
 
-  const nextCursor = filterSessionItems(
-      orderedItems,
-      page1Items.map((item) => item.id),
-    ).length > 0
+  const nextCursor = normalizedChipId
+    ? chipFilteredItems.length > page1Items.length
+      ? encodeSearchCursor({
+        v: 1,
+        kind: "session",
+        search_id: feedId,
+        offset: page1Items.length,
+      })
+      : null
+    : filterSessionItems(
+        orderedItems,
+        page1Items.map((item) => item.id),
+      ).length > 0
     ? encodeSearchCursor({
       v: 1,
       kind: "session",
@@ -1234,8 +1369,9 @@ export const getExploreForYouFeed = async (params: {
     profile_state: tasteProfile.profileState,
     algorithm_version: algorithm.version,
     items: page1Items,
+    suggested_chips: suggestedChips,
     next_cursor: nextCursor,
-    no_match: orderedItems.length === 0
+    no_match: chipFilteredItems.length === 0
       ? {
         code: "for_you_feed_empty",
         message: "Alchemy does not have enough matching public recipes yet.",

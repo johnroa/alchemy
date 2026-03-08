@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2";
+import type { SuggestedChip } from "../../../../packages/shared/src/recipe-semantics.ts";
 import type { JsonValue, RecipePayload } from "../../_shared/types.ts";
 import type { RecipePreview } from "../recipe-preview.ts";
 
@@ -59,6 +60,7 @@ export type ForYouFeedResponse = {
   profile_state: ForYouProfileState;
   algorithm_version: string;
   items: RecipeSearchCard[];
+  suggested_chips: SuggestedChip[];
   next_cursor: string | null;
   no_match: RecipeSearchNoMatch | null;
 };

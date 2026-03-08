@@ -7,6 +7,7 @@ import type {
   ChatMessageView,
   ContextPack,
   CookbookEntry,
+  SuggestedChip,
   PreferenceContext,
   RecipePreview,
   RecipeViewOptions,
@@ -89,6 +90,10 @@ export type RecipesDeps = {
     client: RouteContext["client"],
     userId: string,
   ) => Promise<CookbookEntry[]>;
+  buildCookbookFeed: (
+    client: RouteContext["client"],
+    userId: string,
+  ) => Promise<{ items: CookbookEntry[]; suggestedChips: SuggestedChip[] }>;
   buildCookbookInsightDeterministic: (items: CookbookEntry[]) => string | null;
   ensurePersistedRecipeImageRequest: (input: {
     serviceClient: RouteContext["serviceClient"];
@@ -133,6 +138,7 @@ export type RecipesDeps = {
     cursor?: string | null;
     limit?: number | null;
     presetId?: string | null;
+    chipId?: string | null;
     preferences: Record<string, JsonValue>;
     memorySnapshot: Record<string, JsonValue>;
     activeMemories: JsonValue;
@@ -144,6 +150,7 @@ export type RecipesDeps = {
     profile_state: "cold" | "warm" | "established";
     algorithm_version: string;
     items: RecipePreview[];
+    suggested_chips: SuggestedChip[];
     next_cursor: string | null;
     no_match: {
       code: string;

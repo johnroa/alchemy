@@ -1,4 +1,5 @@
 import type { GatewayScope as GatewayScopeType } from "./llm-scope-registry.ts";
+import type { RecipeSemanticProfile } from "../../../packages/shared/src/recipe-semantics.ts";
 export type { GatewayScope } from "./llm-scope-registry.ts";
 
 export type JsonValue =
@@ -125,6 +126,7 @@ export type RecipeMetadataV2 = {
     cost_tier?: string;
     meal_prep_friendly?: boolean;
   };
+  semantic_profile?: RecipeSemanticProfile;
   [key: string]: JsonValue | undefined;
 };
 

@@ -226,8 +226,8 @@ export function PromptsRulesSection({
               {hasActive && (
                 <span
                   className={cn(
-                    "absolute -right-1 -top-1 h-2 w-2 rounded-full border border-white",
-                    selectedScope === scope ? "bg-emerald-300" : "bg-emerald-500"
+                    "absolute -right-1 -top-1 h-2 w-2 rounded-full border border-background",
+                    selectedScope === scope ? "bg-emerald-300 dark:bg-emerald-400" : "bg-emerald-500 dark:bg-emerald-400"
                   )}
                 />
               )}
@@ -238,7 +238,7 @@ export function PromptsRulesSection({
 
       {/* Active item for selected scope */}
       {activeItem ? (
-        <Card className={editingId === activeItem.id ? undefined : "border-emerald-300 bg-emerald-50"}>
+        <Card className={editingId === activeItem.id ? undefined : "border-emerald-500/30 bg-emerald-500/10"}>
           <CardHeader className="pb-2">
             <div className="flex flex-wrap items-center justify-between gap-2">
               {editingId === activeItem.id ? (
@@ -250,7 +250,7 @@ export function PromptsRulesSection({
                 />
               ) : (
                 <div className="flex flex-wrap items-center gap-2">
-                  <Badge className="gap-1 bg-emerald-100 text-emerald-700 border-emerald-300 text-xs">
+                  <Badge className="gap-1 border-emerald-500/35 bg-emerald-500/15 text-xs text-emerald-700 dark:text-emerald-300">
                     <Check className="h-2.5 w-2.5" /> Active
                   </Badge>
                   <span className="text-sm font-semibold">{activeItem.name}</span>
@@ -281,11 +281,11 @@ export function PromptsRulesSection({
                 className={cn("font-mono text-xs", isPrompts ? "min-h-[300px]" : "min-h-[160px]")}
               />
             ) : isPrompts ? (
-              <pre className="whitespace-pre-wrap rounded-md border border-emerald-200 bg-white p-3 font-mono text-xs leading-relaxed text-zinc-700">
+              <pre className="whitespace-pre-wrap rounded-md border border-emerald-500/25 bg-background/80 p-3 font-mono text-xs leading-relaxed text-foreground shadow-sm">
                 {(activeItem as Prompt).template}
               </pre>
             ) : (
-              <pre className="whitespace-pre-wrap rounded-md border border-emerald-200 bg-white p-3 font-mono text-xs leading-relaxed text-zinc-700">
+              <pre className="whitespace-pre-wrap rounded-md border border-emerald-500/25 bg-background/80 p-3 font-mono text-xs leading-relaxed text-foreground shadow-sm">
                 {JSON.stringify((activeItem as Rule).rule, null, 2)}
               </pre>
             )}
@@ -350,7 +350,8 @@ export function PromptsRulesSection({
                         </Button>
                         <button
                           onClick={() => toggleExpanded(item.id)}
-                          className="rounded p-1 text-muted-foreground hover:bg-zinc-100"
+                          aria-label={`${isExpanded ? "Collapse" : "Expand"} ${item.name}`}
+                          className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-accent-foreground"
                         >
                           {isExpanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
                         </button>
@@ -368,7 +369,7 @@ export function PromptsRulesSection({
                   </div>
                 ) : isExpanded ? (
                   <div className="border-t px-3 pb-3 pt-2">
-                    <pre className="whitespace-pre-wrap rounded-md border bg-zinc-50 p-3 font-mono text-xs leading-relaxed text-zinc-700">
+                    <pre className="whitespace-pre-wrap rounded-md border border-border/80 bg-muted/35 p-3 font-mono text-xs leading-relaxed text-foreground/90">
                       {isPrompts
                         ? (item as Prompt).template
                         : JSON.stringify((item as Rule).rule, null, 2)}
@@ -393,7 +394,7 @@ export function PromptsRulesSection({
               </CardTitle>
               <button
                 onClick={() => setShowCreateForm(false)}
-                className="rounded p-1 text-muted-foreground hover:bg-zinc-100"
+                className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-accent-foreground"
               >
                 <X className="h-4 w-4" />
               </button>

@@ -17,6 +17,9 @@ export default async function MetadataPipelinePage(): Promise<React.JSX.Element>
   const failed = data.jobs.filter((job) => job.status === "failed").length;
   const total = data.jobs.length;
   const recentErrors = data.jobs.filter((job) => Boolean(job.last_error)).slice(0, 15);
+  const descriptorTotal = data.jobs.reduce((total, job) => total + job.semantic_descriptor_count, 0);
+  const axisTotal = data.jobs.reduce((total, job) => total + job.semantic_axis_count, 0);
+  const rejectionTotal = data.jobs.reduce((total, job) => total + job.recipe_enrichment_rejections, 0);
 
   return (
     <div className="space-y-6">
@@ -26,11 +29,13 @@ export default async function MetadataPipelinePage(): Promise<React.JSX.Element>
         actions={<MetadataPipelineControls />}
       />
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-6">
         <KpiCard label="Pending" value={String(pending)} hint="Waiting for processing" icon={Clock3} variant={pending > 20 ? "warning" : "default"} />
         <KpiCard label="Processing" value={String(processing)} hint="Currently locked by processor" icon={Loader2} />
         <KpiCard label="Ready" value={String(ready)} hint="Metadata and graph links completed" icon={CheckCircle2} variant={ready > 0 ? "success" : "muted"} />
         <KpiCard label="Failed" value={String(failed)} hint="Requires retry" icon={AlertCircle} variant={failed > 0 ? "danger" : "success"} />
+        <KpiCard label="Descriptors" value={String(descriptorTotal)} hint="Canonical semantic descriptors persisted across ready jobs." icon={CheckCircle2} variant={descriptorTotal > 0 ? "success" : "muted"} />
+        <KpiCard label="Recipe Drops" value={String(rejectionTotal)} hint="Recipe-enrichment runs discarded below the confidence threshold." icon={AlertCircle} variant={rejectionTotal > 0 ? "warning" : "success"} />
       </div>
 
       {total > 0 && (
@@ -51,6 +56,8 @@ export default async function MetadataPipelinePage(): Promise<React.JSX.Element>
               <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-blue-400" />Processing ({processing})</span>
               <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-emerald-400" />Ready ({ready})</span>
               <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-red-400" />Failed ({failed})</span>
+              <span>{descriptorTotal} descriptors materialized</span>
+              <span>{axisTotal} semantic axes recorded</span>
             </div>
           </CardContent>
         </Card>

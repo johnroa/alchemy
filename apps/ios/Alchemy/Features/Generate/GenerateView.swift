@@ -54,13 +54,11 @@ struct GenerateView: View {
     /// Controls the entry animation: chat panel starts off-screen and
     /// slides up on first appear.
     @State private var hasAppeared = false
-    /// Tracks the user's drag on the resize handle. Positive = dragging
-    /// down (shrink), negative = dragging up (expand). Reset to 0 on
-    /// gesture end when the panel snaps to a phase.
-    @State private var chatDragOffset: CGFloat = 0
+    /// Whether the chat panel is explicitly expanded by the user via the
+    /// chevron toggle. Only relevant in presenting/iterating phases.
+    @State private var isChatPanelExpanded = false
 
     @FocusState private var inputFocused: Bool
-    @State private var keyboardHeight: CGFloat = 0
 
     // MARK: - API State
 
@@ -74,13 +72,8 @@ struct GenerateView: View {
 
     // MARK: - Layout Constants
 
-    /// Chat panel height when fully expanded (chatting / iterating).
-    private var expandedChatHeight: CGFloat {
-        UIScreen.main.bounds.height * 0.75
-    }
-
     /// Chat panel height when minimized (presenting). Enough for the
-    /// last assistant message (2-3 lines) + the input prompt bar.
+    /// last assistant ChatBubble + the input prompt bar.
     private let minimizedChatHeight: CGFloat = 220
 
     /// Whether the chat panel should be visible at all.
@@ -88,34 +81,28 @@ struct GenerateView: View {
         phase != .generating
     }
 
-    /// Target max-height for the chat panel based on current phase.
-    private var chatPanelHeight: CGFloat {
+    /// Chat panel height when fully expanded (chatting / iterating).
+    /// Matches the Preferences chat dock: 65% of container, capped at
+    /// 560pt so the panel never swallows the full screen.
+    private func expandedChatHeight(in containerHeight: CGFloat) -> CGFloat {
+        max(360, min(containerHeight * 0.65, 560))
+    }
+
+    /// Target height for the chat panel based on current phase.
+    private func chatPanelHeight(in containerHeight: CGFloat) -> CGFloat {
         switch phase {
-        case .chatting, .iterating: return expandedChatHeight
-        case .presenting: return minimizedChatHeight
+        case .chatting: return expandedChatHeight(in: containerHeight)
+        case .iterating: return expandedChatHeight(in: containerHeight)
+        case .presenting: return isChatPanelExpanded
+            ? expandedChatHeight(in: containerHeight)
+            : minimizedChatHeight
         case .generating: return 0
         }
     }
 
-    /// Effective height during drag gestures. Combines the phase-based
-    /// target with the user's drag offset and clamps to valid bounds.
-    private var effectiveChatHeight: CGFloat {
-        let base = chatPanelHeight
-        let adjusted = base - chatDragOffset
-        return min(max(adjusted, minimizedChatHeight), expandedChatHeight)
-    }
-
-    /// Whether the chat is in its compact/minimized state (not being dragged).
+    /// True when the chat is showing just the last message + input bar.
     private var isChatMinimized: Bool {
-        phase == .presenting && chatDragOffset == 0
-    }
-
-    /// Whether scroll interaction should be disabled. When the panel is
-    /// at minimized height (and not being actively dragged taller), the
-    /// tiny scroll area is unusable — disable it so the drag handle and
-    /// input bar tap take priority.
-    private var scrollDisabled: Bool {
-        phase == .presenting && chatDragOffset >= 0
+        phase == .presenting && !isChatPanelExpanded
     }
 
     /// The message we want to keep visible in the compact post-generate state.
@@ -126,105 +113,108 @@ struct GenerateView: View {
         messages.last(where: { $0.role == .assistant && !$0.isLoading })
     }
 
-    /// Drag gesture for the resize handle. Lets the user pull the chat
-    /// panel up/down between minimized and expanded heights. On release,
-    /// snaps to whichever state is closest (with velocity for flick).
-    /// Only active when a recipe is visible (presenting / iterating).
-    private var chatResizeGesture: some Gesture {
-        DragGesture(minimumDistance: 8)
-            .onChanged { value in
-                guard phase == .presenting || phase == .iterating else { return }
-                chatDragOffset = value.translation.height
+    /// Toggles the chat between minimized (last message visible) and
+    /// expanded (full conversation + input) in the presenting phase.
+    private func toggleChatPanel() {
+        withAnimation(.spring(duration: 0.45, bounce: 0.15)) {
+            if isChatPanelExpanded || phase == .iterating {
+                phase = .presenting
+                isChatPanelExpanded = false
+                inputFocused = false
+            } else {
+                isChatPanelExpanded = true
             }
-            .onEnded { value in
-                guard phase == .presenting || phase == .iterating else { return }
+        }
 
-                // Velocity = how far beyond the current position the
-                // finger was heading. Negative = upward flick.
-                let velocity = value.predictedEndTranslation.height - value.translation.height
-                let currentHeight = effectiveChatHeight
-                let midPoint = (minimizedChatHeight + expandedChatHeight) / 2
-
-                // Strong flick overrides position-based snap
-                let shouldExpand: Bool
-                if velocity < -200 {
-                    shouldExpand = true
-                } else if velocity > 200 {
-                    shouldExpand = false
-                } else {
-                    shouldExpand = currentHeight > midPoint
-                }
-
-                withAnimation(.spring(duration: 0.45, bounce: 0.15)) {
-                    if shouldExpand {
-                        phase = .iterating
-                    } else {
-                        phase = .presenting
-                        inputFocused = false
-                    }
-                    chatDragOffset = 0
-                }
-
-                if shouldExpand {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                        inputFocused = true
-                    }
-                }
+        if isChatPanelExpanded {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                inputFocused = true
             }
+        }
     }
 
     var body: some View {
-        ZStack {
-            Color.clear
-                .ignoresSafeArea()
-                .overlay { backgroundContent }
+        GeometryReader { geometry in
+            ZStack {
+                Color.clear
+                    .ignoresSafeArea()
+                    .overlay { backgroundContent }
 
-            NavigationStack {
-                ZStack {
-                    // Recipe content — shown whenever we have a candidate
-                    if phase == .presenting || phase == .iterating {
-                        presentedRecipe
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                // Tapping the recipe behind expanded chat
-                                // minimizes it so the user can review.
-                                if phase == .iterating {
-                                    withAnimation(.spring(duration: 0.45, bounce: 0.15)) {
-                                        phase = .presenting
-                                        inputFocused = false
+                NavigationStack {
+                    ZStack {
+                        // Recipe content — shown whenever we have a candidate
+                        if phase == .presenting || phase == .iterating {
+                            presentedRecipe
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    // Tapping the recipe behind expanded chat
+                                    // minimizes it so the user can review.
+                                    if phase == .iterating || isChatPanelExpanded {
+                                        withAnimation(.spring(duration: 0.45, bounce: 0.15)) {
+                                            phase = .presenting
+                                            isChatPanelExpanded = false
+                                            inputFocused = false
+                                        }
                                     }
                                 }
-                            }
-                    } else if phase != .generating {
-                        Color.clear.allowsHitTesting(false)
-                    }
+                        } else if phase != .generating {
+                            Color.clear.allowsHitTesting(false)
+                        }
 
-                    // Chat panel — always visible except during generation.
-                    // Smoothly animates between minimized (~15%) and expanded (~75%).
-                    if showChatPanel {
-                        chatPanel
-                            .frame(maxHeight: effectiveChatHeight)
-                            .frame(maxHeight: .infinity, alignment: .bottom)
-                            // Entry animation: slide up from below on first appear
-                            .offset(y: hasAppeared ? 0 : UIScreen.main.bounds.height)
-                    }
+                        // Chat panel — always visible except during generation.
+                        // Background applied AFTER maxHeight constraint so the
+                        // gradient fills the full panel, not just VStack content.
+                        // .ignoresSafeArea(.bottom) is on the background shape only
+                        // (extends gradient behind home indicator) — NOT on the
+                        // content frame, so keyboard avoidance pushes the panel
+                        // above the keyboard instead of hiding it behind.
+                        if showChatPanel {
+                            chatPanel(containerHeight: geometry.size.height)
+                                .frame(maxWidth: .infinity)
+                                .frame(maxHeight: chatPanelHeight(in: geometry.size.height))
+                                .background(
+                                    UnevenRoundedRectangle(
+                                        topLeadingRadius: 20,
+                                        bottomLeadingRadius: 0,
+                                        bottomTrailingRadius: 0,
+                                        topTrailingRadius: 20
+                                    )
+                                    .fill(.ultraThinMaterial)
+                                    .overlay {
+                                        chatGradientBackground
+                                            .clipShape(
+                                                UnevenRoundedRectangle(
+                                                    topLeadingRadius: 20,
+                                                    bottomLeadingRadius: 0,
+                                                    bottomTrailingRadius: 0,
+                                                    topTrailingRadius: 20
+                                                )
+                                            )
+                                    }
+                                    .ignoresSafeArea(edges: .bottom)
+                                )
+                                .frame(maxHeight: .infinity, alignment: .bottom)
+                                // Entry animation: slide up from below on first appear
+                                .offset(y: hasAppeared ? 0 : geometry.size.height)
+                        }
 
-                    if phase == .generating {
-                        generationLoader.transition(.opacity)
+                        if phase == .generating {
+                            generationLoader.transition(.opacity)
+                        }
                     }
+                    // No coordinate space needed — toggle button replaces drag gesture
+                    .containerBackground(.clear, for: .navigation)
+                    .toolbarBackground(.hidden, for: .navigationBar)
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar { toolbarContent }
+                    .animation(.spring(duration: 0.5, bounce: 0.15), value: phase)
+                    .toolbarVisibility(.hidden, for: .tabBar)
+                    .sheet(isPresented: $showPreferences) { PreferencesView(selectedTab: $selectedTab) }
+                    .sheet(isPresented: $showSettings) { SettingsView() }
                 }
-                .containerBackground(.clear, for: .navigation)
-                .toolbarBackground(.hidden, for: .navigationBar)
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar { toolbarContent }
-                .animation(.spring(duration: 0.5, bounce: 0.15), value: phase)
-                .toolbarVisibility(.hidden, for: .tabBar)
-                .sheet(isPresented: $showPreferences) { PreferencesView(selectedTab: $selectedTab) }
-                .sheet(isPresented: $showSettings) { SettingsView() }
             }
         }
         .background(AlchemyColors.background)
-        .ignoresSafeArea(.keyboard)
         .task {
             // Imported sessions must win over the default greeting flow. If the
             // sheet dismisses and TabShell selects Sous Chef with `importedSession`
@@ -251,10 +241,10 @@ struct GenerateView: View {
         }
         .onChange(of: inputFocused) { _, focused in
             // When the user taps the input bar while the chat is minimized,
-            // expand to full iterating mode so they can type comfortably.
-            if focused && phase == .presenting {
+            // expand so they can type comfortably.
+            if focused && isChatMinimized {
                 withAnimation(.spring(duration: 0.45, bounce: 0.15)) {
-                    phase = .iterating
+                    isChatPanelExpanded = true
                 }
             }
         }
@@ -384,25 +374,37 @@ struct GenerateView: View {
     /// is visible; at expanded height the full message list is scrollable.
     /// No view-swapping between states — just a height change — so the drag
     /// resize gesture works smoothly without structural jumps.
-    private var chatPanel: some View {
+    private func chatPanel(containerHeight: CGFloat) -> some View {
         VStack(spacing: 0) {
-            // Drag handle — visual pill is 36×4pt, hit target is full-width × 28pt.
-            RoundedRectangle(cornerRadius: 2)
-                .fill(Color.black.opacity(0.3))
-                .frame(width: 36, height: 4)
-                .frame(maxWidth: .infinity)
-                .frame(height: 28)
-                .contentShape(Rectangle())
-                .gesture(chatResizeGesture)
+            // Chevron toggle — only shown after recipe generation
+            // (presenting or iterating). During initial chatting the
+            // panel is always expanded so no toggle is needed.
+            if phase == .presenting || phase == .iterating {
+                HStack {
+                    Spacer()
+                    Button {
+                        toggleChatPanel()
+                    } label: {
+                        Image(systemName: isChatMinimized
+                              ? "chevron.up.circle.fill"
+                              : "chevron.down.circle.fill")
+                            .font(.title3)
+                            .foregroundStyle(Color(red: 0.3, green: 0.3, blue: 0.35).opacity(0.6))
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 10)
+                .padding(.bottom, 4)
+            } else {
+                Spacer().frame(height: 12)
+            }
 
             if isChatMinimized {
-                VStack(alignment: .leading, spacing: AlchemySpacing.md) {
+                // Minimized: last assistant bubble + input bar
+                VStack(alignment: .leading, spacing: AlchemySpacing.sm) {
                     if let lastAssistantMessage {
-                        Text(lastAssistantMessage.content)
-                            .font(AlchemyTypography.chatMessage)
-                            .foregroundStyle(Color(red: 0.15, green: 0.15, blue: 0.18))
-                            .fixedSize(horizontal: false, vertical: true)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                        ChatBubble(message: lastAssistantMessage)
                             .padding(.horizontal, AlchemySpacing.screenHorizontal)
                     }
 
@@ -423,67 +425,27 @@ struct GenerateView: View {
                         .padding(.top, AlchemySpacing.sm)
                         .padding(.bottom, AlchemySpacing.xxl)
                     }
-                    .scrollDisabled(scrollDisabled)
                     .scrollDismissesKeyboard(.interactively)
                     .onTapGesture {
                         inputFocused = false
                     }
+                    .onAppear { scrollToBottom(proxy: proxy) }
                     .onChange(of: messages.count) { scrollToBottom(proxy: proxy) }
                     .onChange(of: messages.last?.isLoading) { scrollToBottom(proxy: proxy) }
-                    .onChange(of: keyboardHeight) { scrollToBottom(proxy: proxy) }
                     .onChange(of: phase) { _, newPhase in
                         if newPhase == .presenting {
                             scrollToBottom(proxy: proxy)
                         }
                     }
                 }
-            }
 
-            if !isChatMinimized {
                 suggestionChips
                     .padding(.top, AlchemySpacing.sm)
-            }
 
-            if !isChatMinimized {
                 chatInputBar
                     .padding(.top, AlchemySpacing.xs)
-                    .padding(.bottom, keyboardHeight > 0 ? keyboardHeight - 16 : 40)
+                    .padding(.bottom, 8)
             }
-        }
-        .background(
-            UnevenRoundedRectangle(
-                topLeadingRadius: 20,
-                bottomLeadingRadius: 0,
-                bottomTrailingRadius: 0,
-                topTrailingRadius: 20
-            )
-            .fill(.ultraThinMaterial)
-            .overlay {
-                chatGradientBackground
-                    .clipShape(
-                        UnevenRoundedRectangle(
-                            topLeadingRadius: 20,
-                            bottomLeadingRadius: 0,
-                            bottomTrailingRadius: 0,
-                            topTrailingRadius: 20
-                        )
-                    )
-            }
-            .ignoresSafeArea(edges: .bottom)
-        )
-        .ignoresSafeArea(.keyboard)
-        .animation(.spring(duration: 0.35), value: keyboardHeight)
-        .onReceive(
-            NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)
-        ) { notification in
-            if let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect {
-                keyboardHeight = frame.height
-            }
-        }
-        .onReceive(
-            NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)
-        ) { _ in
-            keyboardHeight = 0
         }
     }
 
@@ -606,7 +568,7 @@ struct GenerateView: View {
     }
 
     private var dynamicPlaceholder: String {
-        if isChatMinimized {
+        if phase == .presenting {
             return "Want to make any changes?"
         }
         if phase == .iterating {
@@ -718,6 +680,7 @@ struct GenerateView: View {
         if session.candidateRecipeSet != nil {
             withAnimation(.easeInOut(duration: 0.4)) {
                 phase = .presenting
+                isChatPanelExpanded = false
                 showAddToCookbook = true
             }
             refreshImagePolling()
@@ -795,16 +758,7 @@ struct GenerateView: View {
         isSending = true
         withAnimation { iterationSuggestions = [] }
 
-        // Multi-line TextField can ignore binding clears while focused.
-        // Drop focus first, then restore it on the next run loop.
-        let shouldRestoreFocus = inputFocused || prefilledText != nil
-        inputFocused = false
         inputText = ""
-        if shouldRestoreFocus {
-            DispatchQueue.main.async {
-                inputFocused = true
-            }
-        }
 
         if !chatHasStarted {
             withAnimation { chatHasStarted = true }
@@ -908,14 +862,19 @@ struct GenerateView: View {
 
                 withAnimation(.spring(duration: 0.5, bounce: 0.15)) {
                     phase = .presenting
+                    isChatPanelExpanded = false
                     showAddToCookbook = true
                 }
             }
-        } else if response.candidateRecipeSet != nil && phase != .presenting {
-            // Iteration update: go back to presenting (minimized chat)
-            // so the user can see the updated recipe.
+        } else if response.candidateRecipeSet != nil {
+            // Iteration update (or first generation without animation):
+            // minimize chat and drop keyboard so the user sees the
+            // updated recipe. Fires even when already in .presenting
+            // because the user may have expanded the chat to request
+            // a tweak and needs it collapsed again after the response.
             withAnimation(.spring(duration: 0.5, bounce: 0.15)) {
                 phase = .presenting
+                isChatPanelExpanded = false
                 showAddToCookbook = true
                 inputFocused = false
             }
@@ -923,19 +882,45 @@ struct GenerateView: View {
         applyChatSessionState(response)
     }
 
-    /// Normalizes LLM-provided suggestion chips so the UI never renders
-    /// blank or duplicate actions, and chip taps can rely on stable content.
+    /// Normalizes LLM-provided suggestion chips: strips filler lead-ins
+    /// like "Make me a…" / "Give me a…" so chips read as concise noun
+    /// phrases ("Lemon herb baked salmon"), deduplicates, and drops blanks.
     private func applySuggestedActions(_ actions: [String]?) {
+        let fillerPrefixes = [
+            "make me a ", "make me an ", "make me ",
+            "give me a ", "give me an ", "give me ",
+            "how about a ", "how about an ", "how about ",
+            "try a ", "try an ", "try ",
+            "let's make a ", "let's make an ", "let's make ",
+            "let's try a ", "let's try an ", "let's try ",
+            "i want a ", "i want an ", "i want ",
+            "i'd like a ", "i'd like an ", "i'd like ",
+            "suggest a ", "suggest an ", "suggest ",
+            "show me a ", "show me an ", "show me ",
+        ]
+
         var seen = Set<String>()
         let normalized = (actions ?? []).compactMap { rawAction -> String? in
-            let trimmed = rawAction.trimmingCharacters(in: .whitespacesAndNewlines)
+            var trimmed = rawAction.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return nil }
+
+            let lower = trimmed.lowercased()
+            for prefix in fillerPrefixes {
+                if lower.hasPrefix(prefix) {
+                    trimmed = String(trimmed.dropFirst(prefix.count))
+                    // Capitalize the first letter after stripping
+                    if let first = trimmed.first {
+                        trimmed = first.uppercased() + trimmed.dropFirst()
+                    }
+                    break
+                }
+            }
 
             let identity = trimmed.folding(
                 options: [.caseInsensitive, .diacriticInsensitive],
                 locale: .current
             )
-            guard seen.insert(identity).inserted else { return nil }
+            guard !trimmed.isEmpty, seen.insert(identity).inserted else { return nil }
             return trimmed
         }
 

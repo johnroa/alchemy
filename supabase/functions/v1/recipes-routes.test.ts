@@ -173,6 +173,7 @@ const createDeps = (overrides: Record<string, unknown> = {}) => ({
   resolveRelationTypeId: unused,
   logChangelog: unused,
   buildCookbookItems: async () => [] as RecipePreview[],
+  buildCookbookFeed: async () => ({ items: [], suggestedChips: [] }),
   buildCookbookInsightDeterministic: () => null,
   ensurePersistedRecipeImageRequest: unused,
   scheduleImageQueueDrain: unused,
@@ -364,8 +365,8 @@ const createVariantRouteClient = () => ({
 });
 
 Deno.test("GET /recipes/cookbook returns the preview shape plus cookbook_insight", async () => {
-  const item: RecipePreview = {
-    id: "11111111-1111-1111-1111-111111111111",
+  const item = {
+    canonical_recipe_id: "11111111-1111-1111-1111-111111111111",
     title: "Weeknight Rigatoni",
     summary: "Fast tomato rigatoni with basil.",
     image_url: "https://cdn.cookwithalchemy.com/rigatoni.jpg",
@@ -379,6 +380,13 @@ Deno.test("GET /recipes/cookbook returns the preview shape plus cookbook_insight
       health_score: 78,
       items: 7,
     },
+    variant_status: "none",
+    active_variant_version_id: null,
+    personalized_at: null,
+    autopersonalize: true,
+    saved_at: "2026-03-06T12:00:00.000Z",
+    variant_tags: {},
+    matched_chip_ids: ["occasion:weeknight"],
   };
 
   const response = await handleRecipeRoutes(
@@ -387,7 +395,10 @@ Deno.test("GET /recipes/cookbook returns the preview shape plus cookbook_insight
       method: "GET",
     }) as never,
     createDeps({
-      buildCookbookItems: async () => [item],
+      buildCookbookFeed: async () => ({
+        items: [item],
+        suggestedChips: [{ id: "occasion:weeknight", label: "Weeknight", matched_count: 1 }],
+      }),
       buildCookbookInsightDeterministic: () => "You save quick pasta dinners most often.",
     }) as never,
   );
@@ -400,6 +411,9 @@ Deno.test("GET /recipes/cookbook returns the preview shape plus cookbook_insight
   if (!Array.isArray(body.items) || body.items.length !== 1) {
     throw new Error("expected cookbook items");
   }
+  if (!Array.isArray(body.suggested_chips) || body.suggested_chips.length !== 1) {
+    throw new Error("expected cookbook suggested chips");
+  }
   if (body.cookbook_insight !== "You save quick pasta dinners most often.") {
     throw new Error("expected cookbook_insight");
   }
@@ -407,7 +421,7 @@ Deno.test("GET /recipes/cookbook returns the preview shape plus cookbook_insight
   const preview = body.items[0] as Record<string, unknown>;
   for (
     const key of [
-      "id",
+      "canonical_recipe_id",
       "title",
       "summary",
       "image_url",
@@ -416,6 +430,7 @@ Deno.test("GET /recipes/cookbook returns the preview shape plus cookbook_insight
       "visibility",
       "updated_at",
       "quick_stats",
+      "matched_chip_ids",
     ]
   ) {
     if (!(key in preview)) {
@@ -908,6 +923,11 @@ Deno.test("POST /recipes/explore/for-you returns the personalized feed and logs 
           quick_stats: null,
           why_tags: ["Quick cleanup", "Leans healthy"],
         }],
+        suggested_chips: [{
+          id: "health:leans-healthy",
+          label: "Leans Healthy",
+          matched_count: 1,
+        }],
         next_cursor: null,
         no_match: null,
         internal: {
@@ -927,6 +947,9 @@ Deno.test("POST /recipes/explore/for-you returns the personalized feed and logs 
   const body = await parseJson(response);
   if (body.feed_id !== "feed-1" || body.algorithm_version !== "for_you_v1") {
     throw new Error("expected feed metadata in response");
+  }
+  if (!Array.isArray(body.suggested_chips) || body.suggested_chips.length !== 1) {
+    throw new Error("expected suggested chips in response");
   }
   if (!Array.isArray(body.items) || body.items.length !== 1) {
     throw new Error("expected personalized feed items");

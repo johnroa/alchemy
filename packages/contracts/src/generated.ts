@@ -164,6 +164,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             items: components["schemas"]["CookbookEntry"][];
+                            suggested_chips: components["schemas"]["SuggestedChip"][];
                             cookbook_insight: string | null;
                         };
                     };
@@ -2510,6 +2511,7 @@ export interface components {
             cursor?: string;
             limit?: number;
             preset_id?: string | null;
+            chip_id?: string | null;
         };
         RecipeSearchNoMatch: {
             code: string;
@@ -2534,8 +2536,14 @@ export interface components {
             profile_state: "cold" | "warm" | "established";
             algorithm_version: string;
             items: components["schemas"]["RecipePreview"][];
+            suggested_chips: components["schemas"]["SuggestedChip"][];
             next_cursor: string | null;
             no_match: components["schemas"]["RecipeSearchNoMatch"] | null;
+        };
+        SuggestedChip: {
+            id: string;
+            label: string;
+            matched_count: number;
         };
         RecipeVersion: {
             /** Format: uuid */
@@ -2996,6 +3004,7 @@ export interface components {
             /** Format: date-time */
             saved_at: string;
             variant_tags?: components["schemas"]["VariantTags"];
+            matched_chip_ids: string[];
         };
         SaveRecipeResponse: {
             saved: boolean;
@@ -3022,7 +3031,7 @@ export interface components {
             /** @description Client-generated idempotency key for the behavior event. */
             event_id: string;
             /** @enum {string} */
-            event_type: "app_first_open" | "app_session_started" | "auth_completed" | "onboarding_started" | "onboarding_completed" | "explore_feed_served" | "explore_impression" | "explore_opened_recipe" | "explore_skipped_recipe" | "explore_hidden_recipe" | "explore_saved_recipe" | "chat_session_started" | "chat_turn_submitted" | "chat_turn_resolved" | "chat_iteration_requested" | "chat_candidate_selected" | "chat_commit_completed" | "cookbook_viewed" | "cookbook_search_applied" | "cookbook_chip_applied" | "cookbook_recipe_opened" | "cookbook_recipe_unsaved" | "recipe_detail_opened" | "recipe_detail_heartbeat" | "recipe_detail_closed" | "recipe_saved" | "recipe_unsaved" | "recipe_cooked_inferred" | "ingredient_substitution_applied";
+            event_type: "app_first_open" | "app_session_started" | "auth_completed" | "onboarding_started" | "onboarding_completed" | "explore_feed_served" | "explore_impression" | "explore_opened_recipe" | "explore_skipped_recipe" | "explore_hidden_recipe" | "explore_saved_recipe" | "chat_session_started" | "chat_turn_submitted" | "chat_turn_resolved" | "chat_iteration_requested" | "chat_candidate_selected" | "chat_commit_completed" | "cookbook_viewed" | "cookbook_search_applied" | "cookbook_chip_applied" | "explore_chip_applied" | "cookbook_recipe_opened" | "cookbook_recipe_unsaved" | "recipe_detail_opened" | "recipe_detail_heartbeat" | "recipe_detail_closed" | "recipe_saved" | "recipe_unsaved" | "recipe_cooked_inferred" | "ingredient_substitution_applied";
             /**
              * @description Optional explicit surface override. When omitted, the API applies the canonical surface for the event type.
              * @enum {string}

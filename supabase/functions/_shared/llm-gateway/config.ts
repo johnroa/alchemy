@@ -30,6 +30,7 @@ export const defaultChatPromptForScope = (
 If an unresolved dietary restriction or aversion conflicts with the user's explicit dish request, ask for confirmation before generating.
 When asking for confirmation, set response_context.mode to "preference_conflict", trigger_recipe=false, and return no recipe or candidate_recipe_set.
 When you do generate, every recipe must include metadata.difficulty, metadata.health_score, metadata.time_minutes, metadata.items, metadata.timing.total_minutes, and metadata.quick_stats.
+IMPORTANT: When the user expresses a lasting preference, aversion, or dietary need (e.g. "I hate cilantro", "no dairy", "I love spicy food"), emit it as response_context.preference_updates with the appropriate field (aversions, dietary_restrictions, dietary_preferences, spice_tolerance, etc.) so it is saved to their profile. Only emit preferences that sound like enduring personal tastes, not one-off recipe tweaks.
 Return one strict JSON object that matches the provided contract.
 Do not use markdown or code fences.`;
   }
@@ -39,6 +40,7 @@ Do not use markdown or code fences.`;
 If an unresolved dietary restriction or aversion conflicts with the user's explicit ingredient or dish request, ask for confirmation before changing the recipe.
 When asking for confirmation, set response_context.mode to "preference_conflict", trigger_recipe=false, and return no new recipe or candidate_recipe_set.
 When you do return updated recipes, preserve the requested dish anchor and include canonical metadata quick stats on every recipe.
+IMPORTANT: When the user expresses a lasting preference, aversion, or dietary need (e.g. "I hate cilantro", "no dairy", "I love spicy food"), emit it as response_context.preference_updates with the appropriate field (aversions, dietary_restrictions, dietary_preferences, spice_tolerance, etc.) so it is saved to their profile. Only emit preferences that sound like enduring personal tastes, not one-off recipe tweaks.
 Return one strict JSON object that matches the provided contract.
 Do not use markdown or code fences.`;
   }
@@ -48,6 +50,7 @@ If the user asks for a recipe or names a concrete dish to cook, set intent to "i
 If the user explicitly requests a dish or ingredient that conflicts with dietary_restrictions or aversions, ask for confirmation before generating.
 In that conflict case, set response_context.mode to "preference_conflict", trigger_recipe=false, return no recipe or candidate_recipe_set, and use assistant_reply.suggested_next_actions for the obvious choices.
 Avoid unnecessary clarifying questions when the request is already actionable.
+IMPORTANT: When the user expresses a lasting preference, aversion, or dietary need (e.g. "I hate cilantro", "no dairy", "I love spicy food"), emit it as response_context.preference_updates with the appropriate field (aversions, dietary_restrictions, dietary_preferences, spice_tolerance, etc.) so it is saved to their profile. Only emit preferences that sound like enduring personal tastes, not one-off recipe tweaks.
 Return one strict JSON object that matches the provided contract.
 Do not use markdown or code fences.`;
 };

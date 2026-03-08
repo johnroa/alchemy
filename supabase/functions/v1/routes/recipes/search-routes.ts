@@ -32,8 +32,10 @@ export const handleSearchRoutes = async (
       cursor?: string;
       limit?: number;
       preset_id?: string | null;
+      chip_id?: string | null;
     }>(request);
     const installId = getInstallIdFromHeaders(request);
+    const chipId = body.chip_id ?? body.preset_id ?? null;
 
     const isCursorRequest = typeof body.cursor === "string" && body.cursor.trim().length > 0;
     const preferences = isCursorRequest
@@ -53,7 +55,8 @@ export const handleSearchRoutes = async (
       requestId,
       cursor: body.cursor ?? null,
       limit: typeof body.limit === "number" ? body.limit : null,
-      presetId: body.preset_id ?? null,
+      presetId: chipId,
+      chipId,
       preferences: (preferences ?? {}) as Record<string, JsonValue>,
       memorySnapshot,
       activeMemories: activeMemories as unknown as JsonValue,
@@ -74,7 +77,8 @@ export const handleSearchRoutes = async (
         algorithmVersion: response.algorithm_version,
         payload: {
           applied_context: response.applied_context,
-          preset_id: body.preset_id ?? null,
+          preset_id: chipId,
+          chip_id: chipId,
           profile_state: response.profile_state,
           candidate_count: internal.candidate_count,
           rerank_used: internal.rerank_used,

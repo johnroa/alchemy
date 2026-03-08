@@ -1,19 +1,14 @@
 import { Activity, BarChart3, Bot, Clock3, Coins, Sparkles } from "lucide-react";
 import { BoardChartCard, BoardPageHeader, BoardTableCard, HeroStatGrid, type BoardHeroStat } from "@/components/admin/board-kit";
 import { FilterBar } from "@/components/admin/filter-bar";
+import { LlmUsageByActionCard } from "@/components/admin/llm-usage-by-action-card";
 import { ModelUsageTimeCharts } from "@/components/admin/model-usage-time-charts";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { DEFAULT_ANALYTICS_QUERY, getDaysForRange, parseAnalyticsQueryState } from "@/lib/admin-analytics";
 import { getModelUsageData } from "@/lib/admin-data";
 import { formatCost, formatPercent, formatTokens } from "@/lib/format";
-
-const formatUnitCost = (usd: number): string => {
-  if (usd === 0) return "$0.0000";
-  if (usd < 0.0001) return `$${usd.toFixed(6)}`;
-  if (usd < 0.01) return `$${usd.toFixed(4)}`;
-  return `$${usd.toFixed(3)}`;
-};
+import { parseModelUsageActionSort } from "@/lib/llm-analytics";
 
 export default async function ModelUsagePage({
   searchParams,
@@ -22,9 +17,9 @@ export default async function ModelUsagePage({
 }): Promise<React.JSX.Element> {
   const params = await searchParams;
   const query = parseAnalyticsQueryState(params, DEFAULT_ANALYTICS_QUERY);
-  const data = await getModelUsageData({ rangeDays: getDaysForRange(query.range) });
-
-  const maxActionTokens = Math.max(1, ...data.byAction.map((row) => row.totalTokens));
+  const actionSortParam = params["actionSort"];
+  const actionSort = parseModelUsageActionSort(Array.isArray(actionSortParam) ? actionSortParam[0] : actionSortParam);
+  const data = await getModelUsageData({ rangeDays: getDaysForRange(query.range), actionSort });
   const heroStats: BoardHeroStat[] = [
     {
       label: "LLM Calls",
@@ -73,49 +68,12 @@ export default async function ModelUsagePage({
 
       <HeroStatGrid items={heroStats} />
 
-      <BoardChartCard
-        title="Time-based Usage Graphs"
-        description="Area charts for hourly traffic and daily cost patterns."
-      >
+      <BoardChartCard>
         <ModelUsageTimeCharts hourly={data.hourly} daily={data.daily} />
       </BoardChartCard>
 
       <div className="grid gap-6 xl:grid-cols-1">
-        <BoardChartCard
-          title="Usage by Action"
-          description="Generating, chatting, tweaking, images, and other scoped actions."
-        >
-          {data.byAction.length === 0 ? (
-            <p className="py-8 text-center text-sm text-muted-foreground">No action usage to display yet.</p>
-          ) : (
-            <div className="space-y-4">
-              {data.byAction.map((row) => (
-                <div key={row.scope} className="space-y-1.5">
-                  <div className="flex flex-wrap items-center justify-between gap-2 sm:gap-3">
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-medium">{row.label}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {row.calls.toLocaleString()} calls · {formatTokens(row.totalTokens)} tokens ·{" "}
-                        {formatCost(row.costUsd)} total ·{" "}
-                        {formatUnitCost(row.calls > 0 ? row.costUsd / row.calls : 0)}/call ·{" "}
-                        {formatUnitCost(row.totalTokens > 0 ? (row.costUsd / row.totalTokens) * 1000 : 0)}/1K tok
-                      </p>
-                    </div>
-                    <Badge variant="outline" className="font-mono text-[11px]">
-                      {formatPercent(row.callShare)} calls
-                    </Badge>
-                  </div>
-                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted/70">
-                    <div
-                      className="h-full rounded-full bg-emerald-400/90"
-                      style={{ width: `${Math.max(2, (row.totalTokens / maxActionTokens) * 100)}%` }}
-                    />
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </BoardChartCard>
+        <LlmUsageByActionCard initialRows={data.byAction} initialSort={actionSort} />
       </div>
 
       <BoardTableCard

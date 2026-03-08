@@ -1,21 +1,9 @@
 import PhotosUI
 import SwiftUI
 
-/// Modal sheet for importing recipes from URLs, photos, or pasted text.
-///
-/// Presented by TabShell after the user taps the import menu action.
-/// On successful import, calls `onImported` with the seeded ChatSession,
-/// which TabShell uses to navigate to GenerateView with the imported recipe.
 struct ImportView: View {
     let method: ImportMethod
-    /// Optional URL pre-filled by the clipboard banner. When set,
-    /// the URL text field is populated on appear and the import
-    /// starts automatically.
     var prefillURL: String? = nil
-    /// Called on the main actor when the import API succeeds. The caller
-    /// (TabShell) uses this to dismiss the sheet, set the imported session,
-    /// and switch to the Sous Chef tab. Must NOT be @Sendable because
-    /// it mutates @State properties that are main-actor-isolated.
     let onImported: (ChatSessionResponse) -> Void
 
     @State private var viewModel = ImportViewModel()
@@ -23,52 +11,27 @@ struct ImportView: View {
 
     var body: some View {
         NavigationStack {
-            ZStack {
-                AlchemyColors.background
-                    .ignoresSafeArea()
-
-                LinearGradient(
-                    colors: [
-                        Color.white.opacity(0.04),
-                        Color.clear,
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .ignoresSafeArea()
-
-                ScrollView {
-                    Group {
-                        switch method {
-                        case .url:
-                            urlImportContent
-                        case .text:
-                            textImportContent
-                        case .photo:
-                            photoImportContent
-                        }
-                    }
-                    .padding(.horizontal, AlchemySpacing.screenHorizontal)
-                    .padding(.top, AlchemySpacing.lg)
-                    .padding(.bottom, AlchemySpacing.xxxl)
+            VStack(spacing: 24) {
+                switch method {
+                case .url:  urlContent
+                case .text: textContent
+                case .photo: photoContent
                 }
+                Spacer()
             }
+            .padding(.horizontal, 20)
+            .padding(.top, 20)
             .navigationTitle(navigationTitle)
             .navigationBarTitleDisplayMode(.inline)
-            .containerBackground(.clear, for: .navigation)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
-                        .font(AlchemyTypography.body)
-                        .foregroundStyle(AlchemyColors.textPrimary)
                 }
             }
             .disabled(viewModel.isLoading)
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
             .task {
-                // Auto-fill and start import if a URL was pre-filled
-                // (e.g., from the clipboard banner).
                 if let prefillURL, method == .url {
                     viewModel.urlText = prefillURL
                     await viewModel.importFromURL(onImported: onImported)
@@ -85,124 +48,77 @@ struct ImportView: View {
         }
     }
 
-    // MARK: - URL Import
+    // MARK: - URL
 
-    private var urlImportContent: some View {
-        VStack(alignment: .leading, spacing: 24) {
-            VStack(alignment: .leading, spacing: AlchemySpacing.sm) {
-                Text("Paste a recipe link and Sous Chef will turn it into a fully editable recipe.")
-                    .font(AlchemyTypography.body)
-                    .foregroundStyle(AlchemyColors.textSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(.horizontal, AlchemySpacing.sm)
+    private var urlContent: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Paste a recipe link and Sous Chef will import it.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
 
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Recipe URL")
-                    .font(AlchemyTypography.captionBold)
-                    .foregroundStyle(AlchemyColors.textSecondary)
-
-                TextField("https://example.com/recipe", text: $viewModel.urlText)
-                    .font(AlchemyTypography.body)
-                    .foregroundStyle(AlchemyColors.textPrimary)
-                    .keyboardType(.URL)
-                    .autocorrectionDisabled()
-                    .textInputAutocapitalization(.never)
-                    .submitLabel(.go)
-                    .padding(.horizontal, AlchemySpacing.md)
-                    .padding(.vertical, AlchemySpacing.md)
-                    .background {
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .fill(AlchemyColors.surface)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                    .strokeBorder(.white.opacity(0.08), lineWidth: 1)
-                            )
-                    }
-                    .onSubmit {
-                        Task { await viewModel.importFromURL(onImported: onImported) }
-                    }
-            }
-            .padding(AlchemySpacing.lg)
-            .background {
-                RoundedRectangle(cornerRadius: 28, style: .continuous)
-                    .fill(.ultraThinMaterial)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 28, style: .continuous)
-                            .strokeBorder(.white.opacity(0.12), lineWidth: 1)
-                    )
-            }
+            TextField("https://example.com/recipe", text: $viewModel.urlText)
+                .keyboardType(.URL)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+                .textFieldStyle(.roundedBorder)
+                .submitLabel(.go)
+                .onSubmit {
+                    Task { await viewModel.importFromURL(onImported: onImported) }
+                }
 
             if let error = viewModel.errorMessage {
-                errorBanner(error)
+                errorLabel(error)
             }
 
-            importButton("Import Recipe") {
+            actionButton("Import Recipe") {
                 await viewModel.importFromURL(onImported: onImported)
             }
-            Text("Paste a URL from any recipe website. We’ll extract it, rewrite it into Alchemy format, and open it in Sous Chef ready to customize.")
-                .font(AlchemyTypography.caption)
-                .foregroundStyle(AlchemyColors.textTertiary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, AlchemySpacing.sm)
         }
     }
 
-    // MARK: - Text Import
+    // MARK: - Text
 
-    private var textImportContent: some View {
-        VStack(spacing: 24) {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Recipe Text")
-                    .font(AlchemyTypography.captionBold)
-                    .foregroundStyle(AlchemyColors.textSecondary)
-
-                TextEditor(text: $viewModel.pastedText)
-                    .frame(minHeight: 200)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8)
-                            .stroke(Color(.systemGray4), lineWidth: 1)
-                    )
-                    .overlay(alignment: .topLeading) {
-                        if viewModel.pastedText.isEmpty {
-                            Text("Paste your recipe here...")
-                                .foregroundStyle(.tertiary)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 12)
-                                .allowsHitTesting(false)
-                        }
+    private var textContent: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            TextEditor(text: $viewModel.pastedText)
+                .frame(minHeight: 180)
+                .scrollContentBackground(.hidden)
+                .padding(8)
+                .background(Color(.systemGray6))
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .overlay(alignment: .topLeading) {
+                    if viewModel.pastedText.isEmpty {
+                        Text("Paste your recipe here...")
+                            .foregroundStyle(.tertiary)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 16)
+                            .allowsHitTesting(false)
                     }
-            }
+                }
 
             if let error = viewModel.errorMessage {
-                errorBanner(error)
+                errorLabel(error)
             }
 
-            importButton("Import Recipe") {
+            actionButton("Import Recipe") {
                 await viewModel.importFromText(onImported: onImported)
             }
         }
     }
 
-    // MARK: - Photo Import
+    // MARK: - Photo
 
-    /// Two acquisition paths: live camera capture or photo library pick.
-    /// Once an image is loaded (from either source), shows a preview
-    /// and the "Import Recipe" button.
-    private var photoImportContent: some View {
-        VStack(spacing: 24) {
+    private var photoContent: some View {
+        VStack(spacing: 16) {
             if let image = viewModel.capturedImage {
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFit()
-                    .frame(maxHeight: 300)
+                    .frame(maxHeight: 260)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
 
-                importButton("Import Recipe") {
-                    await viewModel.importFromPhoto(
-                        image: image,
-                        onImported: onImported
-                    )
+                actionButton("Import Recipe") {
+                    await viewModel.importFromPhoto(image: image, onImported: onImported)
                 }
 
                 Button("Choose a Different Photo") {
@@ -211,53 +127,43 @@ struct ImportView: View {
                 }
                 .font(.footnote)
             } else {
-                VStack(spacing: 12) {
-                    // Camera capture (only on devices with a camera)
-                    if UIImagePickerController.isSourceTypeAvailable(.camera) {
-                        Button {
-                            viewModel.showCamera = true
-                        } label: {
-                            Label("Take Photo", systemImage: "camera")
-                                .frame(maxWidth: .infinity)
-                                .padding()
-                                .background(.ultraThinMaterial)
-                                .clipShape(RoundedRectangle(cornerRadius: 12))
-                        }
-                    }
-
-                    // Photo library picker
-                    PhotosPicker(
-                        selection: $viewModel.selectedPhotoItem,
-                        matching: .images
-                    ) {
-                        Label("Choose from Library", systemImage: "photo.on.rectangle")
+                if UIImagePickerController.isSourceTypeAvailable(.camera) {
+                    Button {
+                        viewModel.showCamera = true
+                    } label: {
+                        Label("Take Photo", systemImage: "camera")
                             .frame(maxWidth: .infinity)
-                            .padding()
-                            .background(.ultraThinMaterial)
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                            .padding(.vertical, 14)
                     }
-                    .onChange(of: viewModel.selectedPhotoItem) { _, newItem in
-                        Task {
-                            if let data = try? await newItem?.loadTransferable(type: Data.self),
-                               let uiImage = UIImage(data: data) {
-                                viewModel.capturedImage = uiImage
-                            }
+                    .buttonStyle(.bordered)
+                }
+
+                PhotosPicker(
+                    selection: $viewModel.selectedPhotoItem,
+                    matching: .images
+                ) {
+                    Label("Choose from Library", systemImage: "photo.on.rectangle")
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                }
+                .buttonStyle(.bordered)
+                .onChange(of: viewModel.selectedPhotoItem) { _, newItem in
+                    Task {
+                        if let data = try? await newItem?.loadTransferable(type: Data.self),
+                           let uiImage = UIImage(data: data) {
+                            viewModel.capturedImage = uiImage
                         }
                     }
                 }
 
-                Text("Snap a photo of a cookbook page or recipe card, or choose an existing photo from your library.")
-                    .font(.footnote)
-                    .foregroundStyle(.tertiary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal)
+                Text("Snap a photo of a cookbook page or recipe card.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             if let error = viewModel.errorMessage {
-                errorBanner(error)
+                errorLabel(error)
             }
-
-            Spacer()
         }
         .fullScreenCover(isPresented: $viewModel.showCamera) {
             CameraCapture(image: $viewModel.capturedImage)
@@ -265,52 +171,40 @@ struct ImportView: View {
         }
     }
 
-    // MARK: - Shared Components
+    // MARK: - Shared
 
-    private func importButton(_ title: String, action: @escaping () async -> Void) -> some View {
+    private func actionButton(_ title: String, action: @escaping () async -> Void) -> some View {
         Button {
             Task { await action() }
         } label: {
             if viewModel.isLoading {
-                HStack(spacing: AlchemySpacing.sm) {
-                    ProgressView()
-                        .tint(AlchemyColors.textPrimary)
-                    Text("Importing...")
-                        .font(AlchemyTypography.subheading)
-                        .foregroundStyle(AlchemyColors.textPrimary)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, AlchemySpacing.md)
+                ProgressView()
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
             } else {
                 Text(title)
-                    .font(AlchemyTypography.subheading)
-                    .foregroundStyle(AlchemyColors.textPrimary)
+                    .font(.headline)
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, AlchemySpacing.md)
+                    .padding(.vertical, 14)
             }
         }
-        .glassEffect(.regular, in: .capsule)
+        .buttonStyle(.borderedProminent)
         .disabled(viewModel.isLoading)
     }
 
-    private func errorBanner(_ message: String) -> some View {
-        HStack {
+    private func errorLabel(_ message: String) -> some View {
+        HStack(spacing: 6) {
             Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(AlchemyColors.accent)
+                .foregroundStyle(.orange)
             Text(message)
-                .font(AlchemyTypography.bodySecondary)
-                .foregroundStyle(AlchemyColors.textSecondary)
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
-        .padding(AlchemySpacing.md)
-        .background(AlchemyColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 }
 
 // MARK: - Camera Capture
 
-/// UIKit camera wrapper. Presents UIImagePickerController with .camera source.
-/// Binds the captured image back to SwiftUI state.
 struct CameraCapture: UIViewControllerRepresentable {
     @Binding var image: UIImage?
     @Environment(\.dismiss) private var dismiss
