@@ -26,6 +26,7 @@ export type OrchestratedChatTurn = {
   effectivePreferences: PreferenceContext;
   responseContext: ChatLoopResponse["response_context"] | null;
   justGenerated: boolean;
+  generationDeferred: boolean;
 };
 
 export type ChatDeps = {
@@ -52,6 +53,8 @@ export type ChatDeps = {
     contextPack: ContextPack;
     threadForPrompt: Array<{ role: string; content: string }>;
     modelOverrides?: RouteContext["modelOverrides"];
+    deferGeneration?: boolean;
+    scopeOverride?: "chat_ideation" | "chat_generation" | "chat_iteration";
   }) => Promise<OrchestratedChatTurn>;
   updateChatSessionLoopContext: (input: {
     client: RouteContext["client"];

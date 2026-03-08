@@ -159,11 +159,19 @@ export type ChatSessionContext = {
   workflow?: "preferences" | null;
   entry_surface?: string | null;
   preference_editing_intent?: PreferenceEditingIntent | null;
+  /** Set after ideation determines a recipe should be generated.
+   *  Cleared when the client calls POST /chat/:id/generate and
+   *  the generation LLM completes. */
+  generation_pending?: boolean;
 };
 
 export type ChatUiHints = {
   show_generation_animation?: boolean;
   focus_component_id?: string;
+  /** Signals that ideation classified the intent as recipe generation
+   *  but the actual generation was deferred. Client should show the
+   *  generation animation and call POST /chat/:id/generate. */
+  generation_pending?: boolean;
 };
 
 export type ChatLoopResponse = {

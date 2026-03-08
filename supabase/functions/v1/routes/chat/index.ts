@@ -3,6 +3,7 @@ import type { ChatDeps } from "./types.ts";
 import { handleGreeting } from "./greeting.ts";
 import { handleCreateSession, handleGetSession } from "./session.ts";
 import { handleSendMessage } from "./message.ts";
+import { handleGenerateRecipe } from "./generate.ts";
 import { handleCandidatePatch } from "./candidate.ts";
 import { handleCommit } from "./commit.ts";
 
@@ -47,6 +48,18 @@ export const handleChatRoutes = async (
     method === "POST"
   ) {
     return handleSendMessage(context, deps);
+  }
+
+  // POST /chat/:id/generate — runs the deferred recipe generation
+  // LLM call after ideation classified intent as recipe generation.
+  // The client shows the cooking animation while this call runs.
+  if (
+    segments.length === 3 &&
+    segments[0] === "chat" &&
+    segments[2] === "generate" &&
+    method === "POST"
+  ) {
+    return handleGenerateRecipe(context, deps);
   }
 
   // PATCH /chat/:id/candidate

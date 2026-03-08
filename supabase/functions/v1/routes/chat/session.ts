@@ -179,6 +179,8 @@ export const handleCreateSession = async (
     entry_surface: launchContext?.entry_surface ?? null,
     preference_editing_intent: launchContext?.preference_editing_intent ?? null,
   };
+  // Defer generation on session creation too — the very first
+  // message could be a direct recipe request like "make me pad thai".
   const orchestrated = await orchestrateChatTurn({
     client,
     serviceClient,
@@ -190,6 +192,7 @@ export const handleCreateSession = async (
     contextPack,
     threadForPrompt,
     modelOverrides,
+    deferGeneration: true,
   });
 
   let nextCandidateSet = orchestrated.nextCandidateSet;
@@ -366,7 +369,12 @@ export const handleCreateSession = async (
       memoryContextIds: contextPack.selectedMemoryIds,
       createdAt: chatSession.created_at,
       updatedAt: new Date().toISOString(),
-      uiHints: nextCandidateSet
+      uiHints: orchestrated.generationDeferred
+        ? {
+          generation_pending: true,
+          show_generation_animation: true,
+        }
+        : nextCandidateSet
         ? {
           show_generation_animation: orchestrated.justGenerated,
           focus_component_id: nextCandidateSet.active_component_id,

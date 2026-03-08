@@ -1,6 +1,23 @@
+/**
+ * POST /chat/:id/generate
+ *
+ * Runs the deferred recipe generation LLM call. Called by the client
+ * after receiving a response with ui_hints.generation_pending = true.
+ *
+ * Flow:
+ *   1. Validate session has generation_pending = true
+ *   2. Rebuild context pack + thread (same as message handler)
+ *   3. Call chat_generation scope LLM
+ *   4. Process result: candidate set, preference updates, images
+ *   5. Save assistant message with recipe envelope
+ *   6. Clear generation_pending, persist updated context
+ *   7. Return full ChatLoopResponse with candidate_recipe_set
+ *
+ * The client shows the generation animation (Lottie + cooking phrases)
+ * for the entire duration of this request (~8-12s).
+ */
 import {
   ApiError,
-  requireJsonBody,
 } from "../../../_shared/errors.ts";
 import type { JsonValue } from "../../../_shared/types.ts";
 import {
@@ -15,19 +32,11 @@ import type {
 } from "../shared.ts";
 import type { ChatDeps } from "./types.ts";
 
-/**
- * POST /chat/:id/messages
- *
- * Sends a new user message to an existing chat session, runs an LLM turn,
- * persists the assistant reply, enrolls candidate images, enqueues memory
- * extraction, and returns the updated ChatLoopResponse.
- */
-export const handleSendMessage = async (
+export const handleGenerateRecipe = async (
   context: RouteContext,
   deps: ChatDeps,
 ): Promise<Response> => {
   const {
-    request,
     segments,
     auth,
     client,
@@ -35,6 +44,7 @@ export const handleSendMessage = async (
     requestId,
     respond,
     modelOverrides,
+    request,
   } = context;
   const {
     parseUuid,
@@ -56,13 +66,9 @@ export const handleSendMessage = async (
   } = deps;
 
   const chatId = parseUuid(segments[1]);
-  const body = await requireJsonBody<{ message: string }>(request);
-  const message = body.message?.trim();
   const installId = getInstallIdFromHeaders(request);
 
-  if (!message) {
-    throw new ApiError(400, "invalid_message", "message is required");
-  }
+  // ── Load session and validate generation_pending ──
 
   const { data: chatSession, error: chatError } = await client
     .from("chat_sessions")
@@ -78,25 +84,52 @@ export const handleSendMessage = async (
       chatError?.message,
     );
   }
+
   if (chatSession.status === "archived") {
     throw new ApiError(
       409,
       "chat_not_open",
-      "Archived chat sessions cannot receive new messages",
+      "Archived chat sessions cannot generate recipes",
     );
   }
 
   const sessionContext = extractChatContext(chatSession.context);
+
+  if (!sessionContext.generation_pending) {
+    throw new ApiError(
+      409,
+      "generation_not_pending",
+      "No deferred generation pending for this session. Send a message first.",
+    );
+  }
+
   const existingCandidate = normalizeCandidateRecipeSet(
     sessionContext.candidate_recipe_set ?? null,
   );
+
+  // ── Build context (same as message handler) ──
+
+  const threadMessages = await fetchChatMessages(client, chatId);
+
+  // The user's last message is the generation prompt.
+  const lastUserMessage = [...threadMessages]
+    .reverse()
+    .find((m) => m.role === "user");
+
+  if (!lastUserMessage) {
+    throw new ApiError(
+      409,
+      "no_user_message",
+      "Cannot generate without a preceding user message",
+    );
+  }
 
   const contextPack = await buildContextPack({
     userClient: client,
     serviceClient,
     userId: auth.userId,
     requestId,
-    prompt: message,
+    prompt: lastUserMessage.content,
     context: {
       chat_context: (chatSession.context as Record<string, JsonValue>) ?? {},
       loop_state: deriveLoopState(sessionContext, existingCandidate),
@@ -107,84 +140,32 @@ export const handleSendMessage = async (
     selectionMode: "fast",
   });
 
-  const { data: userMessage, error: userMessageError } = await client
-    .from("chat_messages")
-    .insert({
-      chat_id: chatId,
-      role: "user",
-      content: message,
-    })
-    .select("id,created_at")
-    .single();
-
-  if (userMessageError || !userMessage) {
-    throw new ApiError(
-      500,
-      "chat_message_create_failed",
-      "Could not store chat message",
-      userMessageError?.message ?? "chat_message_insert_missing",
-    );
-  }
-
-  if (existingCandidate) {
-    await logBehaviorEvents({
-      serviceClient,
-      events: [{
-        eventId: crypto.randomUUID(),
-        userId: auth.userId,
-        installId,
-        eventType: "chat_iteration_requested",
-        sessionId: chatId,
-        entityType: "chat_session",
-        entityId: chatId,
-        payload: {
-          candidate_id: existingCandidate.candidate_id,
-          previous_revision: existingCandidate.revision,
-          active_component_id: existingCandidate.active_component_id,
-        },
-      }],
-    });
-  }
-
-  const threadMessages = await fetchChatMessages(client, chatId);
-  await logBehaviorEvents({
-    serviceClient,
-    events: [{
-      eventId: crypto.randomUUID(),
-      userId: auth.userId,
-      installId,
-      eventType: "chat_turn_submitted",
-      sessionId: chatId,
-      entityType: "chat_session",
-      entityId: chatId,
-      payload: {
-        prompt_char_count: message.length,
-        thread_size: threadMessages.length,
-      },
-    }],
-  });
   const threadForPrompt = buildThreadForPrompt(threadMessages);
-  // Defer the heavy generation LLM call when no recipe exists yet.
-  // The ideation call (~1-3s) classifies intent and returns a chat
-  // reply. If it determines recipe generation is needed, we return
-  // immediately with generation_pending so the client can show the
-  // cooking animation while calling POST /chat/:id/generate.
-  // When a recipe already exists (iteration), we run inline since
-  // there's no separate classification step.
-  const shouldDeferGeneration = !existingCandidate;
+
+  // ── Run the generation LLM (the heavy call) ──
+  // Force chat_generation scope to skip re-running ideation (already
+  // done in the message handler). Clear generation_pending so we
+  // don't double-generate.
+  const generationSessionContext = {
+    ...sessionContext,
+    generation_pending: undefined,
+  };
+
   const orchestrated = await orchestrateChatTurn({
     client,
     serviceClient,
     userId: auth.userId,
     requestId,
-    message,
+    message: lastUserMessage.content,
     existingCandidate,
-    sessionContext,
+    sessionContext: generationSessionContext,
     contextPack,
     threadForPrompt,
     modelOverrides,
-    deferGeneration: shouldDeferGeneration,
+    scopeOverride: "chat_generation",
   });
+
+  // ── Post-processing: images, persistence, memory ──
 
   let nextCandidateSet = orchestrated.nextCandidateSet;
   if (nextCandidateSet) {
@@ -200,6 +181,7 @@ export const handleSendMessage = async (
       candidate_recipe_set: nextCandidateSet,
       candidate_revision: nextCandidateSet.revision,
       active_component_id: nextCandidateSet.active_component_id,
+      generation_pending: undefined,
     };
     scheduleImageQueueDrain({
       serviceClient,
@@ -208,6 +190,12 @@ export const handleSendMessage = async (
       limit: Math.max(5, nextCandidateSet.components.length),
       modelOverrides,
     });
+  } else {
+    // Generation didn't produce a recipe — clear pending flag anyway.
+    orchestrated.nextContext = {
+      ...orchestrated.nextContext,
+      generation_pending: undefined,
+    };
   }
 
   await updateChatSessionLoopContext({
@@ -216,6 +204,7 @@ export const handleSendMessage = async (
     context: orchestrated.nextContext,
   });
 
+  // Save the generation result as a new assistant message.
   const assistantEnvelope = {
     assistant_reply: orchestrated.assistantChatResponse.assistant_reply,
     trigger_recipe: orchestrated.assistantChatResponse.trigger_recipe ??
@@ -232,6 +221,7 @@ export const handleSendMessage = async (
     loop_state: orchestrated.nextLoopState,
     intent: orchestrated.responseContext?.intent ?? null,
     envelope: assistantEnvelope as unknown as JsonValue,
+    source: "deferred_generation",
   };
   const { data: assistantMessage, error: assistantMessageError } =
     await client.from("chat_messages").insert({
@@ -245,13 +235,14 @@ export const handleSendMessage = async (
     throw new ApiError(
       500,
       "chat_assistant_message_failed",
-      "Could not store assistant chat message",
+      "Could not store generation result",
       assistantMessageError?.message ?? "assistant_message_insert_missing",
     );
   }
 
-  const resolvedEventId = crypto.randomUUID();
+  // Telemetry
   const generatedCount = nextCandidateSet?.components.length ?? 0;
+  const resolvedEventId = crypto.randomUUID();
   await logBehaviorEvents({
     serviceClient,
     events: [{
@@ -269,6 +260,7 @@ export const handleSendMessage = async (
         candidate_id: (nextCandidateSet?.candidate_id ?? null) as JsonValue,
         candidate_component_count: generatedCount,
         triggered_recipe: Boolean(nextCandidateSet),
+        source: "deferred_generation",
       },
     }],
   });
@@ -284,8 +276,9 @@ export const handleSendMessage = async (
     }),
   });
 
+  // Enqueue memory extraction for the generation turn.
   const interactionContext: Record<string, JsonValue> = {
-    prompt: message,
+    prompt: lastUserMessage.content,
     chat_id: chatId,
     assistant_reply: orchestrated.assistantChatResponse.assistant_reply,
     thread_size: threadMessages.length,
@@ -293,20 +286,18 @@ export const handleSendMessage = async (
     selected_memory_ids: contextPack.selectedMemoryIds,
     loop_state: orchestrated.nextLoopState,
     response_context: (orchestrated.responseContext ?? {}) as JsonValue,
+    source: "deferred_generation",
   };
-  if (orchestrated.nextCandidateSet) {
+  if (nextCandidateSet) {
     interactionContext.candidate_recipe_set = orchestrated
       .nextContext.candidate_recipe_set as unknown as JsonValue;
-  } else if (orchestrated.assistantChatResponse.recipe) {
-    interactionContext.assistant_recipe = orchestrated.assistantChatResponse
-      .recipe as unknown as JsonValue;
   }
 
   await enqueueMemoryJob({
     serviceClient,
     userId: auth.userId,
     chatId,
-    messageId: userMessage.id,
+    messageId: assistantMessage.id,
     interactionContext,
   });
   try {
@@ -323,6 +314,8 @@ export const handleSendMessage = async (
       error: error instanceof Error ? error.message : String(error),
     });
   }
+
+  // ── Response ──
 
   const messages: ChatMessageView[] = [
     ...threadMessages,
@@ -346,18 +339,9 @@ export const handleSendMessage = async (
       memoryContextIds: contextPack.selectedMemoryIds,
       createdAt: chatSession.created_at,
       updatedAt: new Date().toISOString(),
-      uiHints: orchestrated.generationDeferred
-        ? {
-          generation_pending: true,
-          show_generation_animation: true,
-        }
-        : orchestrated.justGenerated
+      uiHints: nextCandidateSet
         ? {
           show_generation_animation: true,
-          focus_component_id: nextCandidateSet?.active_component_id,
-        }
-        : nextCandidateSet
-        ? {
           focus_component_id: nextCandidateSet.active_component_id,
         }
         : undefined,

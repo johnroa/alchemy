@@ -1244,6 +1244,11 @@ export type OrchestratedChatTurn = {
   effectivePreferences: PreferenceContext;
   responseContext: ChatLoopResponse["response_context"] | null;
   justGenerated: boolean;
+  /** True when ideation determined generation is needed but the heavy
+   *  generation LLM call was skipped. The caller should return early
+   *  with generation_pending so the client can show the Lottie and
+   *  call POST /chat/:id/generate to run the actual generation. */
+  generationDeferred: boolean;
 };
 
 export const orchestrateChatTurn = async (params: {
@@ -1257,6 +1262,15 @@ export const orchestrateChatTurn = async (params: {
   contextPack: ContextPack;
   threadForPrompt: Array<{ role: string; content: string }>;
   modelOverrides?: ModelOverrideMap;
+  /** When true, skip the heavy generation LLM call if ideation
+   *  determines a recipe is needed. Lets the server return the
+   *  ideation reply fast so the client can show the generation
+   *  animation during the actual generation (separate request). */
+  deferGeneration?: boolean;
+  /** Force a specific scope, bypassing the automatic scope selection.
+   *  Used by the /generate endpoint to skip re-running ideation and
+   *  go straight to the generation LLM call. */
+  scopeOverride?: "chat_ideation" | "chat_generation" | "chat_iteration";
 }): Promise<OrchestratedChatTurn> => {
   const candidateOutlineForPrompt = buildCandidateOutlineForPrompt(
     params.existingCandidate,
@@ -1277,13 +1291,13 @@ export const orchestrateChatTurn = async (params: {
   );
   const isPreferenceEditingWorkflow = params.sessionContext.workflow ===
     "preferences";
-  const scopeHint = isPreferenceEditingWorkflow
+  const scopeHint = params.scopeOverride ?? (isPreferenceEditingWorkflow
     ? "chat_ideation"
     : params.existingCandidate
     ? "chat_iteration"
     : currentPendingConflict
     ? "chat_generation"
-    : "chat_ideation";
+    : "chat_ideation");
   const activeComponent =
     params.existingCandidate?.components.find((component) =>
       component.component_id === params.existingCandidate?.active_component_id
@@ -1356,6 +1370,11 @@ export const orchestrateChatTurn = async (params: {
     assistantChatResponse.trigger_recipe === true ||
     assistantChatResponse.response_context?.mode === "generation";
 
+  // Track whether generation was deferred so the caller can return
+  // a fast response with generation_pending and let the client call
+  // POST /chat/:id/generate separately.
+  let generationDeferred = false;
+
   if (
     !isPreferenceEditingWorkflow &&
     scopeHint === "chat_ideation" && !params.existingCandidate &&
@@ -1365,55 +1384,61 @@ export const orchestrateChatTurn = async (params: {
       !assistantChatResponse.candidate_recipe_set &&
       !assistantChatResponse.recipe
     ) {
-      try {
-        const generationResponse = await converseChatWithRetry({
-          client: params.serviceClient,
-          userId: params.userId,
-          requestId: params.requestId,
-          prompt: params.message,
-          context: {
-            chat_context: compactChatContext,
-            thread: params.threadForPrompt,
-            active_recipe: null,
-            candidate_recipe_set: null,
-            candidate_recipe_set_outline: null,
-            loop_state: "generation",
-            preferences: effectivePromptPreferences,
-            preferences_natural_language: promptPreferencesNaturalLanguage,
-            selected_memories: params.contextPack.selectedMemories,
-          },
-          scopeHint: "chat_generation",
-          modelOverrides: params.modelOverrides,
-        });
-        assistantChatResponse = {
-          ...generationResponse,
-          response_context: {
-            ...(generationResponse.response_context ?? {}),
-            mode: generationResponse.response_context?.mode ?? "generation",
-            intent:
-              normalizeChatIntent(generationResponse.response_context?.intent) ??
-                "in_scope_generate",
-          },
-        };
-      } catch (error) {
-        console.error("chat_generation_conversion_failed", {
-          request_id: params.requestId,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        // Propagate trigger_recipe so the client knows generation was intended
-        // but failed — it can show a "generation failed, tap to retry" state.
-        assistantChatResponse = {
-          ...assistantChatResponse,
-          trigger_recipe: true,
-          response_context: {
-            ...(assistantChatResponse.response_context ?? {}),
-            mode: "generation",
-            intent:
-              normalizeChatIntent(
-                assistantChatResponse.response_context?.intent,
-              ) ?? "in_scope_generate",
-          },
-        };
+      if (params.deferGeneration) {
+        // Skip the heavy generation LLM call. Return the ideation
+        // reply immediately so the client can show the generation
+        // animation while the actual generation happens via a
+        // separate POST /chat/:id/generate request.
+        generationDeferred = true;
+      } else {
+        try {
+          const generationResponse = await converseChatWithRetry({
+            client: params.serviceClient,
+            userId: params.userId,
+            requestId: params.requestId,
+            prompt: params.message,
+            context: {
+              chat_context: compactChatContext,
+              thread: params.threadForPrompt,
+              active_recipe: null,
+              candidate_recipe_set: null,
+              candidate_recipe_set_outline: null,
+              loop_state: "generation",
+              preferences: effectivePromptPreferences,
+              preferences_natural_language: promptPreferencesNaturalLanguage,
+              selected_memories: params.contextPack.selectedMemories,
+            },
+            scopeHint: "chat_generation",
+            modelOverrides: params.modelOverrides,
+          });
+          assistantChatResponse = {
+            ...generationResponse,
+            response_context: {
+              ...(generationResponse.response_context ?? {}),
+              mode: generationResponse.response_context?.mode ?? "generation",
+              intent:
+                normalizeChatIntent(generationResponse.response_context?.intent) ??
+                  "in_scope_generate",
+            },
+          };
+        } catch (error) {
+          console.error("chat_generation_conversion_failed", {
+            request_id: params.requestId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          assistantChatResponse = {
+            ...assistantChatResponse,
+            trigger_recipe: true,
+            response_context: {
+              ...(assistantChatResponse.response_context ?? {}),
+              mode: "generation",
+              intent:
+                normalizeChatIntent(
+                  assistantChatResponse.response_context?.intent,
+                ) ?? "in_scope_generate",
+            },
+          };
+        }
       }
     }
 
@@ -1529,6 +1554,8 @@ export const orchestrateChatTurn = async (params: {
     active_component_id: nextCandidateSet?.active_component_id ?? null,
     pending_preference_conflict: nextPendingPreferenceConflict,
     thread_preference_overrides: nextThreadOverrides,
+    // Persist the pending flag so the /generate endpoint can pick it up.
+    generation_pending: generationDeferred ? true : undefined,
   };
 
   return {
@@ -1539,5 +1566,6 @@ export const orchestrateChatTurn = async (params: {
     effectivePreferences,
     responseContext,
     justGenerated: !params.existingCandidate && Boolean(nextCandidateSet),
+    generationDeferred,
   };
 };
