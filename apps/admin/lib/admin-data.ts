@@ -32,6 +32,15 @@ export {
   getPipelineAnalyticsData,
   getProductAnalyticsData,
 } from "./admin-data/analytics";
+export type { DemandAnalyticsData, DemandTraceRow } from "./admin-data/demand";
+export {
+  getDemandAnalyticsData,
+  getDemandGraphData,
+  getDemandObservationsData,
+  getDemandOutcomeData,
+  getDemandTrendsData,
+  reviewDemandObservation,
+} from "./admin-data/demand";
 export {
   buildAcquisitionBoardSnapshot,
   buildEngagementBoardSnapshot,

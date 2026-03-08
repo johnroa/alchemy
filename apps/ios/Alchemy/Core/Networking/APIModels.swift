@@ -504,6 +504,9 @@ struct APIChatMessage: Decodable, Identifiable {
 struct ChatUiHints: Decodable {
     let showGenerationAnimation: Bool?
     let focusComponentId: String?
+    /// When true, the server deferred recipe generation. The client
+    /// should show the generation animation and call POST /chat/:id/generate.
+    let generationPending: Bool?
 }
 
 struct ChatResponseContext: Decodable {
@@ -514,6 +517,60 @@ struct ChatResponseContext: Decodable {
     /// Preference updates extracted by the Sous Chef during conversation.
     /// Each entry describes a single preference field change that was saved.
     let preferenceUpdates: [PreferenceUpdate]?
+
+    private enum CodingKeys: String, CodingKey {
+        case mode, intent, changedSections, personalizationNotes, preferenceUpdates
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        mode = try container.decodeIfPresent(String.self, forKey: .mode)
+        intent = try container.decodeIfPresent(String.self, forKey: .intent)
+        changedSections = try container.decodeIfPresent([String].self, forKey: .changedSections)
+        personalizationNotes = try container.decodeIfPresent([String].self, forKey: .personalizationNotes)
+
+        // The server sends preference_updates as a dict keyed by field name
+        // (e.g. {"dietary_preferences": [...]}), not an array of PreferenceUpdate
+        // objects. Try the array format first for forward-compat, then fall back
+        // to extracting dict keys so the "Updated X" toast still fires. If
+        // neither works, set nil — the server already applied the updates.
+        if let arr = try? container.decodeIfPresent([PreferenceUpdate].self, forKey: .preferenceUpdates) {
+            preferenceUpdates = arr
+        } else if container.contains(.preferenceUpdates) {
+            let fieldNames = (try? container.decode(
+                [String: IgnoredJSON].self, forKey: .preferenceUpdates
+            ))?.keys.map { $0 } ?? []
+            preferenceUpdates = fieldNames.isEmpty
+                ? nil
+                : fieldNames.map { PreferenceUpdate(field: $0, value: .null, action: "update") }
+        } else {
+            preferenceUpdates = nil
+        }
+    }
+}
+
+/// Swallows any JSON value so we can extract dict keys without knowing
+/// the value types. Used by ChatResponseContext for preference_updates.
+private struct IgnoredJSON: Decodable {
+    init(from decoder: Decoder) throws {
+        if var unkeyedContainer = try? decoder.unkeyedContainer() {
+            while !unkeyedContainer.isAtEnd {
+                _ = try? unkeyedContainer.decode(IgnoredJSON.self)
+            }
+        } else if let keyedContainer = try? decoder.container(keyedBy: FlexKey.self) {
+            for key in keyedContainer.allKeys {
+                _ = try? keyedContainer.decode(IgnoredJSON.self, forKey: key)
+            }
+        }
+        // Scalars and nulls are consumed by the container creation itself
+    }
+
+    private struct FlexKey: CodingKey {
+        var stringValue: String
+        var intValue: Int?
+        init?(stringValue: String) { self.stringValue = stringValue; self.intValue = nil }
+        init?(intValue: Int) { self.stringValue = "\(intValue)"; self.intValue = intValue }
+    }
 }
 
 /// A single preference field change surfaced in response_context.
@@ -522,6 +579,12 @@ struct PreferenceUpdate: Decodable {
     let field: String
     let value: AnyCodableValue
     let action: String?
+
+    init(field: String, value: AnyCodableValue, action: String?) {
+        self.field = field
+        self.value = value
+        self.action = action
+    }
 }
 
 /// Request body for POST /chat (new session) and POST /chat/{id}/messages

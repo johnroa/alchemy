@@ -132,6 +132,39 @@ export type ExploreForYouRankEnvelope = {
   rationale_tags_by_recipe?: unknown;
 };
 
+export type DemandFacetExtraction = {
+  facet: string;
+  normalized_value: string;
+  raw_value?: string | null;
+  polarity?: "positive" | "negative" | "neutral";
+  confidence?: number | null;
+  rank?: number | null;
+  metadata?: Record<string, JsonValue>;
+};
+
+export type DemandObservationExtraction = {
+  summary?: string | null;
+  why_now?: string | null;
+  privacy_tier?: "derived" | "redacted_snippet" | null;
+  admin_snippet_redacted?: string | null;
+  facts?: DemandFacetExtraction[] | null;
+};
+
+export type DemandEntityLinkSelection = {
+  fact_index: number;
+  entity_id: string | null;
+  confidence?: number | null;
+};
+
+export type DemandEntityLinkResult = {
+  items?: DemandEntityLinkSelection[] | null;
+};
+
+export type DemandOutcomeSummary = {
+  summary?: string | null;
+  admin_snippet_redacted?: string | null;
+};
+
 export type IngredientSemanticRelation = {
   from_canonical_name: string;
   to_canonical_name: string;

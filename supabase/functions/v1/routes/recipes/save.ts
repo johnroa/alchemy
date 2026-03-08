@@ -33,6 +33,8 @@ export const handleSaveRoutes = async (
     computePreferenceFingerprint,
     computeVariantTags,
     fetchGraphSubstitutions,
+    enqueueDemandExtractionJob,
+    scheduleDemandQueueDrain,
   } = deps;
 
   // ── POST/DELETE /recipes/:id/save ──
@@ -142,6 +144,31 @@ export const handleSaveRoutes = async (
         serviceClient,
         events: behaviorEvents,
       });
+
+      if (enqueueDemandExtractionJob) {
+        await enqueueDemandExtractionJob({
+          serviceClient,
+          sourceKind: "recipe_save",
+          sourceId: `${auth.userId}:${recipeId}:${Date.now()}`,
+          userId: auth.userId,
+          stage: "feedback",
+          extractorScope: "demand_summarize_outcome_reason",
+          observedAt: new Date().toISOString(),
+          payload: {
+            recipe_id: recipeId,
+            autopersonalize,
+            source_surface: sourceSurface as JsonValue,
+            source_session_id: sourceSessionId as JsonValue,
+            algorithm_version: algorithmVersion as JsonValue,
+          },
+        });
+        scheduleDemandQueueDrain?.({
+          serviceClient,
+          actorUserId: auth.userId,
+          requestId,
+          limit: 1,
+        });
+      }
 
       // Ensure image processing for the recipe.
       const { data: recipeImageCheck, error: recipeImageCheckError } = await client

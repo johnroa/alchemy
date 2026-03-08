@@ -2,6 +2,17 @@
 
 ## [Unreleased] — 2026-03-08
 
+### Enterprise-Ready Demand Graph + Admin Demand Analytics (v3.8.0)
+
+- Added internal-first demand graph storage with append-only `demand_observations`, `demand_fact_values`, `demand_outcomes`, `demand_graph_edges`, and `demand_extraction_jobs`.
+- Added non-blocking demand extraction queueing across chat turns, imports, onboarding completion, candidate selection/rejection, recipe commits, recipe saves, variant refreshes, and cook/substitution telemetry.
+- Added new demand extraction LLM scopes for observation extraction, iteration delta extraction, entity linking, and outcome summarization.
+- Added `POST /demand-jobs/process` and `POST /demand-jobs/backfill` plus incremental demand graph refresh from the new extraction pipeline.
+- Tightened behavior telemetry ingestion so rejected event types are surfaced explicitly and new demand-relevant event types are part of the canonical contract.
+- Added Admin `/analytics/demand` plus internal admin demand APIs for analytics, observations, graph, trends, outcomes, and review actions.
+- Added sampled review workflow primitives for extraction QA with pending/confirmed/rejected review states and an initial admin review queue.
+- Updated OpenAPI to `3.8.0`, regenerated contracts/admin route inventory, and added targeted backend/admin tests around the new demand snapshot and analytics page.
+
 ### Ingredient Grouping End-to-End + Component Default (v3.7.3)
 
 - Made ingredient grouping a fully supported presentation feature across saved recipe detail and transient Sous Chef candidate previews, limited to `List`, `By Category`, and `By Component`.

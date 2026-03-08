@@ -1,5 +1,6 @@
 import SwiftUI
 import NukeUI
+import Lottie
 
 /// Full recipe detail view with hero image, sticky scroll title, ingredient table,
 /// steps, and floating tweak chat bar.
@@ -205,7 +206,10 @@ struct RecipeDetailView: View {
                     }
                     .padding(.horizontal, AlchemySpacing.screenHorizontal)
                     .padding(.top, AlchemySpacing.xl)
-                    .padding(.bottom, 120)
+                    // Extra bottom clearance when embedded in GenerateView
+                    // so the minimized chat panel (220pt) doesn't hide
+                    // the last steps/content.
+                    .padding(.bottom, isEmbedded ? 260 : 120)
                 }
                 .background(
                     GeometryReader { geo in
@@ -293,7 +297,7 @@ struct RecipeDetailView: View {
                     .frame(width: geo.size.width, height: height)
                     .clipped()
 
-                Color.black.opacity(0.45)
+                Color.black.opacity(0.2)
                 AlchemyColors.heroGradient
 
                 Text(recipe.title)
@@ -312,24 +316,26 @@ struct RecipeDetailView: View {
 
     /// Chooses the right hero content based on image readiness:
     /// - "ready" → loads the actual image via Nuke
-    /// - "pending"/"processing" → animated shimmer placeholder
+    /// - "pending"/"processing" → Lottie loading indicator (embedded)
+    ///   or shimmer placeholder (standalone)
     /// - "failed" or no URL → static dark placeholder
     @ViewBuilder
     private func heroImageContent(_ recipe: RecipeDetail, size: CGSize) -> some View {
         let status = recipe.imageStatus.lowercased()
 
         if status == "pending" || status == "processing" {
-            ImageShimmerPlaceholder()
+            ImageLoadingPlaceholder(isEmbedded: isEmbedded)
         } else if let url = recipe.resolvedImageURL {
             LazyImage(url: url) { state in
                 if let image = state.image {
                     image
                         .resizable()
                         .aspectRatio(contentMode: .fill)
+                        .transition(.opacity.animation(.easeInOut(duration: 0.4)))
                 } else if state.error != nil {
                     Rectangle().fill(AlchemyColors.surfaceSecondary)
                 } else {
-                    ImageShimmerPlaceholder()
+                    ImageLoadingPlaceholder(isEmbedded: isEmbedded)
                 }
             }
         } else {
@@ -861,49 +867,64 @@ private struct ScrollOffsetKey: PreferenceKey {
     }
 }
 
-// MARK: - Image Shimmer Placeholder
+// MARK: - Image Loading Placeholder
 
-/// Skeleton shimmer placeholder for the hero image area while the
-/// recipe image is being generated. Uses a wide, soft gradient pulse
-/// that fades in and out rather than sliding, avoiding the pixelated
-/// edge artifacts of a translating narrow band.
-struct ImageShimmerPlaceholder: View {
+/// Placeholder shown while the recipe image is being generated.
+/// - **Embedded mode** (inside Generate): centered Lottie animation +
+///   "Loading recipe image..." text on a dark surface. Calm and stable.
+/// - **Standalone mode** (recipe detail): subtle shimmer gradient pulse.
+struct ImageLoadingPlaceholder: View {
+    var isEmbedded: Bool = false
     @State private var shimmerActive = false
 
     var body: some View {
-        Rectangle()
-            .fill(
-                LinearGradient(
-                    colors: [
-                        Color(red: 0.12, green: 0.12, blue: 0.14),
-                        Color(red: 0.14, green: 0.14, blue: 0.17),
-                        Color(red: 0.12, green: 0.12, blue: 0.14),
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-            )
-            .overlay {
-                LinearGradient(
-                    stops: [
-                        .init(color: .clear, location: 0.0),
-                        .init(color: .white.opacity(0.03), location: 0.3),
-                        .init(color: .white.opacity(0.06), location: 0.5),
-                        .init(color: .white.opacity(0.03), location: 0.7),
-                        .init(color: .clear, location: 1.0),
-                    ],
-                    startPoint: shimmerActive ? .trailing : .leading,
-                    endPoint: shimmerActive ? .init(x: 2.0, y: 1.0) : .trailing
-                )
-                .blendMode(.screen)
-            }
-            .onAppear {
-                withAnimation(
-                    .easeInOut(duration: 2.2)
-                    .repeatForever(autoreverses: true)
-                ) {
-                    shimmerActive = true
+        if isEmbedded {
+            ZStack {
+                Rectangle().fill(AlchemyColors.surface)
+                VStack(spacing: AlchemySpacing.md) {
+                    LottieView(animation: .named("alchemy-loading"))
+                        .playing(loopMode: .loop)
+                        .frame(width: 80, height: 80)
+                    Text("Loading recipe image...")
+                        .font(AlchemyTypography.caption)
+                        .foregroundStyle(AlchemyColors.textSecondary)
                 }
             }
+        } else {
+            Rectangle()
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color(red: 0.12, green: 0.12, blue: 0.14),
+                            Color(red: 0.14, green: 0.14, blue: 0.17),
+                            Color(red: 0.12, green: 0.12, blue: 0.14),
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .overlay {
+                    LinearGradient(
+                        stops: [
+                            .init(color: .clear, location: 0.0),
+                            .init(color: .white.opacity(0.03), location: 0.3),
+                            .init(color: .white.opacity(0.06), location: 0.5),
+                            .init(color: .white.opacity(0.03), location: 0.7),
+                            .init(color: .clear, location: 1.0),
+                        ],
+                        startPoint: shimmerActive ? .trailing : .leading,
+                        endPoint: shimmerActive ? .init(x: 2.0, y: 1.0) : .trailing
+                    )
+                    .blendMode(.screen)
+                }
+                .onAppear {
+                    withAnimation(
+                        .easeInOut(duration: 2.2)
+                        .repeatForever(autoreverses: true)
+                    ) {
+                        shimmerActive = true
+                    }
+                }
+        }
     }
 }

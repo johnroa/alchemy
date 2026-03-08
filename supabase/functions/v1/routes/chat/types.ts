@@ -93,6 +93,7 @@ export type ChatDeps = {
     uiHints?: {
       show_generation_animation?: boolean;
       focus_component_id?: string;
+      generation_pending?: boolean;
     };
   }) => ChatLoopResponse;
   extractChatContext: (value: unknown) => ChatSessionContext;
@@ -158,6 +159,23 @@ export type ChatDeps = {
     modelOverrides?: RouteContext["modelOverrides"];
   }) => void;
   scheduleMemoryQueueDrain: (input: {
+    serviceClient: RouteContext["serviceClient"];
+    actorUserId: string;
+    requestId: string;
+    limit?: number;
+  }) => void;
+  enqueueDemandExtractionJob?: (input: {
+    serviceClient: RouteContext["serviceClient"];
+    sourceKind: string;
+    sourceId: string;
+    userId?: string | null;
+    stage: "intent" | "iteration" | "import" | "selection" | "commit" | "consumption" | "feedback";
+    extractorScope: string;
+    extractorVersion?: number;
+    observedAt?: string | null;
+    payload?: Record<string, JsonValue>;
+  }) => Promise<void>;
+  scheduleDemandQueueDrain?: (input: {
     serviceClient: RouteContext["serviceClient"];
     actorUserId: string;
     requestId: string;

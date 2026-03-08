@@ -60,6 +60,23 @@ type OnboardingDeps = {
     requestId: string;
     afterJson?: JsonValue;
   }) => Promise<void>;
+  enqueueDemandExtractionJob?: (input: {
+    serviceClient: RouteContext["serviceClient"];
+    sourceKind: string;
+    sourceId: string;
+    userId?: string | null;
+    stage: "intent" | "iteration" | "import" | "selection" | "commit" | "consumption" | "feedback";
+    extractorScope: string;
+    extractorVersion?: number;
+    observedAt?: string | null;
+    payload?: Record<string, JsonValue>;
+  }) => Promise<void>;
+  scheduleDemandQueueDrain?: (input: {
+    serviceClient: RouteContext["serviceClient"];
+    actorUserId: string;
+    requestId: string;
+    limit?: number;
+  }) => void;
 };
 
 export const handleOnboardingRoutes = async (
@@ -84,6 +101,8 @@ export const handleOnboardingRoutes = async (
     applyModelPreferenceUpdates,
     updateMemoryFromInteraction,
     logChangelog,
+    enqueueDemandExtractionJob,
+    scheduleDemandQueueDrain,
   } = deps;
 
   if (
@@ -298,6 +317,31 @@ export const handleOnboardingRoutes = async (
       serviceClient,
       events: milestoneEvents,
     });
+
+    if (onboardingState.completed && enqueueDemandExtractionJob) {
+      await enqueueDemandExtractionJob({
+        serviceClient,
+        sourceKind: "onboarding_completion",
+        sourceId: `${auth.userId}:${requestId}`,
+        userId: auth.userId,
+        stage: "intent",
+        extractorScope: "demand_extract_observation",
+        observedAt: new Date().toISOString(),
+        payload: {
+          latest_message: normalizedMessage as JsonValue,
+          onboarding_state: onboardingState as unknown as JsonValue,
+          preference_updates: (interview.preference_updates ?? {}) as JsonValue,
+          effective_preferences:
+            persistedPreferences as unknown as Record<string, JsonValue>,
+        },
+      });
+      scheduleDemandQueueDrain?.({
+        serviceClient,
+        actorUserId: auth.userId,
+        requestId,
+        limit: 1,
+      });
+    }
 
     void (async () => {
       try {

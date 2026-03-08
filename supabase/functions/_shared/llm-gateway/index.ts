@@ -73,6 +73,12 @@ import {
   filterEquipmentPreferenceUpdates,
 } from "./preferences.ts";
 import { generateGreeting } from "./greeting.ts";
+import {
+  extractDemandIterationDelta,
+  extractDemandObservation,
+  linkDemandEntities,
+  summarizeDemandOutcomeReason,
+} from "./demand.ts";
 
 export type { ModelOverrideMap, SubstitutionDiff, PersonalizeRecipeResult } from "./types.ts";
 
@@ -427,6 +433,14 @@ export const llmGateway = {
   normalizePreferenceList,
 
   filterEquipmentPreferenceUpdates,
+
+  extractDemandObservation,
+
+  extractDemandIterationDelta,
+
+  linkDemandEntities,
+
+  summarizeDemandOutcomeReason,
 
   /**
    * Onboarding interview orchestration: runs the onboarding LLM scope

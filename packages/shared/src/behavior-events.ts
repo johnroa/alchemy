@@ -21,11 +21,14 @@ export const BEHAVIOR_EVENT_DEFINITIONS = {
   explore_skipped_recipe: { surface: "explore", label: "Explore Skipped Recipe" },
   explore_hidden_recipe: { surface: "explore", label: "Explore Hidden Recipe" },
   explore_saved_recipe: { surface: "explore", label: "Explore Saved Recipe" },
+  explore_chip_applied: { surface: "explore", label: "Explore Chip Applied" },
   chat_session_started: { surface: "chat", label: "Chat Session Started" },
   chat_turn_submitted: { surface: "chat", label: "Chat Turn Submitted" },
   chat_turn_resolved: { surface: "chat", label: "Chat Turn Resolved" },
   chat_iteration_requested: { surface: "chat", label: "Chat Iteration Requested" },
   chat_candidate_selected: { surface: "chat", label: "Chat Candidate Selected" },
+  chat_candidate_rejected: { surface: "chat", label: "Chat Candidate Rejected" },
+  chat_candidate_cleared: { surface: "chat", label: "Chat Candidate Cleared" },
   chat_commit_completed: { surface: "chat", label: "Chat Commit Completed" },
   cookbook_viewed: { surface: "cookbook", label: "Cookbook Viewed" },
   cookbook_search_applied: { surface: "cookbook", label: "Cookbook Search Applied" },
@@ -38,9 +41,18 @@ export const BEHAVIOR_EVENT_DEFINITIONS = {
   recipe_saved: { surface: "recipe_detail", label: "Recipe Saved" },
   recipe_unsaved: { surface: "cookbook", label: "Recipe Unsaved" },
   recipe_cooked_inferred: { surface: "recipe_detail", label: "Recipe Cooked Inferred" },
+  variant_refreshed: { surface: "recipe_detail", label: "Variant Refreshed" },
   ingredient_substitution_applied: {
     surface: "recipe_detail",
     label: "Ingredient Substitution Applied",
+  },
+  ingredient_substitution_reverted: {
+    surface: "recipe_detail",
+    label: "Ingredient Substitution Reverted",
+  },
+  ingredient_substitution_manual_override: {
+    surface: "recipe_detail",
+    label: "Ingredient Substitution Manual Override",
   },
 } as const satisfies Record<string, { surface: BehaviorSurface; label: string }>;
 

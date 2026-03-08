@@ -291,6 +291,46 @@ export const LLM_SCOPE_REGISTRY = {
     fallback_policy: "deterministic_only",
     telemetry_tags: { task: "memory_conflict_resolve", criticality: "medium" },
   },
+  demand_extract_observation: {
+    output_contract: "demand_extract_observation_v1",
+    mode: "classification",
+    retry_policy: {
+      max_attempts: 2,
+      retryable_codes: [...STRICT_JSON_RETRYABLE_CODES, ...STANDARD_RETRYABLE_CODES],
+    },
+    fallback_policy: "none",
+    telemetry_tags: { task: "demand_extract_observation", criticality: "high" },
+  },
+  demand_extract_iteration_delta: {
+    output_contract: "demand_extract_iteration_delta_v1",
+    mode: "classification",
+    retry_policy: {
+      max_attempts: 2,
+      retryable_codes: [...STRICT_JSON_RETRYABLE_CODES, ...STANDARD_RETRYABLE_CODES],
+    },
+    fallback_policy: "none",
+    telemetry_tags: { task: "demand_extract_iteration_delta", criticality: "high" },
+  },
+  demand_link_entities: {
+    output_contract: "demand_link_entities_v1",
+    mode: "classification",
+    retry_policy: {
+      max_attempts: 2,
+      retryable_codes: [...STRICT_JSON_RETRYABLE_CODES, ...STANDARD_RETRYABLE_CODES],
+    },
+    fallback_policy: "deterministic_only",
+    telemetry_tags: { task: "demand_link_entities", criticality: "medium" },
+  },
+  demand_summarize_outcome_reason: {
+    output_contract: "demand_summarize_outcome_reason_v1",
+    mode: "classification",
+    retry_policy: {
+      max_attempts: 2,
+      retryable_codes: [...STRICT_JSON_RETRYABLE_CODES, ...STANDARD_RETRYABLE_CODES],
+    },
+    fallback_policy: "deterministic_only",
+    telemetry_tags: { task: "demand_summarize_outcome_reason", criticality: "medium" },
+  },
 
   /**
    * recipe_canonicalize: derives the canonical (public, immutable) base recipe

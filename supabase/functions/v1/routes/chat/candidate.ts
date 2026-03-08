@@ -2,6 +2,7 @@ import {
   ApiError,
   requireJsonBody,
 } from "../../../_shared/errors.ts";
+import type { JsonValue } from "../../../_shared/types.ts";
 import { getInstallIdFromHeaders, logBehaviorEvents } from "../../lib/behavior-events.ts";
 import type {
   ChatLoopState,
@@ -43,6 +44,8 @@ export const handleCandidatePatch = async (
     logChangelog,
     buildChatLoopResponse,
     fetchChatMessages,
+    enqueueDemandExtractionJob,
+    scheduleDemandQueueDrain,
   } = deps;
 
   const chatId = parseUuid(segments[1]);
@@ -80,8 +83,14 @@ export const handleCandidatePatch = async (
     contextValue.candidate_recipe_set ?? null,
   );
   let nextCandidateSet = candidateSet;
+  let affectedComponents: Array<Record<string, unknown>> = [];
 
   if (body.action === "clear_candidate") {
+    affectedComponents = candidateSet?.components.map((component) => ({
+      component_id: component.component_id,
+      title: component.title,
+      role: component.role,
+    })) ?? [];
     nextCandidateSet = null;
   }
 
@@ -116,6 +125,13 @@ export const handleCandidatePatch = async (
       revision: Math.max(1, candidateSet.revision + 1),
       active_component_id: body.component_id,
     };
+    affectedComponents = candidateSet.components
+      .filter((component) => component.component_id === body.component_id)
+      .map((component) => ({
+        component_id: component.component_id,
+        title: component.title,
+        role: component.role,
+      }));
   }
 
   if (body.action === "delete_component") {
@@ -162,6 +178,13 @@ export const handleCandidatePatch = async (
       active_component_id: nextActiveId,
       components: remaining,
     };
+    affectedComponents = candidateSet.components
+      .filter((component) => component.component_id === body.component_id)
+      .map((component) => ({
+        component_id: component.component_id,
+        title: component.title,
+        role: component.role,
+      }));
   }
 
   let hydratedNextCandidateSet = nextCandidateSet;
@@ -236,6 +259,58 @@ export const handleCandidatePatch = async (
           active_component_id: hydratedNextCandidateSet.active_component_id,
         },
       }],
+    });
+  } else if (body.action === "delete_component" || body.action === "clear_candidate") {
+    await logBehaviorEvents({
+      serviceClient,
+      events: [{
+        eventId: crypto.randomUUID(),
+        userId: auth.userId,
+        installId,
+        eventType: body.action === "clear_candidate"
+          ? "chat_candidate_cleared"
+          : "chat_candidate_rejected",
+        sessionId: chatId,
+        entityType: "candidate_set",
+        entityId: candidateSet?.candidate_id ?? chatId,
+        payload: {
+          candidate_id: candidateSet?.candidate_id ?? null,
+          revision: candidateSet?.revision ?? null,
+          components: affectedComponents as never,
+        },
+      }],
+    });
+  }
+
+  if (enqueueDemandExtractionJob) {
+    await enqueueDemandExtractionJob({
+      serviceClient,
+      sourceKind: "chat_candidate_action",
+      sourceId: [
+        chatId,
+        candidateSet?.candidate_id ?? "candidate",
+        body.action,
+        body.component_id ?? "all",
+      ].join(":"),
+      userId: auth.userId,
+      stage: "selection",
+      extractorScope: "demand_summarize_outcome_reason",
+      observedAt: new Date().toISOString(),
+      payload: {
+        chat_id: chatId as JsonValue,
+        action: body.action as JsonValue,
+        candidate_id: (candidateSet?.candidate_id ?? null) as JsonValue,
+        component_id: (body.component_id ?? null) as JsonValue,
+        component_title: (affectedComponents[0]?.["title"] ?? null) as JsonValue,
+        component_role: (affectedComponents[0]?.["role"] ?? null) as JsonValue,
+        components: affectedComponents as unknown as JsonValue,
+      },
+    });
+    scheduleDemandQueueDrain?.({
+      serviceClient,
+      actorUserId: auth.userId,
+      requestId,
+      limit: 1,
     });
   }
 

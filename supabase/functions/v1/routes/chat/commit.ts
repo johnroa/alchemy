@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2";
 import { ApiError } from "../../../_shared/errors.ts";
+import type { JsonValue } from "../../../_shared/types.ts";
 import { getInstallIdFromHeaders, logBehaviorEvents } from "../../lib/behavior-events.ts";
 import type {
   CandidateRecipeSet,
@@ -242,6 +243,8 @@ export const handleCommit = async (
     persistRecipe,
     attachCommittedCandidateImages,
     scheduleImageQueueDrain,
+    enqueueDemandExtractionJob,
+    scheduleDemandQueueDrain,
     mapCandidateRoleToRelation,
     resolveRelationTypeId,
     logChangelog,
@@ -575,6 +578,31 @@ export const handleCommit = async (
         },
       }],
     });
+
+    if (enqueueDemandExtractionJob) {
+      await enqueueDemandExtractionJob({
+        serviceClient,
+        sourceKind: "chat_commit",
+        sourceId: `${chatId}:${candidateSet.candidate_id}:${candidateSet.revision}`,
+        userId: auth.userId,
+        stage: "commit",
+        extractorScope: "demand_summarize_outcome_reason",
+        observedAt: committedAt,
+        payload: {
+          chat_id: chatId as JsonValue,
+          candidate_id: candidateSet.candidate_id as JsonValue,
+          revision: candidateSet.revision as JsonValue,
+          recipes: committedComponents as unknown as JsonValue,
+          links: links as unknown as JsonValue,
+        },
+      });
+      scheduleDemandQueueDrain?.({
+        serviceClient,
+        actorUserId: auth.userId,
+        requestId,
+        limit: 1,
+      });
+    }
 
     return await buildCommitResponse({
       chatId,

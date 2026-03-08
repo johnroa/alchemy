@@ -50,6 +50,8 @@ export const handleCreateSession = async (
     enrollCandidateImageRequests,
     scheduleImageQueueDrain,
     scheduleMemoryQueueDrain,
+    enqueueDemandExtractionJob,
+    scheduleDemandQueueDrain,
   } = deps;
 
   const body = await requireJsonBody<{
@@ -293,6 +295,33 @@ export const handleCreateSession = async (
       generatedCount,
     }),
   });
+
+  if (enqueueDemandExtractionJob) {
+    await enqueueDemandExtractionJob({
+      serviceClient,
+      sourceKind: "chat_message",
+      sourceId: userMessage.id,
+      userId: auth.userId,
+      stage: "intent",
+      extractorScope: "demand_extract_observation",
+      observedAt: userMessage.created_at,
+      payload: {
+        chat_id: chatSession.id,
+        assistant_message_id: assistantMessage.id,
+        response_context: (orchestrated.responseContext ?? {}) as JsonValue,
+        candidate_id: (nextCandidateSet?.candidate_id ?? null) as JsonValue,
+        active_component_id: (nextCandidateSet?.active_component_id ?? null) as JsonValue,
+        workflow: (launchContext?.workflow ?? null) as JsonValue,
+        entry_surface: (launchContext?.entry_surface ?? null) as JsonValue,
+      },
+    });
+    scheduleDemandQueueDrain?.({
+      serviceClient,
+      actorUserId: auth.userId,
+      requestId,
+      limit: 1,
+    });
+  }
 
   const interactionContext: Record<string, JsonValue> = {
     prompt: message,

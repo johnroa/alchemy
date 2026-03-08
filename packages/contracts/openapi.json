@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Alchemy API",
-    "version": "3.7.3",
+    "version": "3.8.0",
     "description": "API contract for Alchemy — an AI-driven recipe creation and management platform.\nCovers the user-facing v1 API at api.cookwithalchemy.com and the admin API at admin.cookwithalchemy.com.\n"
   },
   "servers": [
@@ -1627,6 +1627,92 @@
                       }
                     }
                   }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/demand-jobs/process": {
+      "post": {
+        "summary": "Process due demand extraction jobs (internal authenticated scope)",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Demand queue processing summary",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DemandJobsProcessResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/demand-jobs/backfill": {
+      "post": {
+        "summary": "Backfill demand extraction jobs (internal authenticated scope)",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "user_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "hours": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 720
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 500
+                  },
+                  "process_now": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Demand backfill summary",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DemandJobsBackfillResponse"
                 }
               }
             }
@@ -5440,16 +5526,18 @@
               "explore_skipped_recipe",
               "explore_hidden_recipe",
               "explore_saved_recipe",
+              "explore_chip_applied",
               "chat_session_started",
               "chat_turn_submitted",
               "chat_turn_resolved",
               "chat_iteration_requested",
               "chat_candidate_selected",
+              "chat_candidate_rejected",
+              "chat_candidate_cleared",
               "chat_commit_completed",
               "cookbook_viewed",
               "cookbook_search_applied",
               "cookbook_chip_applied",
-              "explore_chip_applied",
               "cookbook_recipe_opened",
               "cookbook_recipe_unsaved",
               "recipe_detail_opened",
@@ -5458,7 +5546,10 @@
               "recipe_saved",
               "recipe_unsaved",
               "recipe_cooked_inferred",
-              "ingredient_substitution_applied"
+              "variant_refreshed",
+              "ingredient_substitution_applied",
+              "ingredient_substitution_reverted",
+              "ingredient_substitution_manual_override"
             ]
           },
           "surface": {
@@ -5584,7 +5675,8 @@
         "type": "object",
         "required": [
           "accepted",
-          "rejected"
+          "rejected",
+          "rejected_event_types"
         ],
         "properties": {
           "accepted": {
@@ -5594,6 +5686,102 @@
           "rejected": {
             "type": "integer",
             "minimum": 0
+          },
+          "rejected_event_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "DemandJobsProcessResponse": {
+        "type": "object",
+        "required": [
+          "reaped",
+          "claimed",
+          "processed",
+          "completed",
+          "failed",
+          "deadLettered",
+          "graph",
+          "queue"
+        ],
+        "properties": {
+          "reaped": {
+            "type": "integer"
+          },
+          "claimed": {
+            "type": "integer"
+          },
+          "processed": {
+            "type": "integer"
+          },
+          "completed": {
+            "type": "integer"
+          },
+          "failed": {
+            "type": "integer"
+          },
+          "deadLettered": {
+            "type": "integer"
+          },
+          "graph": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "queue": {
+            "type": "object",
+            "required": [
+              "pending",
+              "processing",
+              "completed",
+              "failed",
+              "dead_letter"
+            ],
+            "properties": {
+              "pending": {
+                "type": "integer"
+              },
+              "processing": {
+                "type": "integer"
+              },
+              "completed": {
+                "type": "integer"
+              },
+              "failed": {
+                "type": "integer"
+              },
+              "dead_letter": {
+                "type": "integer"
+              }
+            }
+          }
+        }
+      },
+      "DemandJobsBackfillResponse": {
+        "type": "object",
+        "required": [
+          "chatMessages",
+          "imports",
+          "behaviorEvents"
+        ],
+        "properties": {
+          "chatMessages": {
+            "type": "integer"
+          },
+          "imports": {
+            "type": "integer"
+          },
+          "behaviorEvents": {
+            "type": "integer"
+          },
+          "processed": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true
           }
         }
       },

@@ -6,6 +6,7 @@ import type {
   JsonValue,
   RecipePayload,
 } from "../../../_shared/types.ts";
+import { getInstallIdFromHeaders, logBehaviorEvents } from "../../lib/behavior-events.ts";
 import { materializeRecipeVariant } from "../../lib/variant-materialization.ts";
 import { fetchCanonicalIngredientRows } from "../../lib/recipe-enrichment.ts";
 import { projectRecipePayloadForView } from "../../lib/recipe-persistence.ts";
@@ -27,6 +28,8 @@ export const handleVariantRoutes = async (
     computePreferenceFingerprint,
     computeVariantTags,
     fetchGraphSubstitutions,
+    enqueueDemandExtractionJob,
+    scheduleDemandQueueDrain,
   } = deps;
 
   // ── GET /recipes/{id}/variant ──
@@ -38,6 +41,7 @@ export const handleVariantRoutes = async (
     method === "GET"
   ) {
     const recipeId = parseUuid(segments[1]);
+    const installId = getInstallIdFromHeaders(request);
 
     const { data: variant, error: variantError } = await client
       .from("user_recipe_variants")
@@ -163,6 +167,7 @@ export const handleVariantRoutes = async (
     method === "POST"
   ) {
     const recipeId = parseUuid(segments[1]);
+    const installId = getInstallIdFromHeaders(request);
 
     // 1. Load canonical recipe + its current version payload.
     const { data: recipe, error: recipeError } = await client
@@ -254,6 +259,62 @@ export const handleVariantRoutes = async (
           : 0,
       } as unknown as JsonValue,
     });
+
+    await logBehaviorEvents({
+      serviceClient,
+      events: [{
+        eventId: crypto.randomUUID(),
+        userId: auth.userId,
+        installId,
+        eventType: "variant_refreshed",
+        entityType: "recipe",
+        entityId: recipeId,
+        payload: {
+          variant_id: materializedVariant.variantId,
+          variant_version_id: materializedVariant.variantVersionId,
+          has_manual_edits: Boolean(manualEditInstructions),
+          substitution_count: Array.isArray(
+              materializedVariant.provenance["substitution_diffs"],
+            )
+            ? materializedVariant.provenance["substitution_diffs"].length
+            : 0,
+        },
+      }],
+    });
+
+    if (enqueueDemandExtractionJob) {
+      await enqueueDemandExtractionJob({
+        serviceClient,
+        sourceKind: "variant_refresh",
+        sourceId: materializedVariant.variantVersionId,
+        userId: auth.userId,
+        stage: manualEditInstructions ? "iteration" : "feedback",
+        extractorScope: manualEditInstructions
+          ? "demand_extract_iteration_delta"
+          : "demand_summarize_outcome_reason",
+        observedAt: materializedVariant.personalizedAt,
+        payload: {
+          recipe_id: recipeId,
+          variant_id: materializedVariant.variantId,
+          variant_version_id: materializedVariant.variantVersionId,
+          manual_edit_instructions: (manualEditInstructions ?? null) as JsonValue,
+          adaptation_summary:
+            ((materializedVariant.provenance["adaptation_summary"] as string) ?? null) as JsonValue,
+          substitution_diffs:
+            (Array.isArray(materializedVariant.provenance["substitution_diffs"])
+              ? materializedVariant.provenance["substitution_diffs"]
+              : []) as JsonValue,
+          conflicts: materializedVariant.conflicts as unknown as JsonValue,
+          provenance: materializedVariant.provenance as JsonValue,
+        },
+      });
+      scheduleDemandQueueDrain?.({
+        serviceClient,
+        actorUserId: auth.userId,
+        requestId,
+        limit: 1,
+      });
+    }
 
     return respond(200, {
       variant_id: materializedVariant.variantId,

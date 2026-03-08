@@ -424,6 +424,29 @@ export const handleImportRoutes = async (
     },
   });
 
+  if (deps.enqueueDemandExtractionJob) {
+    await deps.enqueueDemandExtractionJob({
+      serviceClient,
+      sourceKind: "import_provenance",
+      sourceId: provenance.id,
+      userId: auth.userId,
+      stage: "import",
+      extractorScope: "demand_extract_observation",
+      observedAt: new Date().toISOString(),
+      payload: {
+        chat_id: chatSession.id,
+        assistant_message_id: assistantMessage.id,
+        response_context: (transformed.response_context ?? {}) as JsonValue,
+      },
+    });
+    deps.scheduleDemandQueueDrain?.({
+      serviceClient,
+      actorUserId: auth.userId,
+      requestId,
+      limit: 1,
+    });
+  }
+
   // Emit import event for telemetry (picked up by admin dashboard + request trace)
   await serviceClient.from("events").insert({
     event_type: "import_completed",

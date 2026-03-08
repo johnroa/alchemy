@@ -1093,7 +1093,7 @@ const buildCookbookData = async (
       category: resolveCookbookPreviewCategory(userCategory, autoCategory),
       visibility: recipe.visibility,
       updated_at: recipe.updated_at,
-      quick_stats: canonicalMetadata?.quick_stats ?? null,
+      quick_stats: (canonicalMetadata?.quick_stats ?? null) as CookbookEntry["quick_stats"],
       variant_status: variantStatus,
       active_variant_version_id: variant?.current_version_id ?? null,
       personalized_at: variant?.last_materialized_at ?? null,

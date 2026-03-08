@@ -122,7 +122,7 @@ export type RecipesDeps = {
     modelOverrides?: RouteContext["modelOverrides"];
   }) => Promise<{
     search_id: string;
-    applied_context: "all" | "preset" | "query";
+    applied_context: "all" | "preset" | "query" | "for_you";
     items: RecipePreview[];
     next_cursor: string | null;
     no_match: {
@@ -181,4 +181,21 @@ export type RecipesDeps = {
     recipeVersionId: string;
     constraints: string[];
   }) => Promise<Record<string, JsonValue>[]>;
+  enqueueDemandExtractionJob?: (input: {
+    serviceClient: RouteContext["serviceClient"];
+    sourceKind: string;
+    sourceId: string;
+    userId?: string | null;
+    stage: "intent" | "iteration" | "import" | "selection" | "commit" | "consumption" | "feedback";
+    extractorScope: string;
+    extractorVersion?: number;
+    observedAt?: string | null;
+    payload?: Record<string, JsonValue>;
+  }) => Promise<void>;
+  scheduleDemandQueueDrain?: (input: {
+    serviceClient: RouteContext["serviceClient"];
+    actorUserId: string;
+    requestId: string;
+    limit?: number;
+  }) => void;
 };

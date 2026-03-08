@@ -6,6 +6,7 @@ import { isOptionalSemanticCapabilityUnavailable } from "./routing-utils.ts";
 import { processMetadataJobs } from "./metadata-pipeline.ts";
 import { processImageJobs as processCandidateImageJobs } from "../recipe-image-pipeline.ts";
 import { processMemoryJobs } from "./context-pack.ts";
+import { processDemandExtractionJobs } from "./demand/index.ts";
 
 /** Clamp a numeric-ish value to [0, 1], returning fallback if non-finite. */
 const clampConfidence = (value: unknown, fallback = 0.5): number => {
@@ -100,6 +101,34 @@ export const scheduleMemoryQueueDrain = (params: {
     limit,
   }).then(() => undefined).catch((error) => {
     console.error("memory_queue_drain_failed", {
+      request_id: params.requestId,
+      actor_user_id: params.actorUserId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
+
+  runInBackground(task);
+};
+
+export const scheduleDemandQueueDrain = (params: {
+  serviceClient: SupabaseClient;
+  actorUserId: string;
+  requestId: string;
+  limit?: number;
+  processor?: typeof processDemandExtractionJobs;
+}): void => {
+  const limit = Number.isFinite(Number(params.limit))
+    ? Math.max(1, Math.min(25, Number(params.limit)))
+    : 2;
+
+  const processor = params.processor ?? processDemandExtractionJobs;
+  const task = processor({
+    serviceClient: params.serviceClient,
+    actorUserId: params.actorUserId,
+    requestId: params.requestId,
+    limit,
+  }).then(() => undefined).catch((error) => {
+    console.error("demand_queue_drain_failed", {
       request_id: params.requestId,
       actor_user_id: params.actorUserId,
       error: error instanceof Error ? error.message : String(error),

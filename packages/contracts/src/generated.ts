@@ -1534,6 +1534,96 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/demand-jobs/process": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Process due demand extraction jobs (internal authenticated scope) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        limit?: number;
+                    };
+                };
+            };
+            responses: {
+                /** @description Demand queue processing summary */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["DemandJobsProcessResponse"];
+                    };
+                };
+                default: components["responses"]["ErrorResponse"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/demand-jobs/backfill": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Backfill demand extraction jobs (internal authenticated scope) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /** Format: uuid */
+                        user_id?: string;
+                        hours?: number;
+                        limit?: number;
+                        process_now?: boolean;
+                    };
+                };
+            };
+            responses: {
+                /** @description Demand backfill summary */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["DemandJobsBackfillResponse"];
+                    };
+                };
+                default: components["responses"]["ErrorResponse"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/memory-search/backfill": {
         parameters: {
             query?: never;
@@ -3032,7 +3122,7 @@ export interface components {
             /** @description Client-generated idempotency key for the behavior event. */
             event_id: string;
             /** @enum {string} */
-            event_type: "app_first_open" | "app_session_started" | "auth_completed" | "onboarding_started" | "onboarding_completed" | "explore_feed_served" | "explore_impression" | "explore_opened_recipe" | "explore_skipped_recipe" | "explore_hidden_recipe" | "explore_saved_recipe" | "chat_session_started" | "chat_turn_submitted" | "chat_turn_resolved" | "chat_iteration_requested" | "chat_candidate_selected" | "chat_commit_completed" | "cookbook_viewed" | "cookbook_search_applied" | "cookbook_chip_applied" | "explore_chip_applied" | "cookbook_recipe_opened" | "cookbook_recipe_unsaved" | "recipe_detail_opened" | "recipe_detail_heartbeat" | "recipe_detail_closed" | "recipe_saved" | "recipe_unsaved" | "recipe_cooked_inferred" | "ingredient_substitution_applied";
+            event_type: "app_first_open" | "app_session_started" | "auth_completed" | "onboarding_started" | "onboarding_completed" | "explore_feed_served" | "explore_impression" | "explore_opened_recipe" | "explore_skipped_recipe" | "explore_hidden_recipe" | "explore_saved_recipe" | "explore_chip_applied" | "chat_session_started" | "chat_turn_submitted" | "chat_turn_resolved" | "chat_iteration_requested" | "chat_candidate_selected" | "chat_candidate_rejected" | "chat_candidate_cleared" | "chat_commit_completed" | "cookbook_viewed" | "cookbook_search_applied" | "cookbook_chip_applied" | "cookbook_recipe_opened" | "cookbook_recipe_unsaved" | "recipe_detail_opened" | "recipe_detail_heartbeat" | "recipe_detail_closed" | "recipe_saved" | "recipe_unsaved" | "recipe_cooked_inferred" | "variant_refreshed" | "ingredient_substitution_applied" | "ingredient_substitution_reverted" | "ingredient_substitution_manual_override";
             /**
              * @description Optional explicit surface override. When omitted, the API applies the canonical surface for the event type.
              * @enum {string}
@@ -3078,6 +3168,33 @@ export interface components {
         BehaviorTelemetryBatchResponse: {
             accepted: number;
             rejected: number;
+            rejected_event_types: string[];
+        };
+        DemandJobsProcessResponse: {
+            reaped: number;
+            claimed: number;
+            processed: number;
+            completed: number;
+            failed: number;
+            deadLettered: number;
+            graph: {
+                [key: string]: unknown;
+            };
+            queue: {
+                pending: number;
+                processing: number;
+                completed: number;
+                failed: number;
+                dead_letter: number;
+            };
+        };
+        DemandJobsBackfillResponse: {
+            chatMessages: number;
+            imports: number;
+            behaviorEvents: number;
+            processed?: {
+                [key: string]: unknown;
+            } | null;
         };
         RecipeVariant: {
             /** Format: uuid */

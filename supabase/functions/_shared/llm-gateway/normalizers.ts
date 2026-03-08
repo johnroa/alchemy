@@ -442,18 +442,19 @@ export const normalizeRecipeShape = (candidate: unknown): RecipePayload | null =
   }
 
   const ingredients = normalizeIngredientsInput(ingredientsSource)
-    .map((ingredient) => {
+    .reduce<RecipePayload["ingredients"]>((accumulator, ingredient) => {
       if (typeof ingredient === "string") {
         const name = ingredient.trim();
         if (!name) {
-          return null;
+          return accumulator;
         }
 
-        return {
+        accumulator.push({
           name,
           amount: 1,
           unit: "unit",
-        };
+        });
+        return accumulator;
       }
 
       const nameCandidate = typeof ingredient.name === "string"
@@ -480,7 +481,7 @@ export const normalizeRecipeShape = (candidate: unknown): RecipePayload | null =
       const fallbackUnit = parseUnitFromQuantity(quantityText);
 
       if (!name) {
-        return null;
+        return accumulator;
       }
 
       const displayAmount = typeof ingredient.display_amount === "string" &&
@@ -500,7 +501,7 @@ export const normalizeRecipeShape = (candidate: unknown): RecipePayload | null =
         ? ingredient.component.trim()
         : null;
 
-      return {
+      accumulator.push({
         name,
         amount: amount ?? fallbackAmount ?? 1,
         unit: unit || fallbackUnit || "unit",
@@ -508,11 +509,9 @@ export const normalizeRecipeShape = (candidate: unknown): RecipePayload | null =
         ...(preparation ? { preparation } : {}),
         ...(category ? { category } : {}),
         ...(component ? { component } : {}),
-      };
-    })
-    .filter((ingredient): ingredient is RecipePayload["ingredients"][number] =>
-      ingredient !== null
-    );
+      });
+      return accumulator;
+    }, []);
 
   const steps = normalizeStepsInput(stepsSource)
     .map((step, stepIndex) => {

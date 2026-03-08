@@ -4,12 +4,18 @@
  */
 export const ADMIN_ROUTES: Array<{ path: string; method: string }> = [
   { path: "/api/admin/analytics/content", method: "GET" },
+  { path: "/api/admin/analytics/demand", method: "GET" },
   { path: "/api/admin/analytics/llm", method: "GET" },
   { path: "/api/admin/analytics/overview", method: "GET" },
   { path: "/api/admin/analytics/pipelines", method: "GET" },
   { path: "/api/admin/analytics/product", method: "GET" },
   { path: "/api/admin/api-docs", method: "GET" },
   { path: "/api/admin/changelog", method: "GET" },
+  { path: "/api/admin/demand/graph", method: "GET" },
+  { path: "/api/admin/demand/observations", method: "GET" },
+  { path: "/api/admin/demand/outcomes", method: "GET" },
+  { path: "/api/admin/demand/review", method: "POST" },
+  { path: "/api/admin/demand/trends", method: "GET" },
   { path: "/api/admin/development/reset/execute", method: "POST" },
   { path: "/api/admin/development/reset/preview", method: "POST" },
   { path: "/api/admin/development/runs", method: "GET" },

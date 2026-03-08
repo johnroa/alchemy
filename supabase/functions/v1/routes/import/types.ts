@@ -42,6 +42,7 @@ export type ImportDeps = {
     uiHints?: {
       show_generation_animation?: boolean;
       focus_component_id?: string;
+      generation_pending?: boolean;
     };
   }) => ChatLoopResponse;
   enrollCandidateImageRequests: (input: {
@@ -57,5 +58,22 @@ export type ImportDeps = {
     requestId: string;
     limit?: number;
     modelOverrides?: RouteContext["modelOverrides"];
+  }) => void;
+  enqueueDemandExtractionJob?: (input: {
+    serviceClient: RouteContext["serviceClient"];
+    sourceKind: string;
+    sourceId: string;
+    userId?: string | null;
+    stage: "intent" | "iteration" | "import" | "selection" | "commit" | "consumption" | "feedback";
+    extractorScope: string;
+    extractorVersion?: number;
+    observedAt?: string | null;
+    payload?: Record<string, JsonValue>;
+  }) => Promise<void>;
+  scheduleDemandQueueDrain?: (input: {
+    serviceClient: RouteContext["serviceClient"];
+    actorUserId: string;
+    requestId: string;
+    limit?: number;
   }) => void;
 };

@@ -197,6 +197,15 @@ export const ADMIN_PAGES: AdminPageMeta[] = [
     icon: Users,
   },
   {
+    key: "analytics-demand",
+    section: "analytics",
+    title: "Demand Graph",
+    navLabel: "Demand",
+    description: "Creation-primary intent, outcomes, and extraction review health.",
+    href: "/analytics/demand",
+    icon: Radar,
+  },
+  {
     key: "analytics-personalization",
     section: "analytics",
     title: "Personalization",

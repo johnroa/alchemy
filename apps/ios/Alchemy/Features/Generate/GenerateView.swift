@@ -58,6 +58,13 @@ struct GenerateView: View {
     /// Whether the chat panel is explicitly expanded by the user via the
     /// chevron toggle. Only relevant in presenting/iterating phases.
     @State private var isChatPanelExpanded = false
+    /// Brief toast shown when the API confirms a preference update.
+    /// Auto-dismissed after 2.5 seconds.
+    @State private var savedToastText: String?
+    /// Tracks keyboard height for scroll-to-bottom on keyboard show/hide.
+    @State private var keyboardHeight: CGFloat = 0
+    /// Index into the rotating placeholder prompts shown before first message.
+    @State private var placeholderIndex = Int.random(in: 0..<Self.placeholderPrompts.count)
 
     @FocusState private var inputFocused: Bool
 
@@ -213,6 +220,28 @@ struct GenerateView: View {
                     .sheet(isPresented: $showPreferences) { PreferencesView(selectedTab: $selectedTab) }
                     .sheet(isPresented: $showSettings) { SettingsView() }
                 }
+
+                // Preference-saved toast — floats above everything
+                if let toastText = savedToastText {
+                    VStack {
+                        HStack(spacing: 6) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(.green)
+                            Text(toastText)
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.white)
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .background(.ultraThinMaterial, in: Capsule())
+                        .shadow(color: .black.opacity(0.2), radius: 12, y: 4)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+
+                        Spacer()
+                    }
+                    .padding(.top, 60)
+                }
             }
         }
         .background(AlchemyColors.background)
@@ -234,20 +263,33 @@ struct GenerateView: View {
                 hasAppeared = true
             }
         }
-        .onDisappear { imagePollingTask?.cancel() }
+        .onDisappear {
+            imagePollingTask?.cancel()
+        }
         .onChange(of: importedSession?.id) { _, newId in
             guard newId != nil, let session = importedSession else { return }
             consumeImportedSession(session)
             importedSession = nil
         }
         .onChange(of: inputFocused) { _, focused in
-            // When the user taps the input bar while the chat is minimized,
-            // expand so they can type comfortably.
             if focused && isChatMinimized {
                 withAnimation(.spring(duration: 0.45, bounce: 0.15)) {
                     isChatPanelExpanded = true
                 }
             }
+        }
+        // Keyboard observers — scroll to latest message on show/hide
+        .onReceive(
+            NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)
+        ) { notification in
+            if let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect {
+                keyboardHeight = frame.height
+            }
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)
+        ) { _ in
+            keyboardHeight = 0
         }
     }
 
@@ -434,6 +476,7 @@ struct GenerateView: View {
                     .onAppear { scrollToBottom(proxy: proxy) }
                     .onChange(of: messages.count) { scrollToBottom(proxy: proxy) }
                     .onChange(of: messages.last?.isLoading) { scrollToBottom(proxy: proxy) }
+                    .onChange(of: keyboardHeight) { scrollToBottom(proxy: proxy) }
                     .onChange(of: phase) { _, newPhase in
                         if newPhase == .presenting {
                             scrollToBottom(proxy: proxy)
@@ -567,7 +610,39 @@ struct GenerateView: View {
         }
         .padding(.horizontal, AlchemySpacing.screenHorizontal)
         .animation(.easeInOut(duration: 0.2), value: inputText)
+        // Rotate placeholder prompts every 3s before the user's first message.
+        // Timer fires continuously but the index update is gated on !chatHasStarted.
+        .onReceive(
+            Timer.publish(every: 3.0, on: .main, in: .common).autoconnect()
+        ) { _ in
+            guard !chatHasStarted, inputText.isEmpty else { return }
+            withAnimation(.easeInOut(duration: 0.3)) {
+                placeholderIndex = (placeholderIndex + 1) % Self.placeholderPrompts.count
+            }
+        }
     }
+
+    /// Rotating example prompts shown in the input field before the user
+    /// sends their first message. Designed to spark ideas and demonstrate
+    /// the range of things the sous chef can help with.
+    private static let placeholderPrompts = [
+        "Give me dinner ideas",
+        "Something quick with chicken thighs",
+        "Impress my in-laws tonight",
+        "Cozy rainy day soup",
+        "Use up the spinach in my fridge",
+        "Date night Italian",
+        "30-minute weeknight meals",
+        "Teach me to make fresh pasta",
+        "Healthy meal prep for the week",
+        "I have salmon and lemons",
+        "Something my picky kids will eat",
+        "Thai-inspired but not too spicy",
+        "Weekend brunch for a crowd",
+        "What goes well with risotto?",
+        "A showstopper dessert",
+        "Simple one-pot wonder",
+    ]
 
     private var dynamicPlaceholder: String {
         if phase == .presenting {
@@ -576,7 +651,10 @@ struct GenerateView: View {
         if phase == .iterating {
             return "Tell me what to change..."
         }
-        return "Give me dinner ideas"
+        if chatHasStarted {
+            return "Tell your sous chef..."
+        }
+        return Self.placeholderPrompts[placeholderIndex % Self.placeholderPrompts.count]
     }
 
     // MARK: - Generation Loader
@@ -589,9 +667,7 @@ struct GenerateView: View {
                 .playing(loopMode: .loop)
                 .frame(width: 160, height: 160)
 
-            Text("Crafting your recipe...")
-                .font(AlchemyTypography.bodySecondary)
-                .foregroundStyle(AlchemyColors.textSecondary)
+            GenerationPhraseView()
                 .padding(.top, AlchemySpacing.md)
 
             Spacer()
@@ -836,11 +912,12 @@ struct GenerateView: View {
             }
         }
 
-        // Surface preference changes as inline system notifications.
+        // Surface preference changes as both an inline system message
+        // and a floating toast that's visible even when scrolled away.
         if let updates = response.responseContext?.preferenceUpdates, !updates.isEmpty {
             let fields = updates.map(\.field)
             let summary = fields.count == 1
-                ? "Preference saved: \(fields[0].replacingOccurrences(of: "_", with: " "))"
+                ? "Saved: \(fields[0].replacingOccurrences(of: "_", with: " "))"
                 : "\(fields.count) preferences saved"
             let systemMsg = ChatMessage(
                 id: UUID().uuidString,
@@ -849,44 +926,100 @@ struct GenerateView: View {
                 createdAt: .now
             )
             withAnimation { messages.append(systemMsg) }
+
+            withAnimation(.spring(duration: 0.35)) {
+                savedToastText = summary
+            }
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(2.5))
+                withAnimation(.easeOut(duration: 0.3)) {
+                    savedToastText = nil
+                }
+            }
         }
 
         applySuggestedActions(response.assistantReply?.suggestedNextActions)
 
-        // Handle generation animation — dismiss keyboard, show loader,
-        // then reveal recipe with minimized chat panel.
-        if response.uiHints?.showGenerationAnimation == true {
-            Task { @MainActor in
-                inputFocused = false
-                withAnimation { phase = .generating }
+        // Two-phase generation: the server deferred the heavy recipe
+        // generation LLM call and returned the ideation reply fast.
+        // Flip to the Lottie screen immediately and call /generate.
+        if response.uiHints?.generationPending == true,
+           let sessionId = chatSessionId {
+            inputFocused = false
+            withAnimation { phase = .generating }
+            triggerDeferredGeneration(chatId: sessionId)
+            return
+        }
 
-                try? await Task.sleep(for: .seconds(2))
-
-                withAnimation(.spring(duration: 0.5, bounce: 0.15)) {
-                    phase = .presenting
-                    isChatPanelExpanded = false
-                    showAddToCookbook = true
-                }
-            }
-        } else if response.candidateRecipeSet != nil {
-            // Iteration update (or first generation without animation):
-            // minimize chat and drop keyboard so the user sees the
-            // updated recipe. Fires even when already in .presenting
-            // because the user may have expanded the chat to request
-            // a tweak and needs it collapsed again after the response.
+        // Recipe arrived (either inline or from the /generate call).
+        if response.candidateRecipeSet != nil {
+            inputFocused = false
             withAnimation(.spring(duration: 0.5, bounce: 0.15)) {
                 phase = .presenting
                 isChatPanelExpanded = false
                 showAddToCookbook = true
-                inputFocused = false
             }
         }
         applyChatSessionState(response)
     }
 
+    /// Calls POST /chat/:id/generate to run the deferred recipe generation.
+    /// The Lottie animation plays for the full duration of this request.
+    private func triggerDeferredGeneration(chatId: String) {
+        Task { @MainActor in
+            do {
+                let response: ChatSessionResponse = try await APIClient.shared.request(
+                    "/chat/\(chatId)/generate",
+                    method: .post
+                )
+                handleGenerationResponse(response)
+            } catch {
+                print("[GenerateView] deferred generation error: \(error)")
+                withAnimation {
+                    phase = .chatting
+                    let errorMsg = ChatMessage(
+                        id: UUID().uuidString,
+                        role: .assistant,
+                        content: "Something went wrong generating your recipe. Try again!",
+                        createdAt: .now
+                    )
+                    messages.append(errorMsg)
+                }
+            }
+        }
+    }
+
+    /// Processes the response from the deferred /generate call.
+    /// At this point the Lottie has been showing, so we transition
+    /// straight to presenting the recipe.
+    private func handleGenerationResponse(_ response: ChatSessionResponse) {
+        if response.candidateRecipeSet != nil {
+            withAnimation(.spring(duration: 0.5, bounce: 0.15)) {
+                phase = .presenting
+                isChatPanelExpanded = false
+                showAddToCookbook = true
+            }
+        } else {
+            // Generation didn't produce a recipe — fall back to chat.
+            withAnimation { phase = .chatting }
+            if let replyText = response.assistantReply?.text, !replyText.isEmpty {
+                let msg = ChatMessage(
+                    id: UUID().uuidString,
+                    role: .assistant,
+                    content: replyText,
+                    createdAt: .now
+                )
+                withAnimation { messages.append(msg) }
+            }
+        }
+        applySuggestedActions(response.assistantReply?.suggestedNextActions)
+        applyChatSessionState(response)
+    }
+
     /// Normalizes LLM-provided suggestion chips: strips filler lead-ins
-    /// like "Make me a…" / "Give me a…" so chips read as concise noun
-    /// phrases ("Lemon herb baked salmon"), deduplicates, and drops blanks.
+    /// ("Make me a…") and redundant trailing words ("recipe", "idea") so
+    /// chips read as concise noun phrases the user would naturally say.
+    /// Deduplicates and drops blanks.
     private func applySuggestedActions(_ actions: [String]?) {
         let fillerPrefixes = [
             "make me a ", "make me an ", "make me ",
@@ -901,19 +1034,31 @@ struct GenerateView: View {
             "show me a ", "show me an ", "show me ",
         ]
 
+        let fillerSuffixes = [
+            " recipe idea", " recipe option", " recipe suggestion",
+            " recipe", " idea", " suggestion", " option", " dish", " meal",
+        ]
+
         var seen = Set<String>()
         let normalized = (actions ?? []).compactMap { rawAction -> String? in
             var trimmed = rawAction.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return nil }
 
-            let lower = trimmed.lowercased()
+            var lower = trimmed.lowercased()
             for prefix in fillerPrefixes {
                 if lower.hasPrefix(prefix) {
                     trimmed = String(trimmed.dropFirst(prefix.count))
-                    // Capitalize the first letter after stripping
                     if let first = trimmed.first {
                         trimmed = first.uppercased() + trimmed.dropFirst()
                     }
+                    lower = trimmed.lowercased()
+                    break
+                }
+            }
+
+            for suffix in fillerSuffixes {
+                if lower.hasSuffix(suffix) {
+                    trimmed = String(trimmed.dropLast(suffix.count))
                     break
                 }
             }
@@ -1029,6 +1174,9 @@ struct GenerateView: View {
     }
 
     /// Resets all state for a fresh conversation.
+    /// Focus is set via loadGreeting(focusAfter: true) rather than
+    /// inline, because the withAnimation block rebuilds the view tree
+    /// and any inline focus assignment gets lost.
     private func startOver() {
         imagePollingTask?.cancel()
         withAnimation {
@@ -1044,9 +1192,80 @@ struct GenerateView: View {
             chatSessionId = nil
             loopState = .ideation
             candidateSet = nil
+            savedToastText = nil
         }
-        inputFocused = true
-        Task { await loadGreeting(focusAfter: false) }
+        Task { await loadGreeting(focusAfter: true) }
+    }
+}
+
+// MARK: - Generation Phrase Rotator
+
+/// Cycling cooking/baking phrases shown during recipe generation.
+/// Picks a random starting point and rotates every 2 seconds with
+/// a crossfade so the loading screen feels alive and playful.
+struct GenerationPhraseView: View {
+    private static let phrases = [
+        "Preheating the oven...",
+        "Adding a pinch of salt...",
+        "Measuring the flour...",
+        "Cracking the eggs...",
+        "Chopping the onions...",
+        "Mincing the garlic...",
+        "Zesting the lemon...",
+        "Simmering the broth...",
+        "Browning the butter...",
+        "Deglazing the pan...",
+        "Folding in gently...",
+        "Letting it rest...",
+        "Tasting for seasoning...",
+        "A dash of this...",
+        "A splash of that...",
+        "Whisking until smooth...",
+        "Rolling out the dough...",
+        "Caramelizing the onions...",
+        "Toasting the spices...",
+        "Reducing the sauce...",
+        "Grating the cheese...",
+        "Squeezing the lime...",
+        "Slicing it thin...",
+        "Drizzling the oil...",
+        "Bringing to a boil...",
+        "Turning down the heat...",
+        "Checking the timer...",
+        "Almost there...",
+        "Plating up...",
+        "Fresh herbs on top...",
+        "One more taste...",
+        "Finishing touch...",
+        "Blooming the saffron...",
+        "Kneading the dough...",
+        "Dicing the vegetables...",
+        "Marinating overnight... jk...",
+        "Flambéing carefully...",
+        "Blanching the greens...",
+        "Tempering the chocolate...",
+        "Scoring the bread...",
+        "Basting the roast...",
+        "Picking the perfect herb...",
+        "Adjusting the heat...",
+        "Crushing the peppercorns...",
+        "Infusing the cream...",
+        "Stirring constantly...",
+        "Just a little more...",
+    ]
+
+    @State private var index = Int.random(in: 0..<phrases.count)
+    private let timer = Timer.publish(every: 2.0, on: .main, in: .common).autoconnect()
+
+    var body: some View {
+        Text(Self.phrases[index % Self.phrases.count])
+            .font(AlchemyTypography.bodySecondary)
+            .foregroundStyle(AlchemyColors.textSecondary)
+            .contentTransition(.opacity)
+            .animation(.easeInOut(duration: 0.4), value: index)
+            .onReceive(timer) { _ in
+                index = (index + 1) % Self.phrases.count
+            }
     }
 }
 

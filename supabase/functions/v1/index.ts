@@ -41,6 +41,7 @@ import {
 import { handleChatRoutes } from "./routes/chat.ts";
 import { handleGraphRoutes } from "./routes/graph.ts";
 import { handleMemoryRoutes } from "./routes/memory.ts";
+import { handleDemandRoutes } from "./routes/demand.ts";
 import { handleMetadataRoutes } from "./routes/metadata.ts";
 import { handleOnboardingRoutes } from "./routes/onboarding.ts";
 import { handleImportRoutes } from "./routes/import.ts";
@@ -87,8 +88,14 @@ import {
   scheduleMetadataQueueDrain,
   scheduleImageQueueDrain,
   scheduleMemoryQueueDrain,
+  scheduleDemandQueueDrain,
   fetchGraphNeighborhood,
 } from "./lib/background-tasks.ts";
+import {
+  backfillDemandExtractionJobs,
+  enqueueDemandExtractionJob,
+  processDemandExtractionJobs,
+} from "./lib/demand/index.ts";
 import {
   fetchRecipeView,
   persistRecipe,
@@ -296,6 +303,8 @@ Deno.serve(async (request) => {
       applyModelPreferenceUpdates,
       updateMemoryFromInteraction,
       logChangelog,
+      enqueueDemandExtractionJob,
+      scheduleDemandQueueDrain,
     });
     if (onboardingResponse) {
       return onboardingResponse;
@@ -314,6 +323,16 @@ Deno.serve(async (request) => {
     });
     if (memoryResponse) {
       return memoryResponse;
+    }
+
+    const demandResponse = await handleDemandRoutes(routeContext, {
+      parseUuid,
+      logChangelog,
+      processDemandExtractionJobs,
+      backfillDemandExtractionJobs,
+    });
+    if (demandResponse) {
+      return demandResponse;
     }
 
     // ── POST /image-simulations/compare ──
@@ -508,6 +527,8 @@ Deno.serve(async (request) => {
       computeSafetyExclusions: buildSafetyExclusions,
       computeVariantTags,
       fetchGraphSubstitutions,
+      enqueueDemandExtractionJob,
+      scheduleDemandQueueDrain,
     });
     if (recipeResponse) {
       return recipeResponse;
@@ -541,6 +562,8 @@ Deno.serve(async (request) => {
         });
       },
       scheduleImageQueueDrain,
+      enqueueDemandExtractionJob,
+      scheduleDemandQueueDrain,
     });
     if (importResponse) {
       return importResponse;
@@ -591,6 +614,8 @@ Deno.serve(async (request) => {
       persistRecipe,
       scheduleImageQueueDrain,
       scheduleMemoryQueueDrain,
+      enqueueDemandExtractionJob,
+      scheduleDemandQueueDrain,
       mapCandidateRoleToRelation,
       resolveRelationTypeId,
       fetchChatMessages,

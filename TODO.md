@@ -23,6 +23,46 @@ Remaining work after the shipped acquisition-ready telemetry slice. This file is
 - Expand behavior semantics for chat asks and recipe outcomes where current facts are still too thin for model training.
 - Add negative-feedback signals and attribution coverage anywhere still missing in Explore, Chat, or Cookbook flows.
 
+## Demand Graph And Enterprise API Rollout
+
+- Finish production prompt/rule activation for:
+  - `demand_extract_observation`
+  - `demand_extract_iteration_delta`
+  - `demand_link_entities`
+  - `demand_summarize_outcome_reason`
+- Add scheduled demand queue draining and backfill operations so freshness does not depend only on foreground traffic.
+- Expand demand capture to include:
+  - explicit substitution revert events from iOS
+  - manual substitution override events from iOS
+  - stronger candidate dismissal reasons
+  - richer post-cook and repeat-cook satisfaction signals
+- Add density and privacy launch gates for enterprise demand products:
+  - minimum event thresholds by facet/segment/window
+  - minimum review precision by extractor scope
+  - minimum freshness SLO for derived outputs
+  - raw-text leakage and redaction regression tests
+- Ship Phase 1 enterprise read APIs only after the internal admin surface stabilizes:
+  - `GET /enterprise/demand/trends`
+  - `POST /enterprise/demand/query`
+  - `GET /enterprise/demand/graph`
+  - `GET /enterprise/demand/substitutions`
+- Define Phase 2 action APIs on top of the demand graph:
+  - `POST /enterprise/recipes/rewrite`
+  - `POST /enterprise/recipes/adapt`
+  - `POST /enterprise/catalog/insights`
+- Define Phase 3 agent tooling only after the REST shape stabilizes:
+  - `query_demand_trends`
+  - `query_unmet_needs`
+  - `find_accepted_swaps`
+  - `rewrite_for_segment`
+  - `generate_trend_brief`
+- Finish platform work required before any enterprise launch:
+  - service-account auth and scoped enterprise API keys
+  - tenant-safe segmentation and export controls
+  - rate limits, quotas, and billing metering
+  - audit logs and export logs
+  - freshness/status endpoint and SLA dashboards
+
 ## Segments And Control Plane
 
 - Implement the first real segment engine and UI.

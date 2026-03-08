@@ -280,11 +280,13 @@ export type ChatSessionContext = {
   workflow?: "preferences" | null;
   entry_surface?: string | null;
   preference_editing_intent?: PreferenceEditingIntent | null;
+  generation_pending?: boolean;
 };
 
 export type ChatUiHints = {
   show_generation_animation?: boolean;
   focus_component_id?: string;
+  generation_pending?: boolean;
 };
 
 export type ChatResponseContext = {
@@ -292,7 +294,7 @@ export type ChatResponseContext = {
   intent?: ChatIntent;
   changed_sections?: string[];
   personalization_notes?: string[];
-  preference_updates?: PreferenceUpdate[];
+  preference_updates?: Record<string, JsonValue>;
   preference_conflict?: PreferenceConflictContext;
 };
 

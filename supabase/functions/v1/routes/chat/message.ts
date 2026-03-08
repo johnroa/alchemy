@@ -48,6 +48,8 @@ export const handleSendMessage = async (
     enrollCandidateImageRequests,
     scheduleImageQueueDrain,
     scheduleMemoryQueueDrain,
+    enqueueDemandExtractionJob,
+    scheduleDemandQueueDrain,
     fetchChatMessages,
     extractChatContext,
     normalizeCandidateRecipeSet,
@@ -283,6 +285,35 @@ export const handleSendMessage = async (
       generatedCount,
     }),
   });
+
+  if (enqueueDemandExtractionJob) {
+    await enqueueDemandExtractionJob({
+      serviceClient,
+      sourceKind: "chat_message",
+      sourceId: userMessage.id,
+      userId: auth.userId,
+      stage: existingCandidate ? "iteration" : "intent",
+      extractorScope: existingCandidate
+        ? "demand_extract_iteration_delta"
+        : "demand_extract_observation",
+      observedAt: userMessage.created_at,
+      payload: {
+        chat_id: chatId,
+        assistant_message_id: assistantMessage.id,
+        response_context: (orchestrated.responseContext ?? {}) as JsonValue,
+        candidate_id: (nextCandidateSet?.candidate_id ?? null) as JsonValue,
+        active_component_id: (nextCandidateSet?.active_component_id ?? null) as JsonValue,
+        workflow: (sessionContext.workflow ?? null) as JsonValue,
+        entry_surface: (sessionContext.entry_surface ?? null) as JsonValue,
+      },
+    });
+    scheduleDemandQueueDrain?.({
+      serviceClient,
+      actorUserId: auth.userId,
+      requestId,
+      limit: 1,
+    });
+  }
 
   const interactionContext: Record<string, JsonValue> = {
     prompt: message,
