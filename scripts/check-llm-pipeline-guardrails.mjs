@@ -131,7 +131,16 @@ for (const scope of splitScopes) {
   }
 }
 
-const gatewayText = read("supabase/functions/_shared/llm-gateway.ts");
+// The gateway was split from a single file into sub-modules under llm-gateway/.
+// Scan the entire directory (plus the re-export shim) so scope references in
+// any sub-module satisfy the check.
+const gatewayDir = path.join(repoRoot, "supabase/functions/_shared/llm-gateway");
+const gatewayText = [
+  read("supabase/functions/_shared/llm-gateway.ts"),
+  ...fs.readdirSync(gatewayDir)
+    .filter((name) => name.endsWith(".ts"))
+    .map((name) => fs.readFileSync(path.join(gatewayDir, name), "utf8")),
+].join("\n");
 for (const scope of splitScopes) {
   if (!gatewayText.includes(`scope: "${scope}"`)) {
     fail(`Gateway does not execute explicit scope: ${scope}`);
