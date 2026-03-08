@@ -59,7 +59,7 @@ type DemandGraphEdgeRow = {
   acceptance_score: number | null;
   segment_jsonb: Record<string, unknown> | null;
   last_observed_at: string;
-  window: "7d" | "30d";
+  time_window: "7d" | "30d";
 };
 
 type DemandExtractionJobRow = {
@@ -132,7 +132,7 @@ export type DemandAnalyticsData = {
     stage: string | null;
     sourceKind: string | null;
     lastObservedAt: string;
-    window: "7d" | "30d";
+    timeWindow: "7d" | "30d";
   }>;
   scopeQualityRows: Array<{
     scope: string;
@@ -649,7 +649,7 @@ export const buildDemandAnalyticsSnapshot = (params: {
         stage: typeof segment["stage"] === "string" ? segment["stage"] : null,
         sourceKind: typeof segment["source_kind"] === "string" ? segment["source_kind"] : null,
         lastObservedAt: row.last_observed_at,
-        window: row.window,
+        timeWindow: row.time_window,
       };
     })
     .slice(0, 20);
@@ -747,14 +747,14 @@ export const getDemandAnalyticsData = async (
         .limit(4000),
       client
         .from("demand_graph_edges")
-        .select("id,from_facet,from_value,to_facet,to_value,count,recency_weighted_score,acceptance_score,segment_jsonb,last_observed_at,window")
-        .eq("window", demandWindow(query))
+        .select("id,from_facet,from_value,to_facet,to_value,count,recency_weighted_score,acceptance_score,segment_jsonb,last_observed_at,time_window")
+        .eq("time_window", demandWindow(query))
         .order("recency_weighted_score", { ascending: false })
         .limit(80),
       client
         .from("demand_graph_edges")
         .select("id", { count: "exact", head: true })
-        .eq("window", demandWindow(query)),
+        .eq("time_window", demandWindow(query)),
       client
         .from("demand_extraction_jobs")
         .select("status,observed_at,updated_at,next_attempt_at,last_error")
@@ -877,14 +877,14 @@ export const getDemandGraphData = async (params?: {
   limit?: number;
 }): Promise<{ items: DemandAnalyticsData["graphRows"] }> => {
   const client = getAdminClient();
-  const window = params?.window ?? "30d";
+  const tw = params?.window ?? "30d";
   const limit = Math.max(1, Math.min(200, Number(params?.limit ?? 50)));
 
   try {
     const result = await client
       .from("demand_graph_edges")
-      .select("id,from_facet,from_value,to_facet,to_value,count,recency_weighted_score,acceptance_score,segment_jsonb,last_observed_at,window")
-      .eq("window", window)
+      .select("id,from_facet,from_value,to_facet,to_value,count,recency_weighted_score,acceptance_score,segment_jsonb,last_observed_at,time_window")
+      .eq("time_window", tw)
       .order("recency_weighted_score", { ascending: false })
       .limit(limit);
 
@@ -910,7 +910,7 @@ export const getDemandGraphData = async (params?: {
           stage: typeof segment["stage"] === "string" ? segment["stage"] : null,
           sourceKind: typeof segment["source_kind"] === "string" ? segment["source_kind"] : null,
           lastObservedAt: value.last_observed_at,
-          window: value.window,
+          timeWindow: value.time_window,
         };
       }),
     };

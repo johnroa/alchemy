@@ -158,7 +158,7 @@ create table if not exists public.demand_graph_edges (
   to_value text not null,
   from_entity_id uuid references public.graph_entities(id) on delete set null,
   to_entity_id uuid references public.graph_entities(id) on delete set null,
-  window text not null check (window in ('7d', '30d')),
+  time_window text not null check (time_window in ('7d', '30d')),
   count integer not null default 0,
   recency_weighted_score numeric(12,4) not null default 0,
   acceptance_score numeric(8,4),
@@ -171,10 +171,10 @@ comment on table public.demand_graph_edges is
   'Derived demand co-occurrence and intent-to-outcome graph edges for internal analytics and future enterprise products.';
 
 create index if not exists idx_demand_graph_edges_window_score
-  on public.demand_graph_edges (window, recency_weighted_score desc, count desc);
+  on public.demand_graph_edges (time_window, recency_weighted_score desc, count desc);
 
 create index if not exists idx_demand_graph_edges_window_last_seen
-  on public.demand_graph_edges (window, last_observed_at desc);
+  on public.demand_graph_edges (time_window, last_observed_at desc);
 
 create table if not exists public.demand_extraction_jobs (
   id uuid primary key default gen_random_uuid(),
@@ -281,13 +281,13 @@ begin
   delete from public.demand_graph_edges;
 
   with windows as (
-    select '7d'::text as window, interval '7 days' as lookback
+    select '7d'::text as time_window, interval '7 days' as lookback
     union all
-    select '30d'::text as window, interval '30 days' as lookback
+    select '30d'::text as time_window, interval '30 days' as lookback
   ),
   observation_facts as (
     select
-      w.window,
+      w.time_window,
       o.id as observation_id,
       o.stage,
       o.source_kind,
@@ -304,7 +304,7 @@ begin
   ),
   fact_totals as (
     select
-      window,
+      time_window,
       stage,
       source_kind,
       facet,
@@ -315,7 +315,7 @@ begin
   ),
   fact_pairs as (
     select
-      first_fact.window,
+      first_fact.time_window,
       case
         when row(first_fact.facet, first_fact.normalized_value) <= row(second_fact.facet, second_fact.normalized_value)
           then first_fact.facet
@@ -357,14 +357,14 @@ begin
       max(first_fact.observed_at) as last_observed_at
     from observation_facts first_fact
     join observation_facts second_fact
-      on second_fact.window = first_fact.window
+      on second_fact.time_window = first_fact.time_window
      and second_fact.observation_id = first_fact.observation_id
      and second_fact.fact_id > first_fact.fact_id
     group by 1, 2, 3, 4, 5, 6, 7, 8
   ),
   outcome_pairs as (
     select
-      origin_facts.window,
+      origin_facts.time_window,
       origin_facts.stage,
       origin_facts.source_kind,
       origin_facts.facet as from_facet,
@@ -386,7 +386,7 @@ begin
     join observation_facts origin_facts
       on origin_facts.observation_id = coalesce(outcomes.origin_observation_id, outcomes.observation_id)
      and outcomes.occurred_at >= now() - (
-       case origin_facts.window
+       case origin_facts.time_window
          when '7d' then interval '7 days'
          else interval '30 days'
        end
@@ -401,7 +401,7 @@ begin
       to_value,
       from_entity_id,
       to_entity_id,
-      window,
+      time_window,
       count,
       recency_weighted_score,
       acceptance_score,
@@ -416,7 +416,7 @@ begin
       fact_pairs.to_value,
       fact_pairs.from_entity_id,
       fact_pairs.to_entity_id,
-      fact_pairs.window,
+      fact_pairs.time_window,
       fact_pairs.pair_count,
       round(fact_pairs.recency_weighted_score::numeric, 4),
       null::numeric,
@@ -432,7 +432,7 @@ begin
       outcome_pairs.to_value,
       outcome_pairs.from_entity_id,
       outcome_pairs.to_entity_id,
-      outcome_pairs.window,
+      outcome_pairs.time_window,
       outcome_pairs.pair_count,
       round(outcome_pairs.recency_weighted_score::numeric, 4),
       case
@@ -445,7 +445,7 @@ begin
       now()
     from outcome_pairs
     left join fact_totals
-      on fact_totals.window = outcome_pairs.window
+      on fact_totals.time_window = outcome_pairs.time_window
      and fact_totals.stage = outcome_pairs.stage
      and fact_totals.source_kind = outcome_pairs.source_kind
      and fact_totals.facet = outcome_pairs.from_facet

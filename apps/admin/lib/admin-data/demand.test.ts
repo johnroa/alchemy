@@ -157,7 +157,7 @@ describe("buildDemandAnalyticsSnapshot", () => {
           acceptance_score: 0.5,
           segment_jsonb: { stage: "intent", source_kind: "chat_message" },
           last_observed_at: new Date(now - 4 * 60 * 60 * 1000).toISOString(),
-          window: "30d",
+          time_window: "30d",
         },
       ],
       jobs: [
