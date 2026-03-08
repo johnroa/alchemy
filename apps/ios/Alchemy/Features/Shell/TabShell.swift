@@ -84,6 +84,9 @@ struct TabShell: View {
         .sheet(isPresented: $showSettings) {
             SettingsView()
         }
+        .task {
+            ExploreFeedPreloader.shared.preload()
+        }
     }
 }
 

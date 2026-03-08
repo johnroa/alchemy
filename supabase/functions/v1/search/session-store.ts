@@ -76,6 +76,7 @@ export const fetchSearchSession = async (params: {
         "profile_state",
         "rationale_tags_by_recipe",
         "expires_at",
+        "created_at",
       ].join(","),
     )
     .eq("id", params.searchId)
@@ -102,6 +103,63 @@ export const fetchSearchSession = async (params: {
   }
 
   return row;
+};
+
+export const fetchLatestReusableSearchSession = async (params: {
+  serviceClient: SupabaseClient;
+  userId: string;
+  surface: RecipeSearchSurface;
+  appliedContext: RecipeSearchAppliedContext;
+  normalizedInput: string;
+  presetId: string | null;
+  algorithmVersion: string;
+}): Promise<RecipeSearchSessionRow | null> => {
+  let query = params.serviceClient
+    .from("recipe_search_sessions")
+    .select(
+      [
+        "id",
+        "owner_user_id",
+        "surface",
+        "applied_context",
+        "normalized_input",
+        "preset_id",
+        "interpreted_intent",
+        "query_embedding",
+        "snapshot_cutoff_indexed_at",
+        "page1_promoted_recipe_ids",
+        "hybrid_items",
+        "algorithm_version",
+        "profile_state",
+        "rationale_tags_by_recipe",
+        "expires_at",
+        "created_at",
+      ].join(","),
+    )
+    .eq("owner_user_id", params.userId)
+    .eq("surface", params.surface)
+    .eq("applied_context", params.appliedContext)
+    .eq("normalized_input", params.normalizedInput)
+    .eq("algorithm_version", params.algorithmVersion)
+    .gt("expires_at", new Date().toISOString())
+    .order("created_at", { ascending: false })
+    .limit(1);
+
+  query = params.presetId
+    ? query.eq("preset_id", params.presetId)
+    : query.is("preset_id", null);
+
+  const { data, error } = await query.maybeSingle();
+  if (error) {
+    throw new ApiError(
+      500,
+      "recipe_search_session_lookup_failed",
+      "Could not load cached search session",
+      error.message,
+    );
+  }
+
+  return data ? data as unknown as RecipeSearchSessionRow : null;
 };
 
 export const logRecipeSearchEvent = async (params: {

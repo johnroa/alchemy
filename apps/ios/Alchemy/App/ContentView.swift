@@ -56,6 +56,9 @@ struct ContentView: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
                 InstallTelemetry.shared.trackSessionStarted()
+                if authManager.isAuthenticated && hasCompletedOnboarding {
+                    ExploreFeedPreloader.shared.preload()
+                }
                 return
             }
 

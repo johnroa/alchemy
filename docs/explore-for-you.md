@@ -390,6 +390,22 @@ Session helpers:
 
 - [session-store.ts](/Users/john/Projects/alchemy/supabase/functions/v1/search/session-store.ts)
 
+## Stage 10.5: Warm Reuse and Preload
+
+`For You` no longer assumes the user will wait for a fresh feed build after landing on Explore.
+
+Two warm paths now exist:
+
+- the API reuses the latest matching `recipe_search_sessions` row when the same user, algorithm version, preset, and normalized retrieval text already have a fresh session
+- the app preloads the default `For You` feed as the main shell becomes active, so Explore usually opens against a warm response instead of a cold request
+
+There is also a server-side warm trigger for already-linked installs:
+
+- `app_session_started` install telemetry can resolve back to a known user via `user_acquisition_profiles.install_id`
+- when that happens, the backend schedules a background `For You` warmup before the user opens Explore
+
+This makes the first Explore paint rely on stale-while-revalidate cache behavior instead of blocking entirely on retrieval plus rerank.
+
 ## Client Behavior
 
 The iOS Explore screen:
@@ -400,10 +416,12 @@ The iOS Explore screen:
 - uses `POST /recipes/search` only for typed search text
 - renders `why_tags` on cards
 - passes `feedSessionId` and `algorithmVersion` into recipe detail/save attribution
+- uses a local `ExploreFeedPreloader` cache so the screen can render a warm `For You` feed immediately when available
 
 Client implementation:
 
 - [ExploreView.swift](/Users/john/Projects/alchemy/apps/ios/Alchemy/Features/Explore/ExploreView.swift)
+- [APIClient.swift](/Users/john/Projects/alchemy/apps/ios/Alchemy/Core/Networking/APIClient.swift)
 
 ## Telemetry and Attribution
 

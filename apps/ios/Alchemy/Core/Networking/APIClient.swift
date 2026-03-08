@@ -424,3 +424,101 @@ final class InstallTelemetry {
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
+
+// MARK: - Explore Feed Preload Cache
+
+@MainActor
+final class ExploreFeedPreloader {
+
+    static let shared = ExploreFeedPreloader()
+
+    private struct CacheEntry {
+        let response: ForYouFeedResponse
+        let cachedAt: Date
+    }
+
+    private let freshnessWindow: TimeInterval = 10 * 60
+    private var cache: [String: CacheEntry] = [:]
+    private var inFlight: [String: Task<ForYouFeedResponse, Error>] = [:]
+
+    private init() {}
+
+    func cachedResponse(for preset: String?) -> ForYouFeedResponse? {
+        let key = cacheKey(for: preset)
+        guard let entry = cache[key], isFresh(entry) else {
+            return nil
+        }
+        return entry.response
+    }
+
+    func preload(preset: String? = nil, force: Bool = false) {
+        let normalizedPreset = normalizedPresetValue(preset)
+        let key = cacheKey(for: normalizedPreset)
+        if !force, let entry = cache[key], isFresh(entry) {
+            return
+        }
+        guard inFlight[key] == nil else { return }
+
+        let task = makeLoadTask(for: normalizedPreset)
+        inFlight[key] = task
+
+        Task { @MainActor in
+            defer { inFlight[key] = nil }
+            do {
+                let response = try await task.value
+                cache[key] = CacheEntry(response: response, cachedAt: .now)
+            } catch {
+                return
+            }
+        }
+    }
+
+    func load(preset: String? = nil) async throws -> ForYouFeedResponse {
+        let normalizedPreset = normalizedPresetValue(preset)
+        let key = cacheKey(for: normalizedPreset)
+
+        if let entry = cache[key], isFresh(entry) {
+            return entry.response
+        }
+
+        if let existingTask = inFlight[key] {
+            return try await existingTask.value
+        }
+
+        let task = makeLoadTask(for: normalizedPreset)
+        inFlight[key] = task
+        defer { inFlight[key] = nil }
+
+        let response = try await task.value
+        cache[key] = CacheEntry(response: response, cachedAt: .now)
+        return response
+    }
+
+    private func makeLoadTask(for preset: String?) -> Task<ForYouFeedResponse, Error> {
+        Task {
+            try await APIClient.shared.request(
+                "/recipes/explore/for-you",
+                method: .post,
+                body: ForYouFeedRequest(
+                    cursor: nil,
+                    limit: 10,
+                    presetId: preset
+                )
+            )
+        }
+    }
+
+    private func normalizedPresetValue(_ preset: String?) -> String? {
+        guard let preset else { return nil }
+        let trimmed = preset.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func cacheKey(for preset: String?) -> String {
+        preset?.lowercased() ?? "__for_you__"
+    }
+
+    private func isFresh(_ entry: CacheEntry) -> Bool {
+        Date().timeIntervalSince(entry.cachedAt) < freshnessWindow
+    }
+}

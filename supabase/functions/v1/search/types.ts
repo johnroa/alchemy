@@ -118,6 +118,7 @@ export type RecipeSearchSessionRow = {
   profile_state: ForYouProfileState | null;
   rationale_tags_by_recipe: JsonValue;
   expires_at: string;
+  created_at: string;
 };
 
 export type AllFeedCursor = {

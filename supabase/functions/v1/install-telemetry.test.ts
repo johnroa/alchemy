@@ -171,3 +171,36 @@ Deno.test("POST /telemetry/install keeps a single install profile across repeate
   assertEquals(state.installProfiles.get("install-2")?.first_opened_at, "2026-03-07T12:00:00.000Z");
   assertEquals(state.installProfiles.get("install-2")?.last_seen_at, "2026-03-07T12:05:00.000Z");
 });
+
+Deno.test("POST /telemetry/install schedules a For You preload for linked app sessions", async () => {
+  const state = createServiceClient();
+  const lookupCalls: string[][] = [];
+  const preloadUserIds: string[] = [];
+
+  const response = await handleInstallTelemetryRoutes(
+    createContext(
+      {
+        install_id: "install-linked",
+        events: [{
+          event_id: "event-1",
+          event_type: "app_session_started",
+          occurred_at: "2026-03-07T12:00:00.000Z",
+        }],
+      },
+      state.client as unknown as SupabaseClient,
+    ),
+    {
+      lookupUserIdsForInstallIds: async ({ installIds }) => {
+        lookupCalls.push(installIds);
+        return new Map([["install-linked", "user-123"]]);
+      },
+      scheduleExploreForYouPreload: ({ userId }) => {
+        preloadUserIds.push(userId);
+      },
+    },
+  );
+
+  assertEquals(response?.status, 202);
+  assertEquals(lookupCalls, [["install-linked"]]);
+  assertEquals(preloadUserIds, ["user-123"]);
+});

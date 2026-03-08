@@ -20,6 +20,7 @@ import {
 import {
   applyRationaleTagsToCards,
   createSearchSession,
+  fetchLatestReusableSearchSession,
   fetchSearchSession,
   paginateSessionItems,
 } from "./session-store.ts";
@@ -1010,15 +1011,10 @@ export const getExploreForYouFeed = async (params: {
     throw new ApiError(400, "recipe_search_cursor_invalid", "Cursor is invalid");
   }
 
-  if (decodedCursor?.kind === "session") {
-    const session = await fetchSearchSession({
-      serviceClient: params.serviceClient,
-      userId: params.userId,
-      searchId: decodedCursor.search_id,
-    });
-    if (session.applied_context !== "for_you" && session.applied_context !== "preset") {
-      throw new ApiError(400, "recipe_search_cursor_invalid", "Cursor is invalid");
-    }
+  const buildResponseFromSession = (
+    session: Awaited<ReturnType<typeof fetchSearchSession>>,
+    offset: number,
+  ): InternalForYouFeedResponse => {
     const rationaleTagsByRecipe = normalizeRationaleTagsFromSession(
       session.rationale_tags_by_recipe,
     );
@@ -1033,14 +1029,15 @@ export const getExploreForYouFeed = async (params: {
       searchId: session.id,
       items,
       promotedRecipeIds,
-      offset: decodedCursor.offset,
+      offset,
       limit,
       noMatchContext: session.applied_context,
     });
+    const appliedContext = session.applied_context === "preset" ? "preset" : "for_you";
 
     return {
       feed_id: session.id,
-      applied_context: session.applied_context === "preset" ? "preset" : "for_you",
+      applied_context: appliedContext,
       profile_state: session.profile_state ?? "cold",
       algorithm_version: session.algorithm_version ?? "for_you_v1",
       items: page.items,
@@ -1053,6 +1050,18 @@ export const getExploreForYouFeed = async (params: {
         rationale_tags_by_recipe: rationaleTagsByRecipe,
       },
     };
+  };
+
+  if (decodedCursor?.kind === "session") {
+    const session = await fetchSearchSession({
+      serviceClient: params.serviceClient,
+      userId: params.userId,
+      searchId: decodedCursor.search_id,
+    });
+    if (session.applied_context !== "for_you" && session.applied_context !== "preset") {
+      throw new ApiError(400, "recipe_search_cursor_invalid", "Cursor is invalid");
+    }
+    return buildResponseFromSession(session, decodedCursor.offset);
   }
 
   const algorithm = await loadActiveExploreAlgorithmVersion(params.serviceClient);
@@ -1079,6 +1088,18 @@ export const getExploreForYouFeed = async (params: {
     baseRetrievalText: tasteProfile.retrievalText,
     presetId: normalizedPresetId,
   });
+  const cachedSession = await fetchLatestReusableSearchSession({
+    serviceClient: params.serviceClient,
+    userId: params.userId,
+    surface: "explore",
+    appliedContext: normalizedPresetId ? "preset" : "for_you",
+    normalizedInput: retrievalText,
+    presetId: normalizedPresetId,
+    algorithmVersion: algorithm.version,
+  });
+  if (cachedSession) {
+    return buildResponseFromSession(cachedSession, 0);
+  }
   const retrievalEmbedding = normalizedPresetId
     ? (await llmGateway.embedRecipeSearchQuery({
       client: params.serviceClient,

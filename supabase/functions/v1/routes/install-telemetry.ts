@@ -3,6 +3,10 @@ import { isInstallTelemetryEventType } from "../../../../packages/shared/src/acq
 import { requireJsonBody } from "../../_shared/errors.ts";
 import type { JsonValue } from "../../_shared/types.ts";
 import { logBehaviorEvents, normalizeBehaviorEventInput } from "../lib/behavior-events.ts";
+import {
+  lookupUserIdsForInstallIds,
+  scheduleExploreForYouPreload,
+} from "../lib/explore-preload.ts";
 
 type InstallTelemetryContext = {
   request: Request;
@@ -14,6 +18,13 @@ type InstallTelemetryContext = {
 
 export const handleInstallTelemetryRoutes = async (
   context: InstallTelemetryContext,
+  deps: {
+    lookupUserIdsForInstallIds: typeof lookupUserIdsForInstallIds;
+    scheduleExploreForYouPreload: typeof scheduleExploreForYouPreload;
+  } = {
+    lookupUserIdsForInstallIds,
+    scheduleExploreForYouPreload,
+  },
 ): Promise<Response | null> => {
   const { request, segments, method, serviceClient, respond } = context;
 
@@ -54,6 +65,31 @@ export const handleInstallTelemetryRoutes = async (
     serviceClient,
     events,
   });
+
+  const appSessionInstallIds = Array.from(
+    new Set(
+      events
+        .filter((event) => event.eventType === "app_session_started")
+        .map((event) => event.installId)
+        .filter((installId): installId is string => typeof installId === "string" && installId.length > 0),
+    ),
+  );
+  const installUserMap = await deps.lookupUserIdsForInstallIds({
+    serviceClient,
+    installIds: appSessionInstallIds,
+  });
+
+  for (const installId of appSessionInstallIds) {
+    const userId = installUserMap.get(installId);
+    if (!userId) {
+      continue;
+    }
+    deps.scheduleExploreForYouPreload({
+      serviceClient,
+      userId,
+      requestId: `install-preload:${installId}:${crypto.randomUUID()}`,
+    });
+  }
 
   return respond(202, {
     accepted: events.length,

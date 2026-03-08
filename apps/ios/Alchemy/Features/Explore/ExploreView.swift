@@ -211,33 +211,22 @@ struct ExploreView: View {
         preset: String? = nil,
         context: String = "Personalized for you"
     ) async {
-        isLoading = true
         isSearchMode = false
         contextLabel = context
         nextCursor = nil
 
-        do {
-            let response: ForYouFeedResponse = try await APIClient.shared.request(
-                "/recipes/explore/for-you",
-                method: .post,
-                body: ForYouFeedRequest(
-                    cursor: nil,
-                    limit: 10,
-                    presetId: preset,
-                )
-            )
+        if let cached = ExploreFeedPreloader.shared.cachedResponse(for: preset) {
+            applyForYouResponse(cached, preset: preset)
+            contextLabel = context
+            ExploreFeedPreloader.shared.preload(preset: preset, force: true)
+            return
+        }
 
-            withAnimation {
-                previews = response.items
-                nextCursor = response.nextCursor
-                feedSessionId = response.feedId
-                feedAlgorithmVersion = response.algorithmVersion
-                feedProfileState = response.profileState
-                activeFeedFilter = preset ?? "For You"
-                activeFeedIsSearchMode = false
-                resetFeedTracking()
-                isLoading = false
-            }
+        isLoading = true
+
+        do {
+            let response = try await ExploreFeedPreloader.shared.load(preset: preset)
+            applyForYouResponse(response, preset: preset)
 
             if let noMatch = response.noMatch {
                 contextLabel = noMatch.message
@@ -245,6 +234,20 @@ struct ExploreView: View {
         } catch {
             withAnimation { isLoading = false }
             print("[ExploreView] loadForYouFeed error: \(error)")
+        }
+    }
+
+    private func applyForYouResponse(_ response: ForYouFeedResponse, preset: String?) {
+        withAnimation {
+            previews = response.items
+            nextCursor = response.nextCursor
+            feedSessionId = response.feedId
+            feedAlgorithmVersion = response.algorithmVersion
+            feedProfileState = response.profileState
+            activeFeedFilter = preset ?? "For You"
+            activeFeedIsSearchMode = false
+            resetFeedTracking()
+            isLoading = false
         }
     }
 
