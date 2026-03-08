@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Alchemy API
-  version: 3.7.0
+  version: 3.7.1
   description: |
     API contract for Alchemy — an AI-driven recipe creation and management platform.
     Covers the user-facing v1 API at api.cookwithalchemy.com and the admin API at admin.cookwithalchemy.com.
@@ -998,6 +998,58 @@ paths:
                         format: date-time
         default:
           $ref: '#/components/responses/ErrorResponse'
+  /memory-search/backfill:
+    post:
+      summary: Backfill memory retrieval documents (internal authenticated scope)
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                user_id:
+                  type: string
+                  format: uuid
+                limit:
+                  type: integer
+                  minimum: 1
+                  maximum: 200
+                missing_only:
+                  type: boolean
+                  description: When true, only active memories without retrieval docs are indexed.
+      responses:
+        '200':
+          description: Memory retrieval backfill summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemorySearchBackfillResponse'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /memory-search/rebuild:
+    post:
+      summary: Rebuild memory snapshot and retrieval docs for a user (internal authenticated scope)
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                user_id:
+                  type: string
+                  format: uuid
+                  description: Defaults to the authenticated user when omitted.
+      responses:
+        '200':
+          description: Memory artifact rebuild summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemorySearchRebuildResponse'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
   /chat/import:
     post:
       summary: Import a recipe from a URL, pasted text, or cookbook photo
@@ -1650,7 +1702,8 @@ components:
         chat_ideation, chat_generation, chat_iteration, classify,
         ingredient_alias_normalize, ingredient_phrase_split, ingredient_enrich,
         recipe_metadata_enrich, ingredient_relation_infer, preference_normalize, equipment_filter,
-        onboarding, image, image_quality_eval, memory_extract, memory_select, memory_summarize, memory_conflict_resolve.
+        onboarding, image, image_quality_eval, memory_extract, memory_retrieval_embed, memory_select,
+        memory_summarize, memory_conflict_resolve.
         Not required for normal mobile clients.
   responses:
     ErrorResponse:
@@ -1735,6 +1788,7 @@ components:
         - image
         - image_quality_eval
         - memory_extract
+        - memory_retrieval_embed
         - memory_select
         - memory_summarize
         - memory_conflict_resolve
@@ -2840,6 +2894,35 @@ components:
               type: integer
             failed:
               type: integer
+    MemorySearchBackfillResponse:
+      type: object
+      required: [scanned, indexed, missing, users]
+      properties:
+        scanned:
+          type: integer
+        indexed:
+          type: integer
+        missing:
+          type: integer
+        users:
+          type: integer
+    MemorySearchRebuildResponse:
+      type: object
+      required: [ok, user_id, active_memory_count, indexed, removed, token_estimate]
+      properties:
+        ok:
+          type: boolean
+        user_id:
+          type: string
+          format: uuid
+        active_memory_count:
+          type: integer
+        indexed:
+          type: integer
+        removed:
+          type: integer
+        token_estimate:
+          type: integer
     CreateAttachmentRequest:
       type: object
       required: [relation_type]

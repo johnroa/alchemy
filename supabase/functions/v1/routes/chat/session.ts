@@ -9,6 +9,7 @@ import {
   logBehaviorEvents,
   logBehaviorFacts,
 } from "../../lib/behavior-events.ts";
+import { normalizeChatLaunchContext } from "../../lib/chat-types.ts";
 import type {
   ChatMessageView,
   ChatSessionContext,
@@ -48,10 +49,15 @@ export const handleCreateSession = async (
     buildChatLoopResponse,
     enrollCandidateImageRequests,
     scheduleImageQueueDrain,
+    scheduleMemoryQueueDrain,
   } = deps;
 
-  const body = await requireJsonBody<{ message: string }>(request);
+  const body = await requireJsonBody<{
+    message: string;
+    launch_context?: unknown;
+  }>(request);
   const message = body.message?.trim();
+  const launchContext = normalizeChatLaunchContext(body.launch_context);
   const installId = getInstallIdFromHeaders(request);
   if (!message) {
     throw new ApiError(400, "invalid_message", "message is required");
@@ -63,7 +69,9 @@ export const handleCreateSession = async (
     userId: auth.userId,
     requestId,
     prompt: message,
-    context: {},
+    context: launchContext
+      ? { launch_context: launchContext as unknown as JsonValue }
+      : {},
     selectionMode: "fast",
   });
 
@@ -81,6 +89,10 @@ export const handleCreateSession = async (
         active_component_id: null,
         pending_preference_conflict: null,
         thread_preference_overrides: null,
+        workflow: launchContext?.workflow ?? null,
+        entry_surface: launchContext?.entry_surface ?? null,
+        preference_editing_intent: launchContext?.preference_editing_intent ??
+          null,
       },
     })
     .select("id,created_at,updated_at")
@@ -163,6 +175,9 @@ export const handleCreateSession = async (
     active_component_id: null,
     pending_preference_conflict: null,
     thread_preference_overrides: null,
+    workflow: launchContext?.workflow ?? null,
+    entry_surface: launchContext?.entry_surface ?? null,
+    preference_editing_intent: launchContext?.preference_editing_intent ?? null,
   };
   const orchestrated = await orchestrateChatTurn({
     client,
@@ -301,6 +316,20 @@ export const handleCreateSession = async (
     messageId: userMessage.id,
     interactionContext,
   });
+  try {
+    scheduleMemoryQueueDrain({
+      serviceClient,
+      actorUserId: auth.userId,
+      requestId,
+      limit: 1,
+    });
+  } catch (error) {
+    console.error("memory_queue_schedule_failed", {
+      request_id: requestId,
+      actor_user_id: auth.userId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 
   const messages: ChatMessageView[] = [
     ...threadMessages,

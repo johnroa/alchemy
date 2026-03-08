@@ -60,6 +60,7 @@ export function MemoryJobsTable({ jobs }: { jobs: MemoryJob[] }): React.JSX.Elem
   const [loadingMetadataJobId, setLoadingMetadataJobId] = useState<string | null>(null);
   const [metadataByJobId, setMetadataByJobId] = useState<Record<string, MemoryJobMetadata>>({});
   const [metadataErrorByJobId, setMetadataErrorByJobId] = useState<Record<string, string>>({});
+  const [statusFilter, setStatusFilter] = useState<"all" | "pending" | "processing" | "ready" | "failed">("all");
 
   const loadMetadata = async (jobId: string): Promise<void> => {
     setOpenMetadataJobId(jobId);
@@ -117,22 +118,43 @@ export function MemoryJobsTable({ jobs }: { jobs: MemoryJob[] }): React.JSX.Elem
     return <div className="py-8 text-center text-sm text-muted-foreground">No memory jobs in queue.</div>;
   }
 
+  const filteredJobs = statusFilter === "all"
+    ? jobs
+    : jobs.filter((job) => job.status === statusFilter);
+
   return (
-    <Table>
-      <TableHeader>
-        <TableRow>
-          <TableHead>Status</TableHead>
-          <TableHead>User</TableHead>
-          <TableHead>Context</TableHead>
-          <TableHead>Attempts</TableHead>
-          <TableHead>Next Attempt</TableHead>
-          <TableHead>Error</TableHead>
-          <TableHead className="text-right">Action</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {jobs.map((job) => {
+    <div className="space-y-3">
+      <div className="flex items-center gap-2">
+        {(["all", "pending", "processing", "ready", "failed"] as const).map((status) => (
+          <Button
+            key={status}
+            size="sm"
+            variant={statusFilter === status ? "default" : "outline"}
+            onClick={() => setStatusFilter(status)}
+          >
+            {status === "all" ? "All" : status}
+          </Button>
+        ))}
+      </div>
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Status</TableHead>
+            <TableHead>User</TableHead>
+            <TableHead>Context</TableHead>
+            <TableHead>Attempts</TableHead>
+            <TableHead>Next Attempt</TableHead>
+            <TableHead>Error</TableHead>
+            <TableHead className="text-right">Action</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {filteredJobs.map((job) => {
           const style = statusStyle(job.status);
+          const lockedMs = job.locked_at ? Date.parse(job.locked_at) : NaN;
+          const isStaleLock = job.status === "processing" &&
+            Number.isFinite(lockedMs) &&
+            (Date.now() - lockedMs) > (5 * 60 * 1000);
           return (
             <TableRow key={job.id}>
               <TableCell>
@@ -141,6 +163,11 @@ export function MemoryJobsTable({ jobs }: { jobs: MemoryJob[] }): React.JSX.Elem
                   <Badge variant="outline" className={style.badge}>
                     {job.status}
                   </Badge>
+                  {isStaleLock ? (
+                    <Badge variant="outline" className="border-red-300 bg-red-50 text-red-700">
+                      stale lock
+                    </Badge>
+                  ) : null}
                 </div>
               </TableCell>
               <TableCell>
@@ -152,7 +179,14 @@ export function MemoryJobsTable({ jobs }: { jobs: MemoryJob[] }): React.JSX.Elem
                 <p>msg {shortId(job.message_id)}</p>
               </TableCell>
               <TableCell className="text-xs tabular-nums text-muted-foreground">{job.attempts}/{job.max_attempts}</TableCell>
-              <TableCell className="text-xs text-muted-foreground">{new Date(job.next_attempt_at).toLocaleString()}</TableCell>
+              <TableCell className="text-xs text-muted-foreground">
+                <p>{new Date(job.next_attempt_at).toLocaleString()}</p>
+                {job.locked_at ? (
+                  <p className={cn("mt-1", isStaleLock ? "text-red-600" : "text-muted-foreground")}>
+                    locked {new Date(job.locked_at).toLocaleString()}
+                  </p>
+                ) : null}
+              </TableCell>
               <TableCell className="max-w-[280px] truncate text-xs text-red-600">
                 {job.last_error ?? <span className="text-muted-foreground">—</span>}
               </TableCell>
@@ -220,8 +254,9 @@ export function MemoryJobsTable({ jobs }: { jobs: MemoryJob[] }): React.JSX.Elem
               </TableCell>
             </TableRow>
           );
-        })}
-      </TableBody>
-    </Table>
+          })}
+        </TableBody>
+      </Table>
+    </div>
   );
 }

@@ -45,7 +45,6 @@ type OnboardingDeps = {
     userMessages: string[];
   }) => Promise<PreferenceContext>;
   updateMemoryFromInteraction: (input: {
-    userClient: RouteContext["client"];
     serviceClient: RouteContext["serviceClient"];
     userId: string;
     requestId: string;
@@ -303,7 +302,6 @@ export const handleOnboardingRoutes = async (
     void (async () => {
       try {
         await updateMemoryFromInteraction({
-          userClient: client,
           serviceClient,
           userId: auth.userId,
           requestId,

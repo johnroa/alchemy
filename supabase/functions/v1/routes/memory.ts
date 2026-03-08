@@ -28,7 +28,6 @@ type MemoryDeps = {
     afterJson?: JsonValue;
   }) => Promise<void>;
   processMemoryJobs: (input: {
-    userClient: RouteContext["client"];
     serviceClient: RouteContext["serviceClient"];
     actorUserId: string;
     requestId: string;
@@ -38,6 +37,28 @@ type MemoryDeps = {
     succeeded: number;
     failed: number;
     queue: Record<string, JsonValue>;
+  }>;
+  backfillMemorySearchDocuments: (input: {
+    serviceClient: RouteContext["serviceClient"];
+    requestId: string;
+    userId?: string;
+    limit: number;
+    missingOnly?: boolean;
+  }) => Promise<{
+    scanned: number;
+    indexed: number;
+    missing: number;
+    users: number;
+  }>;
+  rebuildUserMemoryArtifacts: (input: {
+    serviceClient: RouteContext["serviceClient"];
+    userId: string;
+    requestId: string;
+  }) => Promise<{
+    active_memory_count: number;
+    indexed: number;
+    removed: number;
+    token_estimate: number;
   }>;
 };
 
@@ -63,6 +84,8 @@ export const handleMemoryRoutes = async (
     parseUuid,
     logChangelog,
     processMemoryJobs,
+    backfillMemorySearchDocuments,
+    rebuildUserMemoryArtifacts,
   } = deps;
 
   if (segments.length === 1 && segments[0] === "memories") {
@@ -112,6 +135,18 @@ export const handleMemoryRoutes = async (
         snapshotResult.error.message,
       );
     }
+    const { error: searchDocError } = await serviceClient
+      .from("memory_search_documents")
+      .delete()
+      .eq("user_id", auth.userId);
+    if (searchDocError) {
+      throw new ApiError(
+        500,
+        "memory_reset_failed",
+        "Could not reset memory retrieval documents",
+        searchDocError.message,
+      );
+    }
 
     await logChangelog({
       serviceClient,
@@ -147,6 +182,18 @@ export const handleMemoryRoutes = async (
         "memory_forget_failed",
         "Could not forget memory",
         forgetResult.error.message,
+      );
+    }
+    const { error: deleteSearchDocError } = await serviceClient
+      .from("memory_search_documents")
+      .delete()
+      .eq("memory_id", memoryId);
+    if (deleteSearchDocError) {
+      throw new ApiError(
+        500,
+        "memory_forget_failed",
+        "Could not remove memory retrieval document",
+        deleteSearchDocError.message,
       );
     }
 
@@ -200,7 +247,6 @@ export const handleMemoryRoutes = async (
       : 25;
 
     const result = await processMemoryJobs({
-      userClient: client,
       serviceClient,
       actorUserId: auth.userId,
       requestId,
@@ -234,7 +280,7 @@ export const handleMemoryRoutes = async (
     const body = await requireJsonBody<{ job_id?: string }>(request);
     const jobId = parseUuid(body.job_id ?? "");
 
-    const { data: retried, error: retryError } = await client
+    const { data: retried, error: retryError } = await serviceClient
       .from("memory_jobs")
       .update({
         status: "pending",
@@ -272,6 +318,95 @@ export const handleMemoryRoutes = async (
     });
 
     return respond(200, { ok: true, job: retried });
+  }
+
+  if (
+    segments.length === 2 &&
+    segments[0] === "memory-search" &&
+    segments[1] === "backfill" &&
+    method === "POST"
+  ) {
+    const body: {
+      user_id?: string;
+      limit?: number;
+      missing_only?: boolean;
+    } = await requireJsonBody<{
+      user_id?: string;
+      limit?: number;
+      missing_only?: boolean;
+    }>(request).catch(() => ({}));
+
+    const userId = typeof body.user_id === "string" && body.user_id.length > 0
+      ? parseUuid(body.user_id)
+      : undefined;
+    const limit = Number.isFinite(Number(body.limit))
+      ? Math.max(1, Math.min(200, Number(body.limit)))
+      : 50;
+
+    const result = await backfillMemorySearchDocuments({
+      serviceClient,
+      requestId,
+      userId,
+      limit,
+      missingOnly: body.missing_only !== false,
+    });
+
+    await logChangelog({
+      serviceClient,
+      actorUserId: auth.userId,
+      scope: "memory",
+      entityType: "memory_search_document",
+      entityId: userId,
+      action: "backfill",
+      requestId,
+      afterJson: {
+        scanned: result.scanned,
+        indexed: result.indexed,
+        missing: result.missing,
+        users: result.users,
+        missing_only: body.missing_only !== false,
+      },
+    });
+
+    return respond(200, result);
+  }
+
+  if (
+    segments.length === 2 &&
+    segments[0] === "memory-search" &&
+    segments[1] === "rebuild" &&
+    method === "POST"
+  ) {
+    const body: { user_id?: string } = await requireJsonBody<{ user_id?: string }>(
+      request,
+    ).catch(() => ({}));
+    const userId = typeof body.user_id === "string" && body.user_id.length > 0
+      ? parseUuid(body.user_id)
+      : auth.userId;
+
+    const result = await rebuildUserMemoryArtifacts({
+      serviceClient,
+      userId,
+      requestId,
+    });
+
+    await logChangelog({
+      serviceClient,
+      actorUserId: auth.userId,
+      scope: "memory",
+      entityType: "memory_snapshot",
+      entityId: userId,
+      action: "rebuild_artifacts",
+      requestId,
+      afterJson: {
+        active_memory_count: result.active_memory_count,
+        indexed: result.indexed,
+        removed: result.removed,
+        token_estimate: result.token_estimate,
+      },
+    });
+
+    return respond(200, { ok: true, ...result, user_id: userId });
   }
 
   return null;

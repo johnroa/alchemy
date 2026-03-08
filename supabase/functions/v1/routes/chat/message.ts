@@ -47,6 +47,7 @@ export const handleSendMessage = async (
     buildChatLoopResponse,
     enrollCandidateImageRequests,
     scheduleImageQueueDrain,
+    scheduleMemoryQueueDrain,
     fetchChatMessages,
     extractChatContext,
     normalizeCandidateRecipeSet,
@@ -299,6 +300,20 @@ export const handleSendMessage = async (
     messageId: userMessage.id,
     interactionContext,
   });
+  try {
+    scheduleMemoryQueueDrain({
+      serviceClient,
+      actorUserId: auth.userId,
+      requestId,
+      limit: 1,
+    });
+  } catch (error) {
+    console.error("memory_queue_schedule_failed", {
+      request_id: requestId,
+      actor_user_id: auth.userId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 
   const messages: ChatMessageView[] = [
     ...threadMessages,

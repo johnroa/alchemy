@@ -2,6 +2,16 @@
 
 ## [Unreleased] — 2026-03-07
 
+### Memory Writeback Activation + Retrieval Operations (v3.7.1)
+
+- Turned on automatic non-blocking memory queue draining after chat session creation and message turns so enqueued memory work now realizes the intended writeback pipeline during normal usage.
+- Added service-role-safe memory worker execution, plus scheduled GitHub Actions backlog draining for `/memory-jobs/process` when chat traffic is low.
+- Added `memory_search_documents`, hybrid per-user memory retrieval, and the `memory_retrieval_embed` LLM scope for scalable shortlist generation before optional `memory_select` reranking.
+- Added `POST /memory-search/backfill` and `POST /memory-search/rebuild` for retrieval-doc repair and per-user artifact rebuilds.
+- Reworked Admin `/operations/memory` into an actionable operator console with queue health, retrieval coverage, per-user repair actions, and retrieval-aware memory records.
+- Replaced the admin memory rebuild proxy so it now calls the real backend rebuild path instead of only writing a placeholder snapshot flag.
+- Updated OpenAPI to `3.7.1`, regenerated contracts/admin route inventory, and added targeted backend/admin tests for scheduling, retry behavior, rebuild/backfill proxies, and the new operations UI.
+
 ### Documentation / Execution Discipline
 
 - Codified repo execution norms in `README.md` and `AGENTS.md` so deploy/build/debug precedence is explicit: repo docs first, documented repo-root workflows over ad hoc ecosystem recovery paths, and documentation updates required when the documented path is wrong.
@@ -13,6 +23,7 @@
 - Added new LLM scopes `explore_for_you_profile` and `explore_for_you_rank`, seeded active model routes, and activated prompt/rule configs through the admin LLM control path.
 - Explore on iOS now opens on `For You`, uses personalized preset chips through the same endpoint, renders `why_tags`, and no longer uses the global `recent | popular | trending` sort flow.
 - Deduplicated materially identical Explore cards before reranking/page assembly so `For You` does not surface duplicate recipe cards in the same feed.
+- Reduced `For You` cold-start latency by serving from cached or fallback taste profiles immediately, refreshing richer profiles in the background, and removing synchronous preset-interpret LLM work from the Explore request hot path.
 - Added version-aware Explore feed telemetry (`explore_feed_served`, `explore_skipped_recipe`, `explore_hidden_recipe`) plus save attribution with `source_session_id` and `algorithm_version`.
 - Added Admin `/boards/personalization` and `/analytics/personalization` for current champion version, lift versus baseline, fallback/latency diagnostics, profile-state breakdowns, and why-tag distribution.
 - Added recommender spillover stats to `/boards/operations` so feed latency and fallback pressure are still visible from the operations surface without turning it into the main personalization console.

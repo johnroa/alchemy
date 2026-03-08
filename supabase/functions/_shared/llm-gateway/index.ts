@@ -55,6 +55,7 @@ import {
   rerankRecipeSearch,
 } from "./search.ts";
 import {
+  embedMemoryRetrievalQuery,
   extractMemories,
   selectMemories,
   summarizeMemories,
@@ -410,6 +411,8 @@ export const llmGateway = {
   },
 
   embedRecipeSearchQuery,
+
+  embedMemoryRetrievalQuery,
 
   interpretRecipeSearch,
 

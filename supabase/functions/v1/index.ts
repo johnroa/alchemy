@@ -86,6 +86,7 @@ import { enqueueRecipeMetadataJob, processMetadataJobs } from "./lib/metadata-pi
 import {
   scheduleMetadataQueueDrain,
   scheduleImageQueueDrain,
+  scheduleMemoryQueueDrain,
   fetchGraphNeighborhood,
 } from "./lib/background-tasks.ts";
 import {
@@ -94,6 +95,10 @@ import {
   deriveAttachmentPayload,
 } from "./lib/recipe-persistence.ts";
 import { buildContextPack, updateMemoryFromInteraction, enqueueMemoryJob, processMemoryJobs } from "./lib/context-pack.ts";
+import {
+  backfillMemorySearchDocuments,
+  rebuildUserMemoryArtifacts,
+} from "./lib/memory-retrieval.ts";
 import {
   fetchChatMessages,
   extractLatestAssistantReply,
@@ -303,6 +308,8 @@ Deno.serve(async (request) => {
       parseUuid,
       logChangelog,
       processMemoryJobs,
+      backfillMemorySearchDocuments,
+      rebuildUserMemoryArtifacts,
     });
     if (memoryResponse) {
       return memoryResponse;
@@ -580,6 +587,7 @@ Deno.serve(async (request) => {
       parseUuid,
       persistRecipe,
       scheduleImageQueueDrain,
+      scheduleMemoryQueueDrain,
       mapCandidateRoleToRelation,
       resolveRelationTypeId,
       fetchChatMessages,

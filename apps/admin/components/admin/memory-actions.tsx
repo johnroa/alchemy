@@ -25,7 +25,7 @@ export function MemoryActions({ userId }: { userId: string }): React.JSX.Element
       return;
     }
 
-    toast.success(mode === "rebuild" ? "Memory snapshot rebuild queued" : "User memory reset complete");
+    toast.success(mode === "rebuild" ? "Memory artifacts rebuilt" : "User memory reset complete");
     window.location.reload();
   };
 
@@ -37,7 +37,7 @@ export function MemoryActions({ userId }: { userId: string }): React.JSX.Element
         onClick={() => void trigger("rebuild")}
         disabled={busy !== null}
       >
-        {busy === "rebuild" ? "Rebuilding..." : "Rebuild"}
+        {busy === "rebuild" ? "Rebuilding..." : "Reindex + Snapshot"}
       </Button>
       <Button
         variant="destructive"
@@ -50,4 +50,3 @@ export function MemoryActions({ userId }: { userId: string }): React.JSX.Element
     </div>
   );
 }
-

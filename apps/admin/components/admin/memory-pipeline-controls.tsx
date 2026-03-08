@@ -11,6 +11,7 @@ type MemoryJobsSummary = {
 export function MemoryPipelineControls(): React.JSX.Element {
   const [processing, setProcessing] = useState(false);
   const [retrying, setRetrying] = useState(false);
+  const [backfilling, setBackfilling] = useState(false);
 
   const processQueue = async (): Promise<void> => {
     setProcessing(true);
@@ -65,12 +66,36 @@ export function MemoryPipelineControls(): React.JSX.Element {
     window.location.reload();
   };
 
+  const backfillMissing = async (): Promise<void> => {
+    setBackfilling(true);
+    const response = await fetch("/api/admin/memory/search/backfill", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ missing_only: true, limit: 100 }),
+    });
+    const payload = (await response.json().catch(() => null)) as
+      | { error?: string; indexed?: number; missing?: number }
+      | null;
+    setBackfilling(false);
+
+    if (!response.ok || payload?.error) {
+      toast.error(payload?.error ?? "Failed to backfill memory retrieval docs");
+      return;
+    }
+
+    toast.success(`Indexed ${payload?.indexed ?? 0} memory retrieval docs`);
+    window.location.reload();
+  };
+
   return (
-    <div className="flex gap-2">
-      <Button variant="outline" onClick={() => void retryFailed()} disabled={retrying || processing}>
+    <div className="flex flex-wrap gap-2">
+      <Button variant="outline" onClick={() => void retryFailed()} disabled={retrying || processing || backfilling}>
         {retrying ? "Retrying..." : "Retry Failed"}
       </Button>
-      <Button onClick={() => void processQueue()} disabled={processing || retrying}>
+      <Button variant="outline" onClick={() => void backfillMissing()} disabled={backfilling || processing || retrying}>
+        {backfilling ? "Backfilling..." : "Backfill Missing Retrieval Docs"}
+      </Button>
+      <Button onClick={() => void processQueue()} disabled={processing || retrying || backfilling}>
         {processing ? "Processing..." : "Process Memory Queue"}
       </Button>
     </div>

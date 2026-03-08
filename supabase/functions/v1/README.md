@@ -35,6 +35,8 @@ Edge function implementing `/v1/*` routes.
 - `POST /v1/memories/reset`
 - `POST /v1/memory-jobs/process`
 - `POST /v1/memory-jobs/retry`
+- `POST /v1/memory-search/backfill`
+- `POST /v1/memory-search/rebuild`
 - `POST /v1/image-jobs/process`
 - `POST /v1/image-simulations/compare`
 - `POST /v1/metadata-jobs/process`
@@ -57,6 +59,7 @@ Edge function implementing `/v1/*` routes.
 - Onboarding interview behavior uses active `scope = onboarding` provider/model/prompt/rule records.
 - Memory extraction/selection/summarization/conflict scopes are configured via:
   - `memory_extract`
+  - `memory_retrieval_embed`
   - `memory_select`
   - `memory_summarize`
   - `memory_conflict_resolve`

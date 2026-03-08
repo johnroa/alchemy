@@ -1532,6 +1532,100 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/memory-search/backfill": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Backfill memory retrieval documents (internal authenticated scope) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /** Format: uuid */
+                        user_id?: string;
+                        limit?: number;
+                        /** @description When true, only active memories without retrieval docs are indexed. */
+                        missing_only?: boolean;
+                    };
+                };
+            };
+            responses: {
+                /** @description Memory retrieval backfill summary */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MemorySearchBackfillResponse"];
+                    };
+                };
+                default: components["responses"]["ErrorResponse"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/memory-search/rebuild": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Rebuild memory snapshot and retrieval docs for a user (internal authenticated scope) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /**
+                         * Format: uuid
+                         * @description Defaults to the authenticated user when omitted.
+                         */
+                        user_id?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Memory artifact rebuild summary */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MemorySearchRebuildResponse"];
+                    };
+                };
+                default: components["responses"]["ErrorResponse"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/chat/import": {
         parameters: {
             query?: never;
@@ -1609,7 +1703,8 @@ export interface paths {
                      *     chat_ideation, chat_generation, chat_iteration, classify,
                      *     ingredient_alias_normalize, ingredient_phrase_split, ingredient_enrich,
                      *     recipe_metadata_enrich, ingredient_relation_infer, preference_normalize, equipment_filter,
-                     *     onboarding, image, image_quality_eval, memory_extract, memory_select, memory_summarize, memory_conflict_resolve.
+                     *     onboarding, image, image_quality_eval, memory_extract, memory_retrieval_embed, memory_select,
+                     *     memory_summarize, memory_conflict_resolve.
                      *     Not required for normal mobile clients.
                      */
                     "x-sim-model-overrides"?: components["parameters"]["SimModelOverrides"];
@@ -1708,7 +1803,8 @@ export interface paths {
                      *     chat_ideation, chat_generation, chat_iteration, classify,
                      *     ingredient_alias_normalize, ingredient_phrase_split, ingredient_enrich,
                      *     recipe_metadata_enrich, ingredient_relation_infer, preference_normalize, equipment_filter,
-                     *     onboarding, image, image_quality_eval, memory_extract, memory_select, memory_summarize, memory_conflict_resolve.
+                     *     onboarding, image, image_quality_eval, memory_extract, memory_retrieval_embed, memory_select,
+                     *     memory_summarize, memory_conflict_resolve.
                      *     Not required for normal mobile clients.
                      */
                     "x-sim-model-overrides"?: components["parameters"]["SimModelOverrides"];
@@ -1781,7 +1877,8 @@ export interface paths {
                      *     chat_ideation, chat_generation, chat_iteration, classify,
                      *     ingredient_alias_normalize, ingredient_phrase_split, ingredient_enrich,
                      *     recipe_metadata_enrich, ingredient_relation_infer, preference_normalize, equipment_filter,
-                     *     onboarding, image, image_quality_eval, memory_extract, memory_select, memory_summarize, memory_conflict_resolve.
+                     *     onboarding, image, image_quality_eval, memory_extract, memory_retrieval_embed, memory_select,
+                     *     memory_summarize, memory_conflict_resolve.
                      *     Not required for normal mobile clients.
                      */
                     "x-sim-model-overrides"?: components["parameters"]["SimModelOverrides"];
@@ -1836,7 +1933,8 @@ export interface paths {
                      *     chat_ideation, chat_generation, chat_iteration, classify,
                      *     ingredient_alias_normalize, ingredient_phrase_split, ingredient_enrich,
                      *     recipe_metadata_enrich, ingredient_relation_infer, preference_normalize, equipment_filter,
-                     *     onboarding, image, image_quality_eval, memory_extract, memory_select, memory_summarize, memory_conflict_resolve.
+                     *     onboarding, image, image_quality_eval, memory_extract, memory_retrieval_embed, memory_select,
+                     *     memory_summarize, memory_conflict_resolve.
                      *     Not required for normal mobile clients.
                      */
                     "x-sim-model-overrides"?: components["parameters"]["SimModelOverrides"];
@@ -2199,7 +2297,7 @@ export interface components {
          * @description Internal LLM pipeline scope key used for prompt/rule/model routing.
          * @enum {string}
          */
-        LlmScope: "chat_ideation" | "chat_generation" | "chat_iteration" | "generate" | "classify" | "ingredient_alias_normalize" | "ingredient_phrase_split" | "ingredient_enrich" | "recipe_metadata_enrich" | "ingredient_relation_infer" | "preference_normalize" | "equipment_filter" | "onboarding" | "image" | "image_quality_eval" | "memory_extract" | "memory_select" | "memory_summarize" | "memory_conflict_resolve" | "recipe_canonicalize" | "recipe_personalize";
+        LlmScope: "chat_ideation" | "chat_generation" | "chat_iteration" | "generate" | "classify" | "ingredient_alias_normalize" | "ingredient_phrase_split" | "ingredient_enrich" | "recipe_metadata_enrich" | "ingredient_relation_infer" | "preference_normalize" | "equipment_filter" | "onboarding" | "image" | "image_quality_eval" | "memory_extract" | "memory_retrieval_embed" | "memory_select" | "memory_summarize" | "memory_conflict_resolve" | "recipe_canonicalize" | "recipe_personalize";
         ErrorEnvelope: {
             code: string;
             message: string;
@@ -2747,6 +2845,21 @@ export interface components {
                 failed: number;
             };
         };
+        MemorySearchBackfillResponse: {
+            scanned: number;
+            indexed: number;
+            missing: number;
+            users: number;
+        };
+        MemorySearchRebuildResponse: {
+            ok: boolean;
+            /** Format: uuid */
+            user_id: string;
+            active_memory_count: number;
+            indexed: number;
+            removed: number;
+            token_estimate: number;
+        };
         CreateAttachmentRequest: {
             relation_type: string;
             position?: number;
@@ -3071,7 +3184,8 @@ export interface components {
          *     chat_ideation, chat_generation, chat_iteration, classify,
          *     ingredient_alias_normalize, ingredient_phrase_split, ingredient_enrich,
          *     recipe_metadata_enrich, ingredient_relation_infer, preference_normalize, equipment_filter,
-         *     onboarding, image, image_quality_eval, memory_extract, memory_select, memory_summarize, memory_conflict_resolve.
+         *     onboarding, image, image_quality_eval, memory_extract, memory_retrieval_embed, memory_select,
+         *     memory_summarize, memory_conflict_resolve.
          *     Not required for normal mobile clients.
          */
         SimModelOverrides: string;

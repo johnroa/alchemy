@@ -8,15 +8,79 @@
  */
 
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2";
+import { ApiError } from "../errors.ts";
+import { executeEmbeddingScope } from "../llm-executor.ts";
 import type { JsonValue, MemoryRecord } from "../types.ts";
 import type {
   ConflictResolution,
   MemoryCandidate,
+  RecipeSearchEmbedding,
   MemorySelection,
   MemorySummary,
   TokenAccum,
 } from "./types.ts";
 import { addTokens, callProvider, getActiveConfig, logLlmEvent } from "./config.ts";
+
+export async function embedMemoryRetrievalQuery(params: {
+  client: SupabaseClient;
+  userId: string;
+  requestId: string;
+  inputText: string;
+}): Promise<RecipeSearchEmbedding> {
+  const startedAt = Date.now();
+  try {
+    const { vector, dimensions, inputTokens, config } = await executeEmbeddingScope({
+      client: params.client,
+      scope: "memory_retrieval_embed",
+      inputText: params.inputText,
+    });
+    const inputCostUsd = inputTokens > 0
+      ? (inputTokens / 1_000_000) * config.inputCostPer1m
+      : 0;
+
+    await logLlmEvent(
+      params.client,
+      params.userId,
+      params.requestId,
+      "memory_retrieval_embed",
+      Date.now() - startedAt,
+      "ok",
+      {
+        task: "memory_retrieval_embedding_v1",
+        dimensions,
+      },
+      {
+        input: inputTokens,
+        output: 0,
+        costUsd: inputCostUsd,
+      },
+    );
+
+    return {
+      vector,
+      dimensions,
+      provider: config.provider,
+      model: config.model,
+    };
+  } catch (error) {
+    const errorCode = error instanceof ApiError
+      ? error.code
+      : "unknown_error";
+    await logLlmEvent(
+      params.client,
+      params.userId,
+      params.requestId,
+      "memory_retrieval_embed",
+      Date.now() - startedAt,
+      "error",
+      {
+        task: "memory_retrieval_embedding_v1",
+        error_code: errorCode,
+      },
+    );
+    throw error;
+  }
+}
 
 export async function extractMemories(params: {
   client: SupabaseClient;

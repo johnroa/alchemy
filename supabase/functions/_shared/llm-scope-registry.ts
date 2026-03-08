@@ -131,6 +131,16 @@ export const LLM_SCOPE_REGISTRY = {
     fallback_policy: "none",
     telemetry_tags: { task: "recipe_search_embed", criticality: "medium" },
   },
+  memory_retrieval_embed: {
+    output_contract: "memory_retrieval_embedding_v1",
+    mode: "embedding",
+    retry_policy: {
+      max_attempts: 2,
+      retryable_codes: STANDARD_RETRYABLE_CODES,
+    },
+    fallback_policy: "none",
+    telemetry_tags: { task: "memory_retrieval_embed", criticality: "medium" },
+  },
   recipe_search_interpret: {
     output_contract: "recipe_search_interpret_v1",
     mode: "classification",

@@ -201,6 +201,7 @@ No direct provider calls are allowed outside adapters.
 | `onboarding` | First-run preference interview | Conversational. Collects dietary, skill, equipment context. |
 | `image` | Recipe image generation | Text-to-image prompt construction |
 | `memory_extract` | Post-conversation memory extraction | Extracts preference signals |
+| `memory_retrieval_embed` | Memory retrieval indexing + query embedding | Generates tenant-filtered retrieval embeddings for memory candidate generation. |
 | `memory_select` | Context injection | Selects relevant memories for prompt injection |
 | `memory_summarize` | Memory compaction | Reduces memory blob size |
 | `memory_conflict_resolve` | Memory deduplication | Resolves conflicting preference records |

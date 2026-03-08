@@ -13,6 +13,10 @@ import {
   logChangelog,
 } from "./user-profile.ts";
 import type { ContextPack } from "./chat-types.ts";
+import {
+  refreshMemorySearchDocumentsForUser,
+  retrieveRelevantMemories,
+} from "./memory-retrieval.ts";
 
 export const buildContextPack = async (params: {
   userClient: SupabaseClient;
@@ -24,7 +28,7 @@ export const buildContextPack = async (params: {
   selectionMode?: "llm" | "fast";
 }): Promise<ContextPack> => {
   const memoryFetchLimit = params.selectionMode === "fast" ? 12 : 36;
-  const [preferences, memorySnapshot, memories] = await Promise.all([
+  const [preferences, memorySnapshot, fallbackMemories] = await Promise.all([
     getPreferences(params.userClient, params.userId),
     getMemorySnapshot(params.userClient, params.userId),
     getActiveMemories(params.userClient, params.userId, memoryFetchLimit),
@@ -32,6 +36,31 @@ export const buildContextPack = async (params: {
   const preferencesNaturalLanguage = buildNaturalLanguagePreferenceContext(
     preferences,
   );
+  let memories = fallbackMemories;
+
+  if (fallbackMemories.length > 0) {
+    try {
+      const retrievedMemories = await retrieveRelevantMemories({
+        serviceClient: params.serviceClient,
+        userId: params.userId,
+        requestId: params.requestId,
+        prompt: params.prompt,
+        context: {
+          preferences,
+          preferences_natural_language: preferencesNaturalLanguage,
+          memory_snapshot: memorySnapshot,
+          ...params.context,
+        },
+        limit: memoryFetchLimit,
+      });
+
+      if (retrievedMemories.length > 0) {
+        memories = retrievedMemories;
+      }
+    } catch (error) {
+      console.error("memory_retrieval_failed", error);
+    }
+  }
 
   if (memories.length === 0) {
     return {
@@ -90,7 +119,6 @@ export const buildContextPack = async (params: {
 };
 
 export const updateMemoryFromInteraction = async (params: {
-  userClient: SupabaseClient;
   serviceClient: SupabaseClient;
   userId: string;
   requestId: string;
@@ -115,7 +143,7 @@ export const updateMemoryFromInteraction = async (params: {
   }
 
   const existingMemories = await getActiveMemories(
-    params.userClient,
+    params.serviceClient,
     params.userId,
     200,
   );
@@ -140,26 +168,35 @@ export const updateMemoryFromInteraction = async (params: {
     console.error("memory_extract_failed", error);
   }
 
+  const touchedMemoryIds = new Set<string>();
+
   if (candidates.length > 0) {
-    const preferredInsert = await params.userClient.from("memories").insert(
-      candidates.map((candidate) => ({
-        user_id: params.userId,
-        memory_type: candidate.memory_type,
-        memory_kind: candidate.memory_kind ?? "preference",
-        memory_content: candidate.memory_content,
-        confidence: Number.isFinite(Number(candidate.confidence))
-          ? Number(candidate.confidence)
-          : 0.5,
-        salience: Number.isFinite(Number(candidate.salience))
-          ? Number(candidate.salience)
-          : 0.5,
-        source: candidate.source ?? "llm_extract",
-        status: "active",
-      })),
-    );
+    const preferredInsert = await params.serviceClient
+      .from("memories")
+      .insert(
+        candidates.map((candidate) => ({
+          user_id: params.userId,
+          memory_type: candidate.memory_type,
+          memory_kind: candidate.memory_kind ?? "preference",
+          memory_content: candidate.memory_content,
+          confidence: Number.isFinite(Number(candidate.confidence))
+            ? Number(candidate.confidence)
+            : 0.5,
+          salience: Number.isFinite(Number(candidate.salience))
+            ? Number(candidate.salience)
+            : 0.5,
+          source: candidate.source ?? "llm_extract",
+          status: "active",
+        })),
+      )
+      .select("id");
 
     if (preferredInsert.error) {
       console.error("memory_insert_failed", preferredInsert.error);
+    } else {
+      for (const row of preferredInsert.data ?? []) {
+        touchedMemoryIds.add(String(row.id));
+      }
     }
   }
 
@@ -178,10 +215,12 @@ export const updateMemoryFromInteraction = async (params: {
       }
 
       if (action.action === "delete") {
-        const deleteUpdate = await params.userClient
+        touchedMemoryIds.add(action.memory_id);
+        const deleteUpdate = await params.serviceClient
           .from("memories")
           .update({ status: "deleted", updated_at: new Date().toISOString() })
-          .eq("id", action.memory_id);
+          .eq("id", action.memory_id)
+          .eq("user_id", params.userId);
 
         if (deleteUpdate.error) {
           console.error("memory_delete_failed", deleteUpdate.error);
@@ -189,14 +228,16 @@ export const updateMemoryFromInteraction = async (params: {
       }
 
       if (action.action === "supersede") {
-        const supersedeUpdate = await params.userClient
+        touchedMemoryIds.add(action.memory_id);
+        const supersedeUpdate = await params.serviceClient
           .from("memories")
           .update({
             status: "superseded",
             supersedes_memory_id: action.supersedes_memory_id ?? null,
             updated_at: new Date().toISOString(),
           })
-          .eq("id", action.memory_id);
+          .eq("id", action.memory_id)
+          .eq("user_id", params.userId);
 
         if (supersedeUpdate.error) {
           console.error("memory_supersede_failed", supersedeUpdate.error);
@@ -204,21 +245,40 @@ export const updateMemoryFromInteraction = async (params: {
       }
 
       if (action.action === "merge" && action.merged_content) {
-        await params.userClient
+        touchedMemoryIds.add(action.memory_id);
+        const mergeUpdate = await params.serviceClient
           .from("memories")
           .update({
             memory_content: action.merged_content,
             updated_at: new Date().toISOString(),
           })
-          .eq("id", action.memory_id);
+          .eq("id", action.memory_id)
+          .eq("user_id", params.userId);
+
+        if (mergeUpdate.error) {
+          console.error("memory_merge_failed", mergeUpdate.error);
+        }
       }
     }
   } catch (error) {
     console.error("memory_conflict_resolution_failed", error);
   }
 
+  if (touchedMemoryIds.size > 0) {
+    try {
+      await refreshMemorySearchDocumentsForUser({
+        serviceClient: params.serviceClient,
+        userId: params.userId,
+        requestId: params.requestId,
+        memoryIds: Array.from(touchedMemoryIds),
+      });
+    } catch (error) {
+      console.error("memory_search_refresh_failed", error);
+    }
+  }
+
   const activeMemories = await getActiveMemories(
-    params.userClient,
+    params.serviceClient,
     params.userId,
     200,
   );
@@ -231,7 +291,7 @@ export const updateMemoryFromInteraction = async (params: {
       context: params.interactionContext,
     });
 
-    const { error: snapshotError } = await params.userClient.from(
+    const { error: snapshotError } = await params.serviceClient.from(
       "memory_snapshots",
     ).upsert({
       user_id: params.userId,
@@ -297,11 +357,11 @@ export const enqueueMemoryJob = async (params: {
 };
 
 export const processMemoryJobs = async (params: {
-  userClient: SupabaseClient;
   serviceClient: SupabaseClient;
   actorUserId: string;
   requestId: string;
   limit: number;
+  processInteraction?: typeof updateMemoryFromInteraction;
 }): Promise<{
   processed: number;
   succeeded: number;
@@ -311,6 +371,7 @@ export const processMemoryJobs = async (params: {
   const nowIso = new Date().toISOString();
   const staleCutoffIso = new Date(Date.now() - 5 * 60 * 1000).toISOString();
   const lockOwner = `memory-worker:${crypto.randomUUID()}`;
+  const processInteraction = params.processInteraction ?? updateMemoryFromInteraction;
 
   const staleResult = await params.serviceClient
     .from("memory_jobs")
@@ -394,8 +455,7 @@ export const processMemoryJobs = async (params: {
 
     processed += 1;
     try {
-      await updateMemoryFromInteraction({
-        userClient: params.userClient,
+      await processInteraction({
         serviceClient: params.serviceClient,
         userId: claim.data.user_id,
         requestId: params.requestId,

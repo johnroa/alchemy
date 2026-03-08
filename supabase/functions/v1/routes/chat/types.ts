@@ -154,6 +154,12 @@ export type ChatDeps = {
     limit?: number;
     modelOverrides?: RouteContext["modelOverrides"];
   }) => void;
+  scheduleMemoryQueueDrain: (input: {
+    serviceClient: RouteContext["serviceClient"];
+    actorUserId: string;
+    requestId: string;
+    limit?: number;
+  }) => void;
   mapCandidateRoleToRelation: (role: CandidateRecipeRole) => string;
   resolveRelationTypeId: (
     client: RouteContext["client"] | RouteContext["serviceClient"],

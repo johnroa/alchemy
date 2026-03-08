@@ -97,6 +97,7 @@ const requiredScopes = [
   "onboarding",
   "image",
   "memory_extract",
+  "memory_retrieval_embed",
   "memory_select",
   "memory_summarize",
   "memory_conflict_resolve",

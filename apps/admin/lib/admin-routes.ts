@@ -37,6 +37,7 @@ export const ADMIN_ROUTES: Array<{ path: string; method: string }> = [
   { path: "/api/admin/memory/jobs/:id", method: "GET" },
   { path: "/api/admin/memory/jobs/process", method: "POST" },
   { path: "/api/admin/memory/jobs/retry", method: "POST" },
+  { path: "/api/admin/memory/search/backfill", method: "POST" },
   { path: "/api/admin/metadata/jobs", method: "GET" },
   { path: "/api/admin/metadata/jobs/process", method: "POST" },
   { path: "/api/admin/metadata/jobs/retry", method: "POST" },

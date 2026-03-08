@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Alchemy API",
-    "version": "3.6.1",
+    "version": "3.7.1",
     "description": "API contract for Alchemy — an AI-driven recipe creation and management platform.\nCovers the user-facing v1 API at api.cookwithalchemy.com and the admin API at admin.cookwithalchemy.com.\n"
   },
   "servers": [
@@ -279,8 +279,8 @@
     },
     "/recipes/search": {
       "post": {
-        "summary": "Search public recipes for Explore and shared retrieval",
-        "description": "Canonical discovery endpoint for recipe search and Explore feed pagination.\nWhen both `query` and `preset_id` are omitted or blank, this returns the Explore feed using the same cursor-backed search session infrastructure.\n",
+        "summary": "Search public recipes for explicit discovery and shared retrieval",
+        "description": "Explicit recipe search endpoint for typed discovery and shared retrieval flows.\nBlank Explore feed usage is deprecated in favor of `/recipes/explore/for-you`.\n",
         "requestBody": {
           "required": true,
           "content": {
@@ -298,6 +298,37 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/RecipeSearchResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/recipes/explore/for-you": {
+      "post": {
+        "summary": "Personalized Explore feed for the authenticated user",
+        "description": "Returns the personalized Explore `For You` feed. This feed uses a cached\nuser taste profile, hybrid candidate retrieval over public recipe search\ndocuments, and a dedicated personalized rerank. Explore preset filters\nremain personalized within the narrowed candidate set.\n",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ForYouFeedRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Personalized Explore feed response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForYouFeedResponse"
                 }
               }
             }
@@ -1598,6 +1629,88 @@
         }
       }
     },
+    "/memory-search/backfill": {
+      "post": {
+        "summary": "Backfill memory retrieval documents (internal authenticated scope)",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "user_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 200
+                  },
+                  "missing_only": {
+                    "type": "boolean",
+                    "description": "When true, only active memories without retrieval docs are indexed."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Memory retrieval backfill summary",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemorySearchBackfillResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/memory-search/rebuild": {
+      "post": {
+        "summary": "Rebuild memory snapshot and retrieval docs for a user (internal authenticated scope)",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "user_id": {
+                    "type": "string",
+                    "format": "uuid",
+                    "description": "Defaults to the authenticated user when omitted."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Memory artifact rebuild summary",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemorySearchRebuildResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
     "/chat/import": {
       "post": {
         "summary": "Import a recipe from a URL, pasted text, or cookbook photo",
@@ -2567,7 +2680,7 @@
         "schema": {
           "type": "string"
         },
-        "description": "Optional JSON string used by Admin Simulation Runner to override model/provider per scope.\nFormat:\n{\n  \"chat_ideation\":{\"provider\":\"anthropic\",\"model\":\"claude-3-5-haiku-latest\"},\n  \"ingredient_enrich\":{\"provider\":\"openai\",\"model\":\"gpt-5-mini\"}\n}\nCommon scope keys:\nchat_ideation, chat_generation, chat_iteration, classify,\ningredient_alias_normalize, ingredient_phrase_split, ingredient_enrich,\nrecipe_metadata_enrich, ingredient_relation_infer, preference_normalize, equipment_filter,\nonboarding, image, image_quality_eval, memory_extract, memory_select, memory_summarize, memory_conflict_resolve.\nNot required for normal mobile clients.\n"
+        "description": "Optional JSON string used by Admin Simulation Runner to override model/provider per scope.\nFormat:\n{\n  \"chat_ideation\":{\"provider\":\"anthropic\",\"model\":\"claude-3-5-haiku-latest\"},\n  \"ingredient_enrich\":{\"provider\":\"openai\",\"model\":\"gpt-5-mini\"}\n}\nCommon scope keys:\nchat_ideation, chat_generation, chat_iteration, classify,\ningredient_alias_normalize, ingredient_phrase_split, ingredient_enrich,\nrecipe_metadata_enrich, ingredient_relation_infer, preference_normalize, equipment_filter,\nonboarding, image, image_quality_eval, memory_extract, memory_retrieval_embed, memory_select,\nmemory_summarize, memory_conflict_resolve.\nNot required for normal mobile clients.\n"
       }
     },
     "responses": {
@@ -2696,6 +2809,7 @@
           "image",
           "image_quality_eval",
           "memory_extract",
+          "memory_retrieval_embed",
           "memory_select",
           "memory_summarize",
           "memory_conflict_resolve",
@@ -3400,6 +3514,14 @@
             "format": "double",
             "minimum": 0,
             "description": "Recent weighted discovery score used to identify recipes gaining momentum."
+          },
+          "why_tags": {
+            "type": "array",
+            "maxItems": 4,
+            "items": {
+              "type": "string"
+            },
+            "description": "Short personalized explanation tags for Explore cards."
           }
         }
       },
@@ -3428,7 +3550,26 @@
               "trending"
             ],
             "default": "recent",
-            "description": "Sort order for the Explore feed. Only applies when query and preset_id are empty."
+            "description": "Legacy sort order for blank Explore feeds. Deprecated for the Explore client."
+          }
+        }
+      },
+      "ForYouFeedRequest": {
+        "type": "object",
+        "properties": {
+          "cursor": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 20
+          },
+          "preset_id": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -3472,6 +3613,64 @@
               "preset",
               "query"
             ]
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RecipePreview"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "no_match": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RecipeSearchNoMatch"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "ForYouFeedResponse": {
+        "type": "object",
+        "required": [
+          "feed_id",
+          "applied_context",
+          "profile_state",
+          "algorithm_version",
+          "items",
+          "next_cursor",
+          "no_match"
+        ],
+        "properties": {
+          "feed_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "applied_context": {
+            "type": "string",
+            "enum": [
+              "for_you",
+              "preset"
+            ]
+          },
+          "profile_state": {
+            "type": "string",
+            "enum": [
+              "cold",
+              "warm",
+              "established"
+            ]
+          },
+          "algorithm_version": {
+            "type": "string"
           },
           "items": {
             "type": "array",
@@ -4646,6 +4845,61 @@
           }
         }
       },
+      "MemorySearchBackfillResponse": {
+        "type": "object",
+        "required": [
+          "scanned",
+          "indexed",
+          "missing",
+          "users"
+        ],
+        "properties": {
+          "scanned": {
+            "type": "integer"
+          },
+          "indexed": {
+            "type": "integer"
+          },
+          "missing": {
+            "type": "integer"
+          },
+          "users": {
+            "type": "integer"
+          }
+        }
+      },
+      "MemorySearchRebuildResponse": {
+        "type": "object",
+        "required": [
+          "ok",
+          "user_id",
+          "active_memory_count",
+          "indexed",
+          "removed",
+          "token_estimate"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "user_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "active_memory_count": {
+            "type": "integer"
+          },
+          "indexed": {
+            "type": "integer"
+          },
+          "removed": {
+            "type": "integer"
+          },
+          "token_estimate": {
+            "type": "integer"
+          }
+        }
+      },
       "CreateAttachmentRequest": {
         "type": "object",
         "required": [
@@ -5096,6 +5350,20 @@
               "null"
             ],
             "description": "Optional originating UI surface for first-party attribution (for example explore or cookbook)."
+          },
+          "source_session_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional upstream feed or session identifier for attribution and downstream cook joins."
+          },
+          "algorithm_version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional Explore algorithm version when the save originated from For You."
           }
         }
       },
@@ -5118,8 +5386,11 @@
               "auth_completed",
               "onboarding_started",
               "onboarding_completed",
+              "explore_feed_served",
               "explore_impression",
               "explore_opened_recipe",
+              "explore_skipped_recipe",
+              "explore_hidden_recipe",
               "explore_saved_recipe",
               "chat_session_started",
               "chat_turn_submitted",

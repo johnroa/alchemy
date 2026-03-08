@@ -1,4 +1,9 @@
 import { getAdminClient, toRecord } from "@/lib/supabase-admin";
+import {
+  compareModelUsageActionRows,
+  DEFAULT_MODEL_USAGE_ACTION_SORT,
+  type ModelUsageActionSort,
+} from "@/lib/llm-analytics";
 import type { RegistryModel } from "./shared";
 
 type LlmRoute = {
@@ -67,6 +72,7 @@ const scopeLabel = (scope: string): string => {
     equipment_filter: "Equipment Filter",
     onboarding: "Onboarding",
     memory_extract: "Memory Extract",
+    memory_retrieval_embed: "Memory Retrieval Embed",
     memory_select: "Memory Select",
     memory_summarize: "Memory Summarize",
     memory_conflict_resolve: "Memory Conflict Resolve",
@@ -134,7 +140,7 @@ export const getLlmConfigData = async (): Promise<{
 };
 
 export const getModelUsageData = async (
-  options: { rangeDays?: number } = {},
+  options: { rangeDays?: number; actionSort?: ModelUsageActionSort } = {},
 ): Promise<{
   windowStart: string;
   windowEnd: string;
@@ -190,6 +196,7 @@ export const getModelUsageData = async (
   const client = getAdminClient();
   const windowEnd = new Date();
   const rangeDays = Math.max(1, Math.min(90, Math.round(options.rangeDays ?? 14)));
+  const actionSort = options.actionSort ?? DEFAULT_MODEL_USAGE_ACTION_SORT;
   const windowStart = new Date(windowEnd.getTime() - rangeDays * 24 * 60 * 60 * 1000);
   const hourlyStart = new Date(windowEnd.getTime() - 24 * 60 * 60 * 1000);
 
@@ -429,7 +436,7 @@ export const getModelUsageData = async (
       avgLatencyMs: totals.latencyCount === 0 ? 0 : Math.round(totals.latencyMsSum / totals.latencyCount)
     },
     byAction: Array.from(actionMap.values())
-      .sort((a, b) => b.totalTokens - a.totalTokens)
+      .sort((a, b) => compareModelUsageActionRows(a, b, actionSort))
       .map((row) => ({
         scope: row.scope,
         label: row.label,

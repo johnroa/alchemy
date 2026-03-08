@@ -176,6 +176,7 @@ const createDeps = (overrides: Record<string, unknown> = {}) => ({
   parseUuid: (value: string) => value,
   persistRecipe: unused,
   scheduleImageQueueDrain: () => undefined,
+  scheduleMemoryQueueDrain: () => undefined,
   mapCandidateRoleToRelation: unused,
   resolveRelationTypeId: unused,
   fetchChatMessages: async () => [] as ChatMessageView[],
@@ -367,6 +368,7 @@ const createChatClient = (params: {
 Deno.test("POST /chat returns enrolled candidate image fields and schedules drain", async () => {
   const chatClient = createChatClient({});
   const scheduled: Array<{ limit?: number }> = [];
+  const memoryScheduled: Array<{ limit?: number }> = [];
   let persistedContext: ChatSessionContext | null = null;
   const enrolled = withImageStates(candidateSetFixture(), [
     {
@@ -394,6 +396,9 @@ Deno.test("POST /chat returns enrolled candidate image fields and schedules drai
       scheduleImageQueueDrain: (input: { limit?: number }) => {
         scheduled.push({ limit: input.limit });
       },
+      scheduleMemoryQueueDrain: (input: { limit?: number }) => {
+        memoryScheduled.push({ limit: input.limit });
+      },
     }) as never,
   );
 
@@ -419,6 +424,31 @@ Deno.test("POST /chat returns enrolled candidate image fields and schedules drai
   }
   if (scheduled.length !== 1 || scheduled[0].limit !== 5) {
     throw new Error("expected image drain scheduling for candidate enrollment");
+  }
+  if (memoryScheduled.length !== 1 || memoryScheduled[0].limit !== 1) {
+    throw new Error("expected memory drain scheduling after enqueue");
+  }
+});
+
+Deno.test("POST /chat still succeeds when memory drain scheduling throws", async () => {
+  const chatClient = createChatClient({});
+
+  const response = await handleChatRoutes(
+    createRouteContext({
+      path: "/chat",
+      method: "POST",
+      body: { message: "Make dinner with a side." },
+      client: chatClient.client,
+    }) as never,
+    createDeps({
+      scheduleMemoryQueueDrain: () => {
+        throw new Error("scheduler exploded");
+      },
+    }) as never,
+  );
+
+  if (!response || response.status !== 200) {
+    throw new Error("expected POST /chat response despite memory scheduler failure");
   }
 });
 
@@ -509,6 +539,7 @@ Deno.test("POST /chat/{id}/messages returns iterated candidate image fields and 
     },
   });
   const scheduled: Array<{ limit?: number }> = [];
+  const memoryScheduled: Array<{ limit?: number }> = [];
 
   const response = await handleChatRoutes(
     createRouteContext({
@@ -568,6 +599,9 @@ Deno.test("POST /chat/{id}/messages returns iterated candidate image fields and 
       scheduleImageQueueDrain: (input: { limit?: number }) => {
         scheduled.push({ limit: input.limit });
       },
+      scheduleMemoryQueueDrain: (input: { limit?: number }) => {
+        memoryScheduled.push({ limit: input.limit });
+      },
     }) as never,
   );
 
@@ -588,5 +622,8 @@ Deno.test("POST /chat/{id}/messages returns iterated candidate image fields and 
   }
   if (scheduled.length !== 1 || scheduled[0].limit !== 5) {
     throw new Error("expected image drain scheduling for iteration");
+  }
+  if (memoryScheduled.length !== 1 || memoryScheduled[0].limit !== 1) {
+    throw new Error("expected memory drain scheduling after message enqueue");
   }
 });
