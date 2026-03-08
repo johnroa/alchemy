@@ -230,7 +230,17 @@ Deno.serve(async (request) => {
       if (method === "PATCH") {
         const body = await requireJsonBody<Record<string, unknown>>(request);
         const patch = normalizePreferencePatch(body);
-        if (!patch) {
+
+        // extended_preferences lives outside PreferenceContext. Extract
+        // it separately so chip deletions and extended-category edits
+        // from the iOS Preferences screen actually persist.
+        const extendedPatch = body.extended_preferences &&
+            typeof body.extended_preferences === "object" &&
+            !Array.isArray(body.extended_preferences)
+          ? (body.extended_preferences as Record<string, JsonValue>)
+          : undefined;
+
+        if (!patch && !extendedPatch) {
           throw new ApiError(
             400,
             "invalid_preferences_payload",
@@ -238,12 +248,14 @@ Deno.serve(async (request) => {
           );
         }
 
-        const normalizedPatch = await normalizePreferencePatchWithLlm({
-          client: serviceClient,
-          userId: auth.userId,
-          requestId,
-          patch,
-        });
+        const normalizedPatch = patch
+          ? await normalizePreferencePatchWithLlm({
+            client: serviceClient,
+            userId: auth.userId,
+            requestId,
+            patch,
+          })
+          : {};
 
         const currentPreferences = await getPreferences(client, auth.userId);
         const nextPreferences: PreferenceContext = {
@@ -251,11 +263,14 @@ Deno.serve(async (request) => {
           ...normalizedPatch,
         };
 
-        const payload = {
+        const payload: Record<string, unknown> = {
           user_id: auth.userId,
           ...nextPreferences,
           updated_at: new Date().toISOString(),
         };
+        if (extendedPatch !== undefined) {
+          payload.extended_preferences = extendedPatch;
+        }
         const { data, error } = await client.from("preferences").upsert(payload)
           .select("*").single();
         if (error) {
