@@ -17,6 +17,7 @@ import {
   shortId,
   truncate,
 } from "./types";
+import { RecipeRenderInspector } from "./recipe-render-inspector";
 
 type RecipeDetailPanelProps = {
   detail: RecipeAuditDetail | null;
@@ -139,6 +140,7 @@ export function RecipeDetailPanel({ detail, cookbookEntries }: RecipeDetailPanel
             </TabsTrigger>
             <TabsTrigger value="causality">Revision Map</TabsTrigger>
             <TabsTrigger value="canonical">Canonical Ingredients</TabsTrigger>
+            <TabsTrigger value="render">Render</TabsTrigger>
             <TabsTrigger value="semantics">Semantics</TabsTrigger>
             <TabsTrigger value="cookbook">
               Cookbook
@@ -437,6 +439,13 @@ export function RecipeDetailPanel({ detail, cookbookEntries }: RecipeDetailPanel
               </Table>
             </CardContent>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="render">
+          <RecipeRenderInspector
+            recipeId={detail.recipe.id}
+            cookbookEntries={cookbookEntries}
+          />
         </TabsContent>
 
         <TabsContent value="semantics">
