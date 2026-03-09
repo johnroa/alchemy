@@ -233,10 +233,9 @@ export const extractSemanticProfileFromMetadata = (
 export const extractUxFilterProfileFromMetadata = (
   metadata: Record<string, JsonValue> | undefined,
 ): RecipeSemanticProfile | undefined => {
-  const explicitProfile = normalizeRecipeSemanticProfile(
+  return normalizeRecipeSemanticProfile(
     metadata?.ux_filter_profile,
   );
-  return explicitProfile ?? extractSemanticProfileFromMetadata(metadata);
 };
 
 export const extractSemanticProfileFromPayload = (

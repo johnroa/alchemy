@@ -125,7 +125,7 @@ Deno.test("mergeSemanticProfiles keeps the highest-confidence descriptor for eac
   );
 });
 
-Deno.test("extractUxFilterProfileFromPayload prefers ux_filter_profile over semantic_profile", () => {
+Deno.test("extractUxFilterProfileFromPayload uses ux_filter_profile when present", () => {
   const profile = extractUxFilterProfileFromPayload({
     title: "Test Recipe",
     servings: 2,
@@ -167,6 +167,30 @@ Deno.test("extractUxFilterProfileFromPayload prefers ux_filter_profile over sema
       confidence: 0.94,
     },
   ]);
+});
+
+Deno.test("extractUxFilterProfileFromPayload does not fall back to semantic_profile", () => {
+  const profile = extractUxFilterProfileFromPayload({
+    title: "Test Recipe",
+    servings: 2,
+    ingredients: [],
+    steps: [],
+    metadata: {
+      semantic_profile: {
+        descriptors: [
+          {
+            id: "health:high_protein",
+            axis: "health",
+            key: "high_protein",
+            label: "High Protein",
+            confidence: 0.96,
+          },
+        ],
+      },
+    },
+  });
+
+  assertEquals(profile, undefined);
 });
 
 Deno.test("buildSuggestedChips returns broad axis coverage before repeating an axis", () => {
