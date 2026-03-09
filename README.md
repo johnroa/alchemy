@@ -130,6 +130,7 @@ Next.js 15 App Router. All pages under `app/(admin)/`:
 | `/recipes` | Split-panel recipe audit — coverage snapshot cards, velocity deltas, version timeline + prompt trace |
 | `/images` | Consolidated image pipeline — overview, live queue, shared assets/reuse provenance, QA tooling |
 | `/imports` | Recipe import telemetry — KPI cards, source/strategy breakdown, recent imports, failure details |
+| `/flags` | Runtime flag control plane — per-environment values, payloads, preview, and archive lifecycle |
 | `/ingredients` | Canonical ingredient registry with semantic food icons, enrichment metadata, and ontology links |
 | `/graph` | Entity relationship graph — force-directed canvas with type filters, fullscreen, and confidence-ranked edges |
 | `/provider-model` | Model Assignments — LLM model routing per scope |
@@ -165,6 +166,7 @@ Next.js 15 App Router. All pages under `app/(admin)/`:
 - Personalized Explore performance is analyzed through `explore_impression_outcomes`, which joins feed serves, impressions, opens, saves, and inferred cooks.
 - The authenticated client ingestion endpoint for batched product events is `POST /telemetry/behavior`.
 - The anonymous pre-auth install ingestion endpoint is `POST /telemetry/install`.
+- Runtime rollout and remote-config values are managed in Admin via `Operations / Flags`, not environment variables.
 - iOS generates a stable local `install_id` on first launch and propagates it through both telemetry endpoints plus the `X-Install-Id` request header for authenticated API calls.
 
 ---

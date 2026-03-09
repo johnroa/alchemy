@@ -45,6 +45,7 @@ import { handleDemandRoutes } from "./routes/demand.ts";
 import { handleMetadataRoutes } from "./routes/metadata.ts";
 import { handleOnboardingRoutes } from "./routes/onboarding.ts";
 import { handleImportRoutes } from "./routes/import.ts";
+import { handleFeatureFlagRoutes } from "./routes/flags.ts";
 import { handleInstallTelemetryRoutes } from "./routes/install-telemetry.ts";
 import { handleRecipeRoutes } from "./routes/recipes.ts";
 import { handleTelemetryRoutes } from "./routes/telemetry.ts";
@@ -210,6 +211,11 @@ Deno.serve(async (request) => {
     const telemetryResponse = await handleTelemetryRoutes(routeContext);
     if (telemetryResponse) {
       return telemetryResponse;
+    }
+
+    const featureFlagResponse = await handleFeatureFlagRoutes(routeContext);
+    if (featureFlagResponse) {
+      return featureFlagResponse;
     }
 
     // ── GET/PATCH /preferences ──

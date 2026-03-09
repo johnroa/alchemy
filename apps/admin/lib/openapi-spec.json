@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Alchemy API",
-    "version": "3.8.0",
+    "version": "3.8.1",
     "description": "API contract for Alchemy — an AI-driven recipe creation and management platform.\nCovers the user-facing v1 API at api.cookwithalchemy.com and the admin API at admin.cookwithalchemy.com.\n"
   },
   "servers": [
@@ -49,6 +49,71 @@
                     },
                     "request_id": {
                       "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/flags/resolve": {
+      "post": {
+        "summary": "Resolve runtime flags for the current environment",
+        "description": "Returns DB-backed runtime flag values for the authenticated caller.\nEvaluation is server-side only and scoped to the inferred deployment environment.\n",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveFlagsRequest"
+              },
+              "examples": {
+                "rolloutFlags": {
+                  "value": {
+                    "keys": [
+                      "recipe_canon_match",
+                      "same_canon_image_judge"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Flag resolution response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResolveFlagsResponse"
+                },
+                "examples": {
+                  "production": {
+                    "value": {
+                      "environment": "production",
+                      "revision": 4,
+                      "flags": {
+                        "recipe_canon_match": {
+                          "enabled": true,
+                          "payload": {
+                            "mode": "shadow"
+                          },
+                          "reason": "resolved",
+                          "flag_type": "operational"
+                        },
+                        "same_canon_image_judge": {
+                          "enabled": false,
+                          "payload": null,
+                          "reason": "resolved",
+                          "flag_type": "operational"
+                        }
+                      }
                     }
                   }
                 }
@@ -5691,6 +5756,91 @@
             "type": "array",
             "items": {
               "type": "string"
+            }
+          }
+        }
+      },
+      "ResolveFlagsRequest": {
+        "type": "object",
+        "required": [
+          "keys"
+        ],
+        "properties": {
+          "keys": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9._-]*$"
+            }
+          }
+        }
+      },
+      "FeatureFlagResolution": {
+        "type": "object",
+        "required": [
+          "enabled",
+          "payload",
+          "reason",
+          "flag_type"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "payload": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "resolved",
+              "missing",
+              "archived"
+            ]
+          },
+          "flag_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "release",
+              "operational",
+              "kill_switch",
+              "permission",
+              null
+            ]
+          }
+        }
+      },
+      "ResolveFlagsResponse": {
+        "type": "object",
+        "required": [
+          "environment",
+          "revision",
+          "flags"
+        ],
+        "properties": {
+          "environment": {
+            "type": "string",
+            "enum": [
+              "development",
+              "production"
+            ]
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "flags": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/FeatureFlagResolution"
             }
           }
         }

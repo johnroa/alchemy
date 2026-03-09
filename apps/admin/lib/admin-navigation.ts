@@ -7,6 +7,7 @@ import {
   Brain,
   Carrot,
   Database,
+  Flag,
   FolderKanban,
   FlaskConical,
   History,
@@ -342,6 +343,15 @@ export const ADMIN_PAGES: AdminPageMeta[] = [
     description: "Recipe metadata queue inspection and controls.",
     href: "/operations/metadata",
     icon: Database,
+  },
+  {
+    key: "operations-flags",
+    section: "operations",
+    title: "Flags",
+    navLabel: "Flags",
+    description: "Runtime feature flag registry and per-environment controls.",
+    href: "/operations/flags",
+    icon: Flag,
   },
   {
     key: "operations-memory",

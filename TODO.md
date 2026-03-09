@@ -73,7 +73,14 @@ Remaining work after the shipped acquisition-ready telemetry slice. This file is
   - `personalization_maturity`
   - `taste_cluster`
   - `monetization_state`
-- Add feature flags and experiments with deterministic assignment, exposure logging, and kill switches.
+- Runtime flags v1 is shipped. V2 should add:
+  - segment targeting with typed built-in attributes
+  - multivariate experiment variants and weighted rollout
+  - sticky bucketing on `user_id` / `install_id`
+  - exposure logging and admin experiment visibility
+  - per-surface targeting and app-version rules
+  - prerequisite/dependent flags
+  - future client SDK / local evaluation if needed
 - Add first-party lifecycle/campaign primitives that replace Customer.io-like orchestration inside Alchemy admin.
 
 ## Delivery And Monetization Adapters

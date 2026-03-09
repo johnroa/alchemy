@@ -5,6 +5,7 @@ Edge function implementing `/v1/*` routes.
 ## Implemented routes
 
 - `GET /v1/recipes/{id}`
+- `POST /v1/flags/resolve`
 - `POST /v1/recipes/{id}/save`
 - `DELETE /v1/recipes/{id}/save`
 - `GET /v1/collections`
@@ -50,6 +51,7 @@ Edge function implementing `/v1/*` routes.
 - Active provider/model route is read from `llm_model_routes`.
 - Prompt instructions are read from `llm_prompts`.
 - Policy rules are read from `llm_rules`.
+- Runtime rollout and remote-config values are read from the feature flag tables and resolved through `POST /v1/flags/resolve`.
 - All LLM calls are executed through the shared pipeline:
   - `supabase/functions/_shared/llm-scope-registry.ts`
   - `supabase/functions/_shared/llm-executor.ts`

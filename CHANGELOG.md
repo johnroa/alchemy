@@ -2,6 +2,14 @@
 
 ## [Unreleased] — 2026-03-08
 
+### Runtime Flags v1 + Admin Flags Control Plane (v3.8.1)
+
+- Added a DB-backed runtime flags system with `feature_flag_environments`, `feature_flags`, `feature_flag_environment_configs`, and `feature_flag_state_revisions`.
+- Added authenticated `POST /flags/resolve` for server-side flag resolution across `development` and `production`, with short-lived compiled-state caching keyed by per-environment revision.
+- Added Admin `Operations / Flags` plus admin APIs for listing, creating, updating, archiving, and previewing runtime flags.
+- Migrated the first rollout consumers off env vars: `recipe_canon_match` and `same_canon_image_judge` now resolve from runtime flags instead of process env.
+- Added shared flag types/evaluator utilities, targeted backend/admin tests, and logged segment/experiment work as explicit V2 follow-up instead of shipping an overbuilt experimentation system now.
+
 ### Enterprise-Ready Demand Graph + Admin Demand Analytics (v3.8.0)
 
 - Added internal-first demand graph storage with append-only `demand_observations`, `demand_fact_values`, `demand_outcomes`, `demand_graph_edges`, and `demand_extraction_jobs`.

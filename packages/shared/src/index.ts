@@ -29,6 +29,26 @@ export {
   type InstallTelemetryEventType,
   type LifecycleStage,
 } from "./acquisition";
+export {
+  FEATURE_FLAG_ENVIRONMENTS,
+  FEATURE_FLAG_KEY_PATTERN,
+  FEATURE_FLAG_RESOLUTION_REASONS,
+  FEATURE_FLAG_TYPES,
+  evaluateCompiledFeatureFlags,
+  isFeatureFlagEnvironment,
+  isFeatureFlagKey,
+  isFeatureFlagPayload,
+  isFeatureFlagType,
+  normalizeFeatureFlagKey,
+  type CompiledFeatureFlag,
+  type FeatureFlagEnvironment,
+  type FeatureFlagPayload,
+  type FeatureFlagResolution,
+  type FeatureFlagResolutionReason,
+  type FeatureFlagType,
+  type ResolveFlagsRequest,
+  type ResolveFlagsResponse,
+} from "./feature-flags";
 
 export {
   resolveIngredientIconKey,

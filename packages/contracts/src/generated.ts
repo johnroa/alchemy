@@ -48,6 +48,51 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/flags/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resolve runtime flags for the current environment
+         * @description Returns DB-backed runtime flag values for the authenticated caller.
+         *     Evaluation is server-side only and scoped to the inferred deployment environment.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["ResolveFlagsRequest"];
+                };
+            };
+            responses: {
+                /** @description Flag resolution response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ResolveFlagsResponse"];
+                    };
+                };
+                default: components["responses"]["ErrorResponse"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/recipes/{id}": {
         parameters: {
             query?: never;
@@ -3169,6 +3214,27 @@ export interface components {
             accepted: number;
             rejected: number;
             rejected_event_types: string[];
+        };
+        ResolveFlagsRequest: {
+            keys: string[];
+        };
+        FeatureFlagResolution: {
+            enabled: boolean;
+            payload: {
+                [key: string]: unknown;
+            } | null;
+            /** @enum {string} */
+            reason: "resolved" | "missing" | "archived";
+            /** @enum {string|null} */
+            flag_type: "release" | "operational" | "kill_switch" | "permission" | null;
+        };
+        ResolveFlagsResponse: {
+            /** @enum {string} */
+            environment: "development" | "production";
+            revision: number;
+            flags: {
+                [key: string]: components["schemas"]["FeatureFlagResolution"];
+            };
         };
         DemandJobsProcessResponse: {
             reaped: number;

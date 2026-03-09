@@ -223,6 +223,7 @@ export const handleDetailRoutes = async (
       serviceClient,
       userId: auth.userId,
       requestId,
+      requestUrl: request.url,
       payload: canonicalPayload,
       diffSummary: `Attachment (${relationType})`,
       selectedMemoryIds: contextPack.selectedMemoryIds,

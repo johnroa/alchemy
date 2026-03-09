@@ -11,6 +11,7 @@ import {
   loadIngredientNameById,
 } from "./recipe-enrichment.ts";
 import { persistRecipe } from "./recipe-persistence.ts";
+import { resolveRuntimeFlag } from "./feature-flags.ts";
 
 export type RecipeIdentityResolutionReason =
   | "exact_content_fingerprint"
@@ -329,17 +330,41 @@ export const buildRecipeIdentityDescriptor = async (params: {
   };
 };
 
-export const getRecipeCanonMatchMode = (): RecipeCanonMatchMode => {
-  const raw = Deno.env.get("ALCHEMY_RECIPE_CANON_MATCH_MODE")?.trim().toLowerCase();
-  if (raw === "shadow" || raw === "enforce") {
-    return raw;
+export const resolveRecipeCanonMatchMode = async (params: {
+  serviceClient: SupabaseClient;
+  requestUrl?: string;
+}): Promise<RecipeCanonMatchMode> => {
+  const resolved = await resolveRuntimeFlag({
+    serviceClient: params.serviceClient,
+    key: "recipe_canon_match",
+    requestUrl: params.requestUrl,
+  });
+
+  if (!resolved.enabled) {
+    return "off";
   }
-  return "off";
+
+  const mode = typeof resolved.payload?.mode === "string"
+    ? resolved.payload.mode.trim().toLowerCase()
+    : null;
+
+  if (mode === "enforce") {
+    return "enforce";
+  }
+
+  return "shadow";
 };
 
-export const isSameCanonImageJudgeEnabled = (): boolean => {
-  const raw = Deno.env.get("ALCHEMY_SAME_CANON_IMAGE_JUDGE")?.trim().toLowerCase();
-  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+export const resolveSameCanonImageJudgeEnabled = async (params: {
+  serviceClient: SupabaseClient;
+  requestUrl?: string;
+}): Promise<boolean> => {
+  const resolved = await resolveRuntimeFlag({
+    serviceClient: params.serviceClient,
+    key: "same_canon_image_judge",
+    requestUrl: params.requestUrl,
+  });
+  return resolved.enabled;
 };
 
 export const serializeVector = (vector: number[]): string => {
@@ -677,6 +702,7 @@ export const resolveAndPersistCanonicalRecipe = async (params: {
   serviceClient: SupabaseClient;
   userId: string;
   requestId: string;
+  requestUrl?: string;
   payload: RecipePayload;
   sourceChatId?: string;
   diffSummary?: string;
@@ -718,7 +744,10 @@ export const resolveAndPersistCanonicalRecipe = async (params: {
     };
   }
 
-  const canonMatchMode = getRecipeCanonMatchMode();
+  const canonMatchMode = await resolveRecipeCanonMatchMode({
+    serviceClient: params.serviceClient,
+    requestUrl: params.requestUrl,
+  });
   let candidates: RecipeIdentityCandidate[] = [];
   let canonMatch: RecipeCanonMatchResult | null = null;
   if (canonMatchMode !== "off") {

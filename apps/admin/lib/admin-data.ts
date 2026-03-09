@@ -65,3 +65,4 @@ export {
   getSimulationData,
 } from "./admin-data/simulations";
 export { getImportData } from "./admin-data/imports";
+export { getFeatureFlagsData } from "./admin-data/flags";

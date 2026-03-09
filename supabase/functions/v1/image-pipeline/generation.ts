@@ -16,7 +16,6 @@ import { llmGateway, type ModelOverrideMap } from "../../_shared/llm-gateway.ts"
 import type { JsonValue } from "../../_shared/types.ts";
 import {
   type ImageResolutionReason,
-  isSameCanonImageJudgeEnabled,
   logImageIdentityResolution,
 } from "../lib/recipe-identity.ts";
 import { loadRecipeSearchDocumentSource, upsertRecipeSearchDocument } from "../recipe-search.ts";
@@ -541,5 +540,3 @@ export const ensureRequestEmbedding = async (params: {
 
   return embedded.vector;
 };
-
-export { isSameCanonImageJudgeEnabled };

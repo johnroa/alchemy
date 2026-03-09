@@ -85,6 +85,7 @@ export type RecipesDeps = {
     serviceClient: RouteContext["serviceClient"];
     userId: string;
     requestId: string;
+    requestUrl?: string;
     payload: RecipePayload;
     sourceChatId?: string;
     diffSummary?: string;

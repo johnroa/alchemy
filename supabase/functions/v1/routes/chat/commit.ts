@@ -403,6 +403,7 @@ export const handleCommit = async (
           serviceClient,
           userId: auth.userId,
           requestId,
+          requestUrl: request.url,
           payload: canonicalPayload,
           sourceChatId: chatId,
           diffSummary: `Committed from chat candidate (${component.role})`,
