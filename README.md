@@ -107,6 +107,9 @@ xcodebuild -project Alchemy.xcodeproj -scheme Alchemy \
 open Alchemy.xcodeproj
 ```
 
+For saved-recipe and cookbook flows, also read
+[apps/ios/private-first-cookbook.md](/Users/john/Projects/alchemy/apps/ios/private-first-cookbook.md).
+
 ### Configuration
 
 Supabase and Sentry settings are injected into `Info.plist` at build time via `Configuration/Debug.xcconfig`, `Configuration/Release.xcconfig`, and optional `Configuration/Local.xcconfig` overrides.
