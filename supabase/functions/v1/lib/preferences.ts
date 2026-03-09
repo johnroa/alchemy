@@ -477,10 +477,14 @@ export const normalizePreferenceStringArray = (
     uniqueEntries.push(entry);
   }
 
-  // If the input array had items but none yielded valid strings
-  // (all were non-string objects we couldn't extract from), return
-  // undefined to avoid accidentally clearing the list.
-  if (uniqueEntries.length === 0 && Array.isArray(value) && value.length > 0) {
+  // An empty result means "no items" — but from the LLM that should be
+  // interpreted as "don't touch this field", not "clear it." An explicit
+  // empty array from the model (or an array where all items were invalid)
+  // must return undefined so callers skip the field entirely. Only a
+  // non-empty array should be treated as a real update. The direct PATCH
+  // endpoint (settings UI) does not go through this function, so users
+  // can still explicitly clear fields via the Preferences screen.
+  if (uniqueEntries.length === 0) {
     return undefined;
   }
 
@@ -683,6 +687,42 @@ export const normalizePreferencePatchDeterministic = (
   return normalized;
 };
 
+// Keys that live in the extended_preferences JSONB column rather than
+// as top-level columns on the preferences table. When the LLM emits
+// preference_updates with these keys, we must patch extended_preferences
+// rather than the top-level columns.
+const EXTENDED_PREFERENCE_KEYS = new Set([
+  "pantry_staples",
+  "health_goals",
+  "spice_tolerance",
+  "cooking_style",
+  "household_detail",
+  "time_budget",
+  "budget",
+  "kitchen_environment",
+]);
+
+/**
+ * Extracts extended-preference fields from the raw LLM preference_updates
+ * object. Returns a map of key → string[] for any recognised extended keys,
+ * or null if none were found.
+ */
+const extractExtendedPreferencePatch = (
+  raw: unknown,
+): Record<string, { values: string[]; propagation: string }> | null => {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const obj = raw as Record<string, unknown>;
+  const patch: Record<string, { values: string[]; propagation: string }> = {};
+  for (const key of Object.keys(obj)) {
+    if (!EXTENDED_PREFERENCE_KEYS.has(key)) continue;
+    const values = normalizePreferenceStringArray(obj[key]);
+    if (values && values.length > 0) {
+      patch[key] = { values, propagation: "preference" };
+    }
+  }
+  return Object.keys(patch).length > 0 ? patch : null;
+};
+
 export const applyModelPreferenceUpdates = async (params: {
   client: SupabaseClient;
   serviceClient: SupabaseClient;
@@ -694,39 +734,59 @@ export const applyModelPreferenceUpdates = async (params: {
   userMessages?: string[];
 }): Promise<PreferenceContext> => {
   const patch = normalizePreferencePatch(params.preferenceUpdates);
-  if (!patch) {
+  const extendedPatch = extractExtendedPreferencePatch(
+    params.preferenceUpdates,
+  );
+
+  if (!patch && !extendedPatch) {
     return params.currentPreferences;
   }
 
-  const safePatch = normalizePreferencePatchDeterministic(
-    sanitizeModelPreferencePatch(patch),
-  );
+  const safePatch = patch
+    ? normalizePreferencePatchDeterministic(
+      sanitizeModelPreferencePatch(patch),
+    )
+    : {};
 
-  if (Object.keys(safePatch).length === 0) {
+  const hasTopLevel = Object.keys(safePatch).length > 0;
+  if (!hasTopLevel && !extendedPatch) {
     return params.currentPreferences;
+  }
+
+  // Build the DB update payload. For extended preferences, we merge
+  // new entries into the existing JSONB rather than replacing it.
+  const updatePayload: Record<string, unknown> = {
+    ...(hasTopLevel ? safePatch : {}),
+    updated_at: new Date().toISOString(),
+  };
+
+  if (extendedPatch) {
+    // Load current extended_preferences to merge (not overwrite).
+    const { data: currentRow } = await params.client
+      .from("preferences")
+      .select("extended_preferences")
+      .eq("user_id", params.userId)
+      .single();
+    const currentExtended =
+      (currentRow?.extended_preferences as Record<string, JsonValue>) ?? {};
+    updatePayload.extended_preferences = {
+      ...currentExtended,
+      ...extendedPatch,
+    };
   }
 
   // CRITICAL: Only update the fields the LLM actually changed. The old
   // approach did a full-row upsert with { ...currentPreferences, ...safePatch },
   // but currentPreferences can be stale (loaded at session start, not at
   // this turn). A stale upsert would overwrite good data with old empty values.
-  // Using .update() with only safePatch ensures we never wipe fields the LLM
-  // didn't explicitly touch.
+  // Using .update() with only the changed fields ensures we never wipe fields
+  // the LLM didn't explicitly touch.
   const { data, error } = await params.client
     .from("preferences")
-    .update({
-      ...safePatch,
-      updated_at: new Date().toISOString(),
-    })
+    .update(updatePayload)
     .eq("user_id", params.userId)
     .select("*")
     .single();
-
-  // Build the merged view for in-memory use downstream
-  const nextPreferences: PreferenceContext = {
-    ...params.currentPreferences,
-    ...safePatch,
-  };
 
   if (error) {
     console.error("preferences_auto_update_failed", error);

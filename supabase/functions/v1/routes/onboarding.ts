@@ -252,17 +252,41 @@ export const handleOnboardingRoutes = async (
         state: interview.onboarding_state.state,
       };
 
+    // Build merged presentation_preferences with onboarding_state.
+    // CRITICAL: Only update presentation_preferences — do NOT spread
+    // effectivePreferences into a full-row upsert. applyModelPreferenceUpdates
+    // already did a safe partial .update() for LLM-changed fields. A full
+    // upsert here would overwrite preferences with stale data loaded at
+    // request start, causing repeated preference wipes when the LLM returns
+    // empty arrays or when another request modified preferences concurrently.
+    const { data: currentPrefRow } = await client
+      .from("preferences")
+      .select("presentation_preferences")
+      .eq("user_id", auth.userId)
+      .single();
+
+    const currentPresentationPrefs =
+      currentPrefRow?.presentation_preferences &&
+      typeof currentPrefRow.presentation_preferences === "object" &&
+      !Array.isArray(currentPrefRow.presentation_preferences)
+        ? (currentPrefRow.presentation_preferences as Record<string, JsonValue>)
+        : {};
+
     const mergedPresentationPreferences = {
-      ...(effectivePreferences.presentation_preferences ?? {}),
+      ...currentPresentationPrefs,
       onboarding_state: onboardingState,
     } as Record<string, JsonValue>;
 
+    // Use upsert with ONLY user_id + presentation_preferences. The
+    // user_id is needed for the upsert's on-conflict key (first
+    // onboarding call may not have a preferences row yet). We
+    // intentionally do NOT spread effectivePreferences — that would
+    // overwrite fields with stale data from the request-start snapshot.
     const { data: persistedPreferences, error: persistedPreferencesError } =
       await client
         .from("preferences")
         .upsert({
           user_id: auth.userId,
-          ...effectivePreferences,
           presentation_preferences: mergedPresentationPreferences,
           updated_at: new Date().toISOString(),
         })
