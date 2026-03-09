@@ -1,9 +1,10 @@
 import { ApiError } from "../errors.ts";
+import type { StructuredOutputDefinition } from "../llm-executor.ts";
 import {
+  normalizeTextValue,
   parseJsonFromText,
   parseResponseOutputJson,
   parseResponseOutputText,
-  normalizeTextValue,
   truncateErrorDetailText,
 } from "../llm-parsers.ts";
 import type { JsonValue } from "../types.ts";
@@ -46,12 +47,23 @@ const buildOpenAiRequestBody = (params: {
   systemPrompt: string;
   userInput: Record<string, JsonValue>;
   config: Record<string, JsonValue>;
+  structuredOutput?: StructuredOutputDefinition;
 }): Record<string, JsonValue> => {
+  const structuredFormat = params.structuredOutput
+    ? {
+      name: params.structuredOutput.name,
+      schema: params.structuredOutput.schema,
+      strict: params.structuredOutput.strict ?? true,
+    }
+    : null;
+
   if (params.apiMode === "chat_completions") {
     return {
       model: params.model,
       ...params.config,
-      response_format: { type: "json_object" },
+      response_format: structuredFormat
+        ? { type: "json_schema", json_schema: structuredFormat }
+        : { type: "json_object" },
       messages: [
         {
           role: "system",
@@ -81,7 +93,11 @@ const buildOpenAiRequestBody = (params: {
         }],
       },
     ],
-    text: { format: { type: "json_object" } },
+    text: {
+      format: structuredFormat
+        ? { type: "json_schema", ...structuredFormat }
+        : { type: "json_object" },
+    },
   };
 };
 
@@ -90,6 +106,7 @@ export const callOpenAiJson = async <T>(params: {
   modelConfig: Record<string, JsonValue>;
   systemPrompt: string;
   userInput: Record<string, JsonValue>;
+  structuredOutput?: StructuredOutputDefinition;
 }): Promise<ProviderResult<T>> => {
   const modelConfig = normalizeOpenAiModelConfig({
     model: params.model,
@@ -182,6 +199,7 @@ export const callOpenAiJson = async <T>(params: {
           systemPrompt: params.systemPrompt,
           userInput: params.userInput,
           config: adaptiveConfig,
+          structuredOutput: params.structuredOutput,
         })),
       });
     } catch (error) {
@@ -259,10 +277,21 @@ export const callOpenAiJson = async <T>(params: {
 
   if (apiMode === "chat_completions") {
     const completionPayload = payload as {
-      choices?: Array<{ message?: { content?: string | null } }>;
       usage?: { prompt_tokens?: number; completion_tokens?: number };
     };
-    const outputText = completionPayload.choices?.[0]?.message?.content ?? "";
+    const outputJson = parseResponseOutputJson(payload);
+    if (outputJson) {
+      return {
+        result: outputJson as T,
+        inputTokens: completionPayload.usage?.prompt_tokens ?? 0,
+        outputTokens: completionPayload.usage?.completion_tokens ?? 0,
+      };
+    }
+
+    const messagePayload = payload as {
+      choices?: Array<{ message?: { content?: string | null } }>;
+    };
+    const outputText = messagePayload.choices?.[0]?.message?.content ?? "";
     if (!outputText) {
       throw new ApiError(
         502,
@@ -592,9 +621,10 @@ export const callOpenAiImage = async (params: {
   const quality = typeof params.modelConfig.quality === "string"
     ? params.modelConfig.quality
     : "high";
-  const requestedResponseFormat = typeof params.modelConfig.response_format === "string"
-    ? params.modelConfig.response_format
-    : null;
+  const requestedResponseFormat =
+    typeof params.modelConfig.response_format === "string"
+      ? params.modelConfig.response_format
+      : null;
   const isDallEModel = params.model.toLowerCase().startsWith("dall-e");
   const timeoutCandidate = Number(params.modelConfig.timeout_ms);
   const timeoutMs = Number.isFinite(timeoutCandidate)

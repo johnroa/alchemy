@@ -66,13 +66,13 @@ export const buildVariantConstraintList = (
 const loadExistingVariantSeed = async (params: {
   serviceClient: SupabaseClient;
   userId: string;
-  recipeId: string;
+  cookbookEntryId: string;
 }): Promise<VariantRowSeed> => {
   const { data, error } = await params.serviceClient
     .from("user_recipe_variants")
     .select("id,current_version_id,accumulated_manual_edits")
     .eq("user_id", params.userId)
-    .eq("canonical_recipe_id", params.recipeId)
+    .eq("cookbook_entry_id", params.cookbookEntryId)
     .maybeSingle();
 
   if (error) {
@@ -92,8 +92,9 @@ export const materializeRecipeVariant = async (params: {
   serviceClient: SupabaseClient;
   userId: string;
   requestId: string;
-  recipeId: string;
-  canonicalVersionId: string;
+  cookbookEntryId: string;
+  recipeId?: string | null;
+  canonicalVersionId?: string | null;
   canonicalPayload: RecipePayload;
   preferences: PreferenceContext;
   computePreferenceFingerprint: (
@@ -126,18 +127,20 @@ export const materializeRecipeVariant = async (params: {
   const preferenceContext = buildVariantPreferenceContext(params.preferences);
   const userConstraints = buildVariantConstraintList(params.preferences);
   const graphSubstitutions = userConstraints.length > 0
-    ? await params.fetchGraphSubstitutions({
-      serviceClient: params.serviceClient,
-      recipeVersionId: params.canonicalVersionId,
-      constraints: userConstraints,
-    })
+    ? params.canonicalVersionId
+      ? await params.fetchGraphSubstitutions({
+        serviceClient: params.serviceClient,
+        recipeVersionId: params.canonicalVersionId,
+        constraints: userConstraints,
+      })
+      : []
     : [];
 
   const existingVariant = params.existingVariant === undefined
     ? await loadExistingVariantSeed({
       serviceClient: params.serviceClient,
       userId: params.userId,
-      recipeId: params.recipeId,
+      cookbookEntryId: params.cookbookEntryId,
     })
     : params.existingVariant;
   const storedEdits = normalizeStoredManualEdits(
@@ -206,9 +209,10 @@ export const materializeRecipeVariant = async (params: {
       .insert({
         id: variantId,
         user_id: params.userId,
-        canonical_recipe_id: params.recipeId,
+        cookbook_entry_id: params.cookbookEntryId,
+        canonical_recipe_id: params.recipeId ?? null,
         current_version_id: null,
-        base_canonical_version_id: params.canonicalVersionId,
+        base_canonical_version_id: params.canonicalVersionId ?? null,
         preference_fingerprint: fingerprint,
         stale_status: variantStatus,
         accumulated_manual_edits: updatedManualEdits,
@@ -232,7 +236,7 @@ export const materializeRecipeVariant = async (params: {
     .insert({
       variant_id: variantId,
       parent_variant_version_id: existingVariant?.current_version_id ?? null,
-      source_canonical_version_id: params.canonicalVersionId,
+      source_canonical_version_id: params.canonicalVersionId ?? null,
       payload: result.recipe as unknown as JsonValue,
       derivation_kind: derivationKind,
       provenance,
@@ -253,7 +257,8 @@ export const materializeRecipeVariant = async (params: {
     .from("user_recipe_variants")
     .update({
       current_version_id: newVersion.id,
-      base_canonical_version_id: params.canonicalVersionId,
+      canonical_recipe_id: params.recipeId ?? null,
+      base_canonical_version_id: params.canonicalVersionId ?? null,
       preference_fingerprint: fingerprint,
       stale_status: variantStatus,
       accumulated_manual_edits: updatedManualEdits,
@@ -277,8 +282,8 @@ export const materializeRecipeVariant = async (params: {
       active_variant_id: variantId,
       updated_at: personalizedAt,
     })
-    .eq("user_id", params.userId)
-    .eq("canonical_recipe_id", params.recipeId);
+    .eq("id", params.cookbookEntryId)
+    .eq("user_id", params.userId);
 
   if (cookbookUpdateError) {
     throw new ApiError(

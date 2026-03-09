@@ -14,9 +14,13 @@ import type {
   ContextPack,
   PreferenceContext,
   RouteContext,
+  VariantStatus,
 } from "../shared.ts";
+import type { CookbookCanonicalStatus } from "../../lib/private-cookbook.ts";
 
-export type AssistantChatResponse = Awaited<ReturnType<typeof llmGateway.converseChat>>;
+export type AssistantChatResponse = Awaited<
+  ReturnType<typeof llmGateway.converseChat>
+>;
 
 export type OrchestratedChatTurn = {
   assistantChatResponse: AssistantChatResponse;
@@ -27,6 +31,8 @@ export type OrchestratedChatTurn = {
   responseContext: ChatLoopResponse["response_context"] | null;
   justGenerated: boolean;
   generationDeferred: boolean;
+  llmLatencyMs: number;
+  recoveryPath: string | null;
 };
 
 export type ChatDeps = {
@@ -38,7 +44,14 @@ export type ChatDeps = {
     prompt: string;
     context: Record<string, JsonValue>;
     selectionMode?: "llm" | "fast";
-  }) => Promise<ContextPack>;
+    retrievalMode?: "none" | "retrieve";
+  }) => Promise<{
+    pack: ContextPack;
+    metrics: {
+      contextLoadMs: number;
+      memoryRetrievalMs: number;
+    };
+  }>;
   buildThreadForPrompt: (
     messages: ChatMessageView[],
   ) => Array<{ role: string; content: string }>;
@@ -146,7 +159,7 @@ export type ChatDeps = {
     userId: string;
     requestId: string;
     payload: RecipePayload;
-    preferences: Record<string, JsonValue>;
+    lineageMetadata?: Record<string, JsonValue>;
     modelOverrides?: RouteContext["modelOverrides"];
   }) => Promise<RecipePayload>;
   persistRecipe: (input: {
@@ -174,7 +187,10 @@ export type ChatDeps = {
     selectedMemoryIds?: string[];
     modelOverrides?: RouteContext["modelOverrides"];
   }) => Promise<{
-    action: "reuse_existing_version" | "append_existing_canon" | "create_new_canon";
+    action:
+      | "reuse_existing_version"
+      | "append_existing_canon"
+      | "create_new_canon";
     reason: string;
     recipeId: string;
     versionId: string;
@@ -184,6 +200,57 @@ export type ChatDeps = {
     judgeCandidateCount: number;
     judgeConfidence: number | null;
   }>;
+  createPrivateCookbookEntry: (input: {
+    serviceClient: RouteContext["serviceClient"];
+    userId: string;
+    requestId: string;
+    payload: RecipePayload;
+    sourceKind: "created_private" | "imported_private";
+    previewImageUrl?: string | null;
+    previewImageStatus?: string | null;
+    sourceChatId?: string | null;
+    selectedMemoryIds?: string[];
+    computePreferenceFingerprint: (
+      preferences: PreferenceContext,
+    ) => Promise<string | null>;
+    computeVariantTags: (params: {
+      canonicalPayload: RecipePayload;
+      variantPayload: RecipePayload;
+      tagDiff: { added: string[]; removed: string[] };
+    }) => Record<string, unknown>;
+    preferences: PreferenceContext;
+  }) => Promise<{
+    cookbookEntryId: string;
+    variantId: string;
+    variantVersionId: string;
+    canonicalStatus: CookbookCanonicalStatus;
+    variantStatus: VariantStatus;
+  }>;
+  deriveCanonicalForCookbookEntry: (input: {
+    serviceClient: RouteContext["serviceClient"];
+    userId: string;
+    requestId: string;
+    cookbookEntryId: string;
+    canonicalizeRecipePayload: ChatDeps["canonicalizeRecipePayload"];
+    resolveAndPersistCanonicalRecipe:
+      ChatDeps["resolveAndPersistCanonicalRecipe"];
+    ensurePersistedRecipeImageRequest?:
+      ChatDeps["ensurePersistedRecipeImageRequest"];
+    scheduleImageQueueDrain?: ChatDeps["scheduleImageQueueDrain"];
+    modelOverrides?: RouteContext["modelOverrides"];
+  }) => Promise<{
+    cookbookEntryId: string;
+    canonicalRecipeId: string | null;
+    canonicalStatus: CookbookCanonicalStatus;
+  }>;
+  computePreferenceFingerprint: (
+    preferences: PreferenceContext,
+  ) => Promise<string | null>;
+  computeVariantTags: (params: {
+    canonicalPayload: RecipePayload;
+    variantPayload: RecipePayload;
+    tagDiff: { added: string[]; removed: string[] };
+  }) => Record<string, unknown>;
   ensurePersistedRecipeImageRequest: (input: {
     serviceClient: RouteContext["serviceClient"];
     userId: string;
@@ -209,7 +276,14 @@ export type ChatDeps = {
     sourceKind: string;
     sourceId: string;
     userId?: string | null;
-    stage: "intent" | "iteration" | "import" | "selection" | "commit" | "consumption" | "feedback";
+    stage:
+      | "intent"
+      | "iteration"
+      | "import"
+      | "selection"
+      | "commit"
+      | "consumption"
+      | "feedback";
     extractorScope: string;
     extractorVersion?: number;
     observedAt?: string | null;

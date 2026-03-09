@@ -82,7 +82,10 @@ struct VariantTags: Decodable, Hashable {
 /// recipe preview data plus variant status. When a variant exists, summary
 /// and tags reflect the personalised version; title always stays canonical.
 struct CookbookEntryItem: Decodable, Identifiable, Hashable {
-    let canonicalRecipeId: String
+    let cookbookEntryId: String
+    let canonicalRecipeId: String?
+    let recipeId: String?
+    let canonicalStatus: String
     let title: String
     let summary: String
     let imageUrl: String?
@@ -99,12 +102,16 @@ struct CookbookEntryItem: Decodable, Identifiable, Hashable {
     let variantTags: VariantTags?
     let matchedChipIds: [String]
 
-    /// Identifiable conformance uses the canonical recipe ID.
-    var id: String { canonicalRecipeId }
+    /// Identifiable conformance uses the cookbook entry ID.
+    var id: String { cookbookEntryId }
 
     var resolvedImageURL: URL? {
         guard let imageUrl, imageStatus == "ready" else { return nil }
         return URL(string: imageUrl)
+    }
+
+    var hasCanonicalRecipe: Bool {
+        canonicalRecipeId != nil
     }
 
     /// Whether the variant is actively personalised (not "none").
@@ -418,6 +425,21 @@ struct VariantDetailResponse: Decodable {
     let substitutionDiffs: [SubstitutionDiff]?
 }
 
+/// Response from GET /recipes/cookbook/{entryId} — private-first cookbook detail.
+struct CookbookRecipeDetailResponse: Decodable {
+    let cookbookEntryId: String
+    let canonicalRecipeId: String?
+    let canonicalStatus: String
+    let variantId: String?
+    let variantVersionId: String?
+    let recipe: RecipeDetail
+    let adaptationSummary: String?
+    let variantStatus: String
+    let derivationKind: String?
+    let personalizedAt: String?
+    let substitutionDiffs: [SubstitutionDiff]?
+}
+
 // MARK: - Chat / Generate
 
 /// Full chat session response from POST /chat, POST /chat/{id}/messages, etc.
@@ -459,8 +481,13 @@ struct CommittedRecipe: Decodable {
     let componentId: String
     let role: String
     let title: String
-    let recipeId: String
-    let recipeVersionId: String
+    let cookbookEntryId: String
+    let recipeId: String?
+    let recipeVersionId: String?
+    let variantId: String?
+    let variantVersionId: String?
+    let variantStatus: String
+    let canonicalStatus: String
 }
 
 struct CommittedLink: Decodable {

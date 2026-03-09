@@ -235,6 +235,13 @@ export type CanonicalizeRecipeResult = {
   rationale: string | null;
 };
 
+export type CanonicalRecipeReviewResult = {
+  approved: boolean;
+  rationale: string | null;
+  leakageDetected: boolean;
+  semanticDriftDetected: boolean;
+};
+
 export type RecipeCanonMatchEnvelope = {
   decision?: unknown;
   matched_recipe_id?: unknown;

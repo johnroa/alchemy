@@ -41,11 +41,11 @@ import { addTokens, generateRecipePayload } from "./recipe.ts";
 import { generateChatConversationPayload } from "./chat.ts";
 import { generateOnboardingInterviewEnvelope } from "./onboarding.ts";
 import {
+  enrichIngredients,
+  inferIngredientRelations,
   normalizeIngredientAliases,
   parseIngredientLines,
   splitIngredientPhrases,
-  enrichIngredients,
-  inferIngredientRelations,
 } from "./ingredients.ts";
 import {
   buildExploreForYouProfile,
@@ -57,24 +57,25 @@ import {
 import {
   embedMemoryRetrievalQuery,
   extractMemories,
+  resolveMemoryConflicts,
   selectMemories,
   summarizeMemories,
-  resolveMemoryConflicts,
 } from "./memory.ts";
 import {
-  generateRecipeImage,
-  generateRecipeImageDetailed,
   evaluateImageQualityPair,
   evaluateRecipeImageReuse,
+  generateRecipeImage,
+  generateRecipeImageDetailed,
 } from "./image.ts";
 import {
   canonicalizeRecipe,
   executeRecipeCanonMatch,
+  reviewCanonicalRecipe,
 } from "./canonical.ts";
 import { personalizeRecipe } from "./personalize.ts";
 import {
-  normalizePreferenceList,
   filterEquipmentPreferenceUpdates,
+  normalizePreferenceList,
 } from "./preferences.ts";
 import { generateGreeting } from "./greeting.ts";
 import {
@@ -86,11 +87,48 @@ import {
 
 export type {
   CanonicalizeRecipeResult,
+  CanonicalRecipeReviewResult,
   ModelOverrideMap,
   PersonalizeRecipeResult,
   RecipeCanonMatchEnvelope,
   SubstitutionDiff,
 } from "./types.ts";
+
+const RECOVERABLE_CHAT_ERROR_CODES = new Set([
+  "llm_invalid_json",
+  "llm_json_truncated",
+  "llm_empty_output",
+  "chat_schema_invalid",
+  "llm_provider_timeout",
+  "llm_provider_error",
+]);
+
+const buildRecoverableChatEnvelope = (
+  scope: ChatConversationScope,
+  errorCode: string,
+): ChatAssistantEnvelope => ({
+  assistant_reply: {
+    text: scope === "chat_iteration"
+      ? "I hit a temporary issue updating that recipe. Try again and I'll pick up from here."
+      : "I hit a temporary issue with that request. Try again and I'll pick up from here.",
+    suggested_next_actions: ["Try again"],
+  },
+  trigger_recipe: false,
+  response_context: {
+    mode: scope === "chat_iteration"
+      ? "iteration"
+      : scope === "chat_generation"
+      ? "generation"
+      : "ideation",
+    intent: scope === "chat_ideation"
+      ? "in_scope_ideation"
+      : "in_scope_generate",
+  },
+  gateway_metadata: {
+    recovery_path: "graceful_retry_copy",
+    error_code: errorCode,
+  },
+});
 
 export const llmGateway = {
   /**
@@ -184,9 +222,9 @@ export const llmGateway = {
   },
 
   /**
-   * Chat conversation with automatic scope detection and degraded-mode
-   * fallback. If the chat envelope fails with a recoverable error,
-   * falls back to the generate scope's recipe pipeline before giving up.
+   * Chat conversation with automatic scope detection and one graceful
+   * recovery owner. Recoverable provider/schema faults return retry copy
+   * instead of cascading into more model work.
    */
   async converseChat(params: {
     client: SupabaseClient;
@@ -231,6 +269,9 @@ export const llmGateway = {
             ? "recipe"
             : "ideation",
           classification_skipped: true,
+          recovery_path: envelope.gateway_metadata?.recovery_path ?? "direct",
+          structured_output: envelope.gateway_metadata?.structured_output ??
+            null,
         },
         accum,
       );
@@ -239,67 +280,14 @@ export const llmGateway = {
       const errorCode = error instanceof ApiError
         ? error.code
         : "unknown_error";
-      const recoverableChatErrors = new Set([
-        "llm_invalid_json",
-        "llm_json_truncated",
-        "llm_empty_output",
-        "chat_schema_invalid",
-      ]);
       if (
         error instanceof ApiError &&
-        recoverableChatErrors.has(error.code)
+        RECOVERABLE_CHAT_ERROR_CODES.has(error.code)
       ) {
-        try {
-          const recipeFallback = await generateRecipePayload(
-            params.client,
-            "generate",
-            {
-              userPrompt: params.prompt,
-              context: params.context,
-            },
-            params.modelOverrides,
-            accum,
-          );
-          await logLlmEvent(
-            params.client,
-            params.userId,
-            params.requestId,
-            scope,
-            Date.now() - startedAt,
-            "degraded",
-            {
-              error_code: error.code,
-              fallback: "generate_scope_recipe_fallback",
-            },
-            accum,
-          );
-          return {
-            assistant_reply: recipeFallback.assistant_reply,
-            recipe: recipeFallback.recipe,
-            trigger_recipe: true,
-            response_context: {
-              mode: scope === "chat_iteration" ? "iteration" : "generation",
-              intent: "in_scope_generate",
-            },
-          };
-        } catch (recipeFallbackError) {
-          await logLlmEvent(
-            params.client,
-            params.userId,
-            params.requestId,
-            scope,
-            Date.now() - startedAt,
-            "degraded",
-            {
-              error_code: error.code,
-              fallback: "generate_scope_recipe_fallback_failed",
-              fallback_error_code: recipeFallbackError instanceof ApiError
-                ? recipeFallbackError.code
-                : "unknown_error",
-            },
-            accum,
-          );
-        }
+        const gracefulEnvelope = buildRecoverableChatEnvelope(
+          scope,
+          error.code,
+        );
         await logLlmEvent(
           params.client,
           params.userId,
@@ -309,16 +297,12 @@ export const llmGateway = {
           "degraded",
           {
             error_code: error.code,
-            fallback: "chat_ideation_recovery_failed",
+            recovery_path: gracefulEnvelope.gateway_metadata?.recovery_path ??
+              "graceful_retry_copy",
           },
           accum,
         );
-        throw new ApiError(
-          502,
-          "chat_recovery_failed",
-          "Chat generation failed after recovery attempts",
-          `primary=${error.code}`,
-        );
+        return gracefulEnvelope;
       }
       await logLlmEvent(
         params.client,
@@ -530,6 +514,8 @@ export const llmGateway = {
   generateGreeting,
 
   canonicalizeRecipe,
+
+  reviewCanonicalRecipe,
 
   executeRecipeCanonMatch,
 

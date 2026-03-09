@@ -92,11 +92,13 @@ const createCommitSummary = (candidateSet: CandidateRecipeSet): ChatCommitSummar
     component_id: "component-main",
     role: "main",
     title: "Cauliflower Pizza Crust",
+    cookbook_entry_id: "cookbook-entry-1",
     recipe_id: "recipe-1",
     recipe_version_id: "version-1",
     variant_id: null,
     variant_version_id: null,
     variant_status: "none",
+    canonical_status: "ready",
   }],
   links: [],
   post_save_options: ["continue_chat", "restart_chat", "go_to_cookbook"],
@@ -372,6 +374,26 @@ Deno.test("POST /chat/{id}/commit clears the candidate and records the commit su
         judgeCandidateCount: 0,
         judgeConfidence: null,
       }),
+      createPrivateCookbookEntry: async () => {
+        state.cookbookWrites.push({
+          cookbook_entry_id: "cookbook-entry-1",
+          canonical_status: "pending",
+        });
+        return {
+          cookbookEntryId: "cookbook-entry-1",
+          variantId: "variant-1",
+          variantVersionId: "variant-version-1",
+          canonicalStatus: "pending" as const,
+          variantStatus: "current" as const,
+        };
+      },
+      deriveCanonicalForCookbookEntry: async () => ({
+        cookbookEntryId: "cookbook-entry-1",
+        canonicalRecipeId: "recipe-1",
+        canonicalStatus: "ready" as const,
+      }),
+      computePreferenceFingerprint: async () => null,
+      computeVariantTags: () => ({}),
       ensurePersistedRecipeImageRequest: async () => undefined,
       scheduleImageQueueDrain: () => undefined,
       mapCandidateRoleToRelation: () => "pairs_with",
@@ -466,6 +488,20 @@ Deno.test("POST /chat/{id}/commit returns the first successful commit when claim
           judgeConfidence: null,
         };
       },
+      createPrivateCookbookEntry: async () => ({
+        cookbookEntryId: "cookbook-entry-1",
+        variantId: "variant-1",
+        variantVersionId: "variant-version-1",
+        canonicalStatus: "pending" as const,
+        variantStatus: "current" as const,
+      }),
+      deriveCanonicalForCookbookEntry: async () => ({
+        cookbookEntryId: "cookbook-entry-1",
+        canonicalRecipeId: "recipe-1",
+        canonicalStatus: "ready" as const,
+      }),
+      computePreferenceFingerprint: async () => null,
+      computeVariantTags: () => ({}),
       ensurePersistedRecipeImageRequest: async () => undefined,
       scheduleImageQueueDrain: () => undefined,
       mapCandidateRoleToRelation: () => "pairs_with",

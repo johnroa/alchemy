@@ -5,7 +5,11 @@ import type {
   ChatMessageView,
   ChatSessionContext,
 } from "./routes/shared.ts";
-import type { AssistantReply, JsonValue, RecipePayload } from "../_shared/types.ts";
+import type {
+  AssistantReply,
+  JsonValue,
+  RecipePayload,
+} from "../_shared/types.ts";
 
 const unused = () => {
   throw new Error("unexpected dependency call");
@@ -86,7 +90,12 @@ const candidateSetFixture = (): CandidateRecipeSet => ({
 
 const withImageStates = (
   candidateSet: CandidateRecipeSet,
-  statuses: Array<{ image_url: string | null; image_status: "pending" | "processing" | "ready" | "failed" }>,
+  statuses: Array<
+    {
+      image_url: string | null;
+      image_status: "pending" | "processing" | "ready" | "failed";
+    }
+  >,
 ): CandidateRecipeSet => ({
   ...candidateSet,
   components: candidateSet.components.map((component, index) => ({
@@ -108,6 +117,7 @@ const buildChatLoopResponse = (input: {
   uiHints?: {
     show_generation_animation?: boolean;
     focus_component_id?: string;
+    generation_pending?: boolean;
   };
 }): Record<string, unknown> => ({
   id: input.chatId,
@@ -125,25 +135,34 @@ const buildChatLoopResponse = (input: {
 
 const createDeps = (overrides: Record<string, unknown> = {}) => ({
   buildContextPack: async () => ({
-    preferences: {
-      free_form: null,
-      dietary_preferences: [],
-      dietary_restrictions: [],
-      skill_level: "easy",
-      equipment: [],
-      cuisines: [],
-      aversions: [],
-      cooking_for: null,
-      max_difficulty: 1,
-      presentation_preferences: {},
+    pack: {
+      preferences: {
+        free_form: null,
+        dietary_preferences: [],
+        dietary_restrictions: [],
+        skill_level: "easy",
+        equipment: [],
+        cuisines: [],
+        aversions: [],
+        cooking_for: null,
+        max_difficulty: 1,
+        presentation_preferences: {},
+      },
+      preferencesNaturalLanguage: {},
+      memorySnapshot: {},
+      selectedMemories: [],
+      selectedMemoryIds: ["memory-1"],
     },
-    preferencesNaturalLanguage: {},
-    memorySnapshot: {},
-    selectedMemories: [],
-    selectedMemoryIds: ["memory-1"],
+    metrics: {
+      contextLoadMs: 0,
+      memoryRetrievalMs: 0,
+    },
   }),
   buildThreadForPrompt: (messages: ChatMessageView[]) =>
-    messages.map((message) => ({ role: message.role, content: message.content })),
+    messages.map((message) => ({
+      role: message.role,
+      content: message.content,
+    })),
   orchestrateChatTurn: async () => ({
     assistantChatResponse: {
       assistant_reply: {
@@ -175,9 +194,13 @@ const createDeps = (overrides: Record<string, unknown> = {}) => ({
     },
     responseContext: { mode: "generation" },
     justGenerated: true,
+    generationDeferred: false,
+    llmLatencyMs: 10,
+    recoveryPath: null,
   }),
   updateChatSessionLoopContext: async () => undefined,
-  resolveAssistantMessageContent: (assistantReply: AssistantReply) => assistantReply.text,
+  resolveAssistantMessageContent: (assistantReply: AssistantReply) =>
+    assistantReply.text,
   enqueueMemoryJob: async () => undefined,
   logChangelog: async () => undefined,
   buildChatLoopResponse,
@@ -185,8 +208,12 @@ const createDeps = (overrides: Record<string, unknown> = {}) => ({
   extractLatestAssistantReply: () => null,
   normalizeCandidateRecipeSet: (candidate: unknown) =>
     candidate ? candidate as CandidateRecipeSet : null,
-  hydrateCandidateRecipeSetImages: async (input: { candidateSet: CandidateRecipeSet }) => input.candidateSet,
-  enrollCandidateImageRequests: async (input: { candidateSet: CandidateRecipeSet }) => input.candidateSet,
+  hydrateCandidateRecipeSetImages: async (
+    input: { candidateSet: CandidateRecipeSet },
+  ) => input.candidateSet,
+  enrollCandidateImageRequests: async (
+    input: { candidateSet: CandidateRecipeSet },
+  ) => input.candidateSet,
   attachCommittedCandidateImages: async () => undefined,
   deriveLoopState: (context: ChatSessionContext) =>
     context.loop_state ?? "ideation",
@@ -204,7 +231,8 @@ const createDeps = (overrides: Record<string, unknown> = {}) => ({
     max_difficulty: 1,
     presentation_preferences: {},
   }),
-  canonicalizeRecipePayload: async (input: { payload: RecipePayload }) => input.payload,
+  canonicalizeRecipePayload: async (input: { payload: RecipePayload }) =>
+    input.payload,
   persistRecipe: unused,
   resolveAndPersistCanonicalRecipe: async () => ({
     action: "create_new_canon" as const,
@@ -235,6 +263,14 @@ const createRouteContext = (input: {
 }) => {
   const defaultServiceClient = {
     from(table: string) {
+      if (table === "events") {
+        return {
+          async insert(_payload: unknown) {
+            return { error: null };
+          },
+        };
+      }
+
       if (table === "behavior_events") {
         return {
           async upsert(_payload: unknown, _options?: unknown) {
@@ -381,7 +417,9 @@ const createChatClient = (params: {
 
         if (table === "chat_messages") {
           return {
-            insert(_payload: { chat_id: string; role: string; content: string }) {
+            insert(
+              _payload: { chat_id: string; role: string; content: string },
+            ) {
               return {
                 select(_columns: string) {
                   return {
@@ -390,7 +428,8 @@ const createChatClient = (params: {
                       return {
                         data: {
                           id: `message-${messageCounter}`,
-                          created_at: `2026-03-06T12:00:0${messageCounter}.000Z`,
+                          created_at:
+                            `2026-03-06T12:00:0${messageCounter}.000Z`,
                         },
                         error: null,
                       };
@@ -433,7 +472,9 @@ Deno.test("POST /chat returns enrolled candidate image fields and schedules drai
     }) as never,
     createDeps({
       enrollCandidateImageRequests: async () => enrolled,
-      updateChatSessionLoopContext: async (input: { context: ChatSessionContext }) => {
+      updateChatSessionLoopContext: async (
+        input: { context: ChatSessionContext },
+      ) => {
         persistedContext = input.context;
       },
       scheduleImageQueueDrain: (input: { limit?: number }) => {
@@ -463,7 +504,9 @@ Deno.test("POST /chat returns enrolled candidate image fields and schedules drai
   const persistedCandidateSet = (persistedContext as ChatSessionContext | null)
     ?.candidate_recipe_set;
   if (!persistedCandidateSet) {
-    throw new Error("expected persisted chat context to include candidate images");
+    throw new Error(
+      "expected persisted chat context to include candidate images",
+    );
   }
   if (scheduled.length !== 1 || scheduled[0].limit !== 5) {
     throw new Error("expected image drain scheduling for candidate enrollment");
@@ -491,7 +534,9 @@ Deno.test("POST /chat still succeeds when memory drain scheduling throws", async
   );
 
   if (!response || response.status !== 200) {
-    throw new Error("expected POST /chat response despite memory scheduler failure");
+    throw new Error(
+      "expected POST /chat response despite memory scheduler failure",
+    );
   }
 });
 
@@ -546,7 +591,10 @@ Deno.test("GET /chat/{id} returns hydrated candidate image state for polling", a
   if (!candidateSet) {
     throw new Error("expected hydrated candidate recipe set");
   }
-  if (candidateSet.components[0].image_url !== "https://cdn.cookwithalchemy.com/images/lemon-chicken.jpg") {
+  if (
+    candidateSet.components[0].image_url !==
+      "https://cdn.cookwithalchemy.com/images/lemon-chicken.jpg"
+  ) {
     throw new Error("expected hydrated image URL");
   }
   if (candidateSet.components[1].image_status !== "failed") {
@@ -629,6 +677,9 @@ Deno.test("POST /chat/{id}/messages returns iterated candidate image fields and 
         },
         responseContext: { mode: "iteration" },
         justGenerated: true,
+        generationDeferred: false,
+        llmLatencyMs: 12,
+        recoveryPath: null,
       }),
       enrollCandidateImageRequests: async () => iteratedCandidate,
       fetchChatMessages: async () => [
@@ -668,5 +719,225 @@ Deno.test("POST /chat/{id}/messages returns iterated candidate image fields and 
   }
   if (memoryScheduled.length !== 1 || memoryScheduled[0].limit !== 1) {
     throw new Error("expected memory drain scheduling after message enqueue");
+  }
+});
+
+Deno.test("POST /chat/{id}/generate reuses deferred generation context without rebuilding prompt inputs", async () => {
+  const chatClient = createChatClient({
+    context: {
+      loop_state: "ideation",
+      candidate_recipe_set: null,
+      candidate_revision: 0,
+      active_component_id: null,
+      selected_memory_ids: ["memory-1"],
+      generation_pending: true,
+      deferred_generation_context: {
+        prompt: "Make lemon pasta",
+        thread: [
+          { role: "user", content: "Make lemon pasta" },
+        ],
+        compact_chat_context: {
+          loop_state: "ideation",
+        },
+        candidate_recipe_set_outline: null,
+        preferences: {
+          free_form: null,
+          dietary_preferences: [],
+          dietary_restrictions: [],
+          skill_level: "easy",
+          equipment: [],
+          cuisines: [],
+          aversions: [],
+          cooking_for: null,
+          max_difficulty: 1,
+          presentation_preferences: {},
+        },
+        memory_snapshot: {},
+        selected_memories: [{
+          id: "memory-1",
+          memory_type: "preference",
+          memory_kind: "preference",
+          memory_content: { likes: ["lemon"] },
+          confidence: 0.9,
+          salience: 0.8,
+          status: "active",
+        }],
+        selected_memory_ids: ["memory-1"],
+      },
+    },
+  });
+  let rebuiltContext = false;
+  let rebuiltThread = false;
+
+  const response = await handleChatRoutes(
+    createRouteContext({
+      path: "/chat/chat-1/generate",
+      method: "POST",
+      client: chatClient.client,
+    }) as never,
+    createDeps({
+      buildContextPack: async () => {
+        rebuiltContext = true;
+        throw new Error(
+          "buildContextPack should not run when deferred context exists",
+        );
+      },
+      buildThreadForPrompt: () => {
+        rebuiltThread = true;
+        throw new Error(
+          "buildThreadForPrompt should not run when deferred thread exists",
+        );
+      },
+      fetchChatMessages: async () => [
+        {
+          id: "message-user",
+          role: "user",
+          content: "Make lemon pasta",
+          created_at: "2026-03-06T12:00:00.000Z",
+        },
+      ],
+    }) as never,
+  );
+
+  if (!response || response.status !== 200) {
+    throw new Error("expected POST /chat/{id}/generate response");
+  }
+  if (rebuiltContext) {
+    throw new Error("expected deferred generation to skip context rebuild");
+  }
+  if (rebuiltThread) {
+    throw new Error("expected deferred generation to skip thread rebuild");
+  }
+});
+
+Deno.test("POST /chat/{id}/generate returns assistant copy when generation resolves without a candidate", async () => {
+  const chatClient = createChatClient({
+    context: {
+      loop_state: "ideation",
+      candidate_recipe_set: null,
+      candidate_revision: 0,
+      active_component_id: null,
+      selected_memory_ids: ["memory-1"],
+      generation_pending: true,
+      deferred_generation_context: {
+        prompt: "Re",
+        thread: [
+          { role: "user", content: "Re" },
+        ],
+        compact_chat_context: {
+          loop_state: "ideation",
+        },
+        candidate_recipe_set_outline: null,
+        preferences: {
+          free_form: null,
+          dietary_preferences: [],
+          dietary_restrictions: [],
+          skill_level: "easy",
+          equipment: [],
+          cuisines: [],
+          aversions: [],
+          cooking_for: null,
+          max_difficulty: 1,
+          presentation_preferences: {},
+        },
+        memory_snapshot: {},
+        selected_memories: [],
+        selected_memory_ids: ["memory-1"],
+      },
+    },
+  });
+  let persistedContext: ChatSessionContext | null = null;
+
+  const response = await handleChatRoutes(
+    createRouteContext({
+      path: "/chat/chat-1/generate",
+      method: "POST",
+      client: chatClient.client,
+    }) as never,
+    createDeps({
+      orchestrateChatTurn: async () => ({
+        assistantChatResponse: {
+          assistant_reply: {
+            text:
+              "I hit a temporary issue with that request. Try again and I'll pick up from here.",
+            suggested_next_actions: ["Try again"],
+          },
+          trigger_recipe: false,
+          response_context: {
+            mode: "generation",
+            intent: "in_scope_generate",
+          },
+          gateway_metadata: {
+            recovery_path: "graceful_retry_copy",
+          },
+        },
+        nextCandidateSet: null,
+        nextLoopState: "ideation",
+        nextContext: {
+          loop_state: "ideation",
+          candidate_recipe_set: null,
+          candidate_revision: 0,
+          active_component_id: null,
+          selected_memory_ids: ["memory-1"],
+          generation_pending: undefined,
+          deferred_generation_context: null,
+        },
+        effectivePreferences: {
+          free_form: null,
+          dietary_preferences: [],
+          dietary_restrictions: [],
+          skill_level: "easy",
+          equipment: [],
+          cuisines: [],
+          aversions: [],
+          cooking_for: null,
+          max_difficulty: 1,
+          presentation_preferences: {},
+        },
+        responseContext: {
+          mode: "generation",
+          intent: "in_scope_generate",
+        },
+        justGenerated: false,
+        generationDeferred: false,
+        llmLatencyMs: 14,
+        recoveryPath: "graceful_retry_copy",
+      }),
+      updateChatSessionLoopContext: async (
+        input: { context: ChatSessionContext },
+      ) => {
+        persistedContext = input.context;
+      },
+      fetchChatMessages: async () => [
+        {
+          id: "message-user",
+          role: "user",
+          content: "Re",
+          created_at: "2026-03-06T12:00:00.000Z",
+        },
+      ],
+    }) as never,
+  );
+
+  if (!response || response.status !== 200) {
+    throw new Error("expected POST /chat/{id}/generate response");
+  }
+
+  const body = await parseJson(response);
+  const assistantReply = body.assistant_reply as { text?: string } | null;
+  if (
+    assistantReply?.text !==
+      "I hit a temporary issue with that request. Try again and I'll pick up from here."
+  ) {
+    throw new Error("expected assistant retry copy");
+  }
+  if (body.candidate_recipe_set !== null) {
+    throw new Error(
+      "expected no candidate recipe set on graceful generation failure",
+    );
+  }
+  const clearedContext = persistedContext as ChatSessionContext | null;
+  if (clearedContext?.deferred_generation_context != null) {
+    throw new Error("expected deferred generation context to be cleared");
   }
 });

@@ -1,8 +1,6 @@
 import { ApiError } from "../errors.ts";
-import {
-  parseJsonFromText,
-  truncateErrorDetailText,
-} from "../llm-parsers.ts";
+import type { StructuredOutputDefinition } from "../llm-executor.ts";
+import { parseJsonFromText, truncateErrorDetailText } from "../llm-parsers.ts";
 import type { JsonValue } from "../types.ts";
 
 type ProviderResult<T> = {
@@ -16,6 +14,7 @@ export const callAnthropicJson = async <T>(params: {
   modelConfig: Record<string, JsonValue>;
   systemPrompt: string;
   userInput: Record<string, JsonValue>;
+  structuredOutput?: StructuredOutputDefinition;
 }): Promise<ProviderResult<T>> => {
   const endpoint = (typeof params.modelConfig.endpoint === "string" &&
     params.modelConfig.endpoint) ||
@@ -57,8 +56,28 @@ export const callAnthropicJson = async <T>(params: {
         model: params.model,
         max_tokens: maxTokens,
         system: params.systemPrompt,
+        ...(params.structuredOutput
+          ? {
+            tools: [{
+              name: params.structuredOutput.name,
+              description: params.structuredOutput.description ??
+                "Return the requested structured response.",
+              input_schema: params.structuredOutput.schema,
+            }],
+            tool_choice: {
+              type: "tool",
+              name: params.structuredOutput.name,
+            },
+          }
+          : {}),
         messages: [
-          { role: "user", content: JSON.stringify(params.userInput) },
+          {
+            role: "user",
+            content: [{
+              type: "text",
+              text: JSON.stringify(params.userInput),
+            }],
+          },
         ],
       }),
     });
@@ -89,10 +108,34 @@ export const callAnthropicJson = async <T>(params: {
   }
 
   const payload = (await response.json()) as {
-    content?: Array<{ type: string; text?: string }>;
+    content?: Array<{
+      type: string;
+      name?: string;
+      text?: string;
+      input?: unknown;
+    }>;
     usage?: { input_tokens?: number; output_tokens?: number };
     stop_reason?: string;
   };
+  const toolInput = params.structuredOutput
+    ? payload.content?.find((item) =>
+      item.type === "tool_use" &&
+      item.name === params.structuredOutput?.name
+    )?.input
+    : null;
+
+  if (
+    toolInput &&
+    typeof toolInput === "object" &&
+    !Array.isArray(toolInput)
+  ) {
+    return {
+      result: toolInput as T,
+      inputTokens: payload.usage?.input_tokens ?? 0,
+      outputTokens: payload.usage?.output_tokens ?? 0,
+    };
+  }
+
   const text = payload?.content?.find((item) => item.type === "text")?.text ??
     null;
 

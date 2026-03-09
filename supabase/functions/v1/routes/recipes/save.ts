@@ -75,26 +75,76 @@ export const handleSaveRoutes = async (
         // Body is optional — empty request means default autopersonalize=true.
       }
 
-      // cookbook_entries is the canonical save table (backfilled in migration 0047).
-      // recipe_saves is deprecated — no longer written to.
-      const { error: cookbookError } = await client
+      const savedAt = new Date().toISOString();
+      const { data: existingEntry, error: existingEntryError } = await client
         .from("cookbook_entries")
-        .upsert(
-          {
+        .select("id")
+        .eq("user_id", auth.userId)
+        .eq("canonical_recipe_id", recipeId)
+        .maybeSingle();
+
+      if (existingEntryError) {
+        throw new ApiError(
+          500,
+          "cookbook_entry_lookup_failed",
+          "Could not load cookbook entry",
+          existingEntryError.message,
+        );
+      }
+
+      let cookbookEntryId = existingEntry?.id ?? null;
+      if (cookbookEntryId) {
+        const { error: updateError } = await client
+          .from("cookbook_entries")
+          .update({
+            autopersonalize,
+            canonical_status: "ready",
+            source_kind: "saved_canonical",
+            canonical_ready_at: savedAt,
+            updated_at: savedAt,
+          })
+          .eq("id", cookbookEntryId)
+          .eq("user_id", auth.userId);
+
+        if (updateError) {
+          throw new ApiError(
+            500,
+            "cookbook_entry_update_failed",
+            "Could not update cookbook entry",
+            updateError.message,
+          );
+        }
+      } else {
+        const { data: insertedEntry, error: insertError } = await client
+          .from("cookbook_entries")
+          .insert({
             user_id: auth.userId,
             canonical_recipe_id: recipeId,
             autopersonalize,
-            updated_at: new Date().toISOString(),
-          },
-          { onConflict: "user_id,canonical_recipe_id" },
-        );
+            source_kind: "saved_canonical",
+            canonical_status: "ready",
+            canonical_ready_at: savedAt,
+            saved_at: savedAt,
+            updated_at: savedAt,
+          })
+          .select("id")
+          .single();
 
-      if (cookbookError) {
+        if (insertError || !insertedEntry) {
+          throw new ApiError(
+            500,
+            "cookbook_entry_create_failed",
+            "Could not create cookbook entry",
+            insertError?.message,
+          );
+        }
+        cookbookEntryId = insertedEntry.id;
+      }
+      if (!cookbookEntryId) {
         throw new ApiError(
           500,
-          "cookbook_entry_create_failed",
-          "Could not create cookbook entry",
-          cookbookError.message,
+          "cookbook_entry_missing",
+          "Cookbook entry was not available after save",
         );
       }
 
@@ -226,8 +276,8 @@ export const handleSaveRoutes = async (
               const { data: canonicalVersion } = await client
                 .from("recipe_versions")
                 .select("id, payload")
-                .eq("id", recipeImageCheck.current_version_id)
-                .single();
+              .eq("id", recipeImageCheck.current_version_id)
+              .single();
 
               if (!canonicalVersion) return;
 
@@ -236,6 +286,7 @@ export const handleSaveRoutes = async (
                 serviceClient,
                 userId: auth.userId,
                 requestId,
+                cookbookEntryId,
                 recipeId,
                 canonicalVersionId: canonicalVersion.id,
                 canonicalPayload: canonicalVersion.payload,
@@ -261,7 +312,10 @@ export const handleSaveRoutes = async (
 
       return respond(200, {
         saved: true,
+        cookbook_entry_id: cookbookEntryId,
+        recipe_id: recipeId,
         canonical_recipe_id: recipeId,
+        canonical_status: "ready",
         variant_status: variantStatus,
         active_variant_version_id: null,
       });
@@ -370,13 +424,11 @@ export const handleSaveRoutes = async (
     }
 
     // Persist as a new canonical recipe.
-    const preferences = await getPreferences(client, auth.userId);
     const canonicalPayload = await canonicalizeRecipePayload({
       serviceClient,
       userId: auth.userId,
       requestId,
       payload,
-      preferences: preferences as unknown as Record<string, JsonValue>,
       modelOverrides,
     });
 

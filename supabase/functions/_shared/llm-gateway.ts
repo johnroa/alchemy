@@ -11,6 +11,7 @@
  */
 export {
   llmGateway,
+  type CanonicalRecipeReviewResult,
   type ModelOverrideMap,
   type SubstitutionDiff,
   type PersonalizeRecipeResult,

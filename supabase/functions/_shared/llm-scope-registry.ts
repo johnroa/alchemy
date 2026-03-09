@@ -334,12 +334,11 @@ export const LLM_SCOPE_REGISTRY = {
 
   /**
    * recipe_canonicalize: derives the canonical (public, immutable) base recipe
-   * from a personalized chat candidate. Strips stable user-specific adaptations
-   * (equipment temp adjustments, dietary substitutions) while preserving dish
-   * identity (title, core technique, flavour profile). Runs as the first phase
-   * of the two-phase commit on chat save.
+   * from a private recipe payload. Removes user/household-specific context
+   * while preserving dish identity (title, core technique, flavour profile).
+   * Runs asynchronously after a private cookbook entry is created.
    *
-   * Input: personalized recipe payload + user preference context
+   * Input: private recipe payload + lineage metadata
    * Output: canonical recipe payload (same schema as recipe_versions.payload)
    */
   recipe_canonicalize: {
@@ -351,6 +350,17 @@ export const LLM_SCOPE_REGISTRY = {
     },
     fallback_policy: "none",
     telemetry_tags: { task: "recipe_canonicalize", criticality: "high" },
+  },
+
+  recipe_canon_review: {
+    output_contract: "recipe_canon_review_v1",
+    mode: "classification",
+    retry_policy: {
+      max_attempts: 2,
+      retryable_codes: [...STRICT_JSON_RETRYABLE_CODES, ...STANDARD_RETRYABLE_CODES],
+    },
+    fallback_policy: "none",
+    telemetry_tags: { task: "recipe_canon_review", criticality: "high" },
   },
 
   recipe_canon_match: {

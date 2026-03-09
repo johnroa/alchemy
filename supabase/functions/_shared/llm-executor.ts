@@ -1,8 +1,8 @@
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2";
 import { ApiError } from "./errors.ts";
 import {
-  getLlmScopeDefinition,
   type GatewayScope,
+  getLlmScopeDefinition,
   type LlmRetryPolicy,
 } from "./llm-scope-registry.ts";
 import { callAnthropicJson } from "./llm-adapters/anthropic.ts";
@@ -40,6 +40,13 @@ export type EmbeddingResult = {
 export type VisionInputImage = {
   label: string;
   imageUrl: string;
+};
+
+export type StructuredOutputDefinition = {
+  name: string;
+  description?: string;
+  schema: Record<string, JsonValue>;
+  strict?: boolean;
 };
 
 const toRecord = (value: unknown): Record<string, JsonValue> => {
@@ -137,7 +144,9 @@ export const getActiveConfig = async (
 
   const { data: reg } = await client
     .from("llm_model_registry")
-    .select("input_cost_per_1m_tokens,output_cost_per_1m_tokens,billing_mode,billing_metadata")
+    .select(
+      "input_cost_per_1m_tokens,output_cost_per_1m_tokens,billing_mode,billing_metadata",
+    )
     .eq("provider", provider)
     .eq("model", model)
     .maybeSingle();
@@ -161,6 +170,7 @@ export const executeWithConfig = async <T>(params: {
   modelConfig: Record<string, JsonValue>;
   systemPrompt: string;
   userInput: Record<string, JsonValue>;
+  structuredOutput?: StructuredOutputDefinition;
 }): Promise<ProviderResult<T>> => {
   if (params.provider === "anthropic") {
     return await callAnthropicJson<T>({
@@ -168,6 +178,7 @@ export const executeWithConfig = async <T>(params: {
       modelConfig: params.modelConfig,
       systemPrompt: params.systemPrompt,
       userInput: params.userInput,
+      structuredOutput: params.structuredOutput,
     });
   }
 
@@ -177,6 +188,7 @@ export const executeWithConfig = async <T>(params: {
       modelConfig: params.modelConfig,
       systemPrompt: params.systemPrompt,
       userInput: params.userInput,
+      structuredOutput: params.structuredOutput,
     });
   }
 
@@ -204,7 +216,9 @@ export const executeScope = async <T>(params: {
   systemPromptOverride?: string;
   modelConfigOverride?: Record<string, JsonValue>;
   retryPolicyOverride?: LlmRetryPolicy;
-}): Promise<ProviderResult<T> & { config: GatewayConfig; attempts: number }> => {
+}): Promise<
+  ProviderResult<T> & { config: GatewayConfig; attempts: number }
+> => {
   const config = await getActiveConfig(
     params.client,
     params.scope,
@@ -360,7 +374,9 @@ export const executeVisionScope = async <T>(params: {
   systemPromptOverride?: string;
   modelConfigOverride?: Record<string, JsonValue>;
   retryPolicyOverride?: LlmRetryPolicy;
-}): Promise<ProviderResult<T> & { config: GatewayConfig; attempts: number }> => {
+}): Promise<
+  ProviderResult<T> & { config: GatewayConfig; attempts: number }
+> => {
   const config = await getActiveConfig(
     params.client,
     params.scope,
@@ -407,13 +423,11 @@ export const executeVisionScope = async <T>(params: {
     }
   }
 
-  throw lastError instanceof Error
-    ? lastError
-    : new ApiError(
-      502,
-      "llm_execution_failed",
-      "LLM multimodal scope execution failed",
-    );
+  throw lastError instanceof Error ? lastError : new ApiError(
+    502,
+    "llm_execution_failed",
+    "LLM multimodal scope execution failed",
+  );
 };
 
 export const executeEmbeddingScope = async (params: {
@@ -465,13 +479,11 @@ export const executeEmbeddingScope = async (params: {
     }
   }
 
-  throw lastError instanceof Error
-    ? lastError
-    : new ApiError(
-      502,
-      "llm_execution_failed",
-      "LLM embedding scope execution failed",
-    );
+  throw lastError instanceof Error ? lastError : new ApiError(
+    502,
+    "llm_execution_failed",
+    "LLM embedding scope execution failed",
+  );
 };
 
 export const executeImageScope = async (params: {
@@ -479,7 +491,11 @@ export const executeImageScope = async (params: {
   prompt: string;
   modelOverride?: { provider: string; model: string };
 }): Promise<{ imageUrl: string; config: GatewayConfig }> => {
-  const config = await getActiveConfig(params.client, "image", params.modelOverride);
+  const config = await getActiveConfig(
+    params.client,
+    "image",
+    params.modelOverride,
+  );
   let imageUrl: string;
   if (config.provider === "openai") {
     imageUrl = await callOpenAiImage({

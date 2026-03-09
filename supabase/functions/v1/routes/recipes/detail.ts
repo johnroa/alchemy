@@ -208,13 +208,11 @@ export const handleDetailRoutes = async (
       );
     }
 
-    const preferences = await getPreferences(client, auth.userId);
     const canonicalPayload = await canonicalizeRecipePayload({
       serviceClient,
       userId: auth.userId,
       requestId,
       payload: attachmentRecipePayload,
-      preferences: preferences as unknown as Record<string, JsonValue>,
       modelOverrides: context.modelOverrides,
     });
 

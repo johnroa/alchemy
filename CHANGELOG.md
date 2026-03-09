@@ -2,6 +2,14 @@
 
 ## [Unreleased] — 2026-03-08
 
+### Private-First Cookbook Saves + Derived Public Canon (v4.0.0)
+
+- Re-rooted saved recipe ownership on `cookbook_entries` so newly committed chat/import recipes are stored immediately as private cookbook items with real private variant lineage before public canon exists.
+- Added cookbook-entry-first backend routes for private detail, private variant refresh, canon retry, and cookbook-entry deletion, while keeping canonical recipe detail and legacy canonical variant routes as compatibility paths.
+- Changed chat commit flow to create private cookbook entries and private variants synchronously, then derive public canon asynchronously without passing user-specific prompt context or memory context into canon generation.
+- Updated cookbook feed/detail projection to support pending and failed canon states, keep public Explore/web canon-only, and preserve compatibility aliases during the transition (`recipe_id` alongside `canonical_recipe_id`).
+- Added the new private-first database migration, updated the OpenAPI contract to `4.0.0`, regenerated generated contracts/admin API docs, and added backend route coverage for cookbook-entry detail and canon retry flows.
+
 ### Render-Driven Recipe Formatting + Candidate Projection (v3.8.2)
 
 - Made recipe formatting fully render-driven across saved detail, variants, and fresh chat/import candidates for units, grouping, inline measurements, verbosity, and temperature units.

@@ -9,13 +9,23 @@
  */
 
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2";
-import type { GatewayConfig, GatewayScope, JsonValue, RecipePayload } from "../types.ts";
+import type {
+  GatewayConfig,
+  GatewayScope,
+  JsonValue,
+  RecipePayload,
+} from "../types.ts";
 import {
   executeImageWithConfig,
   executeWithConfig,
   getActiveConfig as loadActiveConfig,
+  type StructuredOutputDefinition,
 } from "../llm-executor.ts";
-import type { ChatConversationScope, ModelOverrideMap, TokenAccum } from "./types.ts";
+import type {
+  ChatConversationScope,
+  ModelOverrideMap,
+  TokenAccum,
+} from "./types.ts";
 export { estimateImageGenerationCostUsd } from "../image-billing.ts";
 export { logLlmEvent } from "./event-log.ts";
 
@@ -101,6 +111,7 @@ export const callProvider = async <T>(params: {
   modelConfig: Record<string, JsonValue>;
   systemPrompt: string;
   userInput: Record<string, JsonValue>;
+  structuredOutput?: StructuredOutputDefinition;
 }): Promise<ProviderResult<T>> => {
   return await executeWithConfig<T>({
     provider: params.provider,
@@ -108,6 +119,7 @@ export const callProvider = async <T>(params: {
     modelConfig: params.modelConfig,
     systemPrompt: params.systemPrompt,
     userInput: params.userInput,
+    structuredOutput: params.structuredOutput,
   });
 };
 
@@ -173,15 +185,27 @@ export const numericToDisplayFraction = (value: number): string => {
   const whole = Math.floor(value);
   const frac = value - whole;
   const fractionMap: Array<[number, string]> = [
-    [0, ""], [1 / 8, "1/8"], [1 / 6, "1/6"], [1 / 4, "1/4"], [1 / 3, "1/3"],
-    [3 / 8, "3/8"], [1 / 2, "1/2"], [5 / 8, "5/8"], [2 / 3, "2/3"],
-    [3 / 4, "3/4"], [5 / 6, "5/6"], [7 / 8, "7/8"],
+    [0, ""],
+    [1 / 8, "1/8"],
+    [1 / 6, "1/6"],
+    [1 / 4, "1/4"],
+    [1 / 3, "1/3"],
+    [3 / 8, "3/8"],
+    [1 / 2, "1/2"],
+    [5 / 8, "5/8"],
+    [2 / 3, "2/3"],
+    [3 / 4, "3/4"],
+    [5 / 6, "5/6"],
+    [7 / 8, "7/8"],
   ];
   let closest = fractionMap[0];
   let minDist = Infinity;
   for (const entry of fractionMap) {
     const dist = Math.abs(frac - entry[0]);
-    if (dist < minDist) { minDist = dist; closest = entry; }
+    if (dist < minDist) {
+      minDist = dist;
+      closest = entry;
+    }
   }
   if (!closest[1]) return whole > 0 ? String(whole) : "1";
   return whole > 0 ? `${whole} ${closest[1]}` : closest[1];

@@ -2,8 +2,8 @@ import type {
   AssistantReply,
   JsonValue,
   MemoryRecord,
-  RecipePayload,
   PreferenceConflictContext,
+  RecipePayload,
 } from "../../_shared/types.ts";
 import type {
   CanonicalIngredientView,
@@ -23,6 +23,11 @@ export type ContextPack = {
   memorySnapshot: Record<string, JsonValue>;
   selectedMemories: MemoryRecord[];
   selectedMemoryIds: string[];
+};
+
+export type PromptThreadMessage = {
+  role: string;
+  content: string;
 };
 
 export type ChatMessageView = {
@@ -68,8 +73,16 @@ export type RecipeView = {
 };
 
 export type ChatLoopState = "ideation" | "candidate_presented" | "iterating";
-export type CandidateRecipeRole = "main" | "side" | "appetizer" | "dessert" | "drink";
-export type ChatIntent = "in_scope_ideation" | "in_scope_generate" | "out_of_scope";
+export type CandidateRecipeRole =
+  | "main"
+  | "side"
+  | "appetizer"
+  | "dessert"
+  | "drink";
+export type ChatIntent =
+  | "in_scope_ideation"
+  | "in_scope_generate"
+  | "out_of_scope";
 
 export type CandidateRecipeComponent = {
   component_id: string;
@@ -91,11 +104,19 @@ export type ChatCommitRecipe = {
   component_id: string;
   role: CandidateRecipeRole;
   title: string;
-  recipe_id: string;
-  recipe_version_id: string;
+  cookbook_entry_id: string;
+  recipe_id: string | null;
+  recipe_version_id: string | null;
   variant_id: string | null;
   variant_version_id: string | null;
-  variant_status: "current" | "stale" | "processing" | "failed" | "needs_review" | "none";
+  canonical_status: "pending" | "processing" | "ready" | "failed";
+  variant_status:
+    | "current"
+    | "stale"
+    | "processing"
+    | "failed"
+    | "needs_review"
+    | "none";
 };
 
 export type ChatCommitLink = {
@@ -144,6 +165,17 @@ export type ChatLaunchContext = {
   preference_editing_intent?: PreferenceEditingIntent | null;
 };
 
+export type DeferredGenerationContext = {
+  prompt: string;
+  thread: PromptThreadMessage[];
+  compact_chat_context: Record<string, JsonValue>;
+  candidate_recipe_set_outline?: JsonValue;
+  preferences: PreferenceContext;
+  memory_snapshot: Record<string, JsonValue>;
+  selected_memories: MemoryRecord[];
+  selected_memory_ids: string[];
+};
+
 export type ChatSessionContext = {
   preferences?: PreferenceContext;
   memory_snapshot?: Record<string, JsonValue>;
@@ -163,6 +195,7 @@ export type ChatSessionContext = {
    *  Cleared when the client calls POST /chat/:id/generate and
    *  the generation LLM completes. */
   generation_pending?: boolean;
+  deferred_generation_context?: DeferredGenerationContext | null;
 };
 
 export type ChatUiHints = {
@@ -343,6 +376,87 @@ export const wrapRecipeInCandidateSet = (
   };
 };
 
+const normalizePromptThread = (value: unknown): PromptThreadMessage[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.flatMap((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      return [];
+    }
+
+    const raw = entry as Record<string, unknown>;
+    const role = typeof raw.role === "string" ? raw.role.trim() : "";
+    const content = typeof raw.content === "string" ? raw.content.trim() : "";
+    if (!role || !content) {
+      return [];
+    }
+
+    return [{ role, content }];
+  });
+};
+
+export const normalizeDeferredGenerationContext = (
+  value: unknown,
+): DeferredGenerationContext | null => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  const raw = value as Record<string, unknown>;
+  const prompt = typeof raw.prompt === "string" ? raw.prompt.trim() : "";
+  if (!prompt) {
+    return null;
+  }
+
+  const preferences = raw.preferences &&
+      typeof raw.preferences === "object" &&
+      !Array.isArray(raw.preferences)
+    ? raw.preferences as PreferenceContext
+    : null;
+  if (!preferences) {
+    return null;
+  }
+
+  const compactChatContext = raw.compact_chat_context &&
+      typeof raw.compact_chat_context === "object" &&
+      !Array.isArray(raw.compact_chat_context)
+    ? raw.compact_chat_context as Record<string, JsonValue>
+    : {};
+  const memorySnapshot = raw.memory_snapshot &&
+      typeof raw.memory_snapshot === "object" &&
+      !Array.isArray(raw.memory_snapshot)
+    ? raw.memory_snapshot as Record<string, JsonValue>
+    : {};
+  const selectedMemories = Array.isArray(raw.selected_memories)
+    ? raw.selected_memories.filter((entry): entry is MemoryRecord =>
+      Boolean(entry) && typeof entry === "object" && !Array.isArray(entry)
+    )
+    : [];
+  const selectedMemoryIds = Array.isArray(raw.selected_memory_ids)
+    ? raw.selected_memory_ids
+      .filter((entry): entry is string =>
+        typeof entry === "string" && entry.trim().length > 0
+      )
+      .map((entry) => entry.trim())
+    : [];
+
+  return {
+    prompt,
+    thread: normalizePromptThread(raw.thread),
+    compact_chat_context: compactChatContext,
+    candidate_recipe_set_outline: typeof raw.candidate_recipe_set_outline ===
+        "undefined"
+      ? undefined
+      : raw.candidate_recipe_set_outline as JsonValue,
+    preferences,
+    memory_snapshot: memorySnapshot,
+    selected_memories: selectedMemories,
+    selected_memory_ids: selectedMemoryIds,
+  };
+};
+
 export const extractChatContext = (value: unknown): ChatSessionContext => {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return {};
@@ -363,6 +477,9 @@ export const extractChatContext = (value: unknown): ChatSessionContext => {
       : null,
     preference_editing_intent: normalizePreferenceEditingIntent(
       raw.preference_editing_intent,
+    ),
+    deferred_generation_context: normalizeDeferredGenerationContext(
+      raw.deferred_generation_context,
     ),
   };
 };

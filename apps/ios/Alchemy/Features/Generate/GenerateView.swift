@@ -267,8 +267,6 @@ struct GenerateView: View {
         }
         .background(AlchemyColors.background)
         .task {
-            let startTime = Date()
-
             // Imported sessions must win over the default greeting flow. If the
             // sheet dismisses and TabShell selects Sous Chef with `importedSession`
             // already populated, plain `.onChange` can miss that initial value.
@@ -278,22 +276,17 @@ struct GenerateView: View {
                 consumeImportedSession(session)
                 importedSession = nil
             } else {
-                await loadGreeting(focusAfter: false)
+                seedGreeting(focusAfter: false)
+                Task { await hydrateGreeting() }
             }
 
-            // Ensure the Lottie splash shows for at least 1.5s so it
-            // feels intentional, not a flash.
-            let elapsed = Date().timeIntervalSince(startTime)
-            let remaining = max(0, 1.5 - elapsed)
-            if remaining > 0 {
-                try? await Task.sleep(for: .seconds(remaining))
-            }
-
-            // Fade out the splash, then slide the chat panel up.
-            withAnimation(.easeOut(duration: 0.35)) {
+            // Fade the splash immediately once the local greeting state is ready,
+            // then slide the chat panel in. Remote greeting hydration happens
+            // after the screen is already interactive.
+            withAnimation(.easeOut(duration: 0.18)) {
                 isInitialLoading = false
             }
-            try? await Task.sleep(for: .milliseconds(250))
+            try? await Task.sleep(for: .milliseconds(80))
 
             withAnimation(.spring(duration: 0.6, bounce: 0.2)) {
                 hasAppeared = true
@@ -833,47 +826,57 @@ struct GenerateView: View {
 
     // MARK: - API Integration
 
-    /// Fetches a personalized greeting from GET /chat/greeting.
-    private func loadGreeting(focusAfter: Bool = true) async {
+    /// Seeds the opening greeting from the local rotating pool so the
+    /// Generate screen can render immediately without waiting on network.
+    private func seedGreeting(focusAfter: Bool = true) {
         // If another flow has already hydrated the screen (for example import
         // handoff), never overwrite that state with the default greeting.
         guard chatSessionId == nil, candidateSet == nil, messages.isEmpty else { return }
 
-        let loadingId = "greeting-loading"
-
+        let greetingText = GenerateGreetingPool.shared.currentGreeting()
         withAnimation {
             messages = [ChatMessage(
-                id: loadingId,
+                id: "greeting-seed",
                 role: .assistant,
-                content: "",
+                content: greetingText,
                 createdAt: .now,
-                isLoading: true
+                isLoading: false
             )]
-        }
-
-        let greetingText: String
-        do {
-            let greeting: ChatGreetingResponse = try await APIClient.shared.request("/chat/greeting")
-            greetingText = greeting.text
-        } catch {
-            greetingText = "Hey Chef, what are we making today?"
-        }
-
-        withAnimation {
-            if let idx = messages.firstIndex(where: { $0.id == loadingId }) {
-                messages[idx] = ChatMessage(
-                    id: UUID().uuidString,
-                    role: .assistant,
-                    content: greetingText,
-                    createdAt: .now
-                )
-            }
         }
 
         if focusAfter {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
                 inputFocused = true
             }
+        }
+    }
+
+    /// Refreshes the greeting from GET /chat/greeting after the screen is
+    /// already interactive. The local pool stays as the fallback path.
+    private func hydrateGreeting() async {
+        guard chatSessionId == nil, candidateSet == nil else { return }
+
+        do {
+            let greeting: ChatGreetingResponse = try await APIClient.shared.request("/chat/greeting")
+            let greetingText = greeting.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !greetingText.isEmpty else { return }
+
+            GenerateGreetingPool.shared.storeRemoteGreeting(greetingText)
+
+            // If the user has already started chatting, don't rewrite the thread.
+            guard !chatHasStarted else { return }
+            guard messages.count == 1, messages.first?.role == .assistant else { return }
+
+            withAnimation {
+                messages[0] = ChatMessage(
+                    id: messages[0].id,
+                    role: .assistant,
+                    content: greetingText,
+                    createdAt: .now
+                )
+            }
+        } catch {
+            print("[GenerateView] greeting hydration failed: \(error)")
         }
     }
 
@@ -1249,7 +1252,7 @@ struct GenerateView: View {
     }
 
     /// Resets all state for a fresh conversation.
-    /// Focus is set via loadGreeting(focusAfter: true) rather than
+    /// Focus is set via seedGreeting(focusAfter: true) rather than
     /// inline, because the withAnimation block rebuilds the view tree
     /// and any inline focus assignment gets lost.
     private func startOver() {
@@ -1269,7 +1272,8 @@ struct GenerateView: View {
             candidateSet = nil
             savedToastText = nil
         }
-        Task { await loadGreeting(focusAfter: true) }
+        seedGreeting(focusAfter: true)
+        Task { await hydrateGreeting() }
     }
 }
 

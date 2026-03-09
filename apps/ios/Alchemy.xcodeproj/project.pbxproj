@@ -41,8 +41,10 @@
 		7C5265E1BA60220F06AB2E76 /* ImportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A7D97690AB17BAA8EF132F1 /* ImportView.swift */; };
 		92B2D41E5F1EF5194B385E98 /* TabShell.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1905F952E153213B82628C1E /* TabShell.swift */; };
 		9305B55458FE96CA290DFEEE /* ImageDownsamplerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4999CBC14E346A7DE0BCDCFC /* ImageDownsamplerTests.swift */; };
+		9EEAA0D733ADDA6FA99148DD /* GenerateGreetingPool.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF8C77B5108FD2379C7B9097 /* GenerateGreetingPool.swift */; };
 		9F99918ACFA548C23B11F940 /* Lottie in Frameworks */ = {isa = PBXBuildFile; productRef = 92C2805B6E32180FC1015CF1 /* Lottie */; };
 		A6DB3E6D49457E675F369DEB /* RecipeURLDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DA9E3E09DF919C668A03C35 /* RecipeURLDetector.swift */; };
+		A81458A04493899D89984BC5 /* GenerateGreetingPoolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A797CAC25530567A2213B676 /* GenerateGreetingPoolTests.swift */; };
 		A8F2490B77EECF2BFF284BAC /* SupabaseManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B8F424DA5D2661C4CB5914A /* SupabaseManager.swift */; };
 		ABD002AB352654AB6DE0B7DE /* CookbookView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0217F804B0511D28857FC816 /* CookbookView.swift */; };
 		B79A39E174485B7BAA126A2D /* ChatBubble.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE34608B8617C7346206908A /* ChatBubble.swift */; };
@@ -121,6 +123,7 @@
 		815B265102D0AC689E0800AB /* AuthManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthManager.swift; sourceTree = "<group>"; };
 		87391E8941518B7568F1F1D3 /* GlassInputBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlassInputBar.swift; sourceTree = "<group>"; };
 		A6AA8D5FB7A26CA063097587 /* RecipeCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecipeCardView.swift; sourceTree = "<group>"; };
+		A797CAC25530567A2213B676 /* GenerateGreetingPoolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerateGreetingPoolTests.swift; sourceTree = "<group>"; };
 		AE34608B8617C7346206908A /* ChatBubble.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatBubble.swift; sourceTree = "<group>"; };
 		B6846E9DD30BF0EE67FFB668 /* APIModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIModels.swift; sourceTree = "<group>"; };
 		B70AE7658CE52F4C4D9D16E2 /* ExploreView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExploreView.swift; sourceTree = "<group>"; };
@@ -132,6 +135,7 @@
 		D8B08178F20A5FDCD50954CE /* AuthFlowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthFlowView.swift; sourceTree = "<group>"; };
 		D92723C258CA540A3F92B30C /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		DBB2A0915507D2539E028F35 /* AlchemySpacing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlchemySpacing.swift; sourceTree = "<group>"; };
+		DF8C77B5108FD2379C7B9097 /* GenerateGreetingPool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerateGreetingPool.swift; sourceTree = "<group>"; };
 		E0F44AD58C0315286413FB56 /* IngredientGrouping.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IngredientGrouping.swift; sourceTree = "<group>"; };
 		E7D059A499F94C5F767F33CB /* alchemy-loading.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "alchemy-loading.json"; sourceTree = "<group>"; };
 		E8043174613A6F56CD380A47 /* ImportMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportMenu.swift; sourceTree = "<group>"; };
@@ -298,6 +302,7 @@
 		6BCE1272A40AEDA4D51DB690 /* Generate */ = {
 			isa = PBXGroup;
 			children = (
+				DF8C77B5108FD2379C7B9097 /* GenerateGreetingPool.swift */,
 				4CD75C625E706ECE7EB76187 /* GenerateView.swift */,
 			);
 			path = Generate;
@@ -414,6 +419,7 @@
 		DF2ACC4AC9787D754B6CA862 /* AlchemyTests */ = {
 			isa = PBXGroup;
 			children = (
+				A797CAC25530567A2213B676 /* GenerateGreetingPoolTests.swift */,
 				4999CBC14E346A7DE0BCDCFC /* ImageDownsamplerTests.swift */,
 				C5CB35D1085C0ACBD3FD36D1 /* RecipeImageLoadingTests.swift */,
 			);
@@ -579,6 +585,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A81458A04493899D89984BC5 /* GenerateGreetingPoolTests.swift in Sources */,
 				9305B55458FE96CA290DFEEE /* ImageDownsamplerTests.swift in Sources */,
 				1851A9A2A252B977A3391288 /* RecipeImageLoadingTests.swift in Sources */,
 			);
@@ -605,6 +612,7 @@
 				60968686BEA8C1AA49E0E1DB /* ContentView.swift in Sources */,
 				ABD002AB352654AB6DE0B7DE /* CookbookView.swift in Sources */,
 				5BCB1FCA2408B21C8FAA869A /* ExploreView.swift in Sources */,
+				9EEAA0D733ADDA6FA99148DD /* GenerateGreetingPool.swift in Sources */,
 				53C737CD4B44A340BC9F64A9 /* GenerateView.swift in Sources */,
 				698B3C7D3C46D818CB832386 /* GlassInputBar.swift in Sources */,
 				596E09694AA95D0AF940BCB6 /* ImageDownsampler.swift in Sources */,

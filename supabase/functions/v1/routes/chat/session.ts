@@ -1,7 +1,4 @@
-import {
-  ApiError,
-  requireJsonBody,
-} from "../../../_shared/errors.ts";
+import { ApiError, requireJsonBody } from "../../../_shared/errors.ts";
 import type { JsonValue } from "../../../_shared/types.ts";
 import {
   buildChatBehaviorFacts,
@@ -15,6 +12,7 @@ import type {
   ChatSessionContext,
   RouteContext,
 } from "../shared.ts";
+import { logChatRouteTiming } from "./timing.ts";
 import type { ChatDeps } from "./types.ts";
 
 /**
@@ -29,6 +27,7 @@ export const handleCreateSession = async (
   context: RouteContext,
   deps: ChatDeps,
 ): Promise<Response> => {
+  const routeStartedAt = Date.now();
   const {
     request,
     auth,
@@ -65,7 +64,10 @@ export const handleCreateSession = async (
     throw new ApiError(400, "invalid_message", "message is required");
   }
 
-  const contextPack = await buildContextPack({
+  const {
+    pack: contextPack,
+    metrics: contextPackMetrics,
+  } = await buildContextPack({
     userClient: client,
     serviceClient,
     userId: auth.userId,
@@ -75,6 +77,7 @@ export const handleCreateSession = async (
       ? { launch_context: launchContext as unknown as JsonValue }
       : {},
     selectionMode: "fast",
+    retrievalMode: "none",
   });
 
   const { data: chatSession, error: chatError } = await client
@@ -245,8 +248,8 @@ export const handleCreateSession = async (
     envelope: assistantEnvelope as unknown as JsonValue,
   };
 
-  const { data: assistantMessage, error: assistantMessageError } =
-    await client.from("chat_messages").insert({
+  const { data: assistantMessage, error: assistantMessageError } = await client
+    .from("chat_messages").insert({
       chat_id: chatSession.id,
       role: "assistant",
       content: assistantMessageContent,
@@ -290,7 +293,9 @@ export const handleCreateSession = async (
       eventId: resolvedEventId,
       userId: auth.userId,
       chatId: chatSession.id,
-      responseContext: (orchestrated.responseContext ?? null) as Record<string, JsonValue> | null,
+      responseContext: (orchestrated.responseContext ?? null) as
+        | Record<string, JsonValue>
+        | null,
       candidateId: nextCandidateSet?.candidate_id ?? null,
       generatedCount,
     }),
@@ -310,7 +315,8 @@ export const handleCreateSession = async (
         assistant_message_id: assistantMessage.id,
         response_context: (orchestrated.responseContext ?? {}) as JsonValue,
         candidate_id: (nextCandidateSet?.candidate_id ?? null) as JsonValue,
-        active_component_id: (nextCandidateSet?.active_component_id ?? null) as JsonValue,
+        active_component_id:
+          (nextCandidateSet?.active_component_id ?? null) as JsonValue,
         workflow: (launchContext?.workflow ?? null) as JsonValue,
         entry_surface: (launchContext?.entry_surface ?? null) as JsonValue,
       },
@@ -387,30 +393,42 @@ export const handleCreateSession = async (
     },
   });
 
-  return respond(
-    200,
-    buildChatLoopResponse({
-      chatId: chatSession.id,
-      messages,
-      context: orchestrated.nextContext,
-      assistantReply: orchestrated.assistantChatResponse.assistant_reply,
-      responseContext: orchestrated.responseContext,
-      memoryContextIds: contextPack.selectedMemoryIds,
-      createdAt: chatSession.created_at,
-      updatedAt: new Date().toISOString(),
-      uiHints: orchestrated.generationDeferred
-        ? {
-          generation_pending: true,
-          show_generation_animation: true,
-        }
-        : nextCandidateSet
-        ? {
-          show_generation_animation: orchestrated.justGenerated,
-          focus_component_id: nextCandidateSet.active_component_id,
-        }
-        : undefined,
-    }),
-  );
+  const responseBody = buildChatLoopResponse({
+    chatId: chatSession.id,
+    messages,
+    context: orchestrated.nextContext,
+    assistantReply: orchestrated.assistantChatResponse.assistant_reply,
+    responseContext: orchestrated.responseContext,
+    memoryContextIds: contextPack.selectedMemoryIds,
+    createdAt: chatSession.created_at,
+    updatedAt: new Date().toISOString(),
+    uiHints: orchestrated.generationDeferred
+      ? {
+        generation_pending: true,
+        show_generation_animation: true,
+      }
+      : nextCandidateSet
+      ? {
+        show_generation_animation: orchestrated.justGenerated,
+        focus_component_id: nextCandidateSet.active_component_id,
+      }
+      : undefined,
+  });
+  await logChatRouteTiming({
+    serviceClient,
+    userId: auth.userId,
+    requestId,
+    route: "chat_create",
+    contextLoadMs: contextPackMetrics.contextLoadMs,
+    memoryRetrievalMs: contextPackMetrics.memoryRetrievalMs,
+    llmMs: orchestrated.llmLatencyMs,
+    recoveryPath: orchestrated.recoveryPath,
+    cacheHit: false,
+    generationReusedContext: false,
+    totalServerMs: Date.now() - routeStartedAt,
+  });
+
+  return respond(200, responseBody);
 };
 
 /**
@@ -480,8 +498,10 @@ export const handleGetSession = async (
         ...contextValue,
         preferences: currentPreferences,
         candidate_recipe_set: hydratedCandidateSet,
-        candidate_revision: hydratedCandidateSet?.revision ?? contextValue.candidate_revision,
-        active_component_id: hydratedCandidateSet?.active_component_id ?? contextValue.active_component_id ?? null,
+        candidate_revision: hydratedCandidateSet?.revision ??
+          contextValue.candidate_revision,
+        active_component_id: hydratedCandidateSet?.active_component_id ??
+          contextValue.active_component_id ?? null,
       },
       assistantReply: extractLatestAssistantReply(messages),
       memoryContextIds,

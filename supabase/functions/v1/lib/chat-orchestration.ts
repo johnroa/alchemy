@@ -65,8 +65,8 @@ import {
 import {
   buildMatchedChipIds,
   buildSuggestedChips,
-  extractSemanticProfileFromPayload,
   extractBrowseFacetProfileFromPayload,
+  extractSemanticProfileFromPayload,
   mergeSemanticProfiles,
 } from "./semantic-facets.ts";
 import { flattenVariantTags } from "./variant-tags.ts";
@@ -81,6 +81,7 @@ import type {
   ChatSessionContext,
   ChatUiHints,
   ContextPack,
+  DeferredGenerationContext,
   RecipeView,
 } from "./chat-types.ts";
 import {
@@ -914,12 +915,10 @@ const buildCookbookData = async (
     staleContext: StaleContext;
   }
 > => {
-  // Read from cookbook_entries (new table). Falls back to recipe_saves if
-  // no cookbook_entries exist yet (pre-migration users).
   const { data: cookbookRows, error: cbError } = await client
     .from("cookbook_entries")
     .select(
-      "canonical_recipe_id, autopersonalize, active_variant_id, saved_at, updated_at",
+      "id, canonical_recipe_id, canonical_status, autopersonalize, active_variant_id, saved_at, updated_at, preview_image_url, preview_image_status",
     )
     .eq("user_id", userId);
 
@@ -932,51 +931,28 @@ const buildCookbookData = async (
     );
   }
 
-  // After migration 0047, all recipe_saves are backfilled into
-  // cookbook_entries. No fallback needed.
-  const recipeIds = (cookbookRows ?? []).map((row) => row.canonical_recipe_id);
-  const entryMap = new Map<
-    string,
-    {
-      autopersonalize: boolean;
-      active_variant_id: string | null;
-      saved_at: string;
-      updated_at: string;
-    }
-  >();
+  const entries = (cookbookRows ?? []) as Array<{
+    id: string;
+    canonical_recipe_id: string | null;
+    canonical_status: "pending" | "processing" | "ready" | "failed";
+    autopersonalize: boolean;
+    active_variant_id: string | null;
+    saved_at: string;
+    updated_at: string;
+    preview_image_url: string | null;
+    preview_image_status: string;
+  }>;
 
-  for (const row of cookbookRows ?? []) {
-    entryMap.set(row.canonical_recipe_id, {
-      autopersonalize: row.autopersonalize ?? true,
-      active_variant_id: row.active_variant_id,
-      saved_at: row.saved_at ?? row.updated_at,
-      updated_at: row.updated_at,
-    });
-  }
-
-  if (recipeIds.length === 0) {
+  if (entries.length === 0) {
     return { items: [], suggestedChips: [], staleContext: null };
   }
 
+  const recipeIds = entries
+    .map((row) => row.canonical_recipe_id)
+    .filter((id): id is string => Boolean(id));
+
   // Load canonical recipe data.
-  const { data: recipesData, error: recipesError } = await client
-    .from("recipes")
-    .select(
-      "id,title,hero_image_url,image_status,visibility,updated_at,current_version_id",
-    )
-    .in("id", recipeIds)
-    .order("updated_at", { ascending: false });
-
-  if (recipesError) {
-    throw new ApiError(
-      500,
-      "cookbook_fetch_failed",
-      "Could not load cookbook recipes",
-      recipesError.message,
-    );
-  }
-
-  const recipes = (recipesData ?? []) as Array<{
+  const recipeById = new Map<string, {
     id: string;
     title: string;
     hero_image_url: string | null;
@@ -984,10 +960,42 @@ const buildCookbookData = async (
     visibility: string;
     updated_at: string;
     current_version_id: string | null;
-  }>;
+  }>();
+  if (recipeIds.length > 0) {
+    const { data: recipesData, error: recipesError } = await client
+      .from("recipes")
+      .select(
+        "id,title,hero_image_url,image_status,visibility,updated_at,current_version_id",
+      )
+      .in("id", recipeIds)
+      .order("updated_at", { ascending: false });
+
+    if (recipesError) {
+      throw new ApiError(
+        500,
+        "cookbook_fetch_failed",
+        "Could not load cookbook recipes",
+        recipesError.message,
+      );
+    }
+
+    for (
+      const recipe of (recipesData ?? []) as Array<{
+        id: string;
+        title: string;
+        hero_image_url: string | null;
+        image_status: string;
+        visibility: string;
+        updated_at: string;
+        current_version_id: string | null;
+      }>
+    ) {
+      recipeById.set(recipe.id, recipe);
+    }
+  }
 
   // Load canonical version payloads for summaries and metadata.
-  const versionIds = recipes
+  const versionIds = [...recipeById.values()]
     .map((r) => r.current_version_id)
     .filter((id): id is string => Boolean(id));
 
@@ -1012,12 +1020,12 @@ const buildCookbookData = async (
     );
   }
 
-  // Load variant statuses for recipes that have variants.
-  const variantRecipeIds = [...entryMap.entries()]
-    .filter(([, e]) => e.active_variant_id != null)
-    .map(([recipeId]) => recipeId);
+  // Load variant statuses for entries that have active variants.
+  const variantEntryIds = entries
+    .filter((entry) => entry.active_variant_id != null)
+    .map((entry) => entry.id);
 
-  const variantByRecipe = new Map<
+  const variantByEntry = new Map<
     string,
     {
       stale_status: string;
@@ -1027,17 +1035,17 @@ const buildCookbookData = async (
     }
   >();
 
-  if (variantRecipeIds.length > 0) {
+  if (variantEntryIds.length > 0) {
     const { data: variants } = await client
       .from("user_recipe_variants")
       .select(
-        "canonical_recipe_id, stale_status, last_materialized_at, current_version_id, variant_tags",
+        "cookbook_entry_id, stale_status, last_materialized_at, current_version_id, variant_tags",
       )
       .eq("user_id", userId)
-      .in("canonical_recipe_id", variantRecipeIds);
+      .in("cookbook_entry_id", variantEntryIds);
 
     for (const v of variants ?? []) {
-      variantByRecipe.set(v.canonical_recipe_id, {
+      variantByEntry.set(v.cookbook_entry_id, {
         stale_status: v.stale_status,
         last_materialized_at: v.last_materialized_at,
         current_version_id: v.current_version_id,
@@ -1048,7 +1056,7 @@ const buildCookbookData = async (
 
   const variantVersionIds = Array.from(
     new Set(
-      [...variantByRecipe.values()]
+      [...variantByEntry.values()]
         .map((variant) => variant.current_version_id)
         .filter((id): id is string => Boolean(id)),
     ),
@@ -1079,20 +1087,23 @@ const buildCookbookData = async (
   }
 
   // Load categories (same as before).
-  const [{ data: userCategories }, { data: autoCategories }] = await Promise
-    .all([
-      client
-        .from("recipe_user_categories")
-        .select("recipe_id,category")
-        .eq("user_id", userId)
-        .in("recipe_id", recipeIds),
-      client
-        .from("recipe_auto_categories")
-        .select("recipe_id,category,confidence")
-        .in("recipe_id", recipeIds)
-        .order("confidence", { ascending: false, nullsFirst: false })
-        .order("category", { ascending: true }),
-    ]);
+  const [{ data: userCategories }, { data: autoCategories }] =
+    recipeIds.length > 0
+      ? await Promise
+        .all([
+          client
+            .from("recipe_user_categories")
+            .select("recipe_id,category")
+            .eq("user_id", userId)
+            .in("recipe_id", recipeIds),
+          client
+            .from("recipe_auto_categories")
+            .select("recipe_id,category,confidence")
+            .in("recipe_id", recipeIds)
+            .order("confidence", { ascending: false, nullsFirst: false })
+            .order("category", { ascending: true }),
+        ])
+      : [{ data: [] }, { data: [] }];
 
   const userCategoryByRecipe = new Map<string, string>();
   for (const entry of userCategories ?? []) {
@@ -1102,23 +1113,35 @@ const buildCookbookData = async (
     autoCategories ?? [],
   );
 
-  const draftItems = recipes.map((recipe) => {
-    const payload = recipe.current_version_id
+  const draftItems = entries.map((entry) => {
+    const recipe = entry.canonical_recipe_id
+      ? recipeById.get(entry.canonical_recipe_id)
+      : undefined;
+    const payload = recipe?.current_version_id
       ? versionById.get(recipe.current_version_id)
       : undefined;
-    const variant = variantByRecipe.get(recipe.id);
+    const variant = variantByEntry.get(entry.id);
     const variantPayload = variant?.current_version_id
       ? variantVersionById.get(variant.current_version_id)
       : undefined;
-    const userCategory = userCategoryByRecipe.get(recipe.id);
-    const autoCategory = autoCategoryByRecipe.get(recipe.id);
+    const userCategory = entry.canonical_recipe_id
+      ? userCategoryByRecipe.get(entry.canonical_recipe_id)
+      : undefined;
+    const autoCategory = entry.canonical_recipe_id
+      ? autoCategoryByRecipe.get(entry.canonical_recipe_id)
+      : undefined;
+    const effectivePayload = variantPayload ?? payload;
+    const effectiveMetadata = effectivePayload
+      ? canonicalizeRecipePayloadMetadata(effectivePayload)
+      : undefined;
     const canonicalMetadata = payload
       ? canonicalizeRecipePayloadMetadata(payload)
       : undefined;
-    const entry = entryMap.get(recipe.id);
 
     const variantStatus: VariantStatus = variant
       ? (variant.stale_status as VariantStatus)
+      : effectivePayload
+      ? "current"
       : "none";
 
     const canonicalSemanticProfile = extractBrowseFacetProfileFromPayload(
@@ -1137,27 +1160,41 @@ const buildCookbookData = async (
     );
 
     return {
-      item_id: recipe.id,
+      item_id: entry.id,
       profile: effectiveSemanticProfile,
-      canonical_recipe_id: recipe.id,
-      title: payload?.title ?? recipe.title,
-      summary: payload ? resolveRecipePayloadSummary(payload) : "",
-      image_url: resolveRecipeImageUrl(recipe.hero_image_url),
-      image_status: resolveRecipeImageStatus(
-        recipe.hero_image_url,
-        recipe.image_status,
-      ),
+      id: entry.id,
+      canonical_recipe_id: entry.canonical_recipe_id,
+      recipe_id: entry.canonical_recipe_id,
+      canonical_status: entry.canonical_status,
+      title: effectivePayload?.title ?? payload?.title ?? recipe?.title ??
+        "Untitled Recipe",
+      summary: effectivePayload
+        ? resolveRecipePayloadSummary(effectivePayload)
+        : "",
+      image_url: recipe
+        ? resolveRecipeImageUrl(recipe.hero_image_url)
+        : resolveRecipeImageUrl(entry.preview_image_url),
+      image_status: recipe
+        ? resolveRecipeImageStatus(
+          recipe.hero_image_url,
+          recipe.image_status,
+        )
+        : resolveRecipeImageStatus(
+          entry.preview_image_url,
+          entry.preview_image_status,
+        ),
       category: resolveCookbookPreviewCategory(userCategory, autoCategory),
-      visibility: recipe.visibility,
-      updated_at: recipe.updated_at,
-      quick_stats: (canonicalMetadata?.quick_stats ?? null) as CookbookEntry[
-        "quick_stats"
-      ],
+      visibility: recipe?.visibility ?? "private",
+      updated_at: recipe?.updated_at ?? entry.updated_at,
+      quick_stats: ((effectiveMetadata ?? canonicalMetadata)?.quick_stats ??
+        null) as CookbookEntry[
+          "quick_stats"
+        ],
       variant_status: variantStatus,
       active_variant_version_id: variant?.current_version_id ?? null,
       personalized_at: variant?.last_materialized_at ?? null,
-      autopersonalize: entry?.autopersonalize ?? true,
-      saved_at: entry?.saved_at ?? recipe.updated_at,
+      autopersonalize: entry.autopersonalize ?? true,
+      saved_at: entry.saved_at ?? entry.updated_at,
       variant_tags: flattenVariantTags(variant?.variant_tags),
       matched_chip_ids: [],
     };
@@ -1191,7 +1228,7 @@ const buildCookbookData = async (
     .filter((i) =>
       i.variant_status === "stale" || i.variant_status === "needs_review"
     )
-    .map((i) => i.canonical_recipe_id);
+    .map((i) => i.id);
 
   let staleContext: StaleContext = null;
   if (staleRecipeIds.length > 0) {
@@ -1296,7 +1333,7 @@ export const buildCookbookInsightDeterministic = (
   );
 };
 
-const converseChatWithRetry = async (params: {
+const executeChatConversation = async (params: {
   client: SupabaseClient;
   userId: string;
   requestId: string;
@@ -1304,38 +1341,48 @@ const converseChatWithRetry = async (params: {
   context: Record<string, JsonValue>;
   scopeHint?: "chat_ideation" | "chat_generation" | "chat_iteration";
   modelOverrides?: ModelOverrideMap;
-}): Promise<Awaited<ReturnType<typeof llmGateway.converseChat>>> => {
-  const callGateway = () =>
-    llmGateway.converseChat({
-      client: params.client,
-      userId: params.userId,
-      requestId: params.requestId,
-      prompt: params.prompt,
-      context: params.context,
-      scopeHint: params.scopeHint,
-      modelOverrides: params.modelOverrides,
-    });
+}): Promise<{
+  response: Awaited<ReturnType<typeof llmGateway.converseChat>>;
+  latencyMs: number;
+  recoveryPath: string | null;
+}> => {
+  const startedAt = Date.now();
+  const response = await llmGateway.converseChat({
+    client: params.client,
+    userId: params.userId,
+    requestId: params.requestId,
+    prompt: params.prompt,
+    context: params.context,
+    scopeHint: params.scopeHint,
+    modelOverrides: params.modelOverrides,
+  });
 
-  try {
-    return await callGateway();
-  } catch (firstError) {
-    const isRetryable = firstError instanceof ApiError &&
-      (firstError.status === 422 ||
-        firstError.code === "chat_schema_invalid" ||
-        firstError.code === "llm_invalid_json" ||
-        firstError.code === "llm_json_truncated" ||
-        firstError.code === "llm_empty_output");
-    if (!isRetryable) {
-      throw firstError;
-    }
-    console.warn("converseChatWithRetry: retrying after schema error", {
-      request_id: params.requestId,
-      scope_hint: params.scopeHint,
-      error_code: firstError instanceof ApiError ? firstError.code : "unknown",
-    });
-    return await callGateway();
-  }
+  return {
+    response,
+    latencyMs: Date.now() - startedAt,
+    recoveryPath: response.gateway_metadata?.recovery_path ?? null,
+  };
 };
+
+const buildDeferredGenerationContext = (params: {
+  message: string;
+  threadForPrompt: Array<{ role: string; content: string }>;
+  compactChatContext: Record<string, JsonValue>;
+  candidateOutlineForPrompt: JsonValue;
+  effectivePreferences: PreferenceContext;
+  memorySnapshot: Record<string, JsonValue>;
+  selectedMemories: ContextPack["selectedMemories"];
+  selectedMemoryIds: string[];
+}): DeferredGenerationContext => ({
+  prompt: params.message,
+  thread: params.threadForPrompt,
+  compact_chat_context: params.compactChatContext,
+  candidate_recipe_set_outline: params.candidateOutlineForPrompt,
+  preferences: params.effectivePreferences,
+  memory_snapshot: params.memorySnapshot,
+  selected_memories: params.selectedMemories,
+  selected_memory_ids: params.selectedMemoryIds,
+});
 
 export type OrchestratedChatTurn = {
   assistantChatResponse: Awaited<ReturnType<typeof llmGateway.converseChat>>;
@@ -1350,6 +1397,8 @@ export type OrchestratedChatTurn = {
    *  with generation_pending so the client can show the Lottie and
    *  call POST /chat/:id/generate to run the actual generation. */
   generationDeferred: boolean;
+  llmLatencyMs: number;
+  recoveryPath: string | null;
 };
 
 export const orchestrateChatTurn = async (params: {
@@ -1416,7 +1465,10 @@ export const orchestrateChatTurn = async (params: {
     ? buildPreferenceWorkflowInstruction(params.sessionContext)
     : null;
 
-  let assistantChatResponse = await converseChatWithRetry({
+  let llmLatencyMs = 0;
+  let recoveryPath: string | null = null;
+
+  const initialChatCall = await executeChatConversation({
     client: params.serviceClient,
     userId: params.userId,
     requestId: params.requestId,
@@ -1445,6 +1497,9 @@ export const orchestrateChatTurn = async (params: {
     scopeHint,
     modelOverrides: params.modelOverrides,
   });
+  let assistantChatResponse = initialChatCall.response;
+  llmLatencyMs += initialChatCall.latencyMs;
+  recoveryPath = initialChatCall.recoveryPath;
 
   // Hard guard: if this is a preference-editing workflow, strip any recipe
   // generation output the LLM may have produced despite instructions. The
@@ -1495,7 +1550,7 @@ export const orchestrateChatTurn = async (params: {
         generationDeferred = true;
       } else {
         try {
-          const generationResponse = await converseChatWithRetry({
+          const generationCall = await executeChatConversation({
             client: params.serviceClient,
             userId: params.userId,
             requestId: params.requestId,
@@ -1514,6 +1569,9 @@ export const orchestrateChatTurn = async (params: {
             scopeHint: "chat_generation",
             modelOverrides: params.modelOverrides,
           });
+          llmLatencyMs += generationCall.latencyMs;
+          recoveryPath = generationCall.recoveryPath ?? recoveryPath;
+          const generationResponse = generationCall.response;
           assistantChatResponse = {
             ...generationResponse,
             response_context: {
@@ -1530,6 +1588,7 @@ export const orchestrateChatTurn = async (params: {
             request_id: params.requestId,
             error: error instanceof Error ? error.message : String(error),
           });
+          recoveryPath = recoveryPath ?? "inline_generation_failed_fallback";
           assistantChatResponse = {
             ...assistantChatResponse,
             trigger_recipe: true,
@@ -1659,6 +1718,18 @@ export const orchestrateChatTurn = async (params: {
     thread_preference_overrides: nextThreadOverrides,
     // Persist the pending flag so the /generate endpoint can pick it up.
     generation_pending: generationDeferred ? true : undefined,
+    deferred_generation_context: generationDeferred
+      ? buildDeferredGenerationContext({
+        message: params.message,
+        threadForPrompt: params.threadForPrompt,
+        compactChatContext,
+        candidateOutlineForPrompt,
+        effectivePreferences,
+        memorySnapshot: params.contextPack.memorySnapshot,
+        selectedMemories: params.contextPack.selectedMemories,
+        selectedMemoryIds: params.contextPack.selectedMemoryIds,
+      })
+      : null,
     // Preserve session-level fields set at creation time. Without this,
     // updateChatSessionLoopContext overwrites the full context JSONB and
     // drops workflow/entry_surface/preference_editing_intent, breaking
@@ -1677,5 +1748,7 @@ export const orchestrateChatTurn = async (params: {
     responseContext,
     justGenerated: !params.existingCandidate && Boolean(nextCandidateSet),
     generationDeferred,
+    llmLatencyMs,
+    recoveryPath,
   };
 };

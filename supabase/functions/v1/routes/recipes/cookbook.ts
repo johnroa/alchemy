@@ -10,9 +10,13 @@ export const handleCookbookRoutes = async (
   context: RouteContext,
   deps: RecipesDeps,
 ): Promise<Response | null> => {
-  const { request, segments, method, auth, client, serviceClient, requestId, respond } = context;
+  const { request, url, segments, method, auth, client, serviceClient, requestId, respond, modelOverrides } = context;
   const {
     parseUuid,
+    getPreferences,
+    resolvePresentationOptions,
+    fetchCookbookEntryDetail,
+    deriveCanonicalForCookbookEntry,
     logChangelog,
     buildCookbookFeed,
     buildCookbookInsightDeterministic,
@@ -133,6 +137,101 @@ export const handleCookbookRoutes = async (
       suggested_chips: suggestedChips,
       cookbook_insight: cookbookInsight,
       stale_context: staleContext,
+    });
+  }
+
+  // ── GET/DELETE /recipes/cookbook/:entryId ──
+  if (
+    segments.length === 3 &&
+    segments[0] === "recipes" &&
+    segments[1] === "cookbook"
+  ) {
+    const cookbookEntryId = parseUuid(segments[2]);
+
+    if (method === "GET") {
+      const preferences = await getPreferences(client, auth.userId);
+      const viewOptions = resolvePresentationOptions({
+        query: url.searchParams,
+        presentationPreferences:
+          preferences.presentation_preferences as Record<string, unknown>,
+      });
+      const detail = await fetchCookbookEntryDetail({
+        client,
+        userId: auth.userId,
+        cookbookEntryId,
+        viewOptions,
+      });
+      return respond(200, detail);
+    }
+
+    if (method === "DELETE") {
+      const { error } = await client
+        .from("cookbook_entries")
+        .delete()
+        .eq("id", cookbookEntryId)
+        .eq("user_id", auth.userId);
+
+      if (error) {
+        throw new ApiError(
+          500,
+          "cookbook_entry_delete_failed",
+          "Could not delete cookbook entry",
+          error.message,
+        );
+      }
+
+      await logChangelog({
+        serviceClient,
+        actorUserId: auth.userId,
+        scope: "cookbook",
+        entityType: "cookbook_entry",
+        entityId: cookbookEntryId,
+        action: "deleted",
+        requestId,
+      });
+
+      return respond(200, { deleted: true, cookbook_entry_id: cookbookEntryId });
+    }
+  }
+
+  // ── POST /recipes/cookbook/:entryId/canon/retry ──
+  if (
+    segments.length === 5 &&
+    segments[0] === "recipes" &&
+    segments[1] === "cookbook" &&
+    segments[3] === "canon" &&
+    segments[4] === "retry" &&
+    method === "POST"
+  ) {
+    const cookbookEntryId = parseUuid(segments[2]);
+
+    const result = await deriveCanonicalForCookbookEntry({
+      serviceClient,
+      userId: auth.userId,
+      requestId,
+      cookbookEntryId,
+      canonicalizeRecipePayload: deps.canonicalizeRecipePayload,
+      resolveAndPersistCanonicalRecipe: deps.resolveAndPersistCanonicalRecipe,
+      ensurePersistedRecipeImageRequest: deps.ensurePersistedRecipeImageRequest,
+      scheduleImageQueueDrain: deps.scheduleImageQueueDrain,
+      modelOverrides,
+    });
+
+    await logChangelog({
+      serviceClient,
+      actorUserId: auth.userId,
+      scope: "cookbook",
+      entityType: "cookbook_entry",
+      entityId: cookbookEntryId,
+      action: "canon_retry",
+      requestId,
+      afterJson: result as unknown as JsonValue,
+    });
+
+    return respond(200, {
+      cookbook_entry_id: result.cookbookEntryId,
+      canonical_recipe_id: result.canonicalRecipeId,
+      canonical_status: result.canonicalStatus,
     });
   }
 

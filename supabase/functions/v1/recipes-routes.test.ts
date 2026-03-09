@@ -247,18 +247,65 @@ const parseJson = async (response: Response) => {
   return await response.json() as Record<string, unknown>;
 };
 
-const createRecipeSaveClient = (currentVersionId: string | null) => {
-  const savedEntries: Array<{ user_id: string; canonical_recipe_id: string; autopersonalize: boolean }> = [];
+const createRecipeSaveClient = (
+  currentVersionId: string | null,
+  existingCookbookEntryId: string | null = null,
+) => {
+  const insertedEntries: Array<Record<string, unknown>> = [];
+  const updatedEntries: Array<Record<string, unknown>> = [];
+  const cookbookEntryId = existingCookbookEntryId ?? "cookbook-entry-123";
 
   return {
-    savedEntries,
+    insertedEntries,
+    updatedEntries,
+    cookbookEntryId,
     client: {
       from(table: string) {
         if (table === "cookbook_entries") {
           return {
-            async upsert(payload: { user_id: string; canonical_recipe_id: string; autopersonalize: boolean }) {
-              savedEntries.push(payload);
-              return { error: null };
+            select(_columns: string) {
+              return {
+                eq(_column: string, _value: string) {
+                  return {
+                    eq(_columnTwo: string, _valueTwo: string) {
+                      return {
+                        async maybeSingle() {
+                          return {
+                            data: existingCookbookEntryId
+                              ? { id: existingCookbookEntryId }
+                              : null,
+                            error: null,
+                          };
+                        },
+                      };
+                    },
+                  };
+                },
+              };
+            },
+            update(payload: Record<string, unknown>) {
+              updatedEntries.push(payload);
+              return {
+                eq(_column: string, _value: string) {
+                  return {
+                    async eq(_columnTwo: string, _valueTwo: string) {
+                      return { error: null };
+                    },
+                  };
+                },
+              };
+            },
+            insert(payload: Record<string, unknown>) {
+              insertedEntries.push(payload);
+              return {
+                select(_columns: string) {
+                  return {
+                    async single() {
+                      return { data: { id: cookbookEntryId }, error: null };
+                    },
+                  };
+                },
+              };
             },
           };
         }
@@ -287,6 +334,99 @@ const createRecipeSaveClient = (currentVersionId: string | null) => {
     },
   };
 };
+
+const createCookbookRecipeDetail = () => ({
+  cookbook_entry_id: "cookbook-entry-123",
+  canonical_recipe_id: "recipe-123",
+  canonical_status: "ready",
+  variant_id: "variant-123",
+  variant_version_id: "variant-version-123",
+  recipe: {
+    ...createRecipeDetailFetchView(),
+    summary: "Corn, lemon, and basil pasta.",
+    description:
+      "The personalized version keeps the same breezy spirit but leans even brighter, the sort of bowl you want to eat by an open window with a glass of cold white wine.",
+    ingredients: [
+      {
+        name: "Rigatoni",
+        amount: 12,
+        unit: "oz",
+        category: "Pantry",
+        component: "Pasta",
+        ingredient_id: "ingredient-rigatoni",
+        normalized_status: "normalized",
+      },
+      {
+        name: "Sweet Corn",
+        amount: 2,
+        unit: "unit",
+        category: "Produce",
+        component: "Pasta",
+        ingredient_id: "ingredient-corn",
+        normalized_status: "normalized",
+      },
+      {
+        name: "Basil Butter",
+        amount: 3,
+        unit: "tbsp",
+        category: "Dairy",
+        component: "Sauce",
+        ingredient_id: "ingredient-basil-butter",
+        normalized_status: "normalized",
+      },
+    ],
+    ingredient_groups: [
+      {
+        key: "pasta",
+        label: "Pasta",
+        ingredients: [
+          {
+            name: "Rigatoni",
+            amount: 12,
+            unit: "oz",
+            category: "Pantry",
+            component: "Pasta",
+            ingredient_id: "ingredient-rigatoni",
+            normalized_status: "normalized",
+          },
+          {
+            name: "Sweet Corn",
+            amount: 2,
+            unit: "unit",
+            category: "Produce",
+            component: "Pasta",
+            ingredient_id: "ingredient-corn",
+            normalized_status: "normalized",
+          },
+        ],
+      },
+      {
+        key: "sauce",
+        label: "Sauce",
+        ingredients: [
+          {
+            name: "Basil Butter",
+            amount: 3,
+            unit: "tbsp",
+            category: "Dairy",
+            component: "Sauce",
+            ingredient_id: "ingredient-basil-butter",
+            normalized_status: "normalized",
+          },
+        ],
+      },
+    ],
+  },
+  adaptation_summary: "Adjusted to the user's preferences.",
+  variant_status: "current",
+  derivation_kind: "automatic",
+  personalized_at: "2026-03-07T13:00:00.000Z",
+  substitution_diffs: [],
+  provenance: {
+    adaptation_summary: "Adjusted to the user's preferences.",
+    tag_diff: { added: [], removed: [] },
+  },
+});
 
 const createRecipeDetailFetchView = () => ({
   id: "recipe-123",
@@ -342,9 +482,9 @@ const createRecipeDetailFetchView = () => ({
   attachments: [],
 });
 
-const createVariantRouteClient = () => ({
+const createVariantCompatibilityClient = () => ({
   from(table: string) {
-    if (table === "user_recipe_variants") {
+    if (table === "cookbook_entries") {
       return {
         select(_columns: string) {
           return {
@@ -354,133 +494,10 @@ const createVariantRouteClient = () => ({
                   return {
                     async maybeSingle() {
                       return {
-                        data: {
-                          id: "variant-123",
-                          current_version_id: "variant-version-123",
-                          base_canonical_version_id: "canonical-version-123",
-                          preference_fingerprint: "fp",
-                          stale_status: "current",
-                          last_materialized_at: "2026-03-07T13:00:00.000Z",
-                        },
+                        data: { id: "cookbook-entry-123" },
                         error: null,
                       };
                     },
-                  };
-                },
-              };
-            },
-          };
-        },
-      };
-    }
-
-    if (table === "user_recipe_variant_versions") {
-      return {
-        select(_columns: string) {
-          return {
-            eq(_column: string, _value: string) {
-              return {
-                async single() {
-                  return {
-                    data: {
-                      id: "variant-version-123",
-                      payload: {
-                        summary: "Corn, lemon, and basil pasta.",
-                        description:
-                          "The personalized version keeps the same breezy spirit but leans even brighter, the sort of bowl you want to eat by an open window with a glass of cold white wine.",
-                        ingredients: [
-                          {
-                            name: "Rigatoni",
-                            amount: 12,
-                            unit: "oz",
-                            category: "Pantry",
-                            component: "Pasta",
-                          },
-                          {
-                            name: "Sweet Corn",
-                            amount: 2,
-                            unit: "unit",
-                            category: "Produce",
-                            component: "Pasta",
-                          },
-                          {
-                            name: "Basil Butter",
-                            amount: 3,
-                            unit: "tbsp",
-                            category: "Dairy",
-                            component: "Sauce",
-                          },
-                        ],
-                        steps: [{ index: 1, instruction: "Toss everything together." }],
-                        notes: "Finish with lemon zest.",
-                        pairings: ["Cold white wine"],
-                        emoji: ["🍝"],
-                        metadata: {
-                          difficulty: "easy",
-                          health_score: 82,
-                          time_minutes: 25,
-                          items: 3,
-                        },
-                      },
-                      derivation_kind: "automatic",
-                      provenance: {
-                        adaptation_summary: "Adjusted to the user's preferences.",
-                        tag_diff: { added: [], removed: [] },
-                      },
-                      source_canonical_version_id: "canonical-version-123",
-                      created_at: "2026-03-07T13:00:00.000Z",
-                    },
-                    error: null,
-                  };
-                },
-              };
-            },
-          };
-        },
-      };
-    }
-
-    if (table === "recipe_ingredients") {
-      return {
-        select(_columns: string) {
-          return {
-            eq(_column: string, _value: string) {
-              return {
-                async order(_orderColumn: string, _params: { ascending: boolean }) {
-                  return {
-                    data: [
-                      {
-                        id: "row-rigatoni",
-                        position: 0,
-                        ingredient_id: "ingredient-rigatoni",
-                        source_name: "Rigatoni",
-                        source_amount: 12,
-                        source_unit: "oz",
-                        normalized_amount_si: 340,
-                        normalized_unit: "g",
-                        unit_kind: "mass",
-                        normalized_status: "normalized",
-                        category: "Pantry",
-                        component: "Pasta",
-                        metadata: {},
-                      },
-                      {
-                        id: "row-corn",
-                        position: 1,
-                        ingredient_id: "ingredient-corn",
-                        source_name: "Sweet Corn",
-                        source_amount: 2,
-                        source_unit: "unit",
-                        normalized_amount_si: 2,
-                        normalized_unit: "unit",
-                        unit_kind: "count",
-                        normalized_status: "normalized",
-                        category: "Produce",
-                        component: "Pasta",
-                        metadata: {},
-                      },
-                    ],
-                    error: null,
                   };
                 },
               };
@@ -496,7 +513,10 @@ const createVariantRouteClient = () => ({
 
 Deno.test("GET /recipes/cookbook returns the preview shape plus cookbook_insight", async () => {
   const item = {
+    id: "cookbook-entry-111",
     canonical_recipe_id: "11111111-1111-1111-1111-111111111111",
+    recipe_id: "11111111-1111-1111-1111-111111111111",
+    canonical_status: "ready",
     title: "Weeknight Rigatoni",
     summary: "Fast tomato rigatoni with basil.",
     image_url: "https://cdn.cookwithalchemy.com/rigatoni.jpg",
@@ -551,7 +571,10 @@ Deno.test("GET /recipes/cookbook returns the preview shape plus cookbook_insight
   const preview = body.items[0] as Record<string, unknown>;
   for (
     const key of [
+      "id",
       "canonical_recipe_id",
+      "recipe_id",
+      "canonical_status",
       "title",
       "summary",
       "image_url",
@@ -719,17 +742,11 @@ Deno.test("GET /recipes/{id}/variant overlays personalized summary, description,
     createRouteContext({
       path: "/recipes/recipe-123/variant",
       method: "GET",
-      client: createVariantRouteClient(),
+      client: createVariantCompatibilityClient(),
     }) as never,
     createDeps({
-      resolvePresentationOptions: () => ({
-        units: "source",
-        groupBy: "component",
-        inlineMeasurements: false,
-        verbosity: "balanced",
-        temperatureUnit: "fahrenheit",
-      }),
-      fetchRecipeView: async () => createRecipeDetailFetchView(),
+      resolvePresentationOptions: resolveRecipePresentationOptions,
+      fetchCookbookEntryDetail: async () => createCookbookRecipeDetail(),
     }) as never,
   );
 
@@ -771,18 +788,15 @@ Deno.test("GET /recipes/{id}/variant forwards live render overrides for variant 
       path:
         "/recipes/recipe-123/variant?units=metric&group_by=category&inline_measurements=true&verbosity=concise&temperature_unit=celsius",
       method: "GET",
-      client: createVariantRouteClient(),
+      client: createVariantCompatibilityClient(),
     }) as never,
     createDeps({
       resolvePresentationOptions: resolveRecipePresentationOptions,
-      fetchRecipeView: async (
-        _client: unknown,
-        _recipeId: string,
-        _enforceVisibility: boolean,
-        viewOptions: unknown,
+      fetchCookbookEntryDetail: async (
+        input: { viewOptions: ResolvedViewOptions },
       ) => {
-        receivedOptions = viewOptions as ResolvedViewOptions;
-        return createRecipeDetailFetchView();
+        receivedOptions = input.viewOptions;
+        return createCookbookRecipeDetail();
       },
     }) as never,
   );
@@ -804,6 +818,82 @@ Deno.test("GET /recipes/{id}/variant forwards live render overrides for variant 
     variantOptions.temperatureUnit !== "celsius"
   ) {
     throw new Error("expected variant route to honor query render overrides");
+  }
+});
+
+Deno.test("GET /recipes/cookbook/{entryId} returns the private-first detail envelope", async () => {
+  const response = await handleRecipeRoutes(
+    createRouteContext({
+      path:
+        "/recipes/cookbook/cookbook-entry-123?units=metric&group_by=category&inline_measurements=true&verbosity=detailed&temperature_unit=celsius",
+      method: "GET",
+    }) as never,
+    createDeps({
+      resolvePresentationOptions: resolveRecipePresentationOptions,
+      fetchCookbookEntryDetail: async (input: { cookbookEntryId: string; viewOptions: ResolvedViewOptions }) => {
+        if (input.cookbookEntryId !== "cookbook-entry-123") {
+          throw new Error("expected cookbook entry id to be forwarded");
+        }
+        if (
+          input.viewOptions.units !== "metric" ||
+          input.viewOptions.groupBy !== "category" ||
+          input.viewOptions.inlineMeasurements !== true ||
+          input.viewOptions.verbosity !== "detailed" ||
+          input.viewOptions.temperatureUnit !== "celsius"
+        ) {
+          throw new Error("expected cookbook detail route to honor render overrides");
+        }
+        return createCookbookRecipeDetail();
+      },
+    }) as never,
+  );
+
+  if (!response || response.status !== 200) {
+    throw new Error("expected cookbook detail response");
+  }
+
+  const body = await parseJson(response);
+  if (body.cookbook_entry_id !== "cookbook-entry-123") {
+    throw new Error("expected cookbook entry id on response");
+  }
+  if (body.canonical_status !== "ready" || body.variant_status !== "current") {
+    throw new Error("expected private-first cookbook detail metadata");
+  }
+  const recipe = body.recipe as Record<string, unknown>;
+  if (recipe.description !== createCookbookRecipeDetail().recipe.description) {
+    throw new Error("expected private recipe payload in cookbook detail response");
+  }
+});
+
+Deno.test("POST /recipes/cookbook/{entryId}/canon/retry returns canon linkage state", async () => {
+  const response = await handleRecipeRoutes(
+    createRouteContext({
+      path: "/recipes/cookbook/cookbook-entry-123/canon/retry",
+      method: "POST",
+      serviceClient: {},
+    }) as never,
+    createDeps({
+      deriveCanonicalForCookbookEntry: async () => ({
+        cookbookEntryId: "cookbook-entry-123",
+        canonicalRecipeId: "recipe-123",
+        canonicalStatus: "ready",
+        action: "linked_existing_canon",
+      }),
+      logChangelog: async () => undefined,
+    }) as never,
+  );
+
+  if (!response || response.status !== 200) {
+    throw new Error("expected canon retry response");
+  }
+
+  const body = await parseJson(response);
+  if (
+    body.cookbook_entry_id !== "cookbook-entry-123" ||
+    body.canonical_recipe_id !== "recipe-123" ||
+    body.canonical_status !== "ready"
+  ) {
+    throw new Error("expected canon retry response payload");
   }
 });
 
@@ -829,6 +919,33 @@ Deno.test("POST /recipes/{id}/variant/refresh uses serviceClient for personaliza
                     return {
                       data: { id: "recipe-123", current_version_id: "canonical-version-1" },
                       error: null,
+                    };
+                  },
+                };
+              },
+            };
+          },
+        };
+      }
+
+      if (table === "cookbook_entries") {
+        return {
+          select(_columns: string) {
+            return {
+              eq(_column: string, _value: string) {
+                return {
+                  eq(_columnTwo: string, _valueTwo: string) {
+                    return {
+                      async maybeSingle() {
+                        return {
+                          data: {
+                            id: "cookbook-entry-123",
+                            canonical_recipe_id: "recipe-123",
+                            canonical_status: "ready",
+                          },
+                          error: null,
+                        };
+                      },
                     };
                   },
                 };
@@ -1322,7 +1439,17 @@ Deno.test("OpenAPI uses RecipePreview for cookbook and search responses", () => 
     }
   }
 
-  for (const key of ["canonical_recipe_id", "variant_status", "autopersonalize", "saved_at"]) {
+  for (
+    const key of [
+      "id",
+      "canonical_recipe_id",
+      "recipe_id",
+      "canonical_status",
+      "variant_status",
+      "autopersonalize",
+      "saved_at",
+    ]
+  ) {
     if (!cookbookRequired.includes(key)) {
       throw new Error(`expected CookbookEntry.required to include ${key}`);
     }
@@ -1396,11 +1523,20 @@ Deno.test("POST /recipes/{id}/save attaches the persisted version to the image p
   if (body.saved !== true) {
     throw new Error("expected saved=true response");
   }
-  if (recipeClient.savedEntries.length !== 1) {
-    throw new Error("expected cookbook entry upsert");
+  if (recipeClient.insertedEntries.length !== 1) {
+    throw new Error("expected cookbook entry insert");
   }
-  if (recipeClient.savedEntries[0]?.canonical_recipe_id !== "recipe-123") {
+  if (recipeClient.insertedEntries[0]?.canonical_recipe_id !== "recipe-123") {
     throw new Error("expected canonical recipe id in cookbook entry");
+  }
+  if (body.cookbook_entry_id !== recipeClient.cookbookEntryId) {
+    throw new Error("expected save response cookbook entry id");
+  }
+  if (body.recipe_id !== "recipe-123") {
+    throw new Error("expected save response recipe_id compatibility alias");
+  }
+  if (body.canonical_status !== "ready") {
+    throw new Error("expected save response canonical status");
   }
   if (ensureCalls.length !== 1) {
     throw new Error("expected persisted recipe image request attachment");

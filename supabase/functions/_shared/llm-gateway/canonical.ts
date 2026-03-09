@@ -4,6 +4,7 @@ import { executeScope } from "../llm-executor.ts";
 import type { JsonValue, RecipePayload } from "../types.ts";
 import { normalizeRecipeShape } from "./normalizers.ts";
 import type {
+  CanonicalRecipeReviewResult,
   CanonicalizeRecipeResult,
   ModelOverrideMap,
   RecipeCanonMatchEnvelope,
@@ -16,7 +17,7 @@ export async function canonicalizeRecipe(params: {
   userId: string;
   requestId: string;
   recipe: RecipePayload;
-  preferences: Record<string, JsonValue>;
+  lineageMetadata?: Record<string, JsonValue>;
   modelOverrides?: ModelOverrideMap;
 }): Promise<CanonicalizeRecipeResult> {
   const startedAt = Date.now();
@@ -32,7 +33,7 @@ export async function canonicalizeRecipe(params: {
       userInput: {
         task: "recipe_canonicalize",
         candidate_recipe: params.recipe as unknown as JsonValue,
-        user_preferences: params.preferences,
+        lineage_metadata: params.lineageMetadata ?? {},
       },
       modelOverride: params.modelOverrides?.recipe_canonicalize,
     });
@@ -71,6 +72,76 @@ export async function canonicalizeRecipe(params: {
       params.userId,
       params.requestId,
       "recipe_canonicalize",
+      Date.now() - startedAt,
+      "error",
+      { error_code: errorCode },
+      accum,
+    );
+    throw error;
+  }
+}
+
+export async function reviewCanonicalRecipe(params: {
+  client: SupabaseClient;
+  userId: string;
+  requestId: string;
+  privatePayload: RecipePayload;
+  canonicalPayload: RecipePayload;
+  modelOverrides?: ModelOverrideMap;
+}): Promise<CanonicalRecipeReviewResult> {
+  const startedAt = Date.now();
+  const accum: TokenAccum = { input: 0, output: 0, costUsd: 0 };
+
+  try {
+    const { result, inputTokens, outputTokens, config } = await executeScope<{
+      approved?: unknown;
+      rationale?: unknown;
+      leakage_detected?: unknown;
+      semantic_drift_detected?: unknown;
+    }>({
+      client: params.client,
+      scope: "recipe_canon_review",
+      userInput: {
+        task: "recipe_canon_review",
+        private_recipe: params.privatePayload as unknown as JsonValue,
+        canonical_recipe: params.canonicalPayload as unknown as JsonValue,
+      },
+      modelOverride: params.modelOverrides?.recipe_canon_review,
+    });
+    addTokens(accum, inputTokens, outputTokens, config);
+
+    const approved = Boolean(result.approved);
+    const leakageDetected = Boolean(result.leakage_detected);
+    const semanticDriftDetected = Boolean(result.semantic_drift_detected);
+
+    await logLlmEvent(
+      params.client,
+      params.userId,
+      params.requestId,
+      "recipe_canon_review",
+      Date.now() - startedAt,
+      "ok",
+      {
+        approved,
+        leakage_detected: leakageDetected,
+        semantic_drift_detected: semanticDriftDetected,
+      },
+      accum,
+    );
+
+    return {
+      approved,
+      rationale: typeof result.rationale === "string" ? result.rationale : null,
+      leakageDetected,
+      semanticDriftDetected,
+    };
+  } catch (error) {
+    const errorCode = error instanceof ApiError ? error.code : "unknown_error";
+    await logLlmEvent(
+      params.client,
+      params.userId,
+      params.requestId,
+      "recipe_canon_review",
       Date.now() - startedAt,
       "error",
       { error_code: errorCode },

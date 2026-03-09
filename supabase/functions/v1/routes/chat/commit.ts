@@ -2,6 +2,7 @@ import type { SupabaseClient } from "npm:@supabase/supabase-js@2";
 import { ApiError } from "../../../_shared/errors.ts";
 import type { JsonValue } from "../../../_shared/types.ts";
 import { getInstallIdFromHeaders, logBehaviorEvents } from "../../lib/behavior-events.ts";
+import { runInBackground } from "../../lib/background-tasks.ts";
 import type {
   CandidateRecipeSet,
   ChatCommitClaim,
@@ -66,10 +67,11 @@ const loadChatSession = async (
   created_at: string;
   updated_at: string;
   status: string;
+  source_kind: string | null;
 } | null> => {
   const { data, error } = await client
     .from("chat_sessions")
-    .select("id,context,created_at,updated_at,status")
+    .select("id,context,created_at,updated_at,status,source_kind")
     .eq("id", chatId)
     .maybeSingle();
 
@@ -217,10 +219,9 @@ const releaseCommitClaim = async (params: {
  * POST /chat/:id/commit
  *
  * Commits the current candidate recipe set — persists each component as a
- * canonical recipe, saves cookbook entries, creates recipe links between
- * primary and companion components, attaches pending candidate images to
- * the committed recipes, and returns the ChatLoopResponse enriched with
- * a `commit` summary block.
+ * private cookbook entry + private variant, schedules asynchronous canonical
+ * derivation, and returns the ChatLoopResponse enriched with a `commit`
+ * summary block.
  */
 export const handleCommit = async (
   context: RouteContext,
@@ -243,12 +244,14 @@ export const handleCommit = async (
     extractChatContext,
     normalizeCandidateRecipeSet,
     resolveAndPersistCanonicalRecipe,
+    createPrivateCookbookEntry,
+    deriveCanonicalForCookbookEntry,
+    computePreferenceFingerprint,
+    computeVariantTags,
     ensurePersistedRecipeImageRequest,
     scheduleImageQueueDrain,
     enqueueDemandExtractionJob,
     scheduleDemandQueueDrain,
-    mapCandidateRoleToRelation,
-    resolveRelationTypeId,
     logChangelog,
     buildChatLoopResponse,
     fetchChatMessages,
@@ -388,132 +391,64 @@ export const handleCommit = async (
   const preferences = await getPreferences(client, auth.userId);
 
   try {
-    const committedComponentsForImages = await Promise.all(
+    const sourceKind = chatSession.source_kind &&
+        ["url", "text", "photo"].includes(chatSession.source_kind)
+      ? "imported_private"
+      : "created_private";
+
+    const committedComponents: ChatCommitRecipe[] = await Promise.all(
       candidateSet.components.map(async (component) => {
-        const canonicalPayload = await canonicalizeRecipePayload({
+        const saved = await createPrivateCookbookEntry({
           serviceClient,
           userId: auth.userId,
           requestId,
           payload: component.recipe,
-          preferences: preferences as unknown as Record<string, JsonValue>,
-          modelOverrides,
-        });
-        const saved = await resolveAndPersistCanonicalRecipe({
-          client,
-          serviceClient,
-          userId: auth.userId,
-          requestId,
-          payload: canonicalPayload,
+          sourceKind,
+          previewImageUrl: component.image_url,
+          previewImageStatus: component.image_status,
           sourceChatId: chatId,
-          diffSummary: `Committed from chat candidate (${component.role})`,
           selectedMemoryIds,
-          modelOverrides,
+          computePreferenceFingerprint,
+          computeVariantTags,
+          preferences,
         });
 
-        // Save to cookbook_entries (recipe_saves is deprecated after backfill 0047).
-        const { error: cookbookError } = await client
-          .from("cookbook_entries")
-          .upsert(
-            {
-              user_id: auth.userId,
-              canonical_recipe_id: saved.recipeId,
-              autopersonalize: true,
-              updated_at: new Date().toISOString(),
-            },
-            { onConflict: "user_id,canonical_recipe_id" },
-          );
-        if (cookbookError) {
-          throw new ApiError(
-            500,
-            "cookbook_entry_create_failed",
-            "Could not save committed recipe to cookbook",
-            cookbookError.message,
-          );
-        }
-
-        await ensurePersistedRecipeImageRequest({
-          serviceClient,
-          userId: auth.userId,
-          requestId,
-          recipeId: saved.recipeId,
-          recipeVersionId: saved.versionId,
-        });
+        runInBackground(
+          deriveCanonicalForCookbookEntry({
+            serviceClient,
+            userId: auth.userId,
+            requestId: crypto.randomUUID(),
+            cookbookEntryId: saved.cookbookEntryId,
+            canonicalizeRecipePayload,
+            resolveAndPersistCanonicalRecipe,
+            ensurePersistedRecipeImageRequest,
+            scheduleImageQueueDrain,
+            modelOverrides,
+          }).then(() => undefined).catch((error) => {
+            console.error("private_canon_derivation_failed", {
+              cookbook_entry_id: saved.cookbookEntryId,
+              request_id: requestId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }),
+        );
 
         return {
           component_id: component.component_id,
           role: component.role,
-          title: canonicalPayload.title,
-          recipe_id: saved.recipeId,
-          recipe_version_id: saved.versionId,
-          variant_id: null as string | null,
-          variant_version_id: null as string | null,
-          variant_status: "none" as const,
-          recipe: canonicalPayload,
+          title: component.recipe.title,
+          cookbook_entry_id: saved.cookbookEntryId,
+          recipe_id: null,
+          recipe_version_id: null,
+          variant_id: saved.variantId,
+          variant_version_id: saved.variantVersionId,
+          variant_status: saved.variantStatus,
+          canonical_status: saved.canonicalStatus,
         };
       }),
     );
 
-    const committedComponents: ChatCommitRecipe[] = committedComponentsForImages
-      .map((component) => ({
-        component_id: component.component_id,
-        role: component.role,
-        title: component.title,
-        recipe_id: component.recipe_id,
-        recipe_version_id: component.recipe_version_id,
-        variant_id: component.variant_id,
-        variant_version_id: component.variant_version_id,
-        variant_status: component.variant_status,
-      }));
-
-    scheduleImageQueueDrain({
-      serviceClient,
-      actorUserId: auth.userId,
-      requestId,
-      limit: Math.max(5, committedComponents.length),
-      modelOverrides,
-    });
-
-    const primary = committedComponents[0];
     const links: ChatCommitLink[] = [];
-
-    if (primary) {
-      for (let index = 1; index < committedComponents.length; index += 1) {
-        const component = committedComponents[index];
-        const relationType = mapCandidateRoleToRelation(component.role);
-        const relationTypeId = await resolveRelationTypeId(
-          serviceClient,
-          relationType,
-        );
-        const { data: link, error: linkError } = await serviceClient
-          .from("recipe_links")
-          .insert({
-            parent_recipe_id: primary.recipe_id,
-            child_recipe_id: component.recipe_id,
-            relation_type_id: relationTypeId,
-            position: index,
-            source: "chat_commit",
-          })
-          .select("id,parent_recipe_id,child_recipe_id,position")
-          .single();
-
-        if (linkError || !link) {
-          throw new ApiError(
-            500,
-            "recipe_link_insert_failed",
-            "Could not link committed recipe components",
-            linkError?.message,
-          );
-        }
-
-        links.push({
-          id: String(link.id),
-          parent_recipe_id: String(link.parent_recipe_id),
-          child_recipe_id: String(link.child_recipe_id),
-          relation_type: relationType,
-          position: Number(link.position ?? index),
-        });
-      }
-    }
 
     const committedAt = new Date().toISOString();
     const commitSummary = buildCommitSummary(

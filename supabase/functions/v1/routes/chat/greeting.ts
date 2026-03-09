@@ -1,6 +1,7 @@
 import { createServiceClient } from "../../../_shared/db.ts";
 import { llmGateway } from "../../../_shared/llm-gateway.ts";
 import type { RouteContext } from "../shared.ts";
+import { logChatRouteTiming } from "./timing.ts";
 
 /**
  * GET /chat/greeting
@@ -12,7 +13,8 @@ import type { RouteContext } from "../shared.ts";
 export const handleGreeting = async (
   context: RouteContext,
 ): Promise<Response> => {
-  const { request, auth, client, requestId, respond } = context;
+  const routeStartedAt = Date.now();
+  const { request, auth, client, serviceClient, requestId, respond } = context;
 
   const userName = auth.fullName;
   // Prefer the client's timezone (via X-Timezone header) so the greeting
@@ -29,12 +31,9 @@ export const handleGreeting = async (
   } catch {
     hour = new Date().getUTCHours();
   }
-  const timeOfDay = hour < 12
-    ? "morning"
-    : hour < 17
-    ? "afternoon"
-    : "evening";
+  const timeOfDay = hour < 12 ? "morning" : hour < 17 ? "afternoon" : "evening";
 
+  const contextLoadStartedAt = Date.now();
   const { data: recentRecipe } = await client
     .from("recipes")
     .select("title")
@@ -42,11 +41,13 @@ export const handleGreeting = async (
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
+  const contextLoadMs = Date.now() - contextLoadStartedAt;
 
   const lastRecipeTitle = recentRecipe && typeof recentRecipe.title === "string"
     ? recentRecipe.title
     : null;
 
+  const llmStartedAt = Date.now();
   const greeting = await llmGateway.generateGreeting({
     client: createServiceClient(),
     userId: auth.userId,
@@ -54,6 +55,21 @@ export const handleGreeting = async (
     userName,
     timeOfDay,
     lastRecipeTitle,
+  });
+  const llmMs = Date.now() - llmStartedAt;
+
+  await logChatRouteTiming({
+    serviceClient,
+    userId: auth.userId,
+    requestId,
+    route: "chat_greeting",
+    contextLoadMs,
+    memoryRetrievalMs: 0,
+    llmMs,
+    recoveryPath: null,
+    cacheHit: false,
+    generationReusedContext: false,
+    totalServerMs: Date.now() - routeStartedAt,
   });
 
   return respond(200, greeting);

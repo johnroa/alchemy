@@ -17,10 +17,7 @@ import type {
   TemperatureUnitPreference,
   UnitPreference,
 } from "../recipe-standardization.ts";
-import type {
-  RecipePreview,
-  RecipeQuickStats,
-} from "../recipe-preview.ts";
+import type { RecipePreview, RecipeQuickStats } from "../recipe-preview.ts";
 import type {
   PendingPreferenceConflict,
   ThreadPreferenceOverrides,
@@ -138,11 +135,13 @@ export type ChatCommitRecipe = {
   component_id: string;
   role: CandidateRecipeRole;
   title: string;
-  recipe_id: string;
-  recipe_version_id: string;
+  cookbook_entry_id: string;
+  recipe_id: string | null;
+  recipe_version_id: string | null;
   variant_id: string | null;
   variant_version_id: string | null;
   variant_status: VariantStatus;
+  canonical_status: "pending" | "processing" | "ready" | "failed";
 };
 
 export type ChatCommitLink = {
@@ -209,7 +208,10 @@ export type SuggestedChip = SuggestedChipType;
  * and tags reflect the personalised version; title always stays canonical.
  */
 export type CookbookEntry = {
-  canonical_recipe_id: string;
+  id: string;
+  canonical_recipe_id: string | null;
+  recipe_id: string | null;
+  canonical_status: "pending" | "processing" | "ready" | "failed";
   title: string;
   summary: string;
   image_url: string | null;
@@ -225,6 +227,21 @@ export type CookbookEntry = {
   saved_at: string;
   variant_tags: VariantTagSet;
   matched_chip_ids: string[];
+};
+
+export type CookbookRecipeDetail = {
+  cookbook_entry_id: string;
+  canonical_recipe_id: string | null;
+  canonical_status: "pending" | "processing" | "ready" | "failed";
+  variant_id: string | null;
+  variant_version_id: string | null;
+  recipe: RecipeView;
+  adaptation_summary: string;
+  variant_status: VariantStatus;
+  derivation_kind: string | null;
+  personalized_at: string | null;
+  substitution_diffs: JsonValue;
+  provenance?: Record<string, JsonValue>;
 };
 
 /** @deprecated Use CookbookEntry instead. Kept for backward compat during migration. */
@@ -269,6 +286,22 @@ export type CandidateRecipeSet = {
   components: CandidateRecipeComponent[];
 };
 
+export type PromptThreadMessage = {
+  role: string;
+  content: string;
+};
+
+export type DeferredGenerationContext = {
+  prompt: string;
+  thread: PromptThreadMessage[];
+  compact_chat_context: Record<string, JsonValue>;
+  candidate_recipe_set_outline?: JsonValue;
+  preferences: PreferenceContext;
+  memory_snapshot: Record<string, JsonValue>;
+  selected_memories: MemoryRecord[];
+  selected_memory_ids: string[];
+};
+
 export type ChatSessionContext = {
   preferences?: PreferenceContext;
   memory_snapshot?: Record<string, JsonValue>;
@@ -285,6 +318,7 @@ export type ChatSessionContext = {
   entry_surface?: string | null;
   preference_editing_intent?: PreferenceEditingIntent | null;
   generation_pending?: boolean;
+  deferred_generation_context?: DeferredGenerationContext | null;
 };
 
 export type ChatUiHints = {

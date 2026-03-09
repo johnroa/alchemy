@@ -6,6 +6,7 @@ import Lottie
 ///
 /// Can be initialized two ways:
 /// 1. `RecipeDetailView(recipeId:)` — fetches from GET /recipes/{id}
+/// 2. `RecipeDetailView(cookbookEntryId:)` — fetches from GET /recipes/cookbook/{id}
 /// 2. `RecipeDetailView(detail:)` — uses a pre-fetched RecipeDetail
 ///
 /// Scroll behavior:
@@ -16,6 +17,8 @@ import Lottie
 struct RecipeDetailView: View {
     /// Recipe ID to fetch — mutually exclusive with `detail`.
     let recipeId: String?
+    /// Cookbook entry ID to fetch for private-first detail routes.
+    let cookbookEntryId: String?
     /// Pre-fetched recipe detail — used when navigating from Generate after commit.
     let preloadedDetail: RecipeDetail?
     /// Surface that led to this detail view, used for first-party attribution.
@@ -87,6 +90,7 @@ struct RecipeDetailView: View {
         trackBehavior: Bool = true
     ) {
         self.recipeId = recipeId
+        self.cookbookEntryId = nil
         self.preloadedDetail = nil
         self.sourceSurface = sourceSurface
         self.sourceSessionId = sourceSessionId
@@ -111,7 +115,32 @@ struct RecipeDetailView: View {
         trackBehavior: Bool = true
     ) {
         self.recipeId = nil
+        self.cookbookEntryId = nil
         self.preloadedDetail = detail
+        self.sourceSurface = sourceSurface
+        self.sourceSessionId = sourceSessionId
+        self.algorithmVersion = algorithmVersion
+        self.showAddToCookbook = showAddToCookbook
+        self.showShareButton = showShareButton
+        self.showTweakBar = showTweakBar
+        self.isEmbedded = isEmbedded
+        self.trackBehavior = trackBehavior
+    }
+
+    init(
+        cookbookEntryId: String,
+        sourceSurface: String? = nil,
+        sourceSessionId: String? = nil,
+        algorithmVersion: String? = nil,
+        showAddToCookbook: Bool = false,
+        showShareButton: Bool = true,
+        showTweakBar: Bool = true,
+        isEmbedded: Bool = false,
+        trackBehavior: Bool = true
+    ) {
+        self.recipeId = nil
+        self.cookbookEntryId = cookbookEntryId
+        self.preloadedDetail = nil
         self.sourceSurface = sourceSurface
         self.sourceSessionId = sourceSessionId
         self.algorithmVersion = algorithmVersion
@@ -634,6 +663,28 @@ struct RecipeDetailView: View {
             return
         }
 
+        if let cookbookEntryId {
+            isLoading = true
+            errorMessage = nil
+
+            do {
+                let response: CookbookRecipeDetailResponse = try await APIClient.shared.request(
+                    "/recipes/cookbook/\(cookbookEntryId)"
+                )
+                withAnimation {
+                    detail = response.recipe
+                    substitutionDiffs = response.substitutionDiffs ?? []
+                    adaptationSummary = response.adaptationSummary
+                }
+            } catch {
+                errorMessage = "Couldn't load this recipe."
+                print("[RecipeDetailView] cookbook detail load failed: \(error)")
+            }
+
+            isLoading = false
+            return
+        }
+
         guard let recipeId else {
             errorMessage = "No recipe to display."
             isLoading = false
@@ -776,6 +827,9 @@ struct RecipeDetailView: View {
     /// the "What did my Sous Chef change?" section. Called after the
     /// recipe loads. Silently no-ops if no variant exists.
     private func loadVariantDiffs() async {
+        if cookbookEntryId != nil {
+            return
+        }
         guard let id = detail?.id ?? recipeId else { return }
         do {
             applyVariantDetail(try await fetchVariantDetail(id))
@@ -799,13 +853,20 @@ struct RecipeDetailView: View {
     }
 
     private func submitTweak(_ instructions: String) async {
-        guard let id = detail?.id ?? recipeId else { return }
+        let path: String
+        if let cookbookEntryId {
+            path = "/recipes/cookbook/\(cookbookEntryId)/variant/refresh"
+        } else if let id = detail?.id ?? recipeId {
+            path = "/recipes/\(id)/variant/refresh"
+        } else {
+            return
+        }
         isTweaking = true
         tweakConflicts = nil
 
         do {
             let response: VariantRefreshResponse = try await APIClient.shared.request(
-                "/recipes/\(id)/variant/refresh",
+                path,
                 method: .post,
                 body: VariantEditRequest(instructions: instructions)
             )
@@ -840,7 +901,7 @@ struct RecipeDetailView: View {
     }
 
     private var behaviorRecipeId: String? {
-        detail?.id ?? recipeId ?? preloadedDetail?.id
+        cookbookEntryId ?? detail?.id ?? recipeId ?? preloadedDetail?.id
     }
 
     private func handleBehaviorLifecycle() {

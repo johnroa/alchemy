@@ -674,6 +674,7 @@ const loadCookbookEntries = async (
     .from("cookbook_entries")
     .select("canonical_recipe_id,saved_at")
     .eq("user_id", userId)
+    .not("canonical_recipe_id", "is", null)
     .order("saved_at", { ascending: false })
     .limit(24);
 

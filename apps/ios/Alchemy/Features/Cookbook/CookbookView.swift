@@ -116,7 +116,7 @@ struct CookbookView: View {
                                 eventType: "cookbook_recipe_opened",
                                 surface: "cookbook",
                                 sessionId: cookbookSessionId,
-                                entityType: "recipe",
+                                entityType: "cookbook_entry",
                                 entityId: preview.id,
                                 payload: [
                                     "variant_status": .string(preview.variantStatus),
@@ -136,7 +136,7 @@ struct CookbookView: View {
             }
             .navigationDestination(item: $navigateToRecipeId) { recipeId in
                 RecipeDetailView(
-                    recipeId: recipeId,
+                    cookbookEntryId: recipeId,
                     sourceSurface: "cookbook",
                     sourceSessionId: cookbookSessionId
                 )
@@ -160,13 +160,10 @@ struct CookbookView: View {
                 }
             }
             .toolbarVisibility(showFullScreenPreview ? .hidden : .automatic, for: .tabBar)
-            .task { await loadCookbook() }
             .onAppear {
-                // Refresh on tab re-selection (e.g. returning from Sous
-                // Chef after saving). Skip the first appear (task handles
-                // it) and skip when a save is in flight (onChange handler
-                // owns that refresh cycle).
-                guard !isLoading, pendingSave == nil else { return }
+                // Skip when a save is in flight — the onChange handler
+                // owns that refresh cycle.
+                guard pendingSave == nil else { return }
                 Task { await loadCookbook() }
             }
             .onChange(of: pendingSave) { old, new in
@@ -580,11 +577,13 @@ struct CookbookView: View {
     // MARK: - API
 
     private func loadCookbook() async {
+        print("[CookbookView] loadCookbook called, previews=\(previews.count), isLoading=\(isLoading)")
         if previews.isEmpty { isLoading = true }
         errorMessage = nil
 
         do {
             let response: CookbookResponse = try await APIClient.shared.request("/recipes/cookbook")
+            print("[CookbookView] loaded \(response.items.count) items, \(response.suggestedChips.count) chips")
             previews = response.items
             suggestedChips = response.suggestedChips
             staleContext = response.staleContext
@@ -596,11 +595,12 @@ struct CookbookView: View {
         }
 
         isLoading = false
+        print("[CookbookView] loadCookbook done, previews=\(previews.count), isLoading=\(isLoading)")
     }
 
     private func unsaveRecipe(_ id: String) async {
         do {
-            try await APIClient.shared.requestVoid("/recipes/\(id)/save", method: .delete)
+            try await APIClient.shared.requestVoid("/recipes/cookbook/\(id)", method: .delete)
             withAnimation {
                 previews.removeAll { $0.id == id }
             }
@@ -608,7 +608,7 @@ struct CookbookView: View {
                 eventType: "cookbook_recipe_unsaved",
                 surface: "cookbook",
                 sessionId: cookbookSessionId,
-                entityType: "recipe",
+                entityType: "cookbook_entry",
                 entityId: id
             )
         } catch {
@@ -765,7 +765,7 @@ extension CookbookEntryItem {
     /// compatibility with RecipeCardView and other existing components.
     var asRecipeCard: RecipeCard {
         RecipeCard(
-            id: canonicalRecipeId,
+            id: cookbookEntryId,
             title: title,
             summary: summary,
             category: category ?? "Uncategorized",

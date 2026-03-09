@@ -47,20 +47,37 @@ type TracePayload = {
 
 const extractPayloadInfo = (payload: Record<string, unknown>): {
   scope: string | null;
+  route: string | null;
   model: string | null;
   provider: string | null;
   error: string | null;
   error_code: string | null;
   latency: number | null;
   cost: number | null;
+  context_load_ms: number | null;
+  memory_retrieval_ms: number | null;
+  llm_ms: number | null;
+  recovery_path: string | null;
+  cache_hit: boolean | null;
+  generation_reused_context: boolean | null;
 } => ({
   scope: (payload["scope"] as string | undefined) ?? null,
+  route: (payload["route"] as string | undefined) ?? null,
   model: (payload["model"] as string | undefined) ?? null,
   provider: (payload["provider"] as string | undefined) ?? null,
   error: (payload["error"] as string | undefined) ?? (payload["error_message"] as string | undefined) ?? null,
   error_code: (payload["error_code"] as string | undefined) ?? null,
   latency: payload["latency_ms"] != null ? Number(payload["latency_ms"]) : null,
-  cost: payload["cost_usd"] != null ? Number(payload["cost_usd"]) : null
+  cost: payload["cost_usd"] != null ? Number(payload["cost_usd"]) : null,
+  context_load_ms: payload["context_load_ms"] != null ? Number(payload["context_load_ms"]) : null,
+  memory_retrieval_ms: payload["memory_retrieval_ms"] != null ? Number(payload["memory_retrieval_ms"]) : null,
+  llm_ms: payload["llm_ms"] != null ? Number(payload["llm_ms"]) : null,
+  recovery_path: (payload["recovery_path"] as string | undefined) ?? null,
+  cache_hit: typeof payload["cache_hit"] === "boolean" ? Boolean(payload["cache_hit"]) : null,
+  generation_reused_context:
+    typeof payload["generation_reused_context"] === "boolean"
+      ? Boolean(payload["generation_reused_context"])
+      : null
 });
 
 const isError = (event: EventRow): boolean =>
@@ -70,14 +87,37 @@ function EventPayloadDetail({ payload }: { payload: Record<string, unknown> }): 
   const info = extractPayloadInfo(payload);
   return (
     <div className="mt-2 space-y-2 rounded-md border bg-zinc-50 p-3 text-xs">
-      {(info.scope || info.model || info.provider) && (
+      {(info.scope || info.route || info.model || info.provider) && (
         <div className="flex flex-wrap gap-3 text-muted-foreground">
+          {info.route && <span><span className="font-medium text-foreground">route</span> {info.route}</span>}
           {info.scope && <span><span className="font-medium text-foreground">scope</span> {info.scope}</span>}
           {info.provider && <span><span className="font-medium text-foreground">provider</span> {info.provider}</span>}
           {info.model && <span><span className="font-medium text-foreground">model</span> {info.model}</span>}
           {info.latency && <span><span className="font-medium text-foreground">latency</span> {info.latency.toLocaleString()}ms</span>}
           {info.cost != null && info.cost > 0 && (
             <span><span className="font-medium text-foreground">cost</span> ${info.cost.toFixed(4)}</span>
+          )}
+        </div>
+      )}
+      {(info.context_load_ms != null || info.memory_retrieval_ms != null || info.llm_ms != null || info.recovery_path || info.cache_hit != null || info.generation_reused_context != null) && (
+        <div className="flex flex-wrap gap-3 text-muted-foreground">
+          {info.context_load_ms != null && (
+            <span><span className="font-medium text-foreground">context</span> {info.context_load_ms.toLocaleString()}ms</span>
+          )}
+          {info.memory_retrieval_ms != null && (
+            <span><span className="font-medium text-foreground">memory</span> {info.memory_retrieval_ms.toLocaleString()}ms</span>
+          )}
+          {info.llm_ms != null && (
+            <span><span className="font-medium text-foreground">llm</span> {info.llm_ms.toLocaleString()}ms</span>
+          )}
+          {info.recovery_path && (
+            <span><span className="font-medium text-foreground">recovery</span> {info.recovery_path}</span>
+          )}
+          {info.cache_hit != null && (
+            <span><span className="font-medium text-foreground">cache</span> {info.cache_hit ? "hit" : "miss"}</span>
+          )}
+          {info.generation_reused_context != null && (
+            <span><span className="font-medium text-foreground">reused</span> {info.generation_reused_context ? "yes" : "no"}</span>
           )}
         </div>
       )}
@@ -157,7 +197,7 @@ function TraceDetail({ requestId, trace }: { requestId: string; trace: TracePayl
                   >
                     {event.event_type}
                   </Badge>
-                  {info.scope && <span className="text-xs text-muted-foreground">{info.scope}</span>}
+                  {(info.scope || info.route) && <span className="text-xs text-muted-foreground">{info.route ?? info.scope}</span>}
                   {info.model && <span className="text-xs font-mono text-muted-foreground">{info.model}</span>}
                   {isEventError && (
                     <span className="text-xs font-medium text-red-600">

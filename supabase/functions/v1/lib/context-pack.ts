@@ -4,12 +4,12 @@ import type { JsonValue, MemoryRecord } from "../../_shared/types.ts";
 import { llmGateway } from "../../_shared/llm-gateway.ts";
 import type { PreferenceContext } from "./preferences.ts";
 import {
-  getPreferences,
   buildNaturalLanguagePreferenceContext,
+  getPreferences,
 } from "./preferences.ts";
 import {
-  getMemorySnapshot,
   getActiveMemories,
+  getMemorySnapshot,
   logChangelog,
 } from "./user-profile.ts";
 import type { ContextPack } from "./chat-types.ts";
@@ -18,7 +18,12 @@ import {
   retrieveRelevantMemories,
 } from "./memory-retrieval.ts";
 
-export const buildContextPack = async (params: {
+export type ContextPackBuildMetrics = {
+  contextLoadMs: number;
+  memoryRetrievalMs: number;
+};
+
+type BuildContextPackParams = {
   userClient: SupabaseClient;
   serviceClient: SupabaseClient;
   userId: string;
@@ -26,19 +31,104 @@ export const buildContextPack = async (params: {
   prompt: string;
   context: Record<string, JsonValue>;
   selectionMode?: "llm" | "fast";
+  retrievalMode?: "none" | "retrieve";
+};
+
+export type ContextPackBuildResult = {
+  pack: ContextPack;
+  metrics: ContextPackBuildMetrics;
+};
+
+const selectMemoriesForPack = async (params: {
+  serviceClient: SupabaseClient;
+  userId: string;
+  requestId: string;
+  prompt: string;
+  context: Record<string, JsonValue>;
+  preferences: PreferenceContext;
+  preferencesNaturalLanguage: Record<string, JsonValue>;
+  memorySnapshot: Record<string, JsonValue>;
+  memories: MemoryRecord[];
+  selectionMode?: "llm" | "fast";
 }): Promise<ContextPack> => {
+  if (params.memories.length === 0) {
+    return {
+      preferences: params.preferences,
+      preferencesNaturalLanguage: params.preferencesNaturalLanguage,
+      memorySnapshot: params.memorySnapshot,
+      selectedMemories: [],
+      selectedMemoryIds: [],
+    };
+  }
+
+  if (params.selectionMode === "fast") {
+    const selectedMemories = params.memories.slice(0, 12);
+    return {
+      preferences: params.preferences,
+      preferencesNaturalLanguage: params.preferencesNaturalLanguage,
+      memorySnapshot: params.memorySnapshot,
+      selectedMemories,
+      selectedMemoryIds: selectedMemories.map((memory) => memory.id),
+    };
+  }
+
+  let selectedIds: string[] = [];
+  try {
+    const selection = await llmGateway.selectMemories({
+      client: params.serviceClient,
+      userId: params.userId,
+      requestId: params.requestId,
+      prompt: params.prompt,
+      context: {
+        preferences: params.preferences,
+        preferences_natural_language: params.preferencesNaturalLanguage,
+        memory_snapshot: params.memorySnapshot,
+        ...params.context,
+      },
+      memories: params.memories,
+    });
+    selectedIds = selection.selected_memory_ids;
+  } catch (error) {
+    console.error("memory_select_failed", error);
+    selectedIds = params.memories.map((memory) => memory.id).slice(0, 12);
+  }
+
+  const selectedSet = new Set(selectedIds);
+  const selectedMemories = params.memories.filter((memory) =>
+    selectedSet.has(memory.id)
+  );
+
+  return {
+    preferences: params.preferences,
+    preferencesNaturalLanguage: params.preferencesNaturalLanguage,
+    memorySnapshot: params.memorySnapshot,
+    selectedMemories,
+    selectedMemoryIds: selectedMemories.map((memory) => memory.id),
+  };
+};
+
+export const buildContextPackWithStages = async (
+  params: BuildContextPackParams,
+): Promise<ContextPackBuildResult> => {
   const memoryFetchLimit = params.selectionMode === "fast" ? 12 : 36;
+  const contextLoadStartedAt = Date.now();
   const [preferences, memorySnapshot, fallbackMemories] = await Promise.all([
     getPreferences(params.userClient, params.userId),
     getMemorySnapshot(params.userClient, params.userId),
     getActiveMemories(params.userClient, params.userId, memoryFetchLimit),
   ]);
+  const contextLoadMs = Date.now() - contextLoadStartedAt;
   const preferencesNaturalLanguage = buildNaturalLanguagePreferenceContext(
     preferences,
   );
   let memories = fallbackMemories;
+  let memoryRetrievalMs = 0;
 
-  if (fallbackMemories.length > 0) {
+  if (
+    params.retrievalMode !== "none" &&
+    fallbackMemories.length > 0
+  ) {
+    const retrievalStartedAt = Date.now();
     try {
       const retrievedMemories = await retrieveRelevantMemories({
         serviceClient: params.serviceClient,
@@ -59,63 +149,42 @@ export const buildContextPack = async (params: {
       }
     } catch (error) {
       console.error("memory_retrieval_failed", error);
+    } finally {
+      memoryRetrievalMs += Date.now() - retrievalStartedAt;
     }
   }
 
-  if (memories.length === 0) {
-    return {
-      preferences,
-      preferencesNaturalLanguage,
-      memorySnapshot,
-      selectedMemories: [],
-      selectedMemoryIds: [],
-    };
-  }
-
-  if (params.selectionMode === "fast") {
-    const selectedMemories = memories.slice(0, 12);
-    return {
-      preferences,
-      preferencesNaturalLanguage,
-      memorySnapshot,
-      selectedMemories,
-      selectedMemoryIds: selectedMemories.map((memory) => memory.id),
-    };
-  }
-
-  let selectedIds: string[] = [];
-  try {
-    const selection = await llmGateway.selectMemories({
-      client: params.serviceClient,
-      userId: params.userId,
-      requestId: params.requestId,
-      prompt: params.prompt,
-      context: {
-        preferences,
-        preferences_natural_language: preferencesNaturalLanguage,
-        memory_snapshot: memorySnapshot,
-        ...params.context,
-      },
-      memories,
-    });
-    selectedIds = selection.selected_memory_ids;
-  } catch (error) {
-    console.error("memory_select_failed", error);
-    selectedIds = memories.map((memory) => memory.id).slice(0, 12);
-  }
-
-  const selectedSet = new Set(selectedIds);
-  const selectedMemories = memories.filter((memory) =>
-    selectedSet.has(memory.id)
-  );
-
-  return {
+  const selectionStartedAt = Date.now();
+  const pack = await selectMemoriesForPack({
+    serviceClient: params.serviceClient,
+    userId: params.userId,
+    requestId: params.requestId,
+    prompt: params.prompt,
+    context: params.context,
     preferences,
     preferencesNaturalLanguage,
     memorySnapshot,
-    selectedMemories,
-    selectedMemoryIds: selectedMemories.map((memory) => memory.id),
+    memories,
+    selectionMode: params.selectionMode,
+  });
+  if (params.selectionMode !== "fast") {
+    memoryRetrievalMs += Date.now() - selectionStartedAt;
+  }
+
+  return {
+    pack,
+    metrics: {
+      contextLoadMs,
+      memoryRetrievalMs,
+    },
   };
+};
+
+export const buildContextPack = async (
+  params: BuildContextPackParams,
+): Promise<ContextPack> => {
+  const { pack } = await buildContextPackWithStages(params);
+  return pack;
 };
 
 export const updateMemoryFromInteraction = async (params: {
@@ -371,7 +440,8 @@ export const processMemoryJobs = async (params: {
   const nowIso = new Date().toISOString();
   const staleCutoffIso = new Date(Date.now() - 5 * 60 * 1000).toISOString();
   const lockOwner = `memory-worker:${crypto.randomUUID()}`;
-  const processInteraction = params.processInteraction ?? updateMemoryFromInteraction;
+  const processInteraction = params.processInteraction ??
+    updateMemoryFromInteraction;
 
   const staleResult = await params.serviceClient
     .from("memory_jobs")

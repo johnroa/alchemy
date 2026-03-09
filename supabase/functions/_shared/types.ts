@@ -241,6 +241,11 @@ export type ChatAssistantEnvelope = {
   trigger_recipe?: boolean;
   candidate_recipe_set?: CandidateRecipeSet;
   response_context?: AssistantResponseContext;
+  gateway_metadata?: {
+    recovery_path?: string;
+    structured_output?: string;
+    error_code?: string;
+  };
 };
 
 export type ChatLoopState = "ideation" | "candidate_presented" | "iterating";

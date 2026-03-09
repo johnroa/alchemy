@@ -51,46 +51,49 @@ import { handleRecipeRoutes } from "./routes/recipes.ts";
 import { handleTelemetryRoutes } from "./routes/telemetry.ts";
 
 // ── Extracted lib modules ──
-import { normalizePath, getLimit, parseUuid } from "./lib/routing-utils.ts";
+import { getLimit, normalizePath, parseUuid } from "./lib/routing-utils.ts";
 import {
-  type PreferenceContext,
-  computePreferenceFingerprint,
-  buildSafetyExclusions,
-  markUserVariantsStale,
-  logPreferenceChanges,
-  getPreferences,
-  normalizePreferencePatch,
-  normalizePreferencePatchWithLlm,
   applyModelPreferenceUpdates,
   buildNaturalLanguagePreferenceContext,
+  buildSafetyExclusions,
+  computePreferenceFingerprint,
+  getPreferences,
+  logPreferenceChanges,
+  markUserVariantsStale,
+  normalizePreferencePatch,
+  normalizePreferencePatchWithLlm,
+  type PreferenceContext,
 } from "./lib/preferences.ts";
 import { computeVariantTags, flattenVariantTags } from "./lib/variant-tags.ts";
 import { fetchGraphSubstitutions } from "./lib/graph-substitutions.ts";
 import {
+  deriveLoopState,
   extractChatContext,
   normalizeCandidateRecipeSet,
-  deriveLoopState,
   toJsonValue,
 } from "./lib/chat-types.ts";
 import {
-  extractOnboardingStateFromPreferences,
   deriveOnboardingStateFromPreferences,
+  extractOnboardingStateFromPreferences,
 } from "./lib/onboarding-helpers.ts";
 import {
   ensureUserProfile,
-  getMemorySnapshot,
   getActiveMemories,
+  getMemorySnapshot,
   logChangelog,
   resolveRelationTypeId,
 } from "./lib/user-profile.ts";
 import { parseCsvParam } from "./lib/recipe-enrichment.ts";
-import { enqueueRecipeMetadataJob, processMetadataJobs } from "./lib/metadata-pipeline.ts";
 import {
-  scheduleMetadataQueueDrain,
+  enqueueRecipeMetadataJob,
+  processMetadataJobs,
+} from "./lib/metadata-pipeline.ts";
+import {
+  fetchGraphNeighborhood,
+  scheduleDemandQueueDrain,
   scheduleImageQueueDrain,
   scheduleMemoryQueueDrain,
-  scheduleDemandQueueDrain,
-  fetchGraphNeighborhood,
+  scheduleMetadataQueueDrain,
 } from "./lib/background-tasks.ts";
 import {
   backfillDemandExtractionJobs,
@@ -98,32 +101,43 @@ import {
   processDemandExtractionJobs,
 } from "./lib/demand/index.ts";
 import {
+  deriveAttachmentPayload,
   fetchRecipeView,
   persistRecipe,
-  deriveAttachmentPayload,
 } from "./lib/recipe-persistence.ts";
+import {
+  createPrivateCookbookEntry,
+  deriveCanonicalForCookbookEntry,
+  fetchCookbookEntryDetail,
+} from "./lib/private-cookbook.ts";
 import {
   canonicalizeRecipePayload,
   resolveAndPersistCanonicalRecipe,
 } from "./lib/recipe-identity.ts";
-import { buildContextPack, updateMemoryFromInteraction, enqueueMemoryJob, processMemoryJobs } from "./lib/context-pack.ts";
+import {
+  buildContextPack,
+  buildContextPackWithStages,
+  enqueueMemoryJob,
+  processMemoryJobs,
+  updateMemoryFromInteraction,
+} from "./lib/context-pack.ts";
 import {
   backfillMemorySearchDocuments,
   rebuildUserMemoryArtifacts,
 } from "./lib/memory-retrieval.ts";
 import {
-  fetchChatMessages,
-  extractLatestAssistantReply,
-  resolveAssistantMessageContent,
-  buildThreadForPrompt,
   buildCandidateOutlineForPrompt,
-  updateChatSessionLoopContext,
   buildChatLoopResponse,
-  mapCandidateRoleToRelation,
   buildCookbookFeed,
-  buildCookbookItems,
   buildCookbookInsightDeterministic,
+  buildCookbookItems,
+  buildThreadForPrompt,
+  extractLatestAssistantReply,
+  fetchChatMessages,
+  mapCandidateRoleToRelation,
   orchestrateChatTurn,
+  resolveAssistantMessageContent,
+  updateChatSessionLoopContext,
 } from "./lib/chat-orchestration.ts";
 
 Deno.serve(async (request) => {
@@ -365,7 +379,9 @@ Deno.serve(async (request) => {
       segments.length === 2 && segments[0] === "image-simulations" &&
       segments[1] === "compare" && method === "POST"
     ) {
-      const body = await requireJsonBody<ImageSimulationCompareRequest>(request);
+      const body = await requireJsonBody<ImageSimulationCompareRequest>(
+        request,
+      );
       const stream = new URL(request.url).searchParams.get("stream") === "1";
       if (stream) {
         return streamImageSimulationCompare({
@@ -512,6 +528,9 @@ Deno.serve(async (request) => {
       canonicalizeRecipePayload,
       persistRecipe,
       resolveAndPersistCanonicalRecipe,
+      createPrivateCookbookEntry,
+      deriveCanonicalForCookbookEntry,
+      fetchCookbookEntryDetail,
       resolveRelationTypeId,
       logChangelog,
       buildCookbookFeed,
@@ -599,7 +618,7 @@ Deno.serve(async (request) => {
 
     // ── Chat routes ──
     const chatResponse = await handleChatRoutes(routeContext, {
-      buildContextPack,
+      buildContextPack: buildContextPackWithStages,
       buildThreadForPrompt,
       orchestrateChatTurn,
       updateChatSessionLoopContext,
@@ -643,6 +662,10 @@ Deno.serve(async (request) => {
       canonicalizeRecipePayload,
       persistRecipe,
       resolveAndPersistCanonicalRecipe,
+      createPrivateCookbookEntry,
+      deriveCanonicalForCookbookEntry,
+      computePreferenceFingerprint,
+      computeVariantTags,
       ensurePersistedRecipeImageRequest,
       scheduleImageQueueDrain,
       scheduleMemoryQueueDrain,

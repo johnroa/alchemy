@@ -16,9 +16,7 @@
  * The client shows the generation animation (Lottie + cooking phrases)
  * for the entire duration of this request (~8-12s).
  */
-import {
-  ApiError,
-} from "../../../_shared/errors.ts";
+import { ApiError } from "../../../_shared/errors.ts";
 import type { JsonValue } from "../../../_shared/types.ts";
 import {
   buildChatBehaviorFacts,
@@ -26,16 +24,16 @@ import {
   logBehaviorEvents,
   logBehaviorFacts,
 } from "../../lib/behavior-events.ts";
-import type {
-  ChatMessageView,
-  RouteContext,
-} from "../shared.ts";
+import { buildNaturalLanguagePreferenceContext } from "../../lib/preferences.ts";
+import type { ChatMessageView, RouteContext } from "../shared.ts";
+import { logChatRouteTiming } from "./timing.ts";
 import type { ChatDeps } from "./types.ts";
 
 export const handleGenerateRecipe = async (
   context: RouteContext,
   deps: ChatDeps,
 ): Promise<Response> => {
+  const routeStartedAt = Date.now();
   const {
     segments,
     auth,
@@ -94,6 +92,8 @@ export const handleGenerateRecipe = async (
   }
 
   const sessionContext = extractChatContext(chatSession.context);
+  const deferredGenerationContext = sessionContext.deferred_generation_context;
+  const reusedDeferredContext = Boolean(deferredGenerationContext);
 
   if (!sessionContext.generation_pending) {
     throw new ApiError(
@@ -124,23 +124,44 @@ export const handleGenerateRecipe = async (
     );
   }
 
-  const contextPack = await buildContextPack({
-    userClient: client,
-    serviceClient,
-    userId: auth.userId,
-    requestId,
-    prompt: lastUserMessage.content,
-    context: {
-      chat_context: (chatSession.context as Record<string, JsonValue>) ?? {},
-      loop_state: deriveLoopState(sessionContext, existingCandidate),
-      candidate_recipe_set_outline: buildCandidateOutlineForPrompt(
-        existingCandidate,
-      ),
-    },
-    selectionMode: "fast",
-  });
+  const contextPackResult = deferredGenerationContext
+    ? {
+      pack: {
+        preferences: deferredGenerationContext.preferences,
+        preferencesNaturalLanguage: buildNaturalLanguagePreferenceContext(
+          deferredGenerationContext.preferences,
+        ),
+        memorySnapshot: deferredGenerationContext.memory_snapshot,
+        selectedMemories: deferredGenerationContext.selected_memories,
+        selectedMemoryIds: deferredGenerationContext.selected_memory_ids,
+      },
+      metrics: {
+        contextLoadMs: 0,
+        memoryRetrievalMs: 0,
+      },
+    }
+    : await buildContextPack({
+      userClient: client,
+      serviceClient,
+      userId: auth.userId,
+      requestId,
+      prompt: lastUserMessage.content,
+      context: {
+        chat_context: (chatSession.context as Record<string, JsonValue>) ?? {},
+        loop_state: deriveLoopState(sessionContext, existingCandidate),
+        candidate_recipe_set_outline: buildCandidateOutlineForPrompt(
+          existingCandidate,
+        ),
+      },
+      selectionMode: "fast",
+      retrievalMode: "retrieve",
+    });
+  const contextPack = contextPackResult.pack;
 
-  const threadForPrompt = buildThreadForPrompt(threadMessages);
+  const threadForPrompt = deferredGenerationContext &&
+      deferredGenerationContext.thread.length > 0
+    ? deferredGenerationContext.thread
+    : buildThreadForPrompt(threadMessages);
 
   // ── Run the generation LLM (the heavy call) ──
   // Force chat_generation scope to skip re-running ideation (already
@@ -149,6 +170,7 @@ export const handleGenerateRecipe = async (
   const generationSessionContext = {
     ...sessionContext,
     generation_pending: undefined,
+    deferred_generation_context: null,
   };
 
   const orchestrated = await orchestrateChatTurn({
@@ -182,6 +204,7 @@ export const handleGenerateRecipe = async (
       candidate_revision: nextCandidateSet.revision,
       active_component_id: nextCandidateSet.active_component_id,
       generation_pending: undefined,
+      deferred_generation_context: null,
     };
     scheduleImageQueueDrain({
       serviceClient,
@@ -195,6 +218,7 @@ export const handleGenerateRecipe = async (
     orchestrated.nextContext = {
       ...orchestrated.nextContext,
       generation_pending: undefined,
+      deferred_generation_context: null,
     };
   }
 
@@ -223,8 +247,8 @@ export const handleGenerateRecipe = async (
     envelope: assistantEnvelope as unknown as JsonValue,
     source: "deferred_generation",
   };
-  const { data: assistantMessage, error: assistantMessageError } =
-    await client.from("chat_messages").insert({
+  const { data: assistantMessage, error: assistantMessageError } = await client
+    .from("chat_messages").insert({
       chat_id: chatId,
       role: "assistant",
       content: assistantMessageContent,
@@ -270,7 +294,9 @@ export const handleGenerateRecipe = async (
       eventId: resolvedEventId,
       userId: auth.userId,
       chatId,
-      responseContext: (orchestrated.responseContext ?? null) as Record<string, JsonValue> | null,
+      responseContext: (orchestrated.responseContext ?? null) as
+        | Record<string, JsonValue>
+        | null,
       candidateId: nextCandidateSet?.candidate_id ?? null,
       generatedCount,
     }),
@@ -328,23 +354,35 @@ export const handleGenerateRecipe = async (
     },
   ];
 
-  return respond(
-    200,
-    buildChatLoopResponse({
-      chatId,
-      messages,
-      context: orchestrated.nextContext,
-      assistantReply: orchestrated.assistantChatResponse.assistant_reply,
-      responseContext: orchestrated.responseContext,
-      memoryContextIds: contextPack.selectedMemoryIds,
-      createdAt: chatSession.created_at,
-      updatedAt: new Date().toISOString(),
-      uiHints: nextCandidateSet
-        ? {
-          show_generation_animation: true,
-          focus_component_id: nextCandidateSet.active_component_id,
-        }
-        : undefined,
-    }),
-  );
+  const responseBody = buildChatLoopResponse({
+    chatId,
+    messages,
+    context: orchestrated.nextContext,
+    assistantReply: orchestrated.assistantChatResponse.assistant_reply,
+    responseContext: orchestrated.responseContext,
+    memoryContextIds: contextPack.selectedMemoryIds,
+    createdAt: chatSession.created_at,
+    updatedAt: new Date().toISOString(),
+    uiHints: nextCandidateSet
+      ? {
+        show_generation_animation: true,
+        focus_component_id: nextCandidateSet.active_component_id,
+      }
+      : undefined,
+  });
+  await logChatRouteTiming({
+    serviceClient,
+    userId: auth.userId,
+    requestId,
+    route: "chat_generate",
+    contextLoadMs: contextPackResult.metrics.contextLoadMs,
+    memoryRetrievalMs: contextPackResult.metrics.memoryRetrievalMs,
+    llmMs: orchestrated.llmLatencyMs,
+    recoveryPath: orchestrated.recoveryPath,
+    cacheHit: reusedDeferredContext,
+    generationReusedContext: reusedDeferredContext,
+    totalServerMs: Date.now() - routeStartedAt,
+  });
+
+  return respond(200, responseBody);
 };

@@ -190,11 +190,12 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * User cookbook with canonical + variant data
-         * @description Returns the user's cookbook entries. Each entry includes canonical recipe
-         *     preview data plus variant status. When a variant exists, the preview
-         *     reflects the personalised version (title stays canonical, summary and
-         *     tags come from the variant).
+         * User cookbook with private-first saved recipe data
+         * @description Returns the user's cookbook entries. Newly created recipes appear here
+         *     immediately as private cookbook items, even before public canon derivation
+         *     completes. When canon exists, `canonical_recipe_id` links the saved entry
+         *     to the public recipe. Preview content reflects the active private variant
+         *     when present.
          */
         get: {
             parameters: {
@@ -215,6 +216,7 @@ export interface paths {
                             items: components["schemas"]["CookbookEntry"][];
                             suggested_chips: components["schemas"]["SuggestedChip"][];
                             cookbook_insight: string | null;
+                            stale_context: components["schemas"]["CookbookStaleContext"] | null;
                         };
                     };
                 };
@@ -223,6 +225,175 @@ export interface paths {
         };
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/recipes/cookbook/{entryId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a private-first cookbook recipe detail by cookbook entry id
+         * @description Returns the authenticated user's saved recipe detail for a cookbook entry.
+         *     This is the primary private-detail route. It returns the active private
+         *     variant view when available, and falls back to the entry's current private
+         *     payload while canon is pending or failed.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Response projection for ingredient and inline measurement units. */
+                    units?: "source" | "metric" | "imperial";
+                    /** @description Optional ingredient grouping strategy for response rendering. Defaults to component when omitted. */
+                    group_by?: "flat" | "category" | "component";
+                    /** @description Whether to append inline measurements directly inside step instructions. */
+                    inline_measurements?: boolean;
+                    /** @description Selects which server-rendered instruction view to return. */
+                    verbosity?: "concise" | "balanced" | "detailed";
+                    /** @description Overrides the rendered temperature unit in step instructions. */
+                    temperature_unit?: "fahrenheit" | "celsius";
+                };
+                header?: never;
+                path: {
+                    entryId: components["parameters"]["CookbookEntryId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Private cookbook recipe detail */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["CookbookRecipeDetail"];
+                    };
+                };
+                default: components["responses"]["ErrorResponse"];
+            };
+        };
+        put?: never;
+        post?: never;
+        /**
+         * Delete a cookbook entry
+         * @description Removes the saved cookbook entry and any associated private variant lineage.
+         */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    entryId: components["parameters"]["CookbookEntryId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Cookbook entry deleted */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["CookbookDeleteResponse"];
+                    };
+                };
+                default: components["responses"]["ErrorResponse"];
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/recipes/cookbook/{entryId}/canon/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Retry canon derivation for a private cookbook entry
+         * @description Re-runs private-to-public canon derivation for a saved cookbook entry.
+         *     Useful when public canon generation previously failed or is still pending.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    entryId: components["parameters"]["CookbookEntryId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Updated canon linkage state */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["CookbookCanonRetryResponse"];
+                    };
+                };
+                default: components["responses"]["ErrorResponse"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/recipes/cookbook/{entryId}/variant/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Refresh the private variant for a cookbook entry
+         * @description Materialises or refreshes the active private variant for a cookbook entry.
+         *     Uses the public canon base when available, otherwise refreshes from the
+         *     current private payload while canon derivation is pending.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    entryId: components["parameters"]["CookbookEntryId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Variant materialisation result */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["VariantRefreshResponse"];
+                    };
+                };
+                default: components["responses"]["ErrorResponse"];
+            };
+        };
         delete?: never;
         options?: never;
         head?: never;
@@ -332,9 +503,10 @@ export interface paths {
         put?: never;
         /**
          * Save a canonical recipe to cookbook and optionally trigger variant materialisation
-         * @description Creates a cookbook_entries row for the canonical recipe. If autopersonalize
-         *     is true (default) and the user has relevant constraint preferences, queues
-         *     async variant materialisation. Returns the cookbook entry state.
+         * @description Creates or updates a cookbook entry anchored to the canonical recipe.
+         *     If autopersonalize is true (default) and the user has relevant constraint
+         *     preferences, queues async variant materialisation. Returns the cookbook
+         *     entry state including the new `cookbook_entry_id`.
          */
         post: {
             parameters: {
@@ -617,9 +789,10 @@ export interface paths {
         };
         /**
          * Get the user's personalised variant for a canonical recipe
-         * @description Returns the user's private variant of a canonical recipe, including the
-         *     personalised payload, adaptation summary, tag diff, and provenance data.
-         *     Returns 404 if the user has no variant for this recipe.
+         * @description Compatibility wrapper for canonical-linked cookbook entries. Resolves the
+         *     user's cookbook entry by canonical recipe id and returns the active private
+         *     detail payload. New private cookbook flows should prefer
+         *     `/recipes/cookbook/{entryId}` instead.
          */
         get: {
             parameters: {
@@ -682,10 +855,10 @@ export interface paths {
         put?: never;
         /**
          * Create or refresh the user's variant for a canonical recipe
-         * @description Materialises (or re-materialises) the user's private variant from the
-         *     canonical recipe base plus the user's current preference profile. If the
-         *     variant has manual edits, attempts to reapply them after re-personalisation.
-         *     If reapplication conflicts, returns variant with status needs_review.
+         * @description Compatibility wrapper for canonical-linked cookbook entries. Resolves the
+         *     cookbook entry by canonical recipe id and refreshes the active private
+         *     variant from the public canon base plus the user's current preference
+         *     profile.
          */
         post: {
             parameters: {
@@ -2957,25 +3130,31 @@ export interface components {
                     title: string;
                     /**
                      * Format: uuid
-                     * @description Canonical recipe ID.
+                     * @description Private cookbook entry id created for this committed component.
                      */
-                    recipe_id: string;
+                    cookbook_entry_id: string;
                     /**
                      * Format: uuid
-                     * @description Canonical recipe version ID.
+                     * @description Canonical recipe ID, if canon derivation has already completed.
                      */
-                    recipe_version_id: string;
+                    recipe_id: string | null;
                     /**
                      * Format: uuid
-                     * @description The creator's private variant ID, if variant was materialised.
+                     * @description Canonical recipe version ID, if canon derivation has already completed.
                      */
-                    variant_id?: string | null;
+                    recipe_version_id: string | null;
                     /**
                      * Format: uuid
-                     * @description The creator's private variant version ID, if variant was materialised.
+                     * @description The creator's private variant ID.
                      */
-                    variant_version_id?: string | null;
-                    variant_status?: components["schemas"]["VariantStatus"];
+                    variant_id: string | null;
+                    /**
+                     * Format: uuid
+                     * @description The creator's private variant version ID.
+                     */
+                    variant_version_id: string | null;
+                    variant_status: components["schemas"]["VariantStatus"];
+                    canonical_status: components["schemas"]["CookbookCanonicalStatus"];
                 }[];
                 links: {
                     /** Format: uuid */
@@ -3124,9 +3303,27 @@ export interface components {
             /** @description Top ingredients from the variant (lowercased, max 8). */
             key_ingredients?: string[];
         };
+        /**
+         * @description Public canon derivation state for a saved cookbook entry.
+         * @enum {string}
+         */
+        CookbookCanonicalStatus: "pending" | "processing" | "ready" | "failed";
+        CookbookStaleContext: {
+            changed_fields: string[];
+            stale_recipe_ids: string[];
+            count: number;
+        };
         CookbookEntry: {
             /** Format: uuid */
-            canonical_recipe_id: string;
+            id: string;
+            /** Format: uuid */
+            canonical_recipe_id: string | null;
+            /**
+             * Format: uuid
+             * @description Compatibility alias for canonical_recipe_id during migration.
+             */
+            recipe_id: string | null;
+            canonical_status: components["schemas"]["CookbookCanonicalStatus"];
             title: string;
             /** @description Variant summary if variant exists, otherwise canonical summary. */
             summary: string;
@@ -3154,10 +3351,51 @@ export interface components {
             variant_tags?: components["schemas"]["VariantTags"];
             matched_chip_ids: string[];
         };
+        CookbookRecipeDetail: {
+            /** Format: uuid */
+            cookbook_entry_id: string;
+            /** Format: uuid */
+            canonical_recipe_id: string | null;
+            canonical_status: components["schemas"]["CookbookCanonicalStatus"];
+            /** Format: uuid */
+            variant_id: string | null;
+            /** Format: uuid */
+            variant_version_id: string | null;
+            recipe: components["schemas"]["Recipe"];
+            adaptation_summary: string;
+            variant_status: components["schemas"]["VariantStatus"];
+            derivation_kind: string | null;
+            /** Format: date-time */
+            personalized_at: string | null;
+            substitution_diffs: components["schemas"]["SubstitutionDiff"][];
+            provenance?: {
+                [key: string]: unknown;
+            };
+        };
+        CookbookCanonRetryResponse: {
+            /** Format: uuid */
+            cookbook_entry_id: string;
+            /** Format: uuid */
+            canonical_recipe_id: string | null;
+            canonical_status: components["schemas"]["CookbookCanonicalStatus"];
+        };
+        CookbookDeleteResponse: {
+            deleted: boolean;
+            /** Format: uuid */
+            cookbook_entry_id: string;
+        };
         SaveRecipeResponse: {
             saved: boolean;
             /** Format: uuid */
+            cookbook_entry_id: string;
+            /**
+             * Format: uuid
+             * @description Compatibility alias for canonical_recipe_id during migration.
+             */
+            recipe_id: string;
+            /** Format: uuid */
             canonical_recipe_id: string;
+            canonical_status: components["schemas"]["CookbookCanonicalStatus"];
             variant_status: components["schemas"]["VariantStatus"];
             /** Format: uuid */
             active_variant_version_id?: string | null;
@@ -3276,19 +3514,18 @@ export interface components {
         };
         RecipeVariant: {
             /** Format: uuid */
-            variant_id: string;
+            variant_id: string | null;
             /** Format: uuid */
-            variant_version_id: string;
+            variant_version_id: string | null;
             /** Format: uuid */
             canonical_recipe_id: string;
             recipe: components["schemas"]["Recipe"];
             /** @description Natural language summary of what was adapted and why. */
             adaptation_summary: string;
             variant_status: components["schemas"]["VariantStatus"];
-            /** @enum {string} */
-            derivation_kind: "auto_personalized" | "manual_edit" | "mixed";
+            derivation_kind: string | null;
             /** Format: date-time */
-            personalized_at: string;
+            personalized_at: string | null;
             tag_diff?: {
                 added?: string[];
                 removed?: string[];
@@ -3377,6 +3614,7 @@ export interface components {
     };
     parameters: {
         RecipeId: string;
+        CookbookEntryId: string;
         IngredientId: string;
         /**
          * @description Optional JSON string used by Admin Simulation Runner to override model/provider per scope.

@@ -7,11 +7,24 @@ import type {
   RecipePayload,
 } from "../../../_shared/types.ts";
 import { getInstallIdFromHeaders, logBehaviorEvents } from "../../lib/behavior-events.ts";
+import { runInBackground } from "../../lib/background-tasks.ts";
 import { materializeRecipeVariant } from "../../lib/variant-materialization.ts";
-import { fetchCanonicalIngredientRows } from "../../lib/recipe-enrichment.ts";
-import { projectRecipePayloadForView } from "../../lib/recipe-persistence.ts";
 import type { RouteContext, VariantStatus } from "../shared.ts";
 import type { RecipesDeps } from "./types.ts";
+
+const parseManualEditInstructions = async (
+  request: Request,
+): Promise<string | undefined> => {
+  try {
+    const body = await requireJsonBody<{ instructions?: string }>(request);
+    if (body.instructions?.trim()) {
+      return body.instructions.trim();
+    }
+  } catch {
+    // Body is optional for refresh.
+  }
+  return undefined;
+};
 
 export const handleVariantRoutes = async (
   context: RouteContext,
@@ -23,7 +36,8 @@ export const handleVariantRoutes = async (
     parseUuid,
     getPreferences,
     resolvePresentationOptions,
-    fetchRecipeView,
+    fetchCookbookEntryDetail,
+    deriveCanonicalForCookbookEntry,
     logChangelog,
     computePreferenceFingerprint,
     computeVariantTags,
@@ -41,53 +55,28 @@ export const handleVariantRoutes = async (
     method === "GET"
   ) {
     const recipeId = parseUuid(segments[1]);
-    const installId = getInstallIdFromHeaders(request);
-
-    const { data: variant, error: variantError } = await client
-      .from("user_recipe_variants")
-      .select(
-        "id, current_version_id, base_canonical_version_id, preference_fingerprint, stale_status, last_materialized_at",
-      )
+    const { data: entry, error: entryError } = await client
+      .from("cookbook_entries")
+      .select("id")
       .eq("user_id", auth.userId)
       .eq("canonical_recipe_id", recipeId)
       .maybeSingle();
 
-    if (variantError) {
+    if (entryError) {
       throw new ApiError(
         500,
-        "variant_fetch_failed",
-        "Could not fetch variant",
-        variantError.message,
+        "cookbook_entry_fetch_failed",
+        "Could not fetch cookbook entry",
+        entryError.message,
       );
     }
-
-    if (!variant || !variant.current_version_id) {
+    if (!entry) {
       throw new ApiError(
         404,
         "variant_not_found",
         "No variant exists for this user and recipe",
       );
     }
-
-    const { data: variantVersion, error: versionError } = await client
-      .from("user_recipe_variant_versions")
-      .select(
-        "id, payload, derivation_kind, provenance, source_canonical_version_id, created_at",
-      )
-      .eq("id", variant.current_version_id)
-      .single();
-
-    if (versionError || !variantVersion) {
-      throw new ApiError(
-        500,
-        "variant_version_fetch_failed",
-        "Could not fetch variant version",
-        versionError?.message,
-      );
-    }
-
-    const payload = variantVersion.payload as Record<string, JsonValue>;
-    const provenance = variantVersion.provenance as Record<string, JsonValue>;
 
     // Apply rendering-only presentation options (units, groupBy, inline measurements).
     const preferences = await getPreferences(client, auth.userId);
@@ -96,59 +85,26 @@ export const handleVariantRoutes = async (
       presentationPreferences:
         preferences.presentation_preferences as Record<string, unknown>,
     });
-
-    // Build a recipe view from the variant payload using the same projection
-    // as canonical reads, but sourcing from the variant's payload.
-    const canonicalRecipe = await fetchRecipeView(
+    const variantDetail = await fetchCookbookEntryDetail({
       client,
-      recipeId,
-      true,
+      userId: auth.userId,
+      cookbookEntryId: entry.id,
       viewOptions,
-    );
-
-    const canonicalRows = await fetchCanonicalIngredientRows(
-      client,
-      variant.base_canonical_version_id ??
-        variantVersion.source_canonical_version_id ??
-        canonicalRecipe.version.version_id,
-    );
-    const projectedVariantPayload = projectRecipePayloadForView({
-      payload: payload as RecipePayload,
-      canonicalRows,
-      options: viewOptions,
     });
 
-    // Overlay variant payload fields onto the canonical recipe view.
-    // The variant payload has the same structure as recipe_versions.payload,
-    // but still needs the same render-time projection as canonical reads.
-    const variantRecipe = {
-      ...canonicalRecipe,
-      description: projectedVariantPayload.description,
-      summary: projectedVariantPayload.summary,
-      ingredients: projectedVariantPayload.ingredients,
-      ingredient_groups: projectedVariantPayload.ingredient_groups,
-      steps: projectedVariantPayload.steps,
-      notes: projectedVariantPayload.notes,
-      pairings: projectedVariantPayload.pairings,
-      metadata: projectedVariantPayload.metadata,
-      emoji: projectedVariantPayload.emoji,
-    };
-
     return respond(200, {
-      variant_id: variant.id,
-      variant_version_id: variantVersion.id,
+      variant_id: variantDetail.variant_id,
+      variant_version_id: variantDetail.variant_version_id,
       canonical_recipe_id: recipeId,
-      recipe: variantRecipe,
-      adaptation_summary:
-        (provenance.adaptation_summary as string) ?? "",
-      variant_status: variant.stale_status as VariantStatus,
-      derivation_kind: variantVersion.derivation_kind,
-      personalized_at:
-        variant.last_materialized_at ?? variantVersion.created_at,
-      tag_diff: (provenance.tag_diff as JsonValue) ?? { added: [], removed: [] },
-      substitution_diffs:
-        (provenance.substitution_diffs as JsonValue) ?? [],
-      provenance,
+      recipe: variantDetail.recipe,
+      adaptation_summary: variantDetail.adaptation_summary,
+      variant_status: variantDetail.variant_status,
+      derivation_kind: variantDetail.derivation_kind,
+      personalized_at: variantDetail.personalized_at,
+      tag_diff: ((variantDetail.provenance ?? {}).tag_diff as JsonValue) ??
+        { added: [], removed: [] },
+      substitution_diffs: variantDetail.substitution_diffs ?? [],
+      provenance: variantDetail.provenance ?? {},
     });
   }
 
@@ -160,6 +116,179 @@ export const handleVariantRoutes = async (
   //   3. Insert new variant version (or create variant row if first time)
   //   4. Return the materialised variant state
   if (
+    segments.length === 5 &&
+    segments[0] === "recipes" &&
+    segments[1] === "cookbook" &&
+    segments[3] === "variant" &&
+    segments[4] === "refresh" &&
+    method === "POST"
+  ) {
+    const cookbookEntryId = parseUuid(segments[2]);
+    const installId = getInstallIdFromHeaders(request);
+    const { data: entry, error: entryError } = await client
+      .from("cookbook_entries")
+      .select("id, canonical_recipe_id, canonical_status, active_variant_id")
+      .eq("id", cookbookEntryId)
+      .eq("user_id", auth.userId)
+      .maybeSingle();
+
+    if (entryError || !entry) {
+      throw new ApiError(
+        404,
+        "cookbook_entry_not_found",
+        "Cookbook entry not found",
+        entryError?.message,
+      );
+    }
+
+    const preferences = await getPreferences(client, auth.userId);
+    const manualEditInstructions = await parseManualEditInstructions(request);
+
+    const { data: existingVariant } = await client
+      .from("user_recipe_variants")
+      .select("id, current_version_id, accumulated_manual_edits")
+      .eq("user_id", auth.userId)
+      .eq("cookbook_entry_id", cookbookEntryId)
+      .maybeSingle();
+
+    let basePayload: RecipePayload;
+    let canonicalVersionId: string | null = null;
+
+    if (entry.canonical_recipe_id) {
+      const { data: recipe, error: recipeError } = await client
+        .from("recipes")
+        .select("id, current_version_id")
+        .eq("id", entry.canonical_recipe_id)
+        .maybeSingle();
+
+      if (recipeError || !recipe || !recipe.current_version_id) {
+        throw new ApiError(
+          404,
+          "recipe_not_found",
+          "Canonical recipe not found",
+          recipeError?.message,
+        );
+      }
+
+      const { data: canonicalVersion, error: canonicalVersionError } = await client
+        .from("recipe_versions")
+        .select("id,payload")
+        .eq("id", recipe.current_version_id)
+        .single();
+
+      if (canonicalVersionError || !canonicalVersion) {
+        throw new ApiError(
+          500,
+          "canonical_version_fetch_failed",
+          "Could not load canonical recipe version",
+          canonicalVersionError?.message,
+        );
+      }
+
+      basePayload = canonicalVersion.payload as RecipePayload;
+      canonicalVersionId = canonicalVersion.id;
+    } else {
+      if (!entry.active_variant_id) {
+        throw new ApiError(
+          409,
+          "private_variant_missing",
+          "Cookbook entry does not have a private variant to refresh",
+        );
+      }
+
+      const { data: variantVersion, error: variantVersionError } = await client
+        .from("user_recipe_variant_versions")
+        .select("payload")
+        .eq("id", existingVariant?.current_version_id ?? "")
+        .maybeSingle();
+
+      if (variantVersionError || !variantVersion) {
+        throw new ApiError(
+          500,
+          "variant_version_fetch_failed",
+          "Could not load private variant payload",
+          variantVersionError?.message,
+        );
+      }
+
+      basePayload = variantVersion.payload as RecipePayload;
+    }
+
+    const materializedVariant = await materializeRecipeVariant({
+      llmClient: serviceClient,
+      serviceClient,
+      userId: auth.userId,
+      requestId,
+      cookbookEntryId,
+      recipeId: entry.canonical_recipe_id,
+      canonicalVersionId,
+      canonicalPayload: basePayload,
+      preferences,
+      computePreferenceFingerprint,
+      computeVariantTags,
+      fetchGraphSubstitutions,
+      existingVariant,
+      manualEditInstructions,
+      modelOverrides,
+    });
+
+    if (!entry.canonical_recipe_id || entry.canonical_status !== "ready") {
+      runInBackground(
+        deriveCanonicalForCookbookEntry({
+          serviceClient,
+          userId: auth.userId,
+          requestId: crypto.randomUUID(),
+          cookbookEntryId,
+          canonicalizeRecipePayload: deps.canonicalizeRecipePayload,
+          resolveAndPersistCanonicalRecipe: deps.resolveAndPersistCanonicalRecipe,
+          ensurePersistedRecipeImageRequest: deps.ensurePersistedRecipeImageRequest,
+          scheduleImageQueueDrain: deps.scheduleImageQueueDrain,
+          modelOverrides,
+        }).then(() => undefined).catch((error) => {
+          console.error("cookbook_entry_canon_retry_failed", {
+            cookbook_entry_id: cookbookEntryId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }),
+      );
+    }
+
+    await logBehaviorEvents({
+      serviceClient,
+      events: [{
+        eventId: crypto.randomUUID(),
+        userId: auth.userId,
+        installId,
+        eventType: "variant_refreshed",
+        entityType: "cookbook_entry",
+        entityId: cookbookEntryId,
+        payload: {
+          canonical_recipe_id: entry.canonical_recipe_id,
+          variant_id: materializedVariant.variantId,
+          variant_version_id: materializedVariant.variantVersionId,
+          has_manual_edits: Boolean(manualEditInstructions),
+        },
+      }],
+    });
+
+    return respond(200, {
+      variant_id: materializedVariant.variantId,
+      variant_version_id: materializedVariant.variantVersionId,
+      variant_status: materializedVariant.variantStatus,
+      adaptation_summary:
+        (materializedVariant.provenance["adaptation_summary"] as string) ?? "",
+      substitution_diffs: Array.isArray(
+          materializedVariant.provenance["substitution_diffs"],
+        )
+        ? materializedVariant.provenance["substitution_diffs"] as JsonValue[]
+        : undefined,
+      conflicts: materializedVariant.conflicts.length > 0
+        ? materializedVariant.conflicts
+        : undefined,
+    });
+  }
+
+  if (
     segments.length === 4 &&
     segments[0] === "recipes" &&
     segments[2] === "variant" &&
@@ -168,6 +297,21 @@ export const handleVariantRoutes = async (
   ) {
     const recipeId = parseUuid(segments[1]);
     const installId = getInstallIdFromHeaders(request);
+    const { data: entry, error: entryError } = await client
+      .from("cookbook_entries")
+      .select("id, canonical_recipe_id, canonical_status")
+      .eq("user_id", auth.userId)
+      .eq("canonical_recipe_id", recipeId)
+      .maybeSingle();
+
+    if (entryError || !entry) {
+      throw new ApiError(
+        404,
+        "cookbook_entry_not_found",
+        "No cookbook entry exists for this recipe",
+        entryError?.message,
+      );
+    }
 
     // 1. Load canonical recipe + its current version payload.
     const { data: recipe, error: recipeError } = await client
@@ -204,24 +348,14 @@ export const handleVariantRoutes = async (
 
     // 2. Load user preferences for materialization.
     const preferences = await getPreferences(client, auth.userId);
-
-    // Parse optional manual edit instructions from request body.
-    let manualEditInstructions: string | undefined;
-    try {
-      const body = await requireJsonBody<{ instructions?: string }>(request);
-      if (body.instructions?.trim()) {
-        manualEditInstructions = body.instructions.trim();
-      }
-    } catch {
-      // Body is optional for refresh.
-    }
+    const manualEditInstructions = await parseManualEditInstructions(request);
 
     // 3. Check for existing variant row (including accumulated manual edits).
     const { data: existingVariant } = await client
       .from("user_recipe_variants")
       .select("id, current_version_id, accumulated_manual_edits")
       .eq("user_id", auth.userId)
-      .eq("canonical_recipe_id", recipeId)
+      .eq("cookbook_entry_id", entry.id)
       .maybeSingle();
 
     const materializedVariant = await materializeRecipeVariant({
@@ -229,6 +363,7 @@ export const handleVariantRoutes = async (
       serviceClient,
       userId: auth.userId,
       requestId,
+      cookbookEntryId: entry.id,
       recipeId,
       canonicalVersionId: canonicalVersion.id,
       canonicalPayload,
@@ -250,6 +385,7 @@ export const handleVariantRoutes = async (
       action: existingVariant ? "refreshed" : "created",
       requestId,
       afterJson: {
+        cookbook_entry_id: entry.id,
         canonical_recipe_id: recipeId,
         derivation_kind: materializedVariant.derivationKind,
         adaptations_count: Array.isArray(
@@ -294,6 +430,7 @@ export const handleVariantRoutes = async (
           : "demand_summarize_outcome_reason",
         observedAt: materializedVariant.personalizedAt,
         payload: {
+          cookbook_entry_id: entry.id,
           recipe_id: recipeId,
           variant_id: materializedVariant.variantId,
           variant_version_id: materializedVariant.variantVersionId,

@@ -925,7 +925,7 @@ export const canonicalizeRecipePayload = async (params: {
   userId: string;
   requestId: string;
   payload: RecipePayload;
-  preferences: Record<string, JsonValue>;
+  lineageMetadata?: Record<string, JsonValue>;
   modelOverrides?: ModelOverrideMap;
 }): Promise<RecipePayload> => {
   const canonicalized = await llmGateway.canonicalizeRecipe({
@@ -933,7 +933,7 @@ export const canonicalizeRecipePayload = async (params: {
     userId: params.userId,
     requestId: params.requestId,
     recipe: params.payload,
-    preferences: params.preferences,
+    lineageMetadata: params.lineageMetadata,
     modelOverrides: params.modelOverrides,
   });
 

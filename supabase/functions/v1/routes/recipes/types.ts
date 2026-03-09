@@ -5,6 +5,7 @@ import type {
 } from "../../../_shared/types.ts";
 import type {
   ChatMessageView,
+  CookbookRecipeDetail,
   ContextPack,
   CookbookEntry,
   SuggestedChip,
@@ -13,7 +14,9 @@ import type {
   RecipeViewOptions,
   RecipeView,
   RouteContext,
+  VariantStatus,
 } from "../shared.ts";
+import type { CookbookCanonicalStatus } from "../../lib/private-cookbook.ts";
 import type { SearchSafetyExclusions } from "../../recipe-search.ts";
 
 export type RecipesDeps = {
@@ -63,7 +66,7 @@ export type RecipesDeps = {
     userId: string;
     requestId: string;
     payload: RecipePayload;
-    preferences: Record<string, JsonValue>;
+    lineageMetadata?: Record<string, JsonValue>;
     modelOverrides?: RouteContext["modelOverrides"];
   }) => Promise<RecipePayload>;
   persistRecipe: (input: {
@@ -101,6 +104,53 @@ export type RecipesDeps = {
     judgeCandidateCount: number;
     judgeConfidence: number | null;
   }>;
+  createPrivateCookbookEntry: (input: {
+    serviceClient: RouteContext["serviceClient"];
+    userId: string;
+    requestId: string;
+    payload: RecipePayload;
+    sourceKind: "created_private" | "imported_private";
+    previewImageUrl?: string | null;
+    previewImageStatus?: string | null;
+    sourceChatId?: string | null;
+    selectedMemoryIds?: string[];
+    computePreferenceFingerprint: (
+      preferences: PreferenceContext,
+    ) => Promise<string | null>;
+    computeVariantTags: (params: {
+      canonicalPayload: RecipePayload;
+      variantPayload: RecipePayload;
+      tagDiff: { added: string[]; removed: string[] };
+    }) => Record<string, unknown>;
+    preferences: PreferenceContext;
+  }) => Promise<{
+    cookbookEntryId: string;
+    variantId: string;
+    variantVersionId: string;
+    canonicalStatus: CookbookCanonicalStatus;
+    variantStatus: VariantStatus;
+  }>;
+  deriveCanonicalForCookbookEntry: (input: {
+    serviceClient: RouteContext["serviceClient"];
+    userId: string;
+    requestId: string;
+    cookbookEntryId: string;
+    canonicalizeRecipePayload: RecipesDeps["canonicalizeRecipePayload"];
+    resolveAndPersistCanonicalRecipe: RecipesDeps["resolveAndPersistCanonicalRecipe"];
+    ensurePersistedRecipeImageRequest?: RecipesDeps["ensurePersistedRecipeImageRequest"];
+    scheduleImageQueueDrain?: RecipesDeps["scheduleImageQueueDrain"];
+    modelOverrides?: RouteContext["modelOverrides"];
+  }) => Promise<{
+    cookbookEntryId: string;
+    canonicalRecipeId: string | null;
+    canonicalStatus: CookbookCanonicalStatus;
+  }>;
+  fetchCookbookEntryDetail: (input: {
+    client: RouteContext["client"];
+    userId: string;
+    cookbookEntryId: string;
+    viewOptions: RecipeViewOptions;
+  }) => Promise<CookbookRecipeDetail>;
   resolveRelationTypeId: (
     client: RouteContext["client"] | RouteContext["serviceClient"],
     relationType: string,
