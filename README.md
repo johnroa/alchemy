@@ -108,7 +108,7 @@ open Alchemy.xcodeproj
 ```
 
 For saved-recipe and cookbook flows, also read
-[apps/ios/private-first-cookbook.md](/Users/john/Projects/alchemy/apps/ios/private-first-cookbook.md).
+[docs/ios/private-first-cookbook.md](/Users/john/Projects/alchemy/docs/ios/private-first-cookbook.md).
 
 ### Configuration
 
