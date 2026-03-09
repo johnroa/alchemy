@@ -2,7 +2,7 @@ import { assert, assertEquals } from "jsr:@std/assert";
 import {
   buildMatchedChipIds,
   buildSuggestedChips,
-  extractUxFilterProfileFromPayload,
+  extractBrowseFacetProfileFromPayload,
   mergeSemanticProfiles,
 } from "./semantic-facets.ts";
 import {
@@ -125,8 +125,8 @@ Deno.test("mergeSemanticProfiles keeps the highest-confidence descriptor for eac
   );
 });
 
-Deno.test("extractUxFilterProfileFromPayload uses ux_filter_profile when present", () => {
-  const profile = extractUxFilterProfileFromPayload({
+Deno.test("extractBrowseFacetProfileFromPayload uses browse_facet_profile when present", () => {
+  const profile = extractBrowseFacetProfileFromPayload({
     title: "Test Recipe",
     servings: 2,
     ingredients: [],
@@ -143,7 +143,7 @@ Deno.test("extractUxFilterProfileFromPayload uses ux_filter_profile when present
           },
         ],
       },
-      ux_filter_profile: {
+      browse_facet_profile: {
         descriptors: [
           {
             id: "occasion:weeknight_dinner",
@@ -169,8 +169,41 @@ Deno.test("extractUxFilterProfileFromPayload uses ux_filter_profile when present
   ]);
 });
 
-Deno.test("extractUxFilterProfileFromPayload does not fall back to semantic_profile", () => {
-  const profile = extractUxFilterProfileFromPayload({
+Deno.test("extractBrowseFacetProfileFromPayload falls back to legacy ux_filter_profile", () => {
+  const profile = extractBrowseFacetProfileFromPayload({
+    title: "Test Recipe",
+    servings: 2,
+    ingredients: [],
+    steps: [],
+    metadata: {
+      ux_filter_profile: {
+        descriptors: [
+          {
+            id: "occasion:date_night",
+            axis: "occasion",
+            key: "date_night",
+            label: "Date Night",
+            confidence: 0.96,
+          },
+        ],
+      },
+    },
+  });
+
+  assert(profile);
+  assertEquals(profile.descriptors, [
+    {
+      id: "occasion:date_night",
+      axis: "occasion",
+      key: "date_night",
+      label: "Date Night",
+      confidence: 0.96,
+    },
+  ]);
+});
+
+Deno.test("extractBrowseFacetProfileFromPayload does not fall back to semantic_profile", () => {
+  const profile = extractBrowseFacetProfileFromPayload({
     title: "Test Recipe",
     servings: 2,
     ingredients: [],

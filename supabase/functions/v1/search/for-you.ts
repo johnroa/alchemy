@@ -8,7 +8,7 @@ import type { JsonValue, RecipePayload } from "../../_shared/types.ts";
 import { runInBackground } from "../lib/background-tasks.ts";
 import {
   buildSuggestedChips,
-  extractUxFilterProfileFromPayload,
+  extractBrowseFacetProfileFromPayload,
 } from "../lib/semantic-facets.ts";
 import {
   asRecord,
@@ -182,7 +182,7 @@ const loadSemanticProfilesForRecipes = async (params: {
   if (uniqueRecipeIds.length === 0) {
     return new Map<
       string,
-      ReturnType<typeof extractUxFilterProfileFromPayload>
+      ReturnType<typeof extractBrowseFacetProfileFromPayload>
     >();
   }
 
@@ -234,7 +234,7 @@ const loadSemanticProfilesForRecipes = async (params: {
     (recipeRows ?? []).map((row) => [
       row.id,
       row.current_version_id
-        ? extractUxFilterProfileFromPayload(
+        ? extractBrowseFacetProfileFromPayload(
           payloadByVersionId.get(row.current_version_id),
         )
         : undefined,
@@ -247,7 +247,7 @@ const itemMatchesChipId = (params: {
   recipeId: string;
   profileByRecipeId: Map<
     string,
-    ReturnType<typeof extractUxFilterProfileFromPayload>
+    ReturnType<typeof extractBrowseFacetProfileFromPayload>
   >;
 }): boolean =>
   params.profileByRecipeId.get(params.recipeId)?.descriptors.some((

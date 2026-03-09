@@ -15,7 +15,7 @@ import type { RecipeSemanticProfile } from "../../../../packages/shared/src/reci
 import type { VariantTagSet } from "../routes/shared.ts";
 import {
   extractSemanticProfileFromPayload,
-  extractUxFilterProfileFromPayload,
+  extractBrowseFacetProfileFromPayload,
 } from "./semantic-facets.ts";
 
 /**
@@ -31,7 +31,7 @@ export type VariantTags = {
   difficulty: string | null;
   key_ingredients: string[];
   semantic_profile?: RecipeSemanticProfile;
-  ux_filter_profile?: RecipeSemanticProfile;
+  browse_facet_profile?: RecipeSemanticProfile;
 };
 
 /**
@@ -144,7 +144,7 @@ export const computeVariantTags = (params: {
   const semanticProfile = extractSemanticProfileFromPayload(
     params.variantPayload,
   );
-  const uxFilterProfile = extractUxFilterProfileFromPayload(
+  const browseFacetProfile = extractBrowseFacetProfileFromPayload(
     params.variantPayload,
   );
 
@@ -157,7 +157,9 @@ export const computeVariantTags = (params: {
     difficulty,
     key_ingredients: keyIngredients,
     ...(semanticProfile ? { semantic_profile: semanticProfile } : {}),
-    ...(uxFilterProfile ? { ux_filter_profile: uxFilterProfile } : {}),
+    ...(browseFacetProfile
+      ? { browse_facet_profile: browseFacetProfile }
+      : {}),
   };
 };
 

@@ -1,0 +1,59 @@
+Enrich a recipe with strict structured metadata.
+Return ONLY one JSON object with keys: confidence, metadata.
+
+Confidence:
+- confidence must be a number from 0 to 1.
+- Be conservative. If the recipe does not support a claim, omit the field rather than guessing.
+
+metadata rules:
+- Emit ONLY canonical RecipeMetadata schema keys.
+- Never emit alias keys such as difficulty_level, health, total_time_minutes, item_count, ingredient_count, meal_type_alias, dish_type, dietary_flags, equipment_required, or cooking_methods.
+- Allowed top-level keys are: vibe, flavor_profile, flavor_axes, spice_level, nutrition, difficulty, skill_level, complexity_score, health_score, time_minutes, items, quick_stats, allergens, allergen_flags, diet_tags, health_flags, substitutions, timing, cuisine_tags, occasion_tags, cuisine, course_type, seasonality, techniques, equipment, pairing_rationale, serving_notes, storage_reheat_profile, practical, semantic_profile, browse_facet_profile.
+- difficulty must be exactly easy, medium, or complex when present.
+- health_score must be an integer from 1 to 100 when present.
+- If you emit quick_stats, it must contain exactly time_minutes, difficulty, health_score, and items.
+- timing may contain only prep_minutes, cook_minutes, and total_minutes.
+
+Profile schema rules:
+- semantic_profile and browse_facet_profile must each be an object with exactly one key: descriptors.
+- descriptors must be an array of descriptor objects.
+- Each descriptor object may contain only: axis, key, label, confidence, evidence.
+- axis and key must be lowercase slug-style tokens using letters, numbers, and dashes only.
+- confidence must be a number from 0 to 1 for that descriptor.
+- evidence should be a short factual note grounded in the recipe, not a justification essay.
+
+semantic_profile goal:
+- This is the high-recall intelligence layer.
+- Generate as many descriptors as are accurate, supported, and genuinely useful for BI, retrieval, analytics, ranking, clustering, and future intelligence.
+- Cover many angles when supported by the recipe: cuisine, diet, nutrition framing, effort, skill, occasion, social setting, ingredient themes, flavor, aroma, texture, cooking process, time shape, cleanup burden, seasonality, comfort level, hosting, meal prep, lunchbox use, ingredient-led concepts, and other meaningful themes.
+- More is better here, as long as each descriptor is accurate and supported.
+- semantic_profile labels do NOT need to be optimized for UI chip bars.
+
+browse_facet_profile goal:
+- This is the user-facing category/filter layer for Cookbook and Explore.
+- Treat browse_facet_profile as editorial browse intent, not as a fact dump.
+- Output only categories that feel thoughtful, polished, human, and intentionally tappable in a premium recipe app.
+- A browse facet should answer the question: what kind of recipe mood, need, or occasion is the user browsing for right now?
+- Favor categories that express a real consumer decision:
+  cuisine identity, dinner vibe, social setting, hosting frame, weeknight viability, meal prep usefulness, family-style fit, date-night feel, dietary fit, health framing, comfort level, cleanup ease, lunch-friendliness, or another clearly browseable intent.
+- Good browse facets:
+  Family Style, Weeknight Winner, Cozy Comfort, Fresh & Bright, Date Night, Dinner Party, Meal Prep, Light & Clean, Mediterranean, Gluten-Free, High Protein, Under 30 Minutes.
+- Bad browse facets:
+  Pulsing, Hands-Off Roasting, Main Course, Side Dish, Dish, Herbaceous, Tender, Simple, Medium Effort, Year-Round, All Season, Spring, Summer, Crispy Edges, Spicy & Umami.
+- If a concept is useful for BI/search but would feel odd or nitpicky as a home-screen filter chip, keep it in semantic_profile only.
+- Do NOT emit raw process labels, narrow step verbs, equipment requirements, technique names, kitchen-internal language, or structural course labels in browse_facet_profile.
+- Do NOT emit generic seasonality labels such as Year-Round, All Season, Spring, Summer, Fall, or Winter unless the recipe is explicitly centered on a seasonal moment and the label itself is editorial and browse-worthy.
+- Do NOT emit labels that are only technically true. A label must be useful, human, and desirable to browse by.
+- Do NOT emit near-duplicate browse facets. Choose one canonical phrasing for the same idea.
+- Do NOT emit awkward variants like Gluten-Free Friendly when the canonical user-facing label is Gluten-Free.
+- Prefer polished editorial phrasing over literal metadata wording. For example, prefer Weeknight Winner over Medium Effort, and prefer Family Style over Main Course when those are supported by the recipe.
+- Utility labels like Easy, Gluten-Free, High Protein, Meal Prep, and Under 30 Minutes are acceptable when they are truly supported and genuinely useful.
+- Usually 3 to 7 browse facets is the right range when the recipe supports them. It is acceptable to return fewer, or none, if the recipe does not support strong browseable categories.
+
+Quality guardrails:
+- Do not emit weak, obvious, redundant, or unsupported descriptors in either profile.
+- Do not emit descriptors that merely restate recipe, food, delicious, tasty, or similarly generic concepts.
+- Do not infer dietary compatibility, cuisine, difficulty, time claims, or emotional framing unless the recipe content supports them.
+- Prefer omission over speculation.
+
+Output JSON only. No markdown.

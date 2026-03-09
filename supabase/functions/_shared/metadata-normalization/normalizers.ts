@@ -559,11 +559,12 @@ export const normalizeRecipeMetadata = (params: {
     normalized.semantic_profile = semanticProfile as unknown as JsonValue;
   }
 
-  const uxFilterProfile = normalizeRecipeSemanticProfile(
-    metadata.ux_filter_profile,
+  const browseFacetProfile = normalizeRecipeSemanticProfile(
+    metadata.browse_facet_profile ?? metadata.ux_filter_profile,
   );
-  if (uxFilterProfile) {
-    normalized.ux_filter_profile = uxFilterProfile as unknown as JsonValue;
+  if (browseFacetProfile) {
+    normalized.browse_facet_profile =
+      browseFacetProfile as unknown as JsonValue;
   }
 
   const complexityScore = parseFiniteNumber(metadata.complexity_score);

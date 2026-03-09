@@ -66,7 +66,7 @@ import {
   buildMatchedChipIds,
   buildSuggestedChips,
   extractSemanticProfileFromPayload,
-  extractUxFilterProfileFromPayload,
+  extractBrowseFacetProfileFromPayload,
   mergeSemanticProfiles,
 } from "./semantic-facets.ts";
 import { flattenVariantTags } from "./variant-tags.ts";
@@ -1121,13 +1121,18 @@ const buildCookbookData = async (
       ? (variant.stale_status as VariantStatus)
       : "none";
 
-    const canonicalSemanticProfile = extractUxFilterProfileFromPayload(payload);
-    const variantSemanticProfile = extractUxFilterProfileFromPayload(
+    const canonicalSemanticProfile = extractBrowseFacetProfileFromPayload(
+      payload,
+    );
+    const variantSemanticProfile = extractBrowseFacetProfileFromPayload(
       variantPayload,
     ) ?? normalizeRecipeSemanticProfile(
       (
         variant?.variant_tags as Record<string, JsonValue> | undefined
-      )?.ux_filter_profile,
+      )?.browse_facet_profile ??
+        (
+          variant?.variant_tags as Record<string, JsonValue> | undefined
+        )?.ux_filter_profile,
     );
     const effectiveSemanticProfile = mergeSemanticProfiles(
       canonicalSemanticProfile,
