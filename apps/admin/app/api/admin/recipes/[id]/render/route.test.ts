@@ -156,7 +156,7 @@ describe("admin recipe render route", () => {
 
     const response = await GET(
       new Request("https://admin.cookwithalchemy.com/api/admin/recipes/recipe-1/render?units=metric&group_by=category&inline_measurements=false&temperature_unit=celsius"),
-      { params: Promise.resolve({ recipeId: "recipe-1" }) },
+      { params: Promise.resolve({ id: "recipe-1" }) },
     );
 
     expect(response.status).toBe(200);
@@ -196,7 +196,7 @@ describe("admin recipe render route", () => {
 
     const response = await GET(
       new Request("https://admin.cookwithalchemy.com/api/admin/recipes/recipe-1/render?variant_id=variant-1"),
-      { params: Promise.resolve({ recipeId: "recipe-1" }) },
+      { params: Promise.resolve({ id: "recipe-1" }) },
     );
 
     expect(response.status).toBe(200);

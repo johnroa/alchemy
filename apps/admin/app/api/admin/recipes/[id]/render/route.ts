@@ -199,11 +199,11 @@ const buildVariantSource = (params: {
 
 export async function GET(
   request: Request,
-  context: { params: Promise<{ recipeId: string }> },
+  context: { params: Promise<{ id: string }> },
 ): Promise<NextResponse> {
   await requireCloudflareAccess();
 
-  const { recipeId } = await context.params;
+  const { id: recipeId } = await context.params;
   if (!recipeId?.trim()) {
     return NextResponse.json({ error: "recipeId is required" }, { status: 400 });
   }
