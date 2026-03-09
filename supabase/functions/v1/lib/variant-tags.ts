@@ -13,7 +13,10 @@
 import type { RecipePayload } from "../../_shared/types.ts";
 import type { RecipeSemanticProfile } from "../../../../packages/shared/src/recipe-semantics.ts";
 import type { VariantTagSet } from "../routes/shared.ts";
-import { extractSemanticProfileFromPayload } from "./semantic-facets.ts";
+import {
+  extractSemanticProfileFromPayload,
+  extractUxFilterProfileFromPayload,
+} from "./semantic-facets.ts";
 
 /**
  * Structured variant tags computed from canonical recipe metadata and
@@ -28,6 +31,7 @@ export type VariantTags = {
   difficulty: string | null;
   key_ingredients: string[];
   semantic_profile?: RecipeSemanticProfile;
+  ux_filter_profile?: RecipeSemanticProfile;
 };
 
 /**
@@ -47,8 +51,12 @@ export const computeVariantTags = (params: {
   variantPayload: RecipePayload;
   tagDiff: { added: string[]; removed: string[] };
 }): VariantTags => {
-  const meta = params.variantPayload.metadata as Record<string, unknown> | undefined;
-  const canonMeta = params.canonicalPayload.metadata as Record<string, unknown> | undefined;
+  const meta = params.variantPayload.metadata as
+    | Record<string, unknown>
+    | undefined;
+  const canonMeta = params.canonicalPayload.metadata as
+    | Record<string, unknown>
+    | undefined;
 
   const toStringArray = (value: unknown): string[] => {
     if (!Array.isArray(value)) return [];
@@ -56,7 +64,9 @@ export const computeVariantTags = (params: {
   };
 
   // Start with canonical tags per category.
-  const cuisine = new Set(toStringArray(canonMeta?.cuisine_tags ?? canonMeta?.cuisine));
+  const cuisine = new Set(
+    toStringArray(canonMeta?.cuisine_tags ?? canonMeta?.cuisine),
+  );
   const dietary = new Set(toStringArray(canonMeta?.diet_tags));
   const technique = new Set(toStringArray(canonMeta?.techniques));
   const occasion = new Set(toStringArray(canonMeta?.occasion_tags));
@@ -86,7 +96,9 @@ export const computeVariantTags = (params: {
   // Apply additions. Categorize by checking variant metadata fields,
   // falling back to dietary (most additions from personalization are
   // dietary tags like "gluten-free", "dairy-free", etc.).
-  const variantCuisine = new Set(toStringArray(meta?.cuisine_tags ?? meta?.cuisine));
+  const variantCuisine = new Set(
+    toStringArray(meta?.cuisine_tags ?? meta?.cuisine),
+  );
   const variantDietary = new Set(toStringArray(meta?.diet_tags));
   const variantTechnique = new Set(toStringArray(meta?.techniques));
   const variantOccasion = new Set(toStringArray(meta?.occasion_tags));
@@ -132,6 +144,9 @@ export const computeVariantTags = (params: {
   const semanticProfile = extractSemanticProfileFromPayload(
     params.variantPayload,
   );
+  const uxFilterProfile = extractUxFilterProfileFromPayload(
+    params.variantPayload,
+  );
 
   return {
     cuisine: [...cuisine],
@@ -142,6 +157,7 @@ export const computeVariantTags = (params: {
     difficulty,
     key_ingredients: keyIngredients,
     ...(semanticProfile ? { semantic_profile: semanticProfile } : {}),
+    ...(uxFilterProfile ? { ux_filter_profile: uxFilterProfile } : {}),
   };
 };
 
@@ -156,7 +172,9 @@ export const flattenVariantTags = (
   if (!raw || Object.keys(raw).length === 0) return {};
   const toStringArray = (v: unknown): string[] | undefined => {
     if (!Array.isArray(v)) return undefined;
-    const filtered = v.filter((item): item is string => typeof item === "string");
+    const filtered = v.filter((item): item is string =>
+      typeof item === "string"
+    );
     return filtered.length > 0 ? filtered : undefined;
   };
   return {
@@ -164,7 +182,9 @@ export const flattenVariantTags = (
     dietary: toStringArray(raw.dietary),
     technique: toStringArray(raw.technique),
     occasion: toStringArray(raw.occasion),
-    time_minutes: typeof raw.time_minutes === "number" ? raw.time_minutes : null,
+    time_minutes: typeof raw.time_minutes === "number"
+      ? raw.time_minutes
+      : null,
     difficulty: typeof raw.difficulty === "string" ? raw.difficulty : null,
     key_ingredients: toStringArray(raw.key_ingredients),
   };

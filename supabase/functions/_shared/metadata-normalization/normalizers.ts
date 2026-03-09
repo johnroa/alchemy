@@ -7,10 +7,10 @@ import type {
   RecipeQuickStats,
 } from "./types.ts";
 import {
-  RECIPE_STRING_FIELDS,
-  RECIPE_STRING_ARRAY_FIELDS,
-  NUTRITION_FIELDS,
   FLAVOR_AXES_FIELDS,
+  NUTRITION_FIELDS,
+  RECIPE_STRING_ARRAY_FIELDS,
+  RECIPE_STRING_FIELDS,
 } from "./types.ts";
 
 const asRecord = (value: unknown): Record<string, JsonValue> | null => {
@@ -209,7 +209,9 @@ const sanitizeStorageReheatProfile = (
   };
 };
 
-const sanitizePractical = (value: unknown): Record<string, JsonValue> | undefined => {
+const sanitizePractical = (
+  value: unknown,
+): Record<string, JsonValue> | undefined => {
   const record = asRecord(value);
   if (!record) {
     return undefined;
@@ -415,7 +417,9 @@ const applyLegacyAliases = (
   return next;
 };
 
-const resolveHealthScore = (metadata: Record<string, JsonValue>): number | null => {
+const resolveHealthScore = (
+  metadata: Record<string, JsonValue>,
+): number | null => {
   const quickStats = asRecord(metadata.quick_stats);
   const candidate = firstPresentValue(
     quickStats?.health_score,
@@ -522,7 +526,10 @@ export const normalizeRecipeMetadata = (params: {
     normalized.nutrition = nutrition;
   }
 
-  const flavorAxes = sanitizeNumericRecord(metadata.flavor_axes, FLAVOR_AXES_FIELDS);
+  const flavorAxes = sanitizeNumericRecord(
+    metadata.flavor_axes,
+    FLAVOR_AXES_FIELDS,
+  );
   if (flavorAxes) {
     normalized.flavor_axes = flavorAxes;
   }
@@ -550,6 +557,13 @@ export const normalizeRecipeMetadata = (params: {
   );
   if (semanticProfile) {
     normalized.semantic_profile = semanticProfile as unknown as JsonValue;
+  }
+
+  const uxFilterProfile = normalizeRecipeSemanticProfile(
+    metadata.ux_filter_profile,
+  );
+  if (uxFilterProfile) {
+    normalized.ux_filter_profile = uxFilterProfile as unknown as JsonValue;
   }
 
   const complexityScore = parseFiniteNumber(metadata.complexity_score);

@@ -127,10 +127,33 @@ export type RecipeMetadataV2 = {
     meal_prep_friendly?: boolean;
   };
   semantic_profile?: RecipeSemanticProfile;
+  ux_filter_profile?: RecipeSemanticProfile;
   [key: string]: JsonValue | undefined;
 };
 
 export type RecipeMetadata = RecipeMetadataV2;
+
+export type TemperatureUnitPreference = "fahrenheit" | "celsius";
+export type InstructionVerbosity = "concise" | "balanced" | "detailed";
+
+export type InstructionTextPart = {
+  type: "text";
+  value: string;
+};
+
+export type InstructionTemperaturePart = {
+  type: "temperature";
+  value: number;
+  unit: TemperatureUnitPreference;
+};
+
+export type InstructionPart = InstructionTextPart | InstructionTemperaturePart;
+
+export type InstructionViews = {
+  concise?: InstructionPart[];
+  balanced?: InstructionPart[];
+  detailed?: InstructionPart[];
+};
 
 export type PreferenceConflictStatus =
   | "pending_confirmation"
@@ -171,12 +194,28 @@ export type RecipePayload = {
   steps: Array<{
     index: number;
     instruction: string;
+    instruction_views?: InstructionViews;
     timer_seconds?: number;
     notes?: string;
     inline_measurements?: Array<{
       ingredient: string;
       amount: number;
       unit: string;
+    }>;
+  }>;
+  ingredient_groups?: Array<{
+    key: string;
+    label: string;
+    ingredients: Array<{
+      name: string;
+      amount: number;
+      unit: string;
+      display_amount?: string;
+      preparation?: string;
+      category?: string;
+      component?: string | null;
+      ingredient_id?: string | null;
+      normalized_status?: "normalized" | "needs_retry";
     }>;
   }>;
   notes?: string;
@@ -206,7 +245,12 @@ export type ChatAssistantEnvelope = {
 
 export type ChatLoopState = "ideation" | "candidate_presented" | "iterating";
 
-export type CandidateRecipeRole = "main" | "side" | "appetizer" | "dessert" | "drink";
+export type CandidateRecipeRole =
+  | "main"
+  | "side"
+  | "appetizer"
+  | "dessert"
+  | "drink";
 
 export type CandidateRecipeImageStatus =
   | "pending"

@@ -1,11 +1,14 @@
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2";
 import { ApiError } from "../../_shared/errors.ts";
-import { llmGateway, type ModelOverrideMap } from "../../_shared/llm-gateway.ts";
+import {
+  llmGateway,
+  type ModelOverrideMap,
+} from "../../_shared/llm-gateway.ts";
 import type { JsonValue, RecipePayload } from "../../_shared/types.ts";
 import { runInBackground } from "../lib/background-tasks.ts";
 import {
   buildSuggestedChips,
-  extractSemanticProfileFromPayload,
+  extractUxFilterProfileFromPayload,
 } from "../lib/semantic-facets.ts";
 import {
   asRecord,
@@ -119,7 +122,9 @@ const parseTimestamp = (value: string | null | undefined): number | null => {
   return Number.isFinite(parsed) ? parsed : null;
 };
 
-const maxIsoTimestamp = (timestamps: Array<string | null | undefined>): string | null => {
+const maxIsoTimestamp = (
+  timestamps: Array<string | null | undefined>,
+): string | null => {
   let current: number | null = null;
   for (const timestamp of timestamps) {
     const parsed = parseTimestamp(timestamp);
@@ -131,7 +136,9 @@ const maxIsoTimestamp = (timestamps: Array<string | null | undefined>): string |
   return current == null ? null : new Date(current).toISOString();
 };
 
-const parseVectorString = (value: string | null | undefined): number[] | null => {
+const parseVectorString = (
+  value: string | null | undefined,
+): number[] | null => {
   if (!value) return null;
   const trimmed = value.trim();
   if (!trimmed.startsWith("[") || !trimmed.endsWith("]")) {
@@ -173,7 +180,10 @@ const loadSemanticProfilesForRecipes = async (params: {
   );
 
   if (uniqueRecipeIds.length === 0) {
-    return new Map<string, ReturnType<typeof extractSemanticProfileFromPayload>>();
+    return new Map<
+      string,
+      ReturnType<typeof extractUxFilterProfileFromPayload>
+    >();
   }
 
   const { data: recipeRows, error: recipesError } = await params.serviceClient
@@ -200,7 +210,8 @@ const loadSemanticProfilesForRecipes = async (params: {
 
   let payloadByVersionId = new Map<string, RecipePayload>();
   if (currentVersionIds.length > 0) {
-    const { data: versionRows, error: versionError } = await params.serviceClient
+    const { data: versionRows, error: versionError } = await params
+      .serviceClient
       .from("recipe_versions")
       .select("id,payload")
       .in("id", currentVersionIds);
@@ -223,7 +234,9 @@ const loadSemanticProfilesForRecipes = async (params: {
     (recipeRows ?? []).map((row) => [
       row.id,
       row.current_version_id
-        ? extractSemanticProfileFromPayload(payloadByVersionId.get(row.current_version_id))
+        ? extractUxFilterProfileFromPayload(
+          payloadByVersionId.get(row.current_version_id),
+        )
         : undefined,
     ]),
   );
@@ -232,11 +245,14 @@ const loadSemanticProfilesForRecipes = async (params: {
 const itemMatchesChipId = (params: {
   chipId: string;
   recipeId: string;
-  profileByRecipeId: Map<string, ReturnType<typeof extractSemanticProfileFromPayload>>;
+  profileByRecipeId: Map<
+    string,
+    ReturnType<typeof extractUxFilterProfileFromPayload>
+  >;
 }): boolean =>
-  params.profileByRecipeId.get(params.recipeId)?.descriptors.some((descriptor) =>
-    descriptor.id === params.chipId
-  ) ?? false;
+  params.profileByRecipeId.get(params.recipeId)?.descriptors.some((
+    descriptor,
+  ) => descriptor.id === params.chipId) ?? false;
 
 export const dedupeCardsByContentSignature = (
   items: RecipeSearchCard[],
@@ -259,7 +275,8 @@ export const dedupeCardsByContentSignature = (
 };
 
 const isFallbackProfileJson = (value: JsonValue | null | undefined): boolean =>
-  normalizeScalarText(asRecord(value)?.generation_mode)?.toLowerCase() === "fallback";
+  normalizeScalarText(asRecord(value)?.generation_mode)?.toLowerCase() ===
+    "fallback";
 
 export const buildPresetAugmentedRetrievalText = (params: {
   baseRetrievalText: string;
@@ -270,7 +287,9 @@ export const buildPresetAugmentedRetrievalText = (params: {
     return params.baseRetrievalText;
   }
 
-  return `${params.baseRetrievalText}. Explore focus: ${derivePresetText(presetText)}.`;
+  return `${params.baseRetrievalText}. Explore focus: ${
+    derivePresetText(presetText)
+  }.`;
 };
 
 const normalizeAlgorithmConfig = (value: JsonValue): AlgorithmConfig => {
@@ -282,26 +301,32 @@ const normalizeAlgorithmConfig = (value: JsonValue): AlgorithmConfig => {
   const freshnessWindowHours = Number(record?.freshness_window_hours);
 
   return {
-    candidatePoolLimit: Number.isFinite(candidatePoolLimit) && candidatePoolLimit > 0
-      ? Math.trunc(candidatePoolLimit)
-      : DEFAULT_CANDIDATE_POOL_LIMIT,
+    candidatePoolLimit:
+      Number.isFinite(candidatePoolLimit) && candidatePoolLimit > 0
+        ? Math.trunc(candidatePoolLimit)
+        : DEFAULT_CANDIDATE_POOL_LIMIT,
     page1RerankLimit: Number.isFinite(page1RerankLimit) && page1RerankLimit > 0
       ? Math.trunc(page1RerankLimit)
       : DEFAULT_RERANK_LIMIT,
     page1Limit: Number.isFinite(page1Limit) && page1Limit > 0
       ? Math.trunc(page1Limit)
       : 10,
-    explorationRatio: Number.isFinite(explorationRatio) && explorationRatio >= 0 && explorationRatio <= 1
-      ? explorationRatio
-      : DEFAULT_EXPLORATION_RATIO,
+    explorationRatio:
+      Number.isFinite(explorationRatio) && explorationRatio >= 0 &&
+        explorationRatio <= 1
+        ? explorationRatio
+        : DEFAULT_EXPLORATION_RATIO,
     suppressSavedOnPage1: record?.suppress_saved_on_page1 === true,
-    freshnessWindowHours: Number.isFinite(freshnessWindowHours) && freshnessWindowHours > 0
-      ? Math.trunc(freshnessWindowHours)
-      : DEFAULT_FRESHNESS_WINDOW_HOURS,
+    freshnessWindowHours:
+      Number.isFinite(freshnessWindowHours) && freshnessWindowHours > 0
+        ? Math.trunc(freshnessWindowHours)
+        : DEFAULT_FRESHNESS_WINDOW_HOURS,
   };
 };
 
-const toRecipeSnippet = (row: RecipeDocumentSummaryRow): Record<string, JsonValue> => ({
+const toRecipeSnippet = (
+  row: RecipeDocumentSummaryRow,
+): Record<string, JsonValue> => ({
   recipe_id: row.recipe_id,
   title: row.title,
   summary: row.summary,
@@ -316,7 +341,10 @@ const toRecipeSnippet = (row: RecipeDocumentSummaryRow): Record<string, JsonValu
   ingredient_count: row.ingredient_count,
 });
 
-const computeProfileState = (events: BehaviorEventRow[], cookbookEntries: CookbookEntryRow[]): ForYouProfileState => {
+const computeProfileState = (
+  events: BehaviorEventRow[],
+  cookbookEntries: CookbookEntryRow[],
+): ForYouProfileState => {
   let score = cookbookEntries.length * 2;
   for (const row of events) {
     switch (row.event_type) {
@@ -345,7 +373,11 @@ const computeProfileState = (events: BehaviorEventRow[], cookbookEntries: Cookbo
   return "cold";
 };
 
-const buildSignalSummary = (events: BehaviorEventRow[], facts: BehaviorFactRow[], cookbookEntries: CookbookEntryRow[]): Record<string, JsonValue> => {
+const buildSignalSummary = (
+  events: BehaviorEventRow[],
+  facts: BehaviorFactRow[],
+  cookbookEntries: CookbookEntryRow[],
+): Record<string, JsonValue> => {
   const eventCounts = new Map<string, number>();
   for (const row of events) {
     if (!row.event_type) continue;
@@ -364,16 +396,21 @@ const buildSignalSummary = (events: BehaviorEventRow[], facts: BehaviorFactRow[]
   };
 };
 
-const buildPositiveRecipeIds = (events: BehaviorEventRow[], cookbookEntries: CookbookEntryRow[]): string[] => {
+const buildPositiveRecipeIds = (
+  events: BehaviorEventRow[],
+  cookbookEntries: CookbookEntryRow[],
+): string[] => {
   const counts = new Map<string, number>();
 
   for (const row of events) {
     if (!row.entity_id) continue;
     const increment = row.event_type === "recipe_cooked_inferred"
       ? 4
-      : row.event_type === "recipe_saved" || row.event_type === "explore_saved_recipe"
+      : row.event_type === "recipe_saved" ||
+          row.event_type === "explore_saved_recipe"
       ? 3
-      : row.event_type === "explore_opened_recipe" || row.event_type === "cookbook_recipe_opened"
+      : row.event_type === "explore_opened_recipe" ||
+          row.event_type === "cookbook_recipe_opened"
       ? 1
       : row.event_type === "ingredient_substitution_applied"
       ? 2
@@ -383,7 +420,10 @@ const buildPositiveRecipeIds = (events: BehaviorEventRow[], cookbookEntries: Coo
   }
 
   for (const row of cookbookEntries) {
-    counts.set(row.canonical_recipe_id, (counts.get(row.canonical_recipe_id) ?? 0) + 3);
+    counts.set(
+      row.canonical_recipe_id,
+      (counts.get(row.canonical_recipe_id) ?? 0) + 3,
+    );
   }
 
   return [...counts.entries()]
@@ -404,7 +444,10 @@ const extractRecentExposureRecipeIds = (
     if (occurredAtMs == null || occurredAtMs < cutoffMs || !row.entity_id) {
       continue;
     }
-    if (row.event_type === "explore_impression" || row.event_type === "explore_opened_recipe") {
+    if (
+      row.event_type === "explore_impression" ||
+      row.event_type === "explore_opened_recipe"
+    ) {
       result.add(row.entity_id);
     }
   }
@@ -424,30 +467,51 @@ const buildFallbackRetrievalText = (params: {
   const memorySnapshot = params.memorySnapshot;
 
   const cuisines = normalizeStringList(preferences["cuisines"]);
-  const dietaryRestrictions = normalizeStringList(preferences["dietary_restrictions"]);
-  const dietaryPreferences = normalizeStringList(preferences["dietary_preferences"]);
+  const dietaryRestrictions = normalizeStringList(
+    preferences["dietary_restrictions"],
+  );
+  const dietaryPreferences = normalizeStringList(
+    preferences["dietary_preferences"],
+  );
   const aversions = normalizeStringList(preferences["aversions"]);
   const equipment = normalizeStringList(preferences["equipment"]);
 
-  if (cuisines.length > 0) parts.push(`Preferred cuisines: ${cuisines.join(", ")}`);
-  if (dietaryRestrictions.length > 0) parts.push(`Hard dietary restrictions: ${dietaryRestrictions.join(", ")}`);
-  if (dietaryPreferences.length > 0) parts.push(`Dietary preferences: ${dietaryPreferences.join(", ")}`);
+  if (cuisines.length > 0) {
+    parts.push(`Preferred cuisines: ${cuisines.join(", ")}`);
+  }
+  if (dietaryRestrictions.length > 0) {
+    parts.push(`Hard dietary restrictions: ${dietaryRestrictions.join(", ")}`);
+  }
+  if (dietaryPreferences.length > 0) {
+    parts.push(`Dietary preferences: ${dietaryPreferences.join(", ")}`);
+  }
   if (aversions.length > 0) parts.push(`Avoid: ${aversions.join(", ")}`);
-  if (equipment.length > 0) parts.push(`Available equipment: ${equipment.join(", ")}`);
-  if (typeof preferences["free_form"] === "string" && preferences["free_form"].trim().length > 0) {
+  if (equipment.length > 0) {
+    parts.push(`Available equipment: ${equipment.join(", ")}`);
+  }
+  if (
+    typeof preferences["free_form"] === "string" &&
+    preferences["free_form"].trim().length > 0
+  ) {
     parts.push(`Preferences note: ${preferences["free_form"].trim()}`);
   }
   if (Object.keys(memorySnapshot).length > 0) {
     parts.push(`Memory snapshot: ${JSON.stringify(memorySnapshot)}`);
   }
-  if (Array.isArray(params.activeMemories) && params.activeMemories.length > 0) {
-    parts.push(`Active memories: ${JSON.stringify(params.activeMemories.slice(0, 6))}`);
+  if (
+    Array.isArray(params.activeMemories) && params.activeMemories.length > 0
+  ) {
+    parts.push(
+      `Active memories: ${JSON.stringify(params.activeMemories.slice(0, 6))}`,
+    );
   }
   if (params.recipeSnippets.length > 0) {
     parts.push(
       `Positive recipe history: ${
         params.recipeSnippets
-          .map((recipe) => normalizeScalarText(recipe["title"]) ?? "Unknown recipe")
+          .map((recipe) =>
+            normalizeScalarText(recipe["title"]) ?? "Unknown recipe"
+          )
           .join(", ")
       }`,
     );
@@ -457,7 +521,9 @@ const buildFallbackRetrievalText = (params: {
       `Recent semantic facts: ${
         params.facts
           .slice(0, 8)
-          .map((fact) => `${fact.fact_type ?? "fact"}=${JSON.stringify(fact.fact_value)}`)
+          .map((fact) =>
+            `${fact.fact_type ?? "fact"}=${JSON.stringify(fact.fact_value)}`
+          )
           .join("; ")
       }`,
     );
@@ -629,7 +695,9 @@ const loadBehaviorSignals = async (
 ): Promise<BehaviorEventRow[]> => {
   const { data, error } = await serviceClient
     .from("behavior_events")
-    .select("event_type,occurred_at,entity_id,session_id,payload,algorithm_version")
+    .select(
+      "event_type,occurred_at,entity_id,session_id,payload,algorithm_version",
+    )
     .eq("user_id", userId)
     .in("event_type", [
       "explore_impression",
@@ -733,7 +801,9 @@ const collectRecipeSignals = async (params: {
     loadCookbookEntries(params.serviceClient, params.userId),
   ]);
 
-  const savedRecipeIds = new Set(cookbookEntries.map((row) => row.canonical_recipe_id));
+  const savedRecipeIds = new Set(
+    cookbookEntries.map((row) => row.canonical_recipe_id),
+  );
   const recentExposureRecipeIds = extractRecentExposureRecipeIds(
     events,
     params.freshnessWindowHours,
@@ -768,14 +838,20 @@ const shouldRebuildProfile = (params: {
   if (!params.profile.retrieval_text.trim()) return true;
   if (isFallbackProfileJson(params.profile.profile_json)) return true;
 
-  const profileWatermark = parseTimestamp(params.profile.source_event_watermark);
+  const profileWatermark = parseTimestamp(
+    params.profile.source_event_watermark,
+  );
   const sourceWatermark = parseTimestamp(params.sourceEventWatermark);
-  if (sourceWatermark != null && (profileWatermark == null || sourceWatermark > profileWatermark)) {
+  if (
+    sourceWatermark != null &&
+    (profileWatermark == null || sourceWatermark > profileWatermark)
+  ) {
     return true;
   }
 
   const lastBuiltAt = parseTimestamp(params.profile.last_built_at);
-  return lastBuiltAt == null || (Date.now() - lastBuiltAt) > 12 * 60 * 60 * 1000;
+  return lastBuiltAt == null ||
+    (Date.now() - lastBuiltAt) > 12 * 60 * 60 * 1000;
 };
 
 const upsertUserTasteProfile = async (
@@ -834,7 +910,9 @@ const buildMaterializedProfileFromModel = async (params: {
         memory_snapshot: params.memorySnapshot,
         active_memories: params.activeMemories,
         signal_summary: params.signals.signalSummary,
-        recent_positive_recipes: params.positiveRecipeSummaries.map(toRecipeSnippet),
+        recent_positive_recipes: params.positiveRecipeSummaries.map(
+          toRecipeSnippet,
+        ),
         recent_events: params.signals.events.slice(0, 60).map((row) => ({
           event_type: row.event_type,
           occurred_at: row.occurred_at,
@@ -859,8 +937,14 @@ const buildMaterializedProfileFromModel = async (params: {
     computedSignalSummary: params.signals.signalSummary,
   });
   const profileJson = fallbackPath
-    ? { ...normalizedProfile.profileJson, generation_mode: "fallback" as JsonValue }
-    : { ...normalizedProfile.profileJson, generation_mode: "model" as JsonValue };
+    ? {
+      ...normalizedProfile.profileJson,
+      generation_mode: "fallback" as JsonValue,
+    }
+    : {
+      ...normalizedProfile.profileJson,
+      generation_mode: "model" as JsonValue,
+    };
 
   const embedding = await llmGateway.embedRecipeSearchQuery({
     client: params.serviceClient,
@@ -953,7 +1037,10 @@ const ensureUserTasteProfile = async (params: {
   activeMemories: JsonValue;
   modelOverrides?: ModelOverrideMap;
 }): Promise<TasteProfileMaterialized> => {
-  const existingProfile = await loadUserTasteProfile(params.serviceClient, params.userId);
+  const existingProfile = await loadUserTasteProfile(
+    params.serviceClient,
+    params.userId,
+  );
   const positiveRecipeSummaries = await loadRecipeSummaries(
     params.serviceClient,
     params.signals.positiveRecipeIds,
@@ -1014,7 +1101,11 @@ const ensureUserTasteProfile = async (params: {
     fallbackRetrievalText,
     modelOverrides: params.modelOverrides,
   });
-  await upsertUserTasteProfile(params.serviceClient, params.userId, fallbackProfile);
+  await upsertUserTasteProfile(
+    params.serviceClient,
+    params.userId,
+    fallbackProfile,
+  );
   scheduleUserTasteProfileRefresh({
     serviceClient: params.serviceClient,
     userId: params.userId,
@@ -1031,7 +1122,9 @@ const ensureUserTasteProfile = async (params: {
   return fallbackProfile;
 };
 
-const normalizeRationaleTagsFromSession = (value: JsonValue): Record<string, string[]> => {
+const normalizeRationaleTagsFromSession = (
+  value: JsonValue,
+): Record<string, string[]> => {
   const record = asRecord(value);
   if (!record) return {};
   const result: Record<string, string[]> = {};
@@ -1054,7 +1147,10 @@ export const attemptHotPathRerank = async (params: {
 > => {
   let timeoutId: number | null = null;
   const timeoutPromise = new Promise<{ kind: "timeout" }>((resolve) => {
-    timeoutId = setTimeout(() => resolve({ kind: "timeout" }), params.timeoutMs);
+    timeoutId = setTimeout(
+      () => resolve({ kind: "timeout" }),
+      params.timeoutMs,
+    );
   });
 
   const task = params.rerankTask
@@ -1086,10 +1182,18 @@ export const getExploreForYouFeed = async (params: {
   const limit = clampLimit(params.limit);
   const decodedCursor = decodeSearchCursor(params.cursor);
   if (params.cursor && !decodedCursor) {
-    throw new ApiError(400, "recipe_search_cursor_invalid", "Cursor is invalid");
+    throw new ApiError(
+      400,
+      "recipe_search_cursor_invalid",
+      "Cursor is invalid",
+    );
   }
   if (decodedCursor?.kind === "all") {
-    throw new ApiError(400, "recipe_search_cursor_invalid", "Cursor is invalid");
+    throw new ApiError(
+      400,
+      "recipe_search_cursor_invalid",
+      "Cursor is invalid",
+    );
   }
 
   const normalizedChipId = normalizeScalarText(params.chipId);
@@ -1137,7 +1241,9 @@ export const getExploreForYouFeed = async (params: {
       limit,
       noMatchContext: session.applied_context,
     });
-    const appliedContext = session.applied_context === "preset" ? "preset" : "for_you";
+    const appliedContext = session.applied_context === "preset"
+      ? "preset"
+      : "for_you";
 
     return {
       feed_id: session.id,
@@ -1163,13 +1269,22 @@ export const getExploreForYouFeed = async (params: {
       userId: params.userId,
       searchId: decodedCursor.search_id,
     });
-    if (session.applied_context !== "for_you" && session.applied_context !== "preset") {
-      throw new ApiError(400, "recipe_search_cursor_invalid", "Cursor is invalid");
+    if (
+      session.applied_context !== "for_you" &&
+      session.applied_context !== "preset"
+    ) {
+      throw new ApiError(
+        400,
+        "recipe_search_cursor_invalid",
+        "Cursor is invalid",
+      );
     }
     return await buildResponseFromSession(session, decodedCursor.offset);
   }
 
-  const algorithm = await loadActiveExploreAlgorithmVersion(params.serviceClient);
+  const algorithm = await loadActiveExploreAlgorithmVersion(
+    params.serviceClient,
+  );
   const algorithmConfig = normalizeAlgorithmConfig(algorithm.config);
   const signals = await collectRecipeSignals({
     serviceClient: params.serviceClient,
@@ -1232,15 +1347,17 @@ export const getExploreForYouFeed = async (params: {
     query_style: "mixed",
   };
 
-  const hybridItems = dedupeCardsByContentSignature(await fetchHybridCandidates({
-    serviceClient: params.serviceClient,
-    surface: "explore",
-    snapshotCutoffIndexedAt: new Date().toISOString(),
-    intent: retrievalIntent,
-    embeddingVector: retrievalEmbedding,
-    safetyExclusions: params.safetyExclusions,
-    limit: algorithmConfig.candidatePoolLimit,
-  }));
+  const hybridItems = dedupeCardsByContentSignature(
+    await fetchHybridCandidates({
+      serviceClient: params.serviceClient,
+      surface: "explore",
+      snapshotCutoffIndexedAt: new Date().toISOString(),
+      intent: retrievalIntent,
+      embeddingVector: retrievalEmbedding,
+      safetyExclusions: params.safetyExclusions,
+      limit: algorithmConfig.candidatePoolLimit,
+    }),
+  );
 
   let rerankUsed = false;
   let fallbackPath = tasteProfile.fallbackPath;
@@ -1248,7 +1365,10 @@ export const getExploreForYouFeed = async (params: {
   let orderedItems = hybridItems;
 
   if (hybridItems.length > 1) {
-    const rerankCandidates = hybridItems.slice(0, algorithmConfig.page1RerankLimit);
+    const rerankCandidates = hybridItems.slice(
+      0,
+      algorithmConfig.page1RerankLimit,
+    );
     const rerankTask = llmGateway.rerankExploreForYou({
       client: params.serviceClient,
       userId: params.userId,
@@ -1375,7 +1495,8 @@ export const getExploreForYouFeed = async (params: {
       ? {
         code: "for_you_feed_empty",
         message: "Alchemy does not have enough matching public recipes yet.",
-        suggested_action: "Try another Explore filter or generate something new.",
+        suggested_action:
+          "Try another Explore filter or generate something new.",
       }
       : null,
     internal: {

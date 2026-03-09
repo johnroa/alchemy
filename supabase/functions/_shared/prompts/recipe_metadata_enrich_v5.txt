@@ -1,0 +1,50 @@
+Enrich a recipe with strict structured metadata.
+Return ONLY one JSON object with keys: confidence, metadata.
+
+Confidence:
+- confidence must be a number from 0 to 1.
+- Be conservative. If the recipe does not support a claim, omit the field rather than guessing.
+
+metadata rules:
+- Emit ONLY canonical RecipeMetadata schema keys.
+- Never emit alias keys such as difficulty_level, health, total_time_minutes, item_count, ingredient_count, meal_type_alias, dish_type, dietary_flags, equipment_required, or cooking_methods.
+- Allowed top-level keys are: vibe, flavor_profile, flavor_axes, spice_level, nutrition, difficulty, skill_level, complexity_score, health_score, time_minutes, items, quick_stats, allergens, allergen_flags, diet_tags, health_flags, substitutions, timing, cuisine_tags, occasion_tags, cuisine, course_type, seasonality, techniques, equipment, pairing_rationale, serving_notes, storage_reheat_profile, practical, semantic_profile, ux_filter_profile.
+- difficulty must be exactly easy, medium, or complex when present.
+- health_score must be an integer from 1 to 100 when present.
+- If you emit quick_stats, it must contain exactly time_minutes, difficulty, health_score, and items.
+- timing may contain only prep_minutes, cook_minutes, and total_minutes.
+
+Profile schema rules:
+- semantic_profile and ux_filter_profile must each be an object with exactly one key: descriptors.
+- descriptors must be an array of descriptor objects.
+- Each descriptor object may contain only: axis, key, label, confidence, evidence.
+- axis and key must be lowercase slug-style tokens using letters, numbers, and dashes only.
+- confidence must be a number from 0 to 1 for that descriptor.
+- evidence should be a short factual note grounded in the recipe, not a justification essay.
+
+semantic_profile goal:
+- This is the high-recall intelligence layer.
+- Generate as many descriptors as are accurate, supported, and genuinely useful for BI, retrieval, analytics, ranking, clustering, and future intelligence.
+- Cover many angles when supported by the recipe: cuisine, diet, nutrition framing, effort, skill, occasion, social setting, ingredient themes, flavor, aroma, texture, cooking process, time shape, cleanup burden, seasonality, comfort level, hosting, meal prep, lunchbox use, ingredient-led concepts, and other meaningful themes.
+- More is better here, as long as each descriptor is accurate and supported.
+- semantic_profile labels do NOT need to be optimized for UI chip bars.
+
+ux_filter_profile goal:
+- This is the user-facing category/filter layer for Cookbook and Explore.
+- Generate a smaller, thoughtful, experiential set of categories that feel useful and intentional when shown as filter chips.
+- Each ux_filter_profile label must sound like something a person would intentionally tap in a recipe app.
+- Prefer experiential and decision-making filters such as cuisine identity, vibe, occasion, social setting, health framing, dietary fit, effort, weeknight/date-night/family-style/meal-prep framing, and other human-centered recipe choices.
+- Do NOT emit near-duplicate UX categories. Choose one canonical phrasing for the same idea.
+- Do NOT emit raw process labels, narrow step verbs, equipment requirements, or structural filler like "main", "side", or "dish" in ux_filter_profile.
+- Do NOT emit awkward variants like "Gluten-Free Friendly" when the canonical user-facing label is simply "Gluten-Free".
+- Do NOT emit multiple seasonal synonyms such as both "All Season" and "Year-Round". Pick one canonical phrasing.
+- Favor broad, thoughtful, experiential filters over literal kitchen-internal wording.
+- Fewer is better than filler, but return as many strong UX filters as the recipe genuinely supports.
+
+Quality guardrails:
+- Do not emit weak, obvious, redundant, or unsupported descriptors in either profile.
+- Do not emit descriptors that merely restate "recipe", "food", "delicious", "tasty", or similarly generic concepts.
+- Do not infer dietary compatibility, cuisine, difficulty, or time claims unless the recipe content supports them.
+- Prefer omission over speculation.
+
+Output JSON only. No markdown.

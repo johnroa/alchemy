@@ -230,6 +230,15 @@ export const extractSemanticProfileFromMetadata = (
   return explicitProfile ?? buildFallbackSemanticProfile(metadata);
 };
 
+export const extractUxFilterProfileFromMetadata = (
+  metadata: Record<string, JsonValue> | undefined,
+): RecipeSemanticProfile | undefined => {
+  const explicitProfile = normalizeRecipeSemanticProfile(
+    metadata?.ux_filter_profile,
+  );
+  return explicitProfile ?? extractSemanticProfileFromMetadata(metadata);
+};
+
 export const extractSemanticProfileFromPayload = (
   payload: RecipePayload | undefined,
 ): RecipeSemanticProfile | undefined => {
@@ -239,6 +248,17 @@ export const extractSemanticProfileFromPayload = (
 
   const metadata = canonicalizeRecipePayloadMetadata(payload);
   return extractSemanticProfileFromMetadata(metadata);
+};
+
+export const extractUxFilterProfileFromPayload = (
+  payload: RecipePayload | undefined,
+): RecipeSemanticProfile | undefined => {
+  if (!payload) {
+    return undefined;
+  }
+
+  const metadata = canonicalizeRecipePayloadMetadata(payload);
+  return extractUxFilterProfileFromMetadata(metadata);
 };
 
 export const mergeSemanticProfiles = (

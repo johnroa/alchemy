@@ -2,6 +2,7 @@ import { assert, assertEquals } from "jsr:@std/assert";
 import {
   buildMatchedChipIds,
   buildSuggestedChips,
+  extractUxFilterProfileFromPayload,
   mergeSemanticProfiles,
 } from "./semantic-facets.ts";
 import {
@@ -122,6 +123,50 @@ Deno.test("mergeSemanticProfiles keeps the highest-confidence descriptor for eac
       { id: "social_setting:family_style", confidence: 0.84 },
     ],
   );
+});
+
+Deno.test("extractUxFilterProfileFromPayload prefers ux_filter_profile over semantic_profile", () => {
+  const profile = extractUxFilterProfileFromPayload({
+    title: "Test Recipe",
+    servings: 2,
+    ingredients: [],
+    steps: [],
+    metadata: {
+      semantic_profile: {
+        descriptors: [
+          {
+            id: "technique:pulsing",
+            axis: "technique",
+            key: "pulsing",
+            label: "Pulsing",
+            confidence: 1,
+          },
+        ],
+      },
+      ux_filter_profile: {
+        descriptors: [
+          {
+            id: "occasion:weeknight_dinner",
+            axis: "occasion",
+            key: "weeknight_dinner",
+            label: "Weeknight Dinner",
+            confidence: 0.94,
+          },
+        ],
+      },
+    },
+  });
+
+  assert(profile);
+  assertEquals(profile.descriptors, [
+    {
+      id: "occasion:weeknight_dinner",
+      axis: "occasion",
+      key: "weeknight_dinner",
+      label: "Weeknight Dinner",
+      confidence: 0.94,
+    },
+  ]);
 });
 
 Deno.test("buildSuggestedChips returns broad axis coverage before repeating an axis", () => {

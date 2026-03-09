@@ -22,10 +22,13 @@ import { ApiError } from "../../_shared/errors.ts";
 import type {
   AssistantReply,
   JsonValue,
-  RecipePayload,
   PreferenceConflictContext,
+  RecipePayload,
 } from "../../_shared/types.ts";
-import { llmGateway, type ModelOverrideMap } from "../../_shared/llm-gateway.ts";
+import {
+  llmGateway,
+  type ModelOverrideMap,
+} from "../../_shared/llm-gateway.ts";
 import {
   resolveRecipeImageStatus,
   resolveRecipeImageUrl,
@@ -55,36 +58,37 @@ import type { PreferenceContext } from "./preferences.ts";
 import {
   applyModelPreferenceUpdates,
   buildNaturalLanguagePreferenceContext,
-  normalizePreferencePatchDeterministic,
   normalizePreferencePatch,
+  normalizePreferencePatchDeterministic,
 } from "./preferences.ts";
 import {
   buildMatchedChipIds,
   buildSuggestedChips,
   extractSemanticProfileFromPayload,
+  extractUxFilterProfileFromPayload,
   mergeSemanticProfiles,
 } from "./semantic-facets.ts";
 import { flattenVariantTags } from "./variant-tags.ts";
 import type {
-  ChatMessageView,
-  CandidateRecipeSet,
   CandidateRecipeComponent,
   CandidateRecipeRole,
-  ChatLoopState,
-  ChatSessionContext,
-  ChatLoopResponse,
+  CandidateRecipeSet,
   ChatIntent,
+  ChatLoopResponse,
+  ChatLoopState,
+  ChatMessageView,
+  ChatSessionContext,
   ChatUiHints,
   ContextPack,
   RecipeView,
 } from "./chat-types.ts";
 import {
-  normalizeCandidateRecipeSet,
   deriveLoopState,
-  toJsonValue,
   extractChatContext,
-  wrapRecipeInCandidateSet,
+  normalizeCandidateRecipeSet,
   normalizeCandidateRole,
+  toJsonValue,
+  wrapRecipeInCandidateSet,
 } from "./chat-types.ts";
 
 export const fetchChatMessages = async (
@@ -148,8 +152,8 @@ const looksLikeStructuredAssistantPayload = (text: string): boolean => {
     return false;
   }
   return trimmed.startsWith("{") || trimmed.startsWith("[") ||
-    trimmed.startsWith("```") || trimmed.includes("\"assistant_reply\"") ||
-    trimmed.includes("\"candidate_recipe_set\"");
+    trimmed.startsWith("```") || trimmed.includes('"assistant_reply"') ||
+    trimmed.includes('"candidate_recipe_set"');
 };
 
 const extractAssistantTextFromUnknown = (
@@ -343,8 +347,10 @@ export const parseAssistantChatPayload = (
               typeof raw.preference_conflict === "object" &&
               !Array.isArray(raw.preference_conflict)
             ? (() => {
-              const conflict =
-                raw.preference_conflict as Record<string, unknown>;
+              const conflict = raw.preference_conflict as Record<
+                string,
+                unknown
+              >;
               const status = typeof conflict.status === "string" &&
                   (
                     conflict.status === "pending_confirmation" ||
@@ -442,9 +448,8 @@ const sanitizeAssistantMessageContent = (
   }
 
   const fallback = typeof fallbackReplyText === "string"
-      ? fallbackReplyText.trim()
-      : ""
-  ;
+    ? fallbackReplyText.trim()
+    : "";
   if (fallback.length > 0) {
     const normalized = extractAssistantTextFromUnknown(fallback);
     if (normalized) {
@@ -730,7 +735,9 @@ export const buildChatLoopResponse = (params: {
   };
 };
 
-export const mapCandidateRoleToRelation = (role: CandidateRecipeRole): string => {
+export const mapCandidateRoleToRelation = (
+  role: CandidateRecipeRole,
+): string => {
   switch (role) {
     case "side":
       return "is_side_of";
@@ -854,10 +861,27 @@ const mergeRecipeIntoCandidate = (
  *   cookbook_entries → recipe IDs → recipes + recipe_versions (canonical)
  *   → user_recipe_variants (variant status) → merge into CookbookEntry[]
  */
+/**
+ * Stale context returned alongside the cookbook feed. Tells the client
+ * which constraint-category preference fields triggered the staleness
+ * so the UI can display an actionable banner naming them.
+ */
+export type StaleContext = {
+  changed_fields: string[];
+  stale_recipe_ids: string[];
+  count: number;
+} | null;
+
 const buildCookbookData = async (
   client: SupabaseClient,
   userId: string,
-): Promise<{ items: CookbookEntry[]; suggestedChips: SuggestedChip[] }> => {
+): Promise<
+  {
+    items: CookbookEntry[];
+    suggestedChips: SuggestedChip[];
+    staleContext: StaleContext;
+  }
+> => {
   // Read from cookbook_entries (new table). Falls back to recipe_saves if
   // no cookbook_entries exist yet (pre-migration users).
   const { data: cookbookRows, error: cbError } = await client
@@ -974,7 +998,9 @@ const buildCookbookData = async (
   if (variantRecipeIds.length > 0) {
     const { data: variants } = await client
       .from("user_recipe_variants")
-      .select("canonical_recipe_id, stale_status, last_materialized_at, current_version_id, variant_tags")
+      .select(
+        "canonical_recipe_id, stale_status, last_materialized_at, current_version_id, variant_tags",
+      )
       .eq("user_id", userId)
       .in("canonical_recipe_id", variantRecipeIds);
 
@@ -1063,13 +1089,13 @@ const buildCookbookData = async (
       ? (variant.stale_status as VariantStatus)
       : "none";
 
-    const canonicalSemanticProfile = extractSemanticProfileFromPayload(payload);
-    const variantSemanticProfile = extractSemanticProfileFromPayload(
+    const canonicalSemanticProfile = extractUxFilterProfileFromPayload(payload);
+    const variantSemanticProfile = extractUxFilterProfileFromPayload(
       variantPayload,
     ) ?? normalizeRecipeSemanticProfile(
       (
         variant?.variant_tags as Record<string, JsonValue> | undefined
-      )?.semantic_profile,
+      )?.ux_filter_profile,
     );
     const effectiveSemanticProfile = mergeSemanticProfiles(
       canonicalSemanticProfile,
@@ -1090,7 +1116,9 @@ const buildCookbookData = async (
       category: resolveCookbookPreviewCategory(userCategory, autoCategory),
       visibility: recipe.visibility,
       updated_at: recipe.updated_at,
-      quick_stats: (canonicalMetadata?.quick_stats ?? null) as CookbookEntry["quick_stats"],
+      quick_stats: (canonicalMetadata?.quick_stats ?? null) as CookbookEntry[
+        "quick_stats"
+      ],
       variant_status: variantStatus,
       active_variant_version_id: variant?.current_version_id ?? null,
       personalized_at: variant?.last_materialized_at ?? null,
@@ -1108,22 +1136,65 @@ const buildCookbookData = async (
     })),
   });
 
-  const items = draftItems.map(({ item_id: _itemId, profile, ...item }) => ({
-    ...item,
-    matched_chip_ids: buildMatchedChipIds({
-      profile,
-      chips: suggestedChips,
-    }),
-  }));
+  // Sort by saved_at DESC so the most recently saved recipes appear first
+  // in the cookbook grid. Using recipes.updated_at (the previous order) could
+  // place a brand-new save below older recipes updated by background jobs
+  // (metadata enrichment, image pipeline, variant personalization).
+  const items = draftItems
+    .map(({ item_id: _itemId, profile, ...item }) => ({
+      ...item,
+      matched_chip_ids: buildMatchedChipIds({
+        profile,
+        chips: suggestedChips,
+      }),
+    }))
+    .sort((a, b) => b.saved_at.localeCompare(a.saved_at));
 
-  return { items, suggestedChips };
+  // Build stale context: identify which constraint fields changed so the
+  // client can show an actionable banner naming them. Only computed when
+  // at least one variant is stale or needs_review.
+  const staleRecipeIds = items
+    .filter((i) =>
+      i.variant_status === "stale" || i.variant_status === "needs_review"
+    )
+    .map((i) => i.canonical_recipe_id);
+
+  let staleContext: StaleContext = null;
+  if (staleRecipeIds.length > 0) {
+    // Find which retroactive fields changed since the earliest stale
+    // variant was last materialized. Deduplicate field names.
+    const { data: changeRows } = await client
+      .from("preference_change_log")
+      .select("field")
+      .eq("user_id", userId)
+      .eq("propagation", "retroactive")
+      .order("created_at", { ascending: false })
+      .limit(20);
+
+    const changedFields = [
+      ...new Set((changeRows ?? []).map((r) => r.field as string)),
+    ];
+
+    staleContext = {
+      changed_fields: changedFields,
+      stale_recipe_ids: staleRecipeIds,
+      count: staleRecipeIds.length,
+    };
+  }
+
+  return { items, suggestedChips, staleContext };
 };
 
 export const buildCookbookFeed = async (
   client: SupabaseClient,
   userId: string,
-): Promise<{ items: CookbookEntry[]; suggestedChips: SuggestedChip[] }> =>
-  await buildCookbookData(client, userId);
+): Promise<
+  {
+    items: CookbookEntry[];
+    suggestedChips: SuggestedChip[];
+    staleContext: StaleContext;
+  }
+> => await buildCookbookData(client, userId);
 
 export const buildCookbookItems = async (
   client: SupabaseClient,
@@ -1214,8 +1285,7 @@ const converseChatWithRetry = async (params: {
   try {
     return await callGateway();
   } catch (firstError) {
-    const isRetryable =
-      firstError instanceof ApiError &&
+    const isRetryable = firstError instanceof ApiError &&
       (firstError.status === 422 ||
         firstError.code === "chat_schema_invalid" ||
         firstError.code === "llm_invalid_json" ||
@@ -1283,18 +1353,20 @@ export const orchestrateChatTurn = async (params: {
     params.contextPack.preferences,
     currentThreadOverrides,
   );
-  const promptPreferencesNaturalLanguage = buildNaturalLanguagePreferenceContext(
-    effectivePromptPreferences,
-  );
+  const promptPreferencesNaturalLanguage =
+    buildNaturalLanguagePreferenceContext(
+      effectivePromptPreferences,
+    );
   const isPreferenceEditingWorkflow = params.sessionContext.workflow ===
     "preferences";
-  const scopeHint = params.scopeOverride ?? (isPreferenceEditingWorkflow
-    ? "chat_ideation"
-    : params.existingCandidate
-    ? "chat_iteration"
-    : currentPendingConflict
-    ? "chat_generation"
-    : "chat_ideation");
+  const scopeHint = params.scopeOverride ??
+    (isPreferenceEditingWorkflow
+      ? "chat_ideation"
+      : params.existingCandidate
+      ? "chat_iteration"
+      : currentPendingConflict
+      ? "chat_generation"
+      : "chat_ideation");
   const activeComponent =
     params.existingCandidate?.components.find((component) =>
       component.component_id === params.existingCandidate?.active_component_id
@@ -1413,9 +1485,10 @@ export const orchestrateChatTurn = async (params: {
             response_context: {
               ...(generationResponse.response_context ?? {}),
               mode: generationResponse.response_context?.mode ?? "generation",
-              intent:
-                normalizeChatIntent(generationResponse.response_context?.intent) ??
-                  "in_scope_generate",
+              intent: normalizeChatIntent(
+                generationResponse.response_context?.intent,
+              ) ??
+                "in_scope_generate",
             },
           };
         } catch (error) {
@@ -1429,16 +1502,14 @@ export const orchestrateChatTurn = async (params: {
             response_context: {
               ...(assistantChatResponse.response_context ?? {}),
               mode: "generation",
-              intent:
-                normalizeChatIntent(
-                  assistantChatResponse.response_context?.intent,
-                ) ?? "in_scope_generate",
+              intent: normalizeChatIntent(
+                assistantChatResponse.response_context?.intent,
+              ) ?? "in_scope_generate",
             },
           };
         }
       }
     }
-
   }
 
   if (isOutOfScope) {
@@ -1505,11 +1576,12 @@ export const orchestrateChatTurn = async (params: {
   const nextLoopState: ChatLoopState = nextCandidateSet
     ? "candidate_presented"
     : "ideation";
-  const responsePreferenceConflict =
-    assistantChatResponse.response_context?.preference_conflict;
-  let nextPendingPreferenceConflict = derivePendingPreferenceConflictFromResponse(
-    responsePreferenceConflict,
-  );
+  const responsePreferenceConflict = assistantChatResponse.response_context
+    ?.preference_conflict;
+  let nextPendingPreferenceConflict =
+    derivePendingPreferenceConflictFromResponse(
+      responsePreferenceConflict,
+    );
   if (!nextPendingPreferenceConflict && isPreferenceConflict) {
     nextPendingPreferenceConflict = currentPendingConflict;
   }
