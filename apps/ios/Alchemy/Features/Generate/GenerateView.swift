@@ -317,6 +317,13 @@ struct GenerateView: View {
                 withAnimation(.spring(duration: 0.45, bounce: 0.15)) {
                     isChatPanelExpanded = true
                 }
+                // The expansion moves the TextField from the minimized
+                // layout branch to the expanded branch, destroying the
+                // old instance and its focus binding. Re-apply focus
+                // after the layout settles so the keyboard stays up.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                    inputFocused = true
+                }
             }
         }
         // Keyboard observers — scroll to latest message on show/hide
@@ -403,7 +410,7 @@ struct GenerateView: View {
                     isEmbedded: true,
                     trackBehavior: false
                 )
-                .id(component.componentId)
+                .id("\(component.componentId)_\(candidateSet?.revision ?? 0)")
             } else {
                 recipeSkeleton
             }

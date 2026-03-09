@@ -35,9 +35,13 @@ class ShareViewController: UIViewController {
                 if provider.hasItemConformingToTypeIdentifier(UTType.url.identifier) {
                     provider.loadItem(forTypeIdentifier: UTType.url.identifier) { [weak self] data, _ in
                         if let url = data as? URL {
-                            self?.handoff(kind: "url", value: url.absoluteString)
+                            Task { @MainActor [weak self] in
+                                self?.handoff(kind: "url", value: url.absoluteString)
+                            }
                         } else if let urlData = data as? Data, let url = URL(dataRepresentation: urlData, relativeTo: nil) {
-                            self?.handoff(kind: "url", value: url.absoluteString)
+                            Task { @MainActor [weak self] in
+                                self?.handoff(kind: "url", value: url.absoluteString)
+                            }
                         }
                     }
                     return
@@ -47,7 +51,9 @@ class ShareViewController: UIViewController {
                 if provider.hasItemConformingToTypeIdentifier(UTType.plainText.identifier) {
                     provider.loadItem(forTypeIdentifier: UTType.plainText.identifier) { [weak self] data, _ in
                         if let text = data as? String {
-                            self?.handoff(kind: "text", value: text)
+                            Task { @MainActor [weak self] in
+                                self?.handoff(kind: "text", value: text)
+                            }
                         }
                     }
                     return
@@ -57,10 +63,13 @@ class ShareViewController: UIViewController {
                 if provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) {
                     provider.loadItem(forTypeIdentifier: UTType.image.identifier) { [weak self] data, _ in
                         if let url = data as? URL {
-                            self?.handoffImage(url: url)
-                        } else if let image = data as? UIImage,
-                                  let jpegData = image.jpegData(compressionQuality: 0.85) {
-                            self?.handoffImageData(jpegData)
+                            Task { @MainActor [weak self] in
+                                self?.handoffImage(url: url)
+                            }
+                        } else if let image = data as? UIImage {
+                            Task { @MainActor [weak self] in
+                                self?.handoffImage(image: image)
+                            }
                         }
                     }
                     return
@@ -106,33 +115,25 @@ class ShareViewController: UIViewController {
         }
 
         let destURL = container.appendingPathComponent("pending_import_image.jpg")
-        try? FileManager.default.removeItem(at: destURL)
-
-        if let imageData = try? Data(contentsOf: url),
-           let image = UIImage(data: imageData),
-           let jpegData = image.jpegData(compressionQuality: 0.85) {
-            try? jpegData.write(to: destURL, options: .atomic)
-        } else {
-            try? FileManager.default.copyItem(at: url, to: destURL)
+        do {
+            let payload = try autoreleasepool {
+                try ImageDownsampler.downsampleImageFile(at: url)
+            }
+            writePhotoPayload(payload.jpegData, to: destURL, container: container)
+        } catch {
+            try? FileManager.default.removeItem(at: destURL)
+            do {
+                try FileManager.default.copyItem(at: url, to: destURL)
+                writePhotoPayload(nil, to: destURL, container: container)
+            } catch {
+                close()
+            }
         }
-
-        let payload: [String: String] = [
-            "kind": "photo",
-            "value": destURL.lastPathComponent,
-            "origin": "share_extension",
-            "timestamp": ISO8601DateFormatter().string(from: Date()),
-        ]
-
-        let payloadURL = container.appendingPathComponent("pending_import.json")
-        if let data = try? JSONSerialization.data(withJSONObject: payload) {
-            try? data.write(to: payloadURL, options: .atomic)
-        }
-
-        openMainApp(kind: "photo")
     }
 
-    /// Handles raw image data handoff.
-    private func handoffImageData(_ jpegData: Data) {
+    /// Handles in-memory image handoff by first bounding it with the shared
+    /// downsampler, then storing only the reduced JPEG in the App Group.
+    private func handoffImage(image: UIImage) {
         guard let container = FileManager.default.containerURL(
             forSecurityApplicationGroupIdentifier: appGroupId
         ) else {
@@ -141,12 +142,29 @@ class ShareViewController: UIViewController {
         }
 
         let destURL = container.appendingPathComponent("pending_import_image.jpg")
-        try? FileManager.default.removeItem(at: destURL)
-        try? jpegData.write(to: destURL, options: .atomic)
+        do {
+            let payload = try autoreleasepool {
+                try ImageDownsampler.downsampleImage(image)
+            }
+            writePhotoPayload(payload.jpegData, to: destURL, container: container)
+        } catch {
+            close()
+        }
+    }
+
+    private func writePhotoPayload(
+        _ jpegData: Data?,
+        to destinationURL: URL,
+        container: URL
+    ) {
+        try? FileManager.default.removeItem(at: destinationURL)
+        if let jpegData {
+            try? jpegData.write(to: destinationURL, options: .atomic)
+        }
 
         let payload: [String: String] = [
             "kind": "photo",
-            "value": destURL.lastPathComponent,
+            "value": destinationURL.lastPathComponent,
             "origin": "share_extension",
             "timestamp": ISO8601DateFormatter().string(from: Date()),
         ]
@@ -172,7 +190,9 @@ class ShareViewController: UIViewController {
         while let r = responder {
             if let application = r as? UIApplication {
                 application.open(url, options: [:]) { [weak self] _ in
-                    self?.close()
+                    Task { @MainActor [weak self] in
+                        self?.close()
+                    }
                 }
                 return
             }

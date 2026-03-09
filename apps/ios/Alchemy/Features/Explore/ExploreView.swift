@@ -1,5 +1,4 @@
 import SwiftUI
-import NukeUI
 
 /// Explore screen — TikTok/Reels-style vertical discovery feed.
 ///
@@ -485,17 +484,14 @@ private struct ExploreCardView: View {
         ZStack {
             Color.clear
                 .overlay {
-                    LazyImage(url: preview.resolvedImageURL) { state in
-                        if let image = state.image {
-                            image
-                                .resizable()
-                                .aspectRatio(contentMode: .fill)
-                        } else if state.error != nil {
-                            AlchemyColors.surfaceSecondary
-                        } else {
-                            AlchemyColors.surfaceSecondary
-                                .overlay { ProgressView().tint(.white.opacity(0.3)) }
-                        }
+                    RecipeAsyncImage(
+                        url: preview.resolvedImageURL,
+                        profile: .fullScreenFeed
+                    ) {
+                        AlchemyColors.surfaceSecondary
+                            .overlay { ProgressView().tint(.white.opacity(0.3)) }
+                    } failure: {
+                        AlchemyColors.surfaceSecondary
                     }
                 }
                 .clipped()

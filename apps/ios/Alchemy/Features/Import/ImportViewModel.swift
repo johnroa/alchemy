@@ -10,12 +10,17 @@ import SwiftUI
 /// via the `onImported` closure so TabShell can hand it to GenerateView.
 @MainActor @Observable
 final class ImportViewModel {
+    struct PreparedImportPhoto {
+        let previewImage: UIImage
+        let jpegData: Data
+    }
+
     // MARK: - State
 
     var urlText: String = ""
     var pastedText: String = ""
     var selectedPhotoItem: PhotosPickerItem?
-    var capturedImage: UIImage?
+    var preparedPhoto: PreparedImportPhoto?
     var showCamera = false
 
     var isLoading = false
@@ -63,14 +68,71 @@ final class ImportViewModel {
         )
     }
 
-    /// Imports a recipe from a photo. Uploads the image to Supabase Storage
+    /// Prepares a library photo for preview and upload using the shared
+    /// Image I/O downsampling path so the view never stores the original asset.
+    func prepareSelectedPhoto(_ item: PhotosPickerItem?) async {
+        guard let item else { return }
+
+        isLoading = true
+        defer { isLoading = false }
+
+        do {
+            guard let data = try await item.loadTransferable(type: Data.self) else {
+                errorMessage = "Could not read the selected photo"
+                return
+            }
+
+            let jpegData = try await Task.detached(priority: .userInitiated) {
+                try ImageDownsampler.downsampledJPEGData(from: data)
+            }.value
+            guard let previewImage = UIImage(data: jpegData) else {
+                errorMessage = "Could not process the selected photo"
+                return
+            }
+
+            preparedPhoto = PreparedImportPhoto(
+                previewImage: previewImage,
+                jpegData: jpegData
+            )
+            errorMessage = nil
+        } catch {
+            preparedPhoto = nil
+            errorMessage = "Could not process the selected photo"
+        }
+    }
+
+    /// Prepares a captured camera image for preview and upload.
+    func prepareCapturedPhoto(_ image: UIImage) {
+        isLoading = true
+        defer { isLoading = false }
+
+        do {
+            let payload = try autoreleasepool {
+                try ImageDownsampler.downsampleImage(image)
+            }
+            preparedPhoto = PreparedImportPhoto(
+                previewImage: payload.previewImage,
+                jpegData: payload.jpegData
+            )
+            errorMessage = nil
+        } catch {
+            preparedPhoto = nil
+            errorMessage = "Could not process the captured photo"
+        }
+    }
+
+    func clearPreparedPhoto() {
+        preparedPhoto = nil
+        selectedPhotoItem = nil
+    }
+
+    /// Imports a prepared photo. Uploads the bounded JPEG to Supabase Storage
     /// first, then passes the storage reference to the API.
-    func importFromPhoto(
-        image: UIImage,
+    func importPreparedPhoto(
         onImported: @escaping (ChatSessionResponse) -> Void
     ) async {
-        guard let jpegData = image.jpegData(compressionQuality: 0.85) else {
-            errorMessage = "Could not process the image"
+        guard let preparedPhoto else {
+            errorMessage = "Please choose a photo first"
             return
         }
 
@@ -82,7 +144,7 @@ final class ImportViewModel {
             // The file name includes a UUID to avoid collisions.
             let fileName = "imports/\(UUID().uuidString).jpg"
             let storageRef = try await uploadToStorage(
-                data: jpegData,
+                data: preparedPhoto.jpegData,
                 path: fileName,
                 contentType: "image/jpeg"
             )

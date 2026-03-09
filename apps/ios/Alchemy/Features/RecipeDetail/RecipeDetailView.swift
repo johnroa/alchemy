@@ -1,5 +1,4 @@
 import SwiftUI
-import NukeUI
 import Lottie
 
 /// Full recipe detail view with hero image, sticky scroll title, ingredient table,
@@ -348,17 +347,14 @@ struct RecipeDetailView: View {
         if status == "pending" || status == "processing" {
             ImageLoadingPlaceholder(isEmbedded: isEmbedded)
         } else if let url = recipe.resolvedImageURL {
-            LazyImage(url: url) { state in
-                if let image = state.image {
-                    image
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .transition(.opacity.animation(.easeInOut(duration: 0.4)))
-                } else if state.error != nil {
-                    Rectangle().fill(AlchemyColors.surfaceSecondary)
-                } else {
-                    ImageLoadingPlaceholder(isEmbedded: isEmbedded)
-                }
+            RecipeAsyncImage(
+                url: url,
+                profile: .hero,
+                transition: .opacity.animation(.easeInOut(duration: 0.4))
+            ) {
+                ImageLoadingPlaceholder(isEmbedded: isEmbedded)
+            } failure: {
+                Rectangle().fill(AlchemyColors.surfaceSecondary)
             }
         } else {
             Rectangle().fill(AlchemyColors.surfaceSecondary)

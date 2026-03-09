@@ -248,6 +248,9 @@ struct APIIngredient: Decodable, Identifiable, Hashable {
     /// Formatted display string for the quantity column.
     /// Combines the display_amount (or raw amount) with the unit,
     /// omitting redundant units like "piece" for whole countable items.
+    /// Guards against doubled units: if displayAmount already ends with
+    /// the unit (e.g. displayAmount="pinch", unit="pinch" → "pinch",
+    /// not "pinch pinch"; displayAmount="1 tsp", unit="tsp" → "1 tsp").
     var displayQuantity: String {
         let numericPart: String = {
             if let displayAmount, !displayAmount.isEmpty {
@@ -257,7 +260,12 @@ struct APIIngredient: Decodable, Identifiable, Hashable {
         }()
         if let unit, !unit.isEmpty,
            !Self.redundantUnits.contains(unit.lowercased()) {
-            return "\(numericPart) \(unit)"
+            let alreadyHasUnit = numericPart
+                .lowercased()
+                .hasSuffix(unit.lowercased())
+            if !alreadyHasUnit {
+                return "\(numericPart) \(unit)"
+            }
         }
         return numericPart
     }

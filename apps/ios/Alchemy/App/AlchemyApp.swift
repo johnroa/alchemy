@@ -1,4 +1,5 @@
 import SwiftUI
+import Nuke
 import Sentry
 
 /// Root entry point for Alchemy.
@@ -6,6 +7,7 @@ import Sentry
 @main
 struct AlchemyApp: App {
     init() {
+        ImagePipelineBootstrap.configure()
         SentryBootstrap.startIfConfigured()
     }
 
@@ -14,6 +16,16 @@ struct AlchemyApp: App {
             ContentView()
                 .preferredColorScheme(.dark)
         }
+    }
+}
+
+private enum ImagePipelineBootstrap {
+    static func configure() {
+        ImageCache.shared.costLimit = 128 * 1_024 * 1_024
+        ImageCache.shared.countLimit = 100
+#if DEBUG
+        ImagePipeline.Configuration.isSignpostLoggingEnabled = true
+#endif
     }
 }
 

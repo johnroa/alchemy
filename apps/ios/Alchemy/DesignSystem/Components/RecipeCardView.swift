@@ -1,5 +1,4 @@
 import SwiftUI
-import NukeUI
 
 /// Recipe card for the Cookbook masonry grid.
 ///
@@ -36,21 +35,18 @@ struct RecipeCardView: View {
     var body: some View {
         ZStack(alignment: .bottomLeading) {
             // Image layer — fills the card bounds and clips to prevent overflow
-            LazyImage(url: card.imageURL) { state in
-                if let image = state.image {
-                    image
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                } else if state.error != nil {
-                    imagePlaceholder
-                } else {
-                    Rectangle()
-                        .fill(AlchemyColors.surfaceSecondary)
-                        .overlay {
-                            ProgressView()
-                                .tint(AlchemyColors.textTertiary)
-                        }
-                }
+            RecipeAsyncImage(
+                url: card.imageURL,
+                profile: .card
+            ) {
+                Rectangle()
+                    .fill(AlchemyColors.surfaceSecondary)
+                    .overlay {
+                        ProgressView()
+                            .tint(AlchemyColors.textTertiary)
+                    }
+            } failure: {
+                imagePlaceholder
             }
             // Pin to exact card size — .fill will overflow, frame + clipped contain it
             .frame(minWidth: 0, maxWidth: .infinity, minHeight: cardHeight, maxHeight: cardHeight)

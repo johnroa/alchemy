@@ -110,20 +110,19 @@ struct ImportView: View {
 
     private var photoContent: some View {
         VStack(spacing: 16) {
-            if let image = viewModel.capturedImage {
-                Image(uiImage: image)
+            if let preparedPhoto = viewModel.preparedPhoto {
+                Image(uiImage: preparedPhoto.previewImage)
                     .resizable()
                     .scaledToFit()
                     .frame(maxHeight: 260)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
 
                 actionButton("Import Recipe") {
-                    await viewModel.importFromPhoto(image: image, onImported: onImported)
+                    await viewModel.importPreparedPhoto(onImported: onImported)
                 }
 
                 Button("Choose a Different Photo") {
-                    viewModel.capturedImage = nil
-                    viewModel.selectedPhotoItem = nil
+                    viewModel.clearPreparedPhoto()
                 }
                 .font(.footnote)
             } else {
@@ -148,12 +147,7 @@ struct ImportView: View {
                 }
                 .buttonStyle(.bordered)
                 .onChange(of: viewModel.selectedPhotoItem) { _, newItem in
-                    Task {
-                        if let data = try? await newItem?.loadTransferable(type: Data.self),
-                           let uiImage = UIImage(data: data) {
-                            viewModel.capturedImage = uiImage
-                        }
-                    }
+                    Task { await viewModel.prepareSelectedPhoto(newItem) }
                 }
 
                 Text("Snap a photo of a cookbook page or recipe card.")
@@ -166,7 +160,9 @@ struct ImportView: View {
             }
         }
         .fullScreenCover(isPresented: $viewModel.showCamera) {
-            CameraCapture(image: $viewModel.capturedImage)
+            CameraCapture { image in
+                viewModel.prepareCapturedPhoto(image)
+            }
                 .ignoresSafeArea()
         }
     }
@@ -206,7 +202,7 @@ struct ImportView: View {
 // MARK: - Camera Capture
 
 struct CameraCapture: UIViewControllerRepresentable {
-    @Binding var image: UIImage?
+    let onCapture: (UIImage) -> Void
     @Environment(\.dismiss) private var dismiss
 
     func makeUIViewController(context: Context) -> UIImagePickerController {
@@ -232,7 +228,7 @@ struct CameraCapture: UIViewControllerRepresentable {
             didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]
         ) {
             if let uiImage = info[.originalImage] as? UIImage {
-                parent.image = uiImage
+                parent.onCapture(uiImage)
             }
             parent.dismiss()
         }

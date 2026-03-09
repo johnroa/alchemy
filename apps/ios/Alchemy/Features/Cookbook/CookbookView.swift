@@ -1,5 +1,4 @@
 import SwiftUI
-import NukeUI
 
 /// Cookbook screen — saved recipes displayed in a staggered masonry 2-column grid.
 ///
@@ -32,12 +31,6 @@ struct CookbookView: View {
     /// skeleton card stays visible until loadCookbook() actually returns
     /// fresh data (eliminates the disappear-then-reappear flash).
     @State private var holdoverSave: PendingSave?
-
-    /// Monotonic counter incremented before each loadCookbook() call.
-    /// Only the latest load applies its results — prevents a slow stale
-    /// response (e.g. from onAppear before commit finishes) from
-    /// overwriting fresh data fetched after the commit completes.
-    @State private var loadGeneration = 0
 
     /// The skeleton card to display: the real binding while the commit is
     /// in flight, then the local holdover copy until fresh data arrives.
@@ -167,13 +160,13 @@ struct CookbookView: View {
                 }
             }
             .toolbarVisibility(showFullScreenPreview ? .hidden : .automatic, for: .tabBar)
+            .task { await loadCookbook() }
             .onAppear {
-                // Skip the refresh if a save is in flight — the onChange
-                // handler will load fresh data once the commit finishes.
-                // Without this guard, the onAppear load (which started
-                // before the commit) can return stale data and overwrite
-                // the fresh data, making the new recipe "disappear".
-                guard pendingSave == nil else { return }
+                // Refresh on tab re-selection (e.g. returning from Sous
+                // Chef after saving). Skip the first appear (task handles
+                // it) and skip when a save is in flight (onChange handler
+                // owns that refresh cycle).
+                guard !isLoading, pendingSave == nil else { return }
                 Task { await loadCookbook() }
             }
             .onChange(of: pendingSave) { old, new in
@@ -512,14 +505,13 @@ struct CookbookView: View {
     private func savingSkeletonCard(_ pending: PendingSave) -> some View {
         ZStack(alignment: .bottomLeading) {
             if let urlStr = pending.imageUrl, let url = URL(string: urlStr) {
-                LazyImage(url: url) { state in
-                    if let image = state.image {
-                        image
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                    } else {
-                        skeletonShimmer
-                    }
+                RecipeAsyncImage(
+                    url: url,
+                    profile: .card
+                ) {
+                    skeletonShimmer
+                } failure: {
+                    skeletonShimmer
                 }
                 .frame(minHeight: 180, maxHeight: 220)
                 .clipped()
@@ -591,24 +583,14 @@ struct CookbookView: View {
         if previews.isEmpty { isLoading = true }
         errorMessage = nil
 
-        loadGeneration += 1
-        let thisGeneration = loadGeneration
-
         do {
             let response: CookbookResponse = try await APIClient.shared.request("/recipes/cookbook")
-
-            // Only apply if this is still the most recent load. A newer
-            // load may have been kicked off while this one was in flight
-            // (e.g. onChange after commit vs stale onAppear).
-            guard thisGeneration == loadGeneration else { return }
-
             previews = response.items
             suggestedChips = response.suggestedChips
             staleContext = response.staleContext
             if response.staleContext == nil { staleBannerDismissed = false }
             trackCookbookView(itemCount: response.items.count)
         } catch {
-            guard thisGeneration == loadGeneration else { return }
             errorMessage = "Couldn't load your cookbook. Check your connection."
             print("[CookbookView] load failed: \(error)")
         }
@@ -677,14 +659,13 @@ struct CookbookFullScreenPreview: View {
                     Spacer()
 
                     ZStack(alignment: .top) {
-                        LazyImage(url: preview.resolvedImageURL) { state in
-                            if let image = state.image {
-                                image
-                                    .resizable()
-                                    .aspectRatio(contentMode: .fill)
-                            } else {
-                                Rectangle().fill(AlchemyColors.surfaceSecondary)
-                            }
+                        RecipeAsyncImage(
+                            url: preview.resolvedImageURL,
+                            profile: .fullScreenFeed
+                        ) {
+                            Rectangle().fill(AlchemyColors.surfaceSecondary)
+                        } failure: {
+                            Rectangle().fill(AlchemyColors.surfaceSecondary)
                         }
                         .frame(width: geo.size.width, height: panelHeight)
                         .clipped()
@@ -953,14 +934,13 @@ struct StaleVariantReviewSheet: View {
 
         return HStack(spacing: 12) {
             // Thumbnail
-            LazyImage(url: recipe.resolvedImageURL) { state in
-                if let image = state.image {
-                    image
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                } else {
-                    Rectangle().fill(AlchemyColors.surfaceSecondary)
-                }
+            RecipeAsyncImage(
+                url: recipe.resolvedImageURL,
+                profile: .card
+            ) {
+                Rectangle().fill(AlchemyColors.surfaceSecondary)
+            } failure: {
+                Rectangle().fill(AlchemyColors.surfaceSecondary)
             }
             .frame(width: 52, height: 52)
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
