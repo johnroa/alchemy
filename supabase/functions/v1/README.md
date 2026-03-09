@@ -25,6 +25,10 @@ Edge function implementing `/v1/*` routes.
 - `GET /v1/recipes/{id}/graph`
 - `GET /v1/recipes/{id}/history`
 - `GET /v1/recipes/cookbook`
+- `GET /v1/recipes/cookbook/{entryId}`
+- `DELETE /v1/recipes/cookbook/{entryId}`
+- `POST /v1/recipes/cookbook/{entryId}/canon/retry`
+- `POST /v1/recipes/cookbook/{entryId}/variant/refresh`
 - `POST /v1/recipes/search`
 - `POST /v1/recipes/explore/for-you`
 - `POST /v1/recipes/{id}/attachments`
@@ -84,6 +88,14 @@ Edge function implementing `/v1/*` routes.
   - `equipment_filter`
 
 No route-level behavior should depend on hardcoded instruction logic.
+
+## Cookbook contract
+
+- `GET /v1/recipes/cookbook` returns private-first cookbook entries, not canonical recipe previews.
+- Each cookbook item is keyed by top-level JSON `id`, which is the cookbook entry primary key.
+- `GET /v1/recipes/cookbook/{entryId}` is the primary private-detail route.
+- `GET /v1/recipes/{id}` remains canonical/public detail only.
+- `GET /v1/recipes/{id}/variant` is a compatibility wrapper for canonical-linked cookbook entries.
 
 ## Test command
 

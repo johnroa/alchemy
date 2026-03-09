@@ -83,6 +83,14 @@ Alchemy/
 └── Resources/              Assets.xcassets, Info.plist, Lottie JSON, entitlements
 ```
 
+### Cookbook contract
+
+- `GET /recipes/cookbook` is an entry-first private feed. Each `items[]` element is keyed by top-level JSON `id`, which is the cookbook entry primary key.
+- `GET /recipes/cookbook/{entryId}` is the primary private-detail route. iOS should navigate cookbook opens with `cookbook_entry_id`, not canonical `recipe_id`.
+- `GET /recipes/{id}` is canonical/public detail only. Explore and web should continue to use canonical recipe ids.
+- `POST /chat/{id}/commit` returns both `cookbook_entry_id` and nullable `recipe_id`. When canon is still pending, the cookbook entry id is the only stable navigation key for the newly saved recipe.
+- In Swift, `JSONDecoder.KeyDecodingStrategy.convertFromSnakeCase` does not transform JSON `id` into `cookbookEntryId`; `CookbookEntryItem` must provide an explicit `CodingKeys` mapping.
+
 ### Running the iOS app
 
 ```bash
@@ -424,6 +432,12 @@ The migration chain is out of order relative to remote history. Fix by:
 | `0054_restore_search_preview_projection` | Search preview projection compatibility fix after telemetry rollout |
 | `0055_acquisition_profiles` | Install-scoped attribution, acquisition milestones, and acquisition board backing tables |
 | `0056_explore_for_you` | Taste profiles, algorithm version registry, Explore impression outcomes, and For You session metadata |
+| `0057_memory_retrieval_activation` | Retrieval-backed memory indexing, queue draining, and rebuild/backfill operations |
+| `0058_demand_graph` | Demand graph extraction pipeline, observations, outcomes, and admin analytics |
+| `0059_recipe_identity_resolver` | Unified recipe canon/image identity resolver and canon-family lookup |
+| `0060_runtime_flags` | Runtime flags control plane and DB-backed flag resolution |
+| `0061_chat_route_observability` | Route-scoped chat observability and latency instrumentation |
+| `0062_private_first_cookbook_entries` | Private-first cookbook entries, async canon derivation, and cookbook-entry detail routes |
 
 ---
 
@@ -431,7 +445,8 @@ The migration chain is out of order relative to remote history. Fix by:
 
 - **Auth**: Supabase Auth (token-based)
 - **DB**: Postgres — users, preferences, recipes, recipe_versions, cookbook_entries, user_recipe_variants, user_recipe_variant_versions, preference_change_log, collections, memories, events, behavior_events, behavior_semantic_facts, install_profiles, user_acquisition_profiles, user_taste_profiles, explore_algorithm_versions, recipe_search_documents, recipe_view_events, ingredient_trending_stats, graph_entities, graph_edges, ingredients, import_provenance
-- **Edge Functions** (`functions/v1/`): LLM gateway with structured output, prompt injection, memory, image generation, recipe canonicalization/personalization, import pipeline, acquisition telemetry, and personalized Explore retrieval/reranking
+- **Cookbook model**: saved recipes are rooted on `cookbook_entries`; private variant lineage is created immediately for new commits/imports, and public canon is derived asynchronously afterward.
+- **Edge Functions** (`functions/v1/`): LLM gateway with structured output, prompt injection, memory, image generation, recipe canonicalization/personalization, import pipeline, acquisition telemetry, personalized Explore retrieval/reranking, and private-first cookbook projection
 
 ### Deploying edge functions
 

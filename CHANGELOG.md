@@ -9,6 +9,7 @@
 - Changed chat commit flow to create private cookbook entries and private variants synchronously, then derive public canon asynchronously without passing user-specific prompt context or memory context into canon generation.
 - Updated cookbook feed/detail projection to support pending and failed canon states, keep public Explore/web canon-only, and preserve compatibility aliases during the transition (`recipe_id` alongside `canonical_recipe_id`).
 - Added the new private-first database migration, updated the OpenAPI contract to `4.0.0`, regenerated generated contracts/admin API docs, and added backend route coverage for cookbook-entry detail and canon retry flows.
+- Fixed iOS cookbook decoding for the private-first feed by explicitly mapping cookbook list JSON `id` to Swift `cookbookEntryId`, and documented the entry-first contract in repo and backend docs.
 
 ### Render-Driven Recipe Formatting + Candidate Projection (v3.8.2)
 

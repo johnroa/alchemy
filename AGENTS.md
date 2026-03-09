@@ -90,17 +90,21 @@ curl https://api.cookwithalchemy.com/v1/healthz
 
 ## Canonical Recipes + Private Variants ("Sous Chef")
 
-Core architecture: canonical (public, immutable) recipes + per-user private variants.
+Core architecture: private-first cookbook entries + asynchronously derived public canon.
 
-- **Canonical**: created by `recipe_canonicalize` scope from chat output. Immutable, visible in Explore.
-- **Variants**: created by `recipe_personalize` scope. Private per user. Title stays canonical; content is personalized.
+- **Cookbook entries**: the root saved-recipe record. Newly committed or imported recipes are saved here immediately as private user-owned items, even before public canon exists.
+- **Canonical**: derived asynchronously from the private recipe through `recipe_canonicalize`. Public, immutable, and visible in Explore/web/search only after canon reaches `ready`.
+- **Variants**: the active private recipe lineage attached to a cookbook entry. `recipe_personalize` can refresh this lineage from canon when available or from the current private payload while canon is still pending.
 - **Constraints vs preferences**: Constraints (dietary_restrictions, aversions) are retroactive — changes mark variants `stale`. Preferences (cuisines, equipment) are forward-only.
 - **Variant lifecycle**: `current` → `stale` → `processing` → `current`. Also `failed`, `needs_review`.
 - **Graph-grounded personalization**: queries knowledge graph for proven substitution patterns before LLM call.
 - **Substitution diffs**: structured records of ingredient swaps stored in provenance. Surfaced in iOS.
 - **Variant tags**: materialized JSONB tags for multi-dimensional Cookbook filtering.
 - **Tables**: `cookbook_entries`, `user_recipe_variants`, `user_recipe_variant_versions`, `preference_change_log`.
-- **Endpoints**: `GET /recipes/{id}/variant`, `POST /recipes/{id}/variant/refresh`, `POST /recipes/{id}/publish`, `GET /recipes/cookbook`.
+- **Primary private endpoints**: `GET /recipes/cookbook`, `GET /recipes/cookbook/{entryId}`, `POST /recipes/cookbook/{entryId}/variant/refresh`, `POST /recipes/cookbook/{entryId}/canon/retry`.
+- **Canonical/public endpoints**: `GET /recipes/{id}`, Explore/search/web routes.
+- **Compatibility endpoint**: `GET /recipes/{id}/variant` remains only for canonical-linked lookups and should not be the main cookbook detail path.
+- **iOS contract note**: cookbook list items are keyed by top-level JSON `id` (the cookbook entry primary key). Swift models that expose `cookbookEntryId` must map `id` explicitly; `JSONDecoder.KeyDecodingStrategy.convertFromSnakeCase` does not rename `id`.
 
 ## Popularity & Trending
 

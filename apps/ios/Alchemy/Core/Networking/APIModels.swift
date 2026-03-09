@@ -81,6 +81,11 @@ struct VariantTags: Decodable, Hashable {
 /// A cookbook entry as returned by GET /recipes/cookbook. Includes canonical
 /// recipe preview data plus variant status. When a variant exists, summary
 /// and tags reflect the personalised version; title always stays canonical.
+///
+/// The API returns the cookbook entry primary key as `id`, not `cookbook_entry_id`,
+/// so we use CodingKeys to map JSON `id` → `cookbookEntryId`. The decoder's
+/// `convertFromSnakeCase` strategy still handles all other snake_case keys via
+/// their default camelCase raw values.
 struct CookbookEntryItem: Decodable, Identifiable, Hashable {
     let cookbookEntryId: String
     let canonicalRecipeId: String?
@@ -101,6 +106,15 @@ struct CookbookEntryItem: Decodable, Identifiable, Hashable {
     let savedAt: String
     let variantTags: VariantTags?
     let matchedChipIds: [String]
+
+    private enum CodingKeys: String, CodingKey {
+        case cookbookEntryId = "id"
+        case canonicalRecipeId, recipeId, canonicalStatus
+        case title, summary, imageUrl, imageStatus
+        case category, visibility, updatedAt, quickStats
+        case variantStatus, activeVariantVersionId, personalizedAt
+        case autopersonalize, savedAt, variantTags, matchedChipIds
+    }
 
     /// Identifiable conformance uses the cookbook entry ID.
     var id: String { cookbookEntryId }
