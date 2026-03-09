@@ -238,10 +238,12 @@ export const handleCommit = async (
   } = context;
   const {
     parseUuid,
+    getPreferences,
+    canonicalizeRecipePayload,
     extractChatContext,
     normalizeCandidateRecipeSet,
-    persistRecipe,
-    attachCommittedCandidateImages,
+    resolveAndPersistCanonicalRecipe,
+    ensurePersistedRecipeImageRequest,
     scheduleImageQueueDrain,
     enqueueDemandExtractionJob,
     scheduleDemandQueueDrain,
@@ -383,19 +385,29 @@ export const handleCommit = async (
   }
 
   const selectedMemoryIds = extractMemoryContextIds(contextValue);
+  const preferences = await getPreferences(client, auth.userId);
 
   try {
     const committedComponentsForImages = await Promise.all(
       candidateSet.components.map(async (component) => {
-        const saved = await persistRecipe({
-          client,
+        const canonicalPayload = await canonicalizeRecipePayload({
           serviceClient,
           userId: auth.userId,
           requestId,
           payload: component.recipe,
+          preferences: preferences as unknown as Record<string, JsonValue>,
+          modelOverrides,
+        });
+        const saved = await resolveAndPersistCanonicalRecipe({
+          client,
+          serviceClient,
+          userId: auth.userId,
+          requestId,
+          payload: canonicalPayload,
           sourceChatId: chatId,
           diffSummary: `Committed from chat candidate (${component.role})`,
           selectedMemoryIds,
+          modelOverrides,
         });
 
         // Save to cookbook_entries (recipe_saves is deprecated after backfill 0047).
@@ -419,16 +431,24 @@ export const handleCommit = async (
           );
         }
 
+        await ensurePersistedRecipeImageRequest({
+          serviceClient,
+          userId: auth.userId,
+          requestId,
+          recipeId: saved.recipeId,
+          recipeVersionId: saved.versionId,
+        });
+
         return {
           component_id: component.component_id,
           role: component.role,
-          title: component.title,
+          title: canonicalPayload.title,
           recipe_id: saved.recipeId,
           recipe_version_id: saved.versionId,
           variant_id: null as string | null,
           variant_version_id: null as string | null,
           variant_status: "none" as const,
-          recipe: component.recipe,
+          recipe: canonicalPayload,
         };
       }),
     );
@@ -445,14 +465,6 @@ export const handleCommit = async (
         variant_status: component.variant_status,
       }));
 
-    await attachCommittedCandidateImages({
-      serviceClient,
-      userId: auth.userId,
-      requestId,
-      chatId,
-      candidateSet,
-      committedRecipes: committedComponentsForImages,
-    });
     scheduleImageQueueDrain({
       serviceClient,
       actorUserId: auth.userId,

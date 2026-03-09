@@ -74,6 +74,8 @@ Edge function implementing `/v1/*` routes.
   - `recipe_search_embed`
   - `recipe_search_interpret`
   - `recipe_search_rerank`
+  - `recipe_canonicalize`
+  - `recipe_canon_match`
   - `explore_for_you_profile`
   - `explore_for_you_rank`
   - `preference_normalize`

@@ -353,6 +353,17 @@ export const LLM_SCOPE_REGISTRY = {
     telemetry_tags: { task: "recipe_canonicalize", criticality: "high" },
   },
 
+  recipe_canon_match: {
+    output_contract: "recipe_canon_match_v1",
+    mode: "classification",
+    retry_policy: {
+      max_attempts: 2,
+      retryable_codes: [...STRICT_JSON_RETRYABLE_CODES, ...STANDARD_RETRYABLE_CODES],
+    },
+    fallback_policy: "none",
+    telemetry_tags: { task: "recipe_canon_match", criticality: "high" },
+  },
+
   /**
    * recipe_personalize: materialises a user's private variant from a canonical
    * recipe base + the user's active constraint/preference profile + any explicit

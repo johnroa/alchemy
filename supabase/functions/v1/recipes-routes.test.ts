@@ -4,6 +4,7 @@ import { searchRecipes } from "./recipe-search.ts";
 import { resolvePresentationOptions as resolveRecipePresentationOptions } from "./recipe-standardization.ts";
 import { handleRecipeRoutes } from "./routes/recipes.ts";
 import type { RecipePreview } from "./recipe-preview.ts";
+import type { RecipePayload } from "../_shared/types.ts";
 import openapiSpec from "../../../packages/contracts/openapi.json" with {
   type: "json",
 };
@@ -170,7 +171,19 @@ const createDeps = (overrides: Record<string, unknown> = {}) => ({
   fetchChatMessages: unused,
   buildContextPack: unused,
   deriveAttachmentPayload: unused,
+  canonicalizeRecipePayload: async (input: { payload: RecipePayload }) => input.payload,
   persistRecipe: unused,
+  resolveAndPersistCanonicalRecipe: async () => ({
+    action: "create_new_canon" as const,
+    reason: "new_canon",
+    recipeId: "recipe-1",
+    versionId: "version-1",
+    matchedRecipeId: null,
+    matchedRecipeVersionId: null,
+    judgeInvoked: false,
+    judgeCandidateCount: 0,
+    judgeConfidence: null,
+  }),
   resolveRelationTypeId: unused,
   logChangelog: unused,
   buildCookbookItems: async () => [] as RecipePreview[],
@@ -805,6 +818,33 @@ Deno.test("POST /recipes/{id}/variant/refresh uses serviceClient for personaliza
               },
             };
             return query;
+          },
+        };
+      }
+
+      if (table === "behavior_events") {
+        return {
+          async upsert(_payload: unknown, _options?: unknown) {
+            return { error: null };
+          },
+        };
+      }
+
+      if (table === "user_acquisition_profiles") {
+        return {
+          select(_columns: string) {
+            return {
+              eq(_column: string, _value: string) {
+                return {
+                  async maybeSingle() {
+                    return { data: null, error: null };
+                  },
+                };
+              },
+            };
+          },
+          async insert(_payload: unknown) {
+            return { error: null };
           },
         };
       }

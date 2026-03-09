@@ -24,7 +24,8 @@ export const handleDetailRoutes = async (
     fetchChatMessages,
     buildContextPack,
     deriveAttachmentPayload,
-    persistRecipe,
+    canonicalizeRecipePayload,
+    resolveAndPersistCanonicalRecipe,
     resolveRelationTypeId,
     logChangelog,
     toJsonValue,
@@ -207,14 +208,25 @@ export const handleDetailRoutes = async (
       );
     }
 
-    const saved = await persistRecipe({
-      client,
+    const preferences = await getPreferences(client, auth.userId);
+    const canonicalPayload = await canonicalizeRecipePayload({
       serviceClient,
       userId: auth.userId,
       requestId,
       payload: attachmentRecipePayload,
+      preferences: preferences as unknown as Record<string, JsonValue>,
+      modelOverrides: context.modelOverrides,
+    });
+
+    const saved = await resolveAndPersistCanonicalRecipe({
+      client,
+      serviceClient,
+      userId: auth.userId,
+      requestId,
+      payload: canonicalPayload,
       diffSummary: `Attachment (${relationType})`,
       selectedMemoryIds: contextPack.selectedMemoryIds,
+      modelOverrides: context.modelOverrides,
     });
 
     const relationTypeId = await resolveRelationTypeId(client, relationType);

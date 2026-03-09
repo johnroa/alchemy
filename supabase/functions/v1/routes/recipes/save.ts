@@ -25,8 +25,9 @@ export const handleSaveRoutes = async (
   const {
     parseUuid,
     getPreferences,
+    canonicalizeRecipePayload,
     logChangelog,
-    persistRecipe,
+    resolveAndPersistCanonicalRecipe,
     resolveRelationTypeId,
     ensurePersistedRecipeImageRequest,
     scheduleImageQueueDrain,
@@ -369,13 +370,24 @@ export const handleSaveRoutes = async (
     }
 
     // Persist as a new canonical recipe.
-    const saved = await persistRecipe({
-      client,
+    const preferences = await getPreferences(client, auth.userId);
+    const canonicalPayload = await canonicalizeRecipePayload({
       serviceClient,
       userId: auth.userId,
       requestId,
       payload,
+      preferences: preferences as unknown as Record<string, JsonValue>,
+      modelOverrides,
+    });
+
+    const saved = await resolveAndPersistCanonicalRecipe({
+      client,
+      serviceClient,
+      userId: auth.userId,
+      requestId,
+      payload: canonicalPayload,
       diffSummary: `Published from variant of recipe ${sourceRecipeId}`,
+      modelOverrides,
     });
 
     // Create derived_from graph edge linking new canonical to source canonical.
@@ -394,7 +406,7 @@ export const handleSaveRoutes = async (
         .upsert(
           {
             entity_type: "recipe",
-            label: payload.title ?? "Untitled",
+            label: canonicalPayload.title ?? "Untitled",
             metadata: { recipe_id: saved.recipeId },
           },
           { onConflict: "entity_type,label" },
@@ -453,7 +465,7 @@ export const handleSaveRoutes = async (
     return respond(200, {
       recipe_id: saved.recipeId,
       recipe_version_id: saved.versionId,
-      title: payload.title ?? "Untitled",
+      title: canonicalPayload.title ?? "Untitled",
     });
   }
 

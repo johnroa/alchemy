@@ -14,9 +14,13 @@ import type {
   RecipePayload,
 } from "../../_shared/types.ts";
 import {
-  canonicalizeRecipePayloadMetadata,
-  resolveRecipePayloadSummary,
-} from "../recipe-preview.ts";
+  buildRecipeIdentityDescriptor,
+  buildRecipeImageIdentityText,
+  type ImageResolutionReason,
+  normalizeText,
+} from "../lib/recipe-identity.ts";
+
+export { normalizeText };
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -33,6 +37,7 @@ export type ResolutionSource = "generated" | "reused";
 export type ImageRequestRow = {
   id: string;
   recipe_fingerprint: string;
+  image_fingerprint: string;
   normalized_title: string;
   normalized_search_text: string;
   recipe_payload: RecipePayload;
@@ -44,6 +49,11 @@ export type ImageRequestRow = {
   attempt: number;
   max_attempts: number;
   last_error: string | null;
+  matched_recipe_id: string | null;
+  matched_recipe_version_id: string | null;
+  resolution_reason: string | null;
+  judge_invoked: boolean;
+  judge_candidate_count: number;
 };
 
 export type ImageAssetRow = {
@@ -98,14 +108,6 @@ export const asRecord = (value: unknown): Record<string, JsonValue> | null => {
   return value as Record<string, JsonValue>;
 };
 
-export const normalizeText = (value: unknown): string | null => {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const normalized = value.trim().replace(/\s+/g, " ");
-  return normalized.length > 0 ? normalized : null;
-};
-
 export const normalizeStatus = (value: unknown): CandidateRecipeImageStatus => {
   const normalized = normalizeText(value)?.toLowerCase();
   if (
@@ -116,65 +118,6 @@ export const normalizeStatus = (value: unknown): CandidateRecipeImageStatus => {
   }
   return "pending";
 };
-
-export const normalizeNumber = (value: unknown): number | null => {
-  const numeric = Number(value);
-  return Number.isFinite(numeric) ? numeric : null;
-};
-
-export const normalizeInteger = (value: unknown): number | null => {
-  const numeric = Number(value);
-  return Number.isFinite(numeric) ? Math.trunc(numeric) : null;
-};
-
-export const normalizeStringList = (value: unknown): string[] => {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  const seen = new Set<string>();
-  const result: string[] = [];
-  for (const entry of value) {
-    const normalized = normalizeText(entry);
-    if (!normalized) {
-      continue;
-    }
-    const key = normalized.toLowerCase();
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    result.push(normalized);
-  }
-  return result;
-};
-
-export const stableStringify = (value: JsonValue): string => {
-  if (value === null) {
-    return "null";
-  }
-  if (typeof value === "string") {
-    return JSON.stringify(value);
-  }
-  if (typeof value === "number" || typeof value === "boolean") {
-    return JSON.stringify(value);
-  }
-  if (Array.isArray(value)) {
-    return `[${value.map((entry) => stableStringify(entry)).join(",")}]`;
-  }
-
-  const entries = Object.entries(value)
-    .filter(([, entryValue]) => typeof entryValue !== "undefined")
-    .sort(([left], [right]) => left.localeCompare(right));
-  return `{${entries.map(([key, entryValue]) =>
-    `${JSON.stringify(key)}:${stableStringify(entryValue)}`
-  ).join(",")}}`;
-};
-
-export const toHex = (buffer: ArrayBuffer): string =>
-  Array.from(new Uint8Array(buffer)).map((value) =>
-    value.toString(16).padStart(2, "0")
-  ).join("");
 
 export const serializeVector = (vector: number[]): string => {
   return `[${vector.map((value) => Number(value).toFixed(12)).join(",")}]`;
@@ -195,51 +138,6 @@ export const parseVector = (value: string | null): number[] | null => {
 
 // ─── Fingerprinting ──────────────────────────────────────────────────────────
 
-export const buildRecipeImageFingerprintPayload = (
-  recipe: RecipePayload,
-  titleOverride?: string | null,
-): JsonValue => {
-  const metadata = canonicalizeRecipePayloadMetadata(recipe) ?? {};
-
-  return {
-    title: normalizeText(titleOverride) ?? normalizeText(recipe.title) ?? "",
-    description: normalizeText(resolveRecipePayloadSummary(recipe)),
-    servings: normalizeInteger(recipe.servings),
-    ingredients: (recipe.ingredients ?? []).map((ingredient) => ({
-      name: normalizeText(ingredient.name) ?? "",
-      amount: normalizeNumber(ingredient.amount),
-      unit: normalizeText(ingredient.unit),
-      display_amount: normalizeText(ingredient.display_amount),
-      preparation: normalizeText(ingredient.preparation),
-      category: normalizeText(ingredient.category),
-    })),
-    steps: (recipe.steps ?? []).map((step) => ({
-      index: normalizeInteger(step.index),
-      instruction: normalizeText(step.instruction) ?? "",
-      notes: normalizeText(step.notes),
-      timer_seconds: normalizeInteger(step.timer_seconds),
-      inline_measurements: Array.isArray(step.inline_measurements)
-        ? step.inline_measurements.map((measurement) => ({
-          ingredient: normalizeText(measurement.ingredient) ?? "",
-          amount: normalizeNumber(measurement.amount),
-          unit: normalizeText(measurement.unit),
-        }))
-        : [],
-    })),
-    notes: normalizeText(recipe.notes),
-    pairings: normalizeStringList(recipe.pairings),
-    metadata: {
-      vibe: normalizeText(metadata.vibe),
-      spice_level: normalizeText(metadata.spice_level),
-      cuisine_tags: normalizeStringList(metadata.cuisine_tags),
-      occasion_tags: normalizeStringList(metadata.occasion_tags),
-      diet_tags: normalizeStringList(metadata.diet_tags),
-      techniques: normalizeStringList(metadata.techniques),
-      flavor_profile: normalizeStringList(metadata.flavor_profile),
-    },
-  };
-};
-
 /**
  * Reuse matching should focus on dish identity and appearance, not discovery
  * text like pairings or optional serving suggestions that can mention other
@@ -249,36 +147,17 @@ export const buildImageReuseSearchText = (
   recipe: RecipePayload,
   titleOverride?: string | null,
 ): string => {
-  const metadata = canonicalizeRecipePayloadMetadata(recipe) ?? {};
-  const lines = [
-    normalizeText(titleOverride) ?? normalizeText(recipe.title) ?? "Untitled Recipe",
-    normalizeText(resolveRecipePayloadSummary(recipe)),
-    ...Array.from(
-      new Set(
-        (recipe.ingredients ?? []).flatMap((ingredient) => {
-          const normalized = normalizeText(ingredient.name);
-          return normalized ? [normalized] : [];
-        }),
-      ),
-    ),
-    ...normalizeStringList(metadata.cuisine_tags),
-    ...normalizeStringList(metadata.techniques),
-    ...normalizeStringList(metadata.serving_notes),
-    normalizeText(metadata.vibe),
-  ];
-
-  const seen = new Set<string>();
-  return lines.flatMap((line) => {
-    if (!line) {
-      return [];
-    }
-    const key = line.toLowerCase();
-    if (seen.has(key)) {
-      return [];
-    }
-    seen.add(key);
-    return [line];
-  }).join("\n");
+  const normalizedTitle = normalizeText(titleOverride) ?? normalizeText(recipe.title) ??
+    "Untitled Recipe";
+  const canonicalIngredientNames = (recipe.ingredients ?? []).flatMap((ingredient) => {
+    const normalized = normalizeText(ingredient.name);
+    return normalized ? [normalized] : [];
+  });
+  return buildRecipeImageIdentityText(
+    { ...recipe, title: normalizedTitle },
+    canonicalIngredientNames,
+    normalizedTitle,
+  );
 };
 
 export const buildImageRequestDescriptor = async (
@@ -286,32 +165,22 @@ export const buildImageRequestDescriptor = async (
   titleOverride?: string | null,
 ): Promise<{
   fingerprint: string;
+  imageFingerprint: string;
   normalizedTitle: string;
   normalizedSearchText: string;
   recipePayload: RecipePayload;
 }> => {
-  const normalizedTitle = normalizeText(titleOverride) ?? normalizeText(recipe.title) ??
-    "Untitled Recipe";
-  const fingerprintPayload = buildRecipeImageFingerprintPayload(
+  const descriptor = await buildRecipeIdentityDescriptor({
     recipe,
-    normalizedTitle,
-  );
-  const fingerprint = toHex(
-    await crypto.subtle.digest(
-      "SHA-256",
-      new TextEncoder().encode(stableStringify(fingerprintPayload)),
-    ),
-  );
-  const recipePayload = {
-    ...recipe,
-    title: normalizedTitle,
-  };
+    titleOverride,
+  });
 
   return {
-    fingerprint,
-    normalizedTitle,
-    normalizedSearchText: buildImageReuseSearchText(recipePayload, normalizedTitle),
-    recipePayload,
+    fingerprint: descriptor.contentFingerprint,
+    imageFingerprint: descriptor.imageFingerprint,
+    normalizedTitle: descriptor.normalizedTitle,
+    normalizedSearchText: descriptor.imageIdentityText,
+    recipePayload: descriptor.recipePayload,
   };
 };
 
@@ -319,8 +188,19 @@ const hasImageRequestDescriptorMismatch = (
   existing: ImageRequestRow,
   descriptor: ImageRequestDescriptor,
 ): boolean =>
+  existing.image_fingerprint !== descriptor.imageFingerprint ||
   existing.normalized_title !== descriptor.normalizedTitle ||
   existing.normalized_search_text !== descriptor.normalizedSearchText;
+
+const hasImageRequestResolutionContextMismatch = (
+  existing: ImageRequestRow,
+  matchedRecipeId?: string | null,
+  matchedRecipeVersionId?: string | null,
+  resolutionReason?: string | null,
+): boolean =>
+  (matchedRecipeId ?? null) !== existing.matched_recipe_id ||
+  (matchedRecipeVersionId ?? null) !== existing.matched_recipe_version_id ||
+  (resolutionReason ?? null) !== existing.resolution_reason;
 
 export const shouldResetReusedReadyImageRequest = (
   existing: ImageRequestRow,
@@ -334,8 +214,19 @@ export const reconcileImageRequestDescriptor = async (params: {
   serviceClient: SupabaseClient;
   existing: ImageRequestRow;
   descriptor: ImageRequestDescriptor;
+  matchedRecipeId?: string | null;
+  matchedRecipeVersionId?: string | null;
+  resolutionReason?: string | null;
 }): Promise<ImageRequestRow> => {
-  if (!hasImageRequestDescriptorMismatch(params.existing, params.descriptor)) {
+  if (
+    !hasImageRequestDescriptorMismatch(params.existing, params.descriptor) &&
+    !hasImageRequestResolutionContextMismatch(
+      params.existing,
+      params.matchedRecipeId,
+      params.matchedRecipeVersionId,
+      params.resolutionReason,
+    )
+  ) {
     return params.existing;
   }
 
@@ -345,9 +236,13 @@ export const reconcileImageRequestDescriptor = async (params: {
   );
   const now = new Date().toISOString();
   const updatePayload: Record<string, unknown> = {
+    image_fingerprint: params.descriptor.imageFingerprint,
     normalized_title: params.descriptor.normalizedTitle,
     normalized_search_text: params.descriptor.normalizedSearchText,
     recipe_payload: params.descriptor.recipePayload,
+    matched_recipe_id: params.matchedRecipeId ?? null,
+    matched_recipe_version_id: params.matchedRecipeVersionId ?? null,
+    resolution_reason: params.resolutionReason ?? null,
     updated_at: now,
   };
 
@@ -377,6 +272,7 @@ export const mapImageRequestRow = (row: Record<string, unknown>): ImageRequestRo
   return {
     id: String(row.id),
     recipe_fingerprint: String(row.recipe_fingerprint),
+    image_fingerprint: String(row.image_fingerprint ?? ""),
     normalized_title: String(row.normalized_title ?? ""),
     normalized_search_text: String(row.normalized_search_text ?? ""),
     recipe_payload: (row.recipe_payload as RecipePayload) ?? {
@@ -396,6 +292,11 @@ export const mapImageRequestRow = (row: Record<string, unknown>): ImageRequestRo
     attempt: Number(row.attempt ?? 0),
     max_attempts: Number(row.max_attempts ?? 5),
     last_error: normalizeText(row.last_error),
+    matched_recipe_id: normalizeText(row.matched_recipe_id),
+    matched_recipe_version_id: normalizeText(row.matched_recipe_version_id),
+    resolution_reason: normalizeText(row.resolution_reason),
+    judge_invoked: Boolean(row.judge_invoked),
+    judge_candidate_count: Number(row.judge_candidate_count ?? 0),
   };
 };
 
@@ -444,7 +345,7 @@ export const parseReuseMetadata = (value: JsonValue): {
 
 /** Select column list reused by all image_requests queries. */
 const IMAGE_REQUEST_COLUMNS =
-  "id,recipe_fingerprint,normalized_title,normalized_search_text,recipe_payload,embedding,asset_id,status,resolution_source,reuse_evaluation,attempt,max_attempts,last_error";
+  "id,recipe_fingerprint,image_fingerprint,normalized_title,normalized_search_text,recipe_payload,embedding,asset_id,status,resolution_source,reuse_evaluation,attempt,max_attempts,last_error,matched_recipe_id,matched_recipe_version_id,resolution_reason,judge_invoked,judge_candidate_count";
 
 export const loadImageRequestByFingerprint = async (
   serviceClient: SupabaseClient,
@@ -522,14 +423,21 @@ export const loadImageAssets = async (
 export const createImageRequest = async (params: {
   serviceClient: SupabaseClient;
   descriptor: Awaited<ReturnType<typeof buildImageRequestDescriptor>>;
+  matchedRecipeId?: string | null;
+  matchedRecipeVersionId?: string | null;
+  resolutionReason?: ImageResolutionReason | null;
 }): Promise<ImageRequestRow> => {
   const now = new Date().toISOString();
   const { data, error } = await params.serviceClient.from("image_requests")
     .insert({
       recipe_fingerprint: params.descriptor.fingerprint,
+      image_fingerprint: params.descriptor.imageFingerprint,
       normalized_title: params.descriptor.normalizedTitle,
       normalized_search_text: params.descriptor.normalizedSearchText,
       recipe_payload: params.descriptor.recipePayload,
+      matched_recipe_id: params.matchedRecipeId ?? null,
+      matched_recipe_version_id: params.matchedRecipeVersionId ?? null,
+      resolution_reason: params.resolutionReason ?? null,
       status: "pending",
       updated_at: now,
     })
@@ -559,6 +467,9 @@ export const ensureImageRequestForRecipe = async (params: {
   serviceClient: SupabaseClient;
   recipe: RecipePayload;
   titleOverride?: string | null;
+  matchedRecipeId?: string | null;
+  matchedRecipeVersionId?: string | null;
+  resolutionReason?: ImageResolutionReason | null;
 }): Promise<ImageRequestRow> => {
   const descriptor = await buildImageRequestDescriptor(
     params.recipe,
@@ -578,6 +489,26 @@ export const ensureImageRequestForRecipe = async (params: {
         serviceClient: params.serviceClient,
         existing,
         descriptor,
+        matchedRecipeId: params.matchedRecipeId,
+        matchedRecipeVersionId: params.matchedRecipeVersionId,
+        resolutionReason: params.resolutionReason,
+      });
+    }
+    if (
+      hasImageRequestResolutionContextMismatch(
+        existing,
+        params.matchedRecipeId,
+        params.matchedRecipeVersionId,
+        params.resolutionReason,
+      )
+    ) {
+      return await reconcileImageRequestDescriptor({
+        serviceClient: params.serviceClient,
+        existing,
+        descriptor,
+        matchedRecipeId: params.matchedRecipeId,
+        matchedRecipeVersionId: params.matchedRecipeVersionId,
+        resolutionReason: params.resolutionReason,
       });
     }
     return existing;
@@ -586,5 +517,8 @@ export const ensureImageRequestForRecipe = async (params: {
   return await createImageRequest({
     serviceClient: params.serviceClient,
     descriptor,
+    matchedRecipeId: params.matchedRecipeId,
+    matchedRecipeVersionId: params.matchedRecipeVersionId,
+    resolutionReason: params.resolutionReason,
   });
 };

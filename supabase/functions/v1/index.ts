@@ -101,6 +101,10 @@ import {
   persistRecipe,
   deriveAttachmentPayload,
 } from "./lib/recipe-persistence.ts";
+import {
+  canonicalizeRecipePayload,
+  resolveAndPersistCanonicalRecipe,
+} from "./lib/recipe-identity.ts";
 import { buildContextPack, updateMemoryFromInteraction, enqueueMemoryJob, processMemoryJobs } from "./lib/context-pack.ts";
 import {
   backfillMemorySearchDocuments,
@@ -499,7 +503,9 @@ Deno.serve(async (request) => {
       fetchChatMessages,
       buildContextPack,
       deriveAttachmentPayload,
+      canonicalizeRecipePayload,
       persistRecipe,
+      resolveAndPersistCanonicalRecipe,
       resolveRelationTypeId,
       logChangelog,
       buildCookbookFeed,
@@ -626,7 +632,11 @@ Deno.serve(async (request) => {
       deriveLoopState,
       buildCandidateOutlineForPrompt,
       parseUuid,
+      getPreferences,
+      canonicalizeRecipePayload,
       persistRecipe,
+      resolveAndPersistCanonicalRecipe,
+      ensurePersistedRecipeImageRequest,
       scheduleImageQueueDrain,
       scheduleMemoryQueueDrain,
       enqueueDemandExtractionJob,

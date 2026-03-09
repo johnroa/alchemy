@@ -14,6 +14,11 @@ import type { SupabaseClient } from "npm:@supabase/supabase-js@2";
 import { ApiError } from "../../_shared/errors.ts";
 import { llmGateway, type ModelOverrideMap } from "../../_shared/llm-gateway.ts";
 import type { JsonValue } from "../../_shared/types.ts";
+import {
+  type ImageResolutionReason,
+  isSameCanonImageJudgeEnabled,
+  logImageIdentityResolution,
+} from "../lib/recipe-identity.ts";
 import { loadRecipeSearchDocumentSource, upsertRecipeSearchDocument } from "../recipe-search.ts";
 import {
   type ImageAssetRow,
@@ -188,6 +193,11 @@ export const refreshPersistedRecipeImagesForRequest = async (params: {
         reused_from_recipe_id: reuseMetadata.reusedFromRecipeId,
         reused_from_recipe_version_id: reuseMetadata.reusedFromRecipeVersionId,
         reuse_evaluation: params.imageRequest.reuse_evaluation ?? {},
+        matched_recipe_id: params.imageRequest.matched_recipe_id,
+        matched_recipe_version_id: params.imageRequest.matched_recipe_version_id,
+        resolution_reason: params.imageRequest.resolution_reason,
+        judge_invoked: params.imageRequest.judge_invoked,
+        judge_candidate_count: params.imageRequest.judge_candidate_count,
         updated_at: new Date().toISOString(),
       }
       : {
@@ -196,6 +206,11 @@ export const refreshPersistedRecipeImagesForRequest = async (params: {
         reused_from_recipe_id: null,
         reused_from_recipe_version_id: null,
         reuse_evaluation: params.imageRequest.reuse_evaluation ?? {},
+        matched_recipe_id: params.imageRequest.matched_recipe_id,
+        matched_recipe_version_id: params.imageRequest.matched_recipe_version_id,
+        resolution_reason: params.imageRequest.resolution_reason,
+        judge_invoked: params.imageRequest.judge_invoked,
+        judge_candidate_count: params.imageRequest.judge_candidate_count,
         updated_at: new Date().toISOString(),
       };
 
@@ -296,8 +311,13 @@ export const resolveImageRequestToAsset = async (params: {
   imageRequest: ImageRequestRow;
   assetId: string;
   resolutionSource: ResolutionSource;
+  resolutionReason: ImageResolutionReason;
   reuseEvaluation: Record<string, JsonValue>;
   asset?: ImageAssetRow | null;
+  matchedRecipeId?: string | null;
+  matchedRecipeVersionId?: string | null;
+  judgeInvoked?: boolean;
+  judgeCandidateCount?: number;
 }): Promise<void> => {
   const previousAssetId = params.imageRequest.asset_id;
   const now = new Date().toISOString();
@@ -306,6 +326,13 @@ export const resolveImageRequestToAsset = async (params: {
     status: "ready",
     resolution_source: params.resolutionSource,
     reuse_evaluation: params.reuseEvaluation,
+    matched_recipe_id: params.matchedRecipeId ?? params.imageRequest.matched_recipe_id,
+    matched_recipe_version_id: params.matchedRecipeVersionId ??
+      params.imageRequest.matched_recipe_version_id,
+    resolution_reason: params.resolutionReason,
+    judge_invoked: params.judgeInvoked ?? params.imageRequest.judge_invoked,
+    judge_candidate_count: params.judgeCandidateCount ??
+      params.imageRequest.judge_candidate_count,
     last_error: null,
     last_processed_at: now,
     updated_at: now,
@@ -356,6 +383,20 @@ export const resolveImageRequestToAsset = async (params: {
     imageRequest: refreshed,
     asset,
   });
+
+  await logImageIdentityResolution({
+    serviceClient: params.serviceClient,
+    userId: params.userId,
+    requestId: params.requestId,
+    imageRequestId: params.imageRequest.id,
+    recipeId: refreshed.matched_recipe_id,
+    recipeVersionId: refreshed.matched_recipe_version_id,
+    reason: params.resolutionReason,
+    judgeInvoked: params.judgeInvoked ?? refreshed.judge_invoked,
+    judgeCandidateCount: params.judgeCandidateCount ??
+      refreshed.judge_candidate_count,
+    assetId: params.assetId,
+  });
 };
 
 // ─── Reuse Evaluation ────────────────────────────────────────────────────────
@@ -379,6 +420,77 @@ export const shortlistReuseCandidates = async (params: {
       500,
       "image_reuse_candidates_failed",
       "Could not load image reuse candidates",
+      error.message,
+    );
+  }
+
+  return Array.isArray(data)
+    ? (data as ReuseCandidateRow[])
+    : [];
+};
+
+export const findCanonicalImageExactReuseCandidate = async (params: {
+  serviceClient: SupabaseClient;
+  recipeId: string;
+  imageFingerprint: string;
+  excludeImageRequestId?: string | null;
+}): Promise<ReuseCandidateRow | null> => {
+  const { data, error } = await params.serviceClient.rpc(
+    "find_canonical_image_exact_match",
+    {
+      p_recipe_id: params.recipeId,
+      p_image_fingerprint: params.imageFingerprint,
+      p_exclude_request_id: params.excludeImageRequestId ?? null,
+    },
+  );
+
+  if (error) {
+    throw new ApiError(
+      500,
+      "canonical_image_exact_match_failed",
+      "Could not load canonical image exact match",
+      error.message,
+    );
+  }
+
+  if (!Array.isArray(data) || data.length === 0) {
+    return null;
+  }
+
+  const row = data[0] as Record<string, unknown>;
+  return {
+    image_request_id: String(row.image_request_id ?? ""),
+    asset_id: String(row.asset_id ?? ""),
+    image_url: String(row.image_url ?? ""),
+    normalized_title: String(row.normalized_title ?? ""),
+    recipe_id: normalizeText(row.recipe_id),
+    recipe_version_id: normalizeText(row.recipe_version_id),
+    similarity: null,
+    usage_count: null,
+  };
+};
+
+export const shortlistCanonicalReuseCandidates = async (params: {
+  serviceClient: SupabaseClient;
+  recipeId: string;
+  imageRequestId: string;
+  embeddingVector: number[];
+}): Promise<ReuseCandidateRow[]> => {
+  const { data, error } = await params.serviceClient.rpc(
+    "list_canonical_image_reuse_candidates",
+    {
+      p_recipe_id: params.recipeId,
+      p_query_embedding: serializeVector(params.embeddingVector),
+      p_exclude_request_id: params.imageRequestId,
+      p_limit: 3,
+    },
+  );
+
+  if (error) {
+    throw new ApiError(
+      500,
+      "canonical_image_reuse_candidates_failed",
+      "Could not load canonical image reuse candidates",
       error.message,
     );
   }
@@ -429,3 +541,5 @@ export const ensureRequestEmbedding = async (params: {
 
   return embedded.vector;
 };
+
+export { isSameCanonImageJudgeEnabled };

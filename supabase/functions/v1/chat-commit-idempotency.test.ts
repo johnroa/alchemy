@@ -343,14 +343,36 @@ Deno.test("POST /chat/{id}/commit clears the candidate and records the commit su
     }) as never,
     {
       parseUuid: (value: string) => value,
+      getPreferences: async () => ({
+        free_form: null,
+        dietary_preferences: [],
+        dietary_restrictions: [],
+        skill_level: "easy",
+        equipment: [],
+        cuisines: [],
+        aversions: [],
+        cooking_for: null,
+        max_difficulty: 1,
+        presentation_preferences: {},
+      }),
+      canonicalizeRecipePayload: async (input: {
+        payload: RecipePayload;
+      }) => input.payload,
       extractChatContext: (value: unknown) => (value ?? {}) as ChatSessionContext,
       normalizeCandidateRecipeSet: (value: unknown) =>
         value ? value as CandidateRecipeSet : null,
-      persistRecipe: async () => ({
+      resolveAndPersistCanonicalRecipe: async () => ({
+        action: "create_new_canon" as const,
+        reason: "new_canon",
         recipeId: "recipe-1",
         versionId: "version-1",
+        matchedRecipeId: null,
+        matchedRecipeVersionId: null,
+        judgeInvoked: false,
+        judgeCandidateCount: 0,
+        judgeConfidence: null,
       }),
-      attachCommittedCandidateImages: async () => undefined,
+      ensurePersistedRecipeImageRequest: async () => undefined,
       scheduleImageQueueDrain: () => undefined,
       mapCandidateRoleToRelation: () => "pairs_with",
       resolveRelationTypeId: async () => "relation-1",
@@ -412,17 +434,39 @@ Deno.test("POST /chat/{id}/commit returns the first successful commit when claim
     }) as never,
     {
       parseUuid: (value: string) => value,
+      getPreferences: async () => ({
+        free_form: null,
+        dietary_preferences: [],
+        dietary_restrictions: [],
+        skill_level: "easy",
+        equipment: [],
+        cuisines: [],
+        aversions: [],
+        cooking_for: null,
+        max_difficulty: 1,
+        presentation_preferences: {},
+      }),
+      canonicalizeRecipePayload: async (input: {
+        payload: RecipePayload;
+      }) => input.payload,
       extractChatContext: (value: unknown) => (value ?? {}) as ChatSessionContext,
       normalizeCandidateRecipeSet: (value: unknown) =>
         value ? value as CandidateRecipeSet : null,
-      persistRecipe: async () => {
+      resolveAndPersistCanonicalRecipe: async () => {
         persistCalls += 1;
         return {
+          action: "create_new_canon" as const,
+          reason: "new_canon",
           recipeId: "recipe-should-not-be-created",
           versionId: "version-should-not-be-created",
+          matchedRecipeId: null,
+          matchedRecipeVersionId: null,
+          judgeInvoked: false,
+          judgeCandidateCount: 0,
+          judgeConfidence: null,
         };
       },
-      attachCommittedCandidateImages: async () => undefined,
+      ensurePersistedRecipeImageRequest: async () => undefined,
       scheduleImageQueueDrain: () => undefined,
       mapCandidateRoleToRelation: () => "pairs_with",
       resolveRelationTypeId: async () => "relation-1",

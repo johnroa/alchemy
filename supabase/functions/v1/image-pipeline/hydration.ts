@@ -17,6 +17,10 @@ import type {
   RecipePayload,
 } from "../../_shared/types.ts";
 import {
+  logImageIdentityResolution,
+  type ImageResolutionReason,
+} from "../lib/recipe-identity.ts";
+import {
   buildImageRequestDescriptor,
   type CandidateBindingRow,
   ensureImageRequestForRecipe,
@@ -149,7 +153,7 @@ export const hydrateCandidateRecipeSetImages = async (params: {
     ? { data: [] as Record<string, unknown>[], error: null }
     : await params.serviceClient.from("image_requests")
       .select(
-        "id,recipe_fingerprint,normalized_title,normalized_search_text,recipe_payload,embedding,asset_id,status,resolution_source,reuse_evaluation,attempt,max_attempts,last_error",
+        "id,recipe_fingerprint,image_fingerprint,normalized_title,normalized_search_text,recipe_payload,embedding,asset_id,status,resolution_source,reuse_evaluation,attempt,max_attempts,last_error,matched_recipe_id,matched_recipe_version_id,resolution_reason,judge_invoked,judge_candidate_count",
       )
       .in("id", requestIds);
 
@@ -309,6 +313,11 @@ export const attachRecipeVersionToImageRequest = async (params: {
         ? reuseMetadata.reusedFromRecipeVersionId
         : null,
       reuse_evaluation: existingRequest.reuse_evaluation ?? {},
+      matched_recipe_id: existingRequest.matched_recipe_id,
+      matched_recipe_version_id: existingRequest.matched_recipe_version_id,
+      resolution_reason: existingRequest.resolution_reason,
+      judge_invoked: existingRequest.judge_invoked,
+      judge_candidate_count: existingRequest.judge_candidate_count,
       updated_at: new Date().toISOString(),
     }, {
       onConflict: "recipe_version_id",
@@ -334,6 +343,24 @@ export const attachRecipeVersionToImageRequest = async (params: {
     imageRequest: existingRequest,
     asset,
   });
+
+  if (existingRequest.status === "ready" && existingRequest.asset_id) {
+    await logImageIdentityResolution({
+      serviceClient: params.serviceClient,
+      userId: params.userId,
+      requestId: params.requestId,
+      imageRequestId: existingRequest.id,
+      recipeId: existingRequest.matched_recipe_id,
+      recipeVersionId: existingRequest.matched_recipe_version_id,
+      reason: (
+        existingRequest.resolution_reason ??
+          "persisted_exact_fingerprint"
+      ) as ImageResolutionReason,
+      judgeInvoked: existingRequest.judge_invoked,
+      judgeCandidateCount: existingRequest.judge_candidate_count,
+      assetId: existingRequest.asset_id,
+    });
+  }
 };
 
 export const attachCommittedCandidateImages = async (params: {
@@ -448,6 +475,9 @@ export const ensurePersistedRecipeImageRequest = async (params: {
         serviceClient: params.serviceClient,
         existing: existingRequest,
         descriptor,
+        matchedRecipeId: params.recipeId,
+        matchedRecipeVersionId: params.recipeVersionId,
+        resolutionReason: "persisted_exact_fingerprint",
       });
     }
 
@@ -483,6 +513,9 @@ export const ensurePersistedRecipeImageRequest = async (params: {
   const imageRequest = await ensureImageRequestForRecipe({
     serviceClient: params.serviceClient,
     recipe: recipePayload,
+    matchedRecipeId: params.recipeId,
+    matchedRecipeVersionId: params.recipeVersionId,
+    resolutionReason: "persisted_exact_fingerprint",
   });
   await attachRecipeVersionToImageRequest({
     serviceClient: params.serviceClient,

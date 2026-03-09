@@ -647,6 +647,7 @@ export const buildOperationsBoardSnapshot = (
     "chat_iteration",
     "recipe_personalize",
     "recipe_canonicalize",
+    "recipe_canon_match",
   ]);
 
   const generationRows = llmRows.filter((row) => {

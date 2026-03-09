@@ -77,7 +77,10 @@ const scopeLabel = (scope: string): string => {
     memory_summarize: "Memory Summarize",
     memory_conflict_resolve: "Memory Conflict Resolve",
     image_quality_eval: "Image Quality Eval",
-    image_reuse_eval: "Image Reuse Eval"
+    image_reuse_eval: "Image Reuse Eval",
+    recipe_canonicalize: "Recipe Canonicalize",
+    recipe_canon_match: "Recipe Canon Match",
+    recipe_personalize: "Recipe Personalize",
   };
 
   if (scope in known) {

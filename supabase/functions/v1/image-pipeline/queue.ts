@@ -21,11 +21,13 @@ import {
 import {
   createRecipeImageAsset,
   ensureRequestEmbedding,
+  findCanonicalImageExactReuseCandidate,
+  isSameCanonImageJudgeEnabled,
   persistImageToStorage,
   refreshPersistedRecipeImagesForRequest,
   resolveImageRequestToAsset,
   resolveReuseCandidate,
-  shortlistReuseCandidates,
+  shortlistCanonicalReuseCandidates,
 } from "./generation.ts";
 
 // ─── Job Enqueue ─────────────────────────────────────────────────────────────
@@ -205,71 +207,123 @@ export const processImageJobs = async (params: {
     }
 
     try {
-      const embeddingVector = await ensureRequestEmbedding({
-        serviceClient: params.serviceClient,
-        userId: params.userId,
-        requestId: params.requestId,
-        imageRequest,
-        modelOverrides: params.modelOverrides,
-      });
-      const shortlist = await shortlistReuseCandidates({
-        serviceClient: params.serviceClient,
-        imageRequestId: imageRequest.id,
-        embeddingVector,
-      });
-
       let resolved = false;
-      if (shortlist.length > 0) {
-        try {
-          const evaluation = await llmGateway.evaluateRecipeImageReuse({
-            client: params.serviceClient,
+      let judgeInvoked = false;
+      let judgeCandidateCount = 0;
+
+      if (imageRequest.matched_recipe_id) {
+        const exactCanonicalMatch = await findCanonicalImageExactReuseCandidate({
+          serviceClient: params.serviceClient,
+          recipeId: imageRequest.matched_recipe_id,
+          imageFingerprint: imageRequest.image_fingerprint,
+          excludeImageRequestId: imageRequest.id,
+        });
+
+        if (exactCanonicalMatch) {
+          const selectedAsset = (
+            await loadImageAssets(params.serviceClient, [exactCanonicalMatch.asset_id])
+          ).get(exactCanonicalMatch.asset_id) ?? null;
+          await resolveImageRequestToAsset({
+            serviceClient: params.serviceClient,
             userId: params.userId,
             requestId: params.requestId,
-            targetRecipe: imageRequest.recipe_payload,
-            targetTitle: imageRequest.normalized_title,
-            targetSearchText: imageRequest.normalized_search_text,
-            candidates: shortlist.map((candidate) => ({
-              id: candidate.image_request_id,
-              title: candidate.normalized_title,
-              imageUrl: candidate.image_url,
-              recipeId: candidate.recipe_id,
-              recipeVersionId: candidate.recipe_version_id,
-            })),
-            modelOverrides: params.modelOverrides?.image_reuse_eval,
+            imageRequest,
+            assetId: exactCanonicalMatch.asset_id,
+            resolutionSource: "reused",
+            resolutionReason: "persisted_canonical_image_fingerprint",
+            matchedRecipeId: exactCanonicalMatch.recipe_id,
+            matchedRecipeVersionId: exactCanonicalMatch.recipe_version_id,
+            judgeInvoked: false,
+            judgeCandidateCount: 0,
+            reuseEvaluation: {
+              decision: "reuse",
+              selected_candidate_id: exactCanonicalMatch.image_request_id,
+              rationale: "Matched an existing canonical-family image fingerprint.",
+              confidence: 1,
+              reused_from_recipe_id: exactCanonicalMatch.recipe_id,
+              reused_from_recipe_version_id: exactCanonicalMatch.recipe_version_id,
+            },
+            asset: selectedAsset,
           });
-          const selected = evaluation.decision === "reuse"
-            ? resolveReuseCandidate(shortlist, evaluation.selectedCandidateId)
-            : null;
-          if (evaluation.decision === "reuse" && selected) {
-            const selectedAsset = (
-              await loadImageAssets(params.serviceClient, [selected.asset_id])
-            ).get(selected.asset_id) ?? null;
-            await resolveImageRequestToAsset({
-              serviceClient: params.serviceClient,
-              userId: params.userId,
-              requestId: params.requestId,
-              imageRequest,
-              assetId: selected.asset_id,
-              resolutionSource: "reused",
-              reuseEvaluation: {
-                decision: "reuse",
-                selected_candidate_id: selected.image_request_id,
-                rationale: evaluation.rationale,
-                confidence: evaluation.confidence,
-                reused_from_recipe_id: selected.recipe_id,
-                reused_from_recipe_version_id: selected.recipe_version_id,
-              },
-              asset: selectedAsset,
-            });
-            ready += 1;
-            resolved = true;
+          ready += 1;
+          resolved = true;
+        }
+
+        if (!resolved) {
+          const embeddingVector = await ensureRequestEmbedding({
+            serviceClient: params.serviceClient,
+            userId: params.userId,
+            requestId: params.requestId,
+            imageRequest,
+            modelOverrides: params.modelOverrides,
+          });
+          const shortlist = await shortlistCanonicalReuseCandidates({
+            serviceClient: params.serviceClient,
+            recipeId: imageRequest.matched_recipe_id,
+            imageRequestId: imageRequest.id,
+            embeddingVector,
+          });
+          judgeCandidateCount = shortlist.length;
+
+          if (shortlist.length > 0 && isSameCanonImageJudgeEnabled()) {
+            judgeInvoked = true;
+            try {
+              const evaluation = await llmGateway.evaluateRecipeImageReuse({
+                client: params.serviceClient,
+                userId: params.userId,
+                requestId: params.requestId,
+                targetRecipe: imageRequest.recipe_payload,
+                targetTitle: imageRequest.normalized_title,
+                targetSearchText: imageRequest.normalized_search_text,
+                candidates: shortlist.map((candidate) => ({
+                  id: candidate.image_request_id,
+                  title: candidate.normalized_title,
+                  imageUrl: candidate.image_url,
+                  recipeId: candidate.recipe_id,
+                  recipeVersionId: candidate.recipe_version_id,
+                })),
+                modelOverrides: params.modelOverrides?.image_reuse_eval,
+              });
+              const selected = evaluation.decision === "reuse"
+                ? resolveReuseCandidate(shortlist, evaluation.selectedCandidateId)
+                : null;
+              if (evaluation.decision === "reuse" && selected) {
+                const selectedAsset = (
+                  await loadImageAssets(params.serviceClient, [selected.asset_id])
+                ).get(selected.asset_id) ?? null;
+                await resolveImageRequestToAsset({
+                  serviceClient: params.serviceClient,
+                  userId: params.userId,
+                  requestId: params.requestId,
+                  imageRequest,
+                  assetId: selected.asset_id,
+                  resolutionSource: "reused",
+                  resolutionReason: "persisted_canonical_judge_reuse",
+                  matchedRecipeId: selected.recipe_id,
+                  matchedRecipeVersionId: selected.recipe_version_id,
+                  judgeInvoked,
+                  judgeCandidateCount,
+                  reuseEvaluation: {
+                    decision: "reuse",
+                    selected_candidate_id: selected.image_request_id,
+                    rationale: evaluation.rationale,
+                    confidence: evaluation.confidence,
+                    reused_from_recipe_id: selected.recipe_id,
+                    reused_from_recipe_version_id: selected.recipe_version_id,
+                  },
+                  asset: selectedAsset,
+                });
+                ready += 1;
+                resolved = true;
+              }
+            } catch (error) {
+              console.error("image_reuse_eval_failed", {
+                request_id: params.requestId,
+                image_request_id: imageRequest.id,
+                error: error instanceof Error ? error.message : String(error),
+              });
+            }
           }
-        } catch (error) {
-          console.error("image_reuse_eval_failed", {
-            request_id: params.requestId,
-            image_request_id: imageRequest.id,
-            error: error instanceof Error ? error.message : String(error),
-          });
         }
       }
 
@@ -319,10 +373,19 @@ export const processImageJobs = async (params: {
           imageRequest,
           assetId: asset.id,
           resolutionSource: "generated",
+          resolutionReason: imageRequest.matched_recipe_id
+            ? "persisted_canonical_generate"
+            : "candidate_generate",
+          matchedRecipeId: imageRequest.matched_recipe_id,
+          matchedRecipeVersionId: imageRequest.matched_recipe_version_id,
+          judgeInvoked,
+          judgeCandidateCount,
           reuseEvaluation: {
             decision: "generate_new",
             selected_candidate_id: null,
-            rationale: "No existing image fit the recipe closely enough.",
+            rationale: imageRequest.matched_recipe_id
+              ? "No canonical-family image fit the recipe closely enough."
+              : "No exact recipe image existed yet, so a new image was generated.",
             confidence: null,
           },
           asset,

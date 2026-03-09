@@ -58,6 +58,14 @@ export type RecipesDeps = {
   deriveAttachmentPayload: (
     payload: Omit<RecipePayload, "attachments">,
   ) => RecipePayload;
+  canonicalizeRecipePayload: (input: {
+    serviceClient: RouteContext["serviceClient"];
+    userId: string;
+    requestId: string;
+    payload: RecipePayload;
+    preferences: Record<string, JsonValue>;
+    modelOverrides?: RouteContext["modelOverrides"];
+  }) => Promise<RecipePayload>;
   persistRecipe: (input: {
     client: RouteContext["client"];
     serviceClient: RouteContext["serviceClient"];
@@ -72,6 +80,27 @@ export type RecipesDeps = {
     imageError?: string;
     selectedMemoryIds?: string[];
   }) => Promise<{ recipeId: string; versionId: string }>;
+  resolveAndPersistCanonicalRecipe: (input: {
+    client: RouteContext["client"];
+    serviceClient: RouteContext["serviceClient"];
+    userId: string;
+    requestId: string;
+    payload: RecipePayload;
+    sourceChatId?: string;
+    diffSummary?: string;
+    selectedMemoryIds?: string[];
+    modelOverrides?: RouteContext["modelOverrides"];
+  }) => Promise<{
+    action: "reuse_existing_version" | "append_existing_canon" | "create_new_canon";
+    reason: string;
+    recipeId: string;
+    versionId: string;
+    matchedRecipeId: string | null;
+    matchedRecipeVersionId: string | null;
+    judgeInvoked: boolean;
+    judgeCandidateCount: number;
+    judgeConfidence: number | null;
+  }>;
   resolveRelationTypeId: (
     client: RouteContext["client"] | RouteContext["serviceClient"],
     relationType: string,

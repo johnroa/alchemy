@@ -96,6 +96,42 @@ Deno.test("buildImageRequestDescriptor uses image reuse search text instead of d
   }
 });
 
+Deno.test("buildImageRequestDescriptor reuses content/image fingerprints across title-only edits", async () => {
+  const original = await buildImageRequestDescriptor({
+    title: "Elevated Scrambled Eggs",
+    summary: "Silky eggs with creme fraiche and chives.",
+    ingredients: [
+      { name: "large eggs", amount: 6, unit: "piece" },
+      { name: "creme fraiche", amount: 2, unit: "tbsp" },
+      { name: "fresh chives", amount: 1, unit: "tbsp" },
+    ],
+    steps: [
+      { index: 1, instruction: "Whisk and slowly cook the eggs until glossy." },
+    ],
+  });
+
+  const renamed = await buildImageRequestDescriptor({
+    title: "Sunday Scrambled Eggs",
+    summary: "A different summary that should not affect exact identity.",
+    description: "Copy drift should not force a new image request for the same recipe.",
+    ingredients: [
+      { name: "large eggs", amount: 6, unit: "piece" },
+      { name: "creme fraiche", amount: 2, unit: "tbsp" },
+      { name: "fresh chives", amount: 1, unit: "tbsp" },
+    ],
+    steps: [
+      { index: 1, instruction: "Whisk and slowly cook the eggs until glossy." },
+    ],
+  });
+
+  if (original.fingerprint !== renamed.fingerprint) {
+    throw new Error("expected content fingerprint to stay stable across title-only edits");
+  }
+  if (original.imageFingerprint !== renamed.imageFingerprint) {
+    throw new Error("expected image fingerprint to stay stable across title-only edits");
+  }
+});
+
 Deno.test("shouldResetReusedReadyImageRequest only resets stale reused requests", async () => {
   const descriptor = await buildImageRequestDescriptor({
     title: "Elevated Scrambled Eggs",
@@ -115,6 +151,7 @@ Deno.test("shouldResetReusedReadyImageRequest only resets stale reused requests"
   const staleReusedRequest = {
     id: "request-1",
     recipe_fingerprint: descriptor.fingerprint,
+    image_fingerprint: descriptor.imageFingerprint,
     normalized_title: descriptor.normalizedTitle,
     normalized_search_text: `${descriptor.normalizedSearchText}\nButtered toast`,
     recipe_payload: descriptor.recipePayload,
@@ -126,6 +163,11 @@ Deno.test("shouldResetReusedReadyImageRequest only resets stale reused requests"
     attempt: 1,
     max_attempts: 5,
     last_error: null,
+    matched_recipe_id: null,
+    matched_recipe_version_id: null,
+    resolution_reason: "exact_reuse",
+    judge_invoked: false,
+    judge_candidate_count: 0,
   };
 
   if (!shouldResetReusedReadyImageRequest(staleReusedRequest, descriptor)) {

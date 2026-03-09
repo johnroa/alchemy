@@ -230,6 +230,19 @@ export type PersonalizeRecipeResult = {
   conflicts: string[];
 };
 
+export type CanonicalizeRecipeResult = {
+  recipe: RecipePayload;
+  rationale: string | null;
+};
+
+export type RecipeCanonMatchEnvelope = {
+  decision?: unknown;
+  matched_recipe_id?: unknown;
+  matched_recipe_version_id?: unknown;
+  rationale?: unknown;
+  confidence?: unknown;
+};
+
 export type TokenAccum = { input: number; output: number; costUsd: number };
 
 export type ImageQualityWinner = "A" | "B" | "tie";

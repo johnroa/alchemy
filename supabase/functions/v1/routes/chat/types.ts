@@ -137,6 +137,18 @@ export type ChatDeps = {
     candidate: CandidateRecipeSet | null,
   ) => JsonValue;
   parseUuid: (value: string) => string;
+  getPreferences: (
+    client: RouteContext["client"],
+    userId: string,
+  ) => Promise<PreferenceContext>;
+  canonicalizeRecipePayload: (input: {
+    serviceClient: RouteContext["serviceClient"];
+    userId: string;
+    requestId: string;
+    payload: RecipePayload;
+    preferences: Record<string, JsonValue>;
+    modelOverrides?: RouteContext["modelOverrides"];
+  }) => Promise<RecipePayload>;
   persistRecipe: (input: {
     client: RouteContext["client"];
     serviceClient: RouteContext["serviceClient"];
@@ -151,6 +163,34 @@ export type ChatDeps = {
     imageError?: string;
     selectedMemoryIds?: string[];
   }) => Promise<{ recipeId: string; versionId: string }>;
+  resolveAndPersistCanonicalRecipe: (input: {
+    client: RouteContext["client"];
+    serviceClient: RouteContext["serviceClient"];
+    userId: string;
+    requestId: string;
+    payload: RecipePayload;
+    sourceChatId?: string;
+    diffSummary?: string;
+    selectedMemoryIds?: string[];
+    modelOverrides?: RouteContext["modelOverrides"];
+  }) => Promise<{
+    action: "reuse_existing_version" | "append_existing_canon" | "create_new_canon";
+    reason: string;
+    recipeId: string;
+    versionId: string;
+    matchedRecipeId: string | null;
+    matchedRecipeVersionId: string | null;
+    judgeInvoked: boolean;
+    judgeCandidateCount: number;
+    judgeConfidence: number | null;
+  }>;
+  ensurePersistedRecipeImageRequest: (input: {
+    serviceClient: RouteContext["serviceClient"];
+    userId: string;
+    requestId: string;
+    recipeId: string;
+    recipeVersionId: string;
+  }) => Promise<void>;
   scheduleImageQueueDrain: (input: {
     serviceClient: RouteContext["serviceClient"];
     actorUserId: string;

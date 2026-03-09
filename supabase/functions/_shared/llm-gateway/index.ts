@@ -67,6 +67,10 @@ import {
   evaluateImageQualityPair,
   evaluateRecipeImageReuse,
 } from "./image.ts";
+import {
+  canonicalizeRecipe,
+  executeRecipeCanonMatch,
+} from "./canonical.ts";
 import { personalizeRecipe } from "./personalize.ts";
 import {
   normalizePreferenceList,
@@ -80,7 +84,13 @@ import {
   summarizeDemandOutcomeReason,
 } from "./demand.ts";
 
-export type { ModelOverrideMap, SubstitutionDiff, PersonalizeRecipeResult } from "./types.ts";
+export type {
+  CanonicalizeRecipeResult,
+  ModelOverrideMap,
+  PersonalizeRecipeResult,
+  RecipeCanonMatchEnvelope,
+  SubstitutionDiff,
+} from "./types.ts";
 
 export const llmGateway = {
   /**
@@ -518,6 +528,10 @@ export const llmGateway = {
   resolveMemoryConflicts,
 
   generateGreeting,
+
+  canonicalizeRecipe,
+
+  executeRecipeCanonMatch,
 
   personalizeRecipe,
 };

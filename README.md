@@ -7,6 +7,7 @@ iOS-first AI recipe app — users set dietary/skill/equipment preferences, chat 
 ```
 apps/ios/             Native SwiftUI iOS app (iOS 18+)
 apps/admin/           Next.js 15 admin dashboard (Cloudflare Workers via OpenNext)
+apps/web/             Next.js 15 consumer website (Cloudflare Workers via OpenNext)
 infra/cloudflare/     Cloudflare Worker API gateway (TypeScript)
 supabase/             Auth, Postgres, Edge Functions (LLM gateway)
 packages/contracts/   OpenAPI schema + generated TypeScript types
@@ -17,6 +18,7 @@ packages/shared/      Shared utilities
 
 - **API**: `https://api.cookwithalchemy.com/v1/*`
 - **Admin**: `https://admin.cookwithalchemy.com`
+- **Web**: `https://cookwithalchemy.com`
 
 ## Current TODOs
 
@@ -167,6 +169,41 @@ Next.js 15 App Router. All pages under `app/(admin)/`:
 
 ---
 
+## Consumer Website (`apps/web/`)
+
+Public website for `cookwithalchemy.com`, built as a separate Next.js 15 App Router app and deployed to Cloudflare Workers via OpenNext. The starter is static by default for landing, legal, and SEO pages, then selectively revalidates live recipe share pages backed by the public API.
+
+### Tech stack
+
+- **Next.js 15 App Router** — server components with route-level rendering controls
+- **TypeScript + React 18** — aligned with the admin app and monorepo toolchain
+- **Tailwind CSS** — fast iteration without introducing a second web styling system
+- **OpenNext for Cloudflare** — same deployment model as `apps/admin`
+- **`packages/contracts`** — typed API access for consumer web routes
+- **`packages/shared`** — shared API base-path and ingredient semantics helpers
+
+### Route model
+
+- `/` — static landing page
+- `/privacy` — static legal page
+- `/terms` — static legal page
+- `/recipes/[id]` — revalidated public canonical recipe page
+- `/robots.txt` and `/sitemap.xml` — generated metadata routes
+
+### Content model
+
+- Repo-local structured content lives in `apps/web/content/`
+- No CMS is required for the starter architecture
+- Introduce a CMS only if non-engineers need frequent publishing without code review
+
+### Running the consumer website
+
+```bash
+pnpm --filter @alchemy/web dev
+```
+
+---
+
 ## LLM Control Model
 
 All LLM configuration is **runtime DB-driven** — no redeployment required for model swaps, prompt edits, or rule changes. The gateway reads the active record for the requested scope on every call.
@@ -186,6 +223,7 @@ No direct provider calls are allowed outside adapters.
 | `chat_generation` | `POST /chat/{id}/messages` when generation is triggered | Returns full `candidate_recipe_set` (max 3 components). |
 | `chat_iteration` | `POST /chat/{id}/messages` when candidate exists | Returns revised `candidate_recipe_set`. |
 | `recipe_canonicalize` | `POST /chat/{id}/commit` | Strips user-specific adaptations from chat candidate to produce canonical base recipe. |
+| `recipe_canon_match` | Canonical persistence resolver | Decides whether an ambiguous near-match should attach to an existing canon or create a new canon. |
 | `recipe_personalize` | `POST /recipes/{id}/variant/refresh`, auto on save | Materialises user's private variant from canonical base + preferences + manual edits. Graph-grounded with substitution diffs. |
 | `recipe_import_transform` | `POST /chat/import` | Transforms ImportedRecipeDocument → RecipePayload + AssistantReply in Alchemy's voice. |
 | `recipe_import_vision_extract` | `POST /chat/import` (photo kind) | Extracts recipe from cookbook page photo → ImportedRecipeDocument. |
@@ -379,6 +417,7 @@ The migration chain is out of order relative to remote history. Fix by:
 | `0050_recipe_import` | Recipe import pipeline — import_provenance, fingerprint dedup, LLM scope seeds |
 | `0051_recipe_popularity` | Popularity scoring, view tracking, ingredient trending, search sort |
 | `0052_pipeline_observability` | Pipeline observability RPC for admin dashboard |
+| `0059_recipe_identity_resolver` | Unified recipe canon + image identity resolver, backfill, and canon-family lookup RPCs |
 | `0053_behavior_telemetry` | First-party product behavior ledger and ingestion substrate |
 | `0054_restore_search_preview_projection` | Search preview projection compatibility fix after telemetry rollout |
 | `0055_acquisition_profiles` | Install-scoped attribution, acquisition milestones, and acquisition board backing tables |
@@ -445,7 +484,7 @@ All commands run from repo root (`/Users/john/Projects/alchemy`).
 - Operational precedence is: `README.md` -> `AGENTS.md` -> repo scripts/config -> ecosystem defaults.
 - If a documented deploy/build command fails, debug that documented path and repair it. Do not silently switch the final workflow to a different cwd or alternate command.
 - Alternate commands or direct service URLs may be used for diagnosis, but the final deploy should still run through the documented repo-root path.
-- Prefer validating against the documented public hosts (`api.cookwithalchemy.com`, `admin.cookwithalchemy.com`) before relying on lower-level worker/dev URLs.
+- Prefer validating against the documented public hosts (`cookwithalchemy.com`, `api.cookwithalchemy.com`, `admin.cookwithalchemy.com`) before relying on lower-level worker/dev URLs.
 - If the documented workflow is incomplete or wrong, update the docs in the same change so the corrected path becomes the new default.
 
 ### One-time auth
@@ -487,6 +526,15 @@ Trigger behavior:
 npx wrangler deploy --config infra/cloudflare/api-gateway/wrangler.jsonc
 ```
 
+### Push Cloudflare consumer website (`cookwithalchemy.com`)
+
+```bash
+pnpm --filter @alchemy/web cf:build
+pnpm --filter @alchemy/web exec opennextjs-cloudflare deploy
+```
+
+The apex custom domain is declared in `apps/web/wrangler.jsonc`, so deploys reconcile `cookwithalchemy.com` as part of the worker publish.
+
 ### Push Cloudflare admin worker (`admin.cookwithalchemy.com`)
 
 ```bash
@@ -497,6 +545,7 @@ pnpm --filter @alchemy/admin exec opennextjs-cloudflare deploy
 ### Quick verify
 
 ```bash
+curl -I https://cookwithalchemy.com
 curl https://api.cookwithalchemy.com/v1/healthz
 ```
 
