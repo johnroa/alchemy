@@ -8,6 +8,10 @@ This document explains how Alchemy's personalized Explore feed works end to end:
 - the telemetry it emits
 - the Admin surfaces used to inspect performance
 
+Companion document:
+
+- [Explore `For You` Serving, Preload, and Cache Guide](/Users/john/Projects/alchemy/docs/explore-for-you-serving.md)
+
 Primary implementation files:
 
 - [for-you.ts](/Users/john/Projects/alchemy/supabase/functions/v1/search/for-you.ts)
