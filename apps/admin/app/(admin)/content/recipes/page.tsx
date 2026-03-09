@@ -3,6 +3,7 @@ import { AnalyticsMovedNotice } from "@/components/admin/analytics-moved-notice"
 import { EntityTypeIcon } from "@/components/admin/entity-type-icon";
 import { PageHeader } from "@/components/admin/page-header";
 import {
+  PrivateCookbookQueue,
   RecipeDetailPanel,
   RecipeFilters,
   RecipeTable,
@@ -12,7 +13,12 @@ import {
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
-import { getRecipeAuditDetail, getRecipeAuditIndexData, getRecipeCookbookEntries } from "@/lib/admin-data";
+import {
+  getPendingCookbookEntries,
+  getRecipeAuditDetail,
+  getRecipeAuditIndexData,
+  getRecipeCookbookEntries,
+} from "@/lib/admin-data";
 
 type RecipesPageSearchParams = {
   q?: string;
@@ -47,9 +53,10 @@ export default async function RecipesPage({
   const selectedRecipeId = sortedRows.some((row) => row.id === requestedRecipeId)
     ? requestedRecipeId
     : sortedRows[0]?.id;
-  const [detail, cookbookEntries] = await Promise.all([
+  const [detail, cookbookEntries, pendingCookbookEntries] = await Promise.all([
     selectedRecipeId ? getRecipeAuditDetail(selectedRecipeId) : Promise.resolve(null),
     selectedRecipeId ? getRecipeCookbookEntries(selectedRecipeId) : Promise.resolve([]),
+    getPendingCookbookEntries(),
   ]);
   const unresolvedOwners = sortedRows.filter((row) => !row.owner_email).length;
   const shownRecipeCount = sortedRows.length;
@@ -83,6 +90,8 @@ export default async function RecipesPage({
           </AlertDescription>
         </Alert>
       )}
+
+      <PrivateCookbookQueue entries={pendingCookbookEntries} />
 
       {/* Two-column split layout */}
       <div className="grid items-start gap-6 lg:grid-cols-[minmax(420px,38%)_minmax(0,1fr)] 2xl:grid-cols-[minmax(460px,40%)_minmax(0,1fr)]">

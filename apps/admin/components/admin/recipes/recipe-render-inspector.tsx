@@ -26,7 +26,7 @@ import {
   type RecipeRenderUnits,
   type RecipeRenderVerbosity,
 } from "@/lib/recipe-render-preview";
-import { cn } from "@/lib/utils";
+import { canonicalStatusBadgeClass, formatSourceKindLabel, variantStatusBadgeClass } from "./status";
 
 type RecipeRenderInspectorProps = {
   recipeId: string;
@@ -88,17 +88,16 @@ const buildFallbackGroups = (
   }];
 };
 
-const formatVariantOptionLabel = (entry: CookbookEntryRow): string => {
+const formatCookbookOptionLabel = (entry: CookbookEntryRow): string => {
   const identity = entry.user_email ?? entry.user_id.slice(0, 8);
-  const status = entry.variant_status ?? "none";
-  return `Variant · ${identity} · ${status}`;
+  return `Private · ${identity} · ${entry.canonical_status}`;
 };
 
 export function RecipeRenderInspector({
   recipeId,
   cookbookEntries,
 }: RecipeRenderInspectorProps): React.JSX.Element {
-  const variantEntries = cookbookEntries.filter((entry) => Boolean(entry.variant_id));
+  const privateEntries = cookbookEntries;
   const [sourceKey, setSourceKey] = useState<string>("canonical");
   const [units, setUnits] = useState<RecipeRenderUnits>("imperial");
   const [groupBy, setGroupBy] = useState<RecipeRenderGroupBy>("component");
@@ -113,11 +112,11 @@ export function RecipeRenderInspector({
   useEffect(() => {
     if (
       sourceKey !== "canonical" &&
-      !variantEntries.some((entry) => entry.variant_id === sourceKey)
+      !privateEntries.some((entry) => entry.id === sourceKey)
     ) {
       setSourceKey("canonical");
     }
-  }, [sourceKey, variantEntries]);
+  }, [sourceKey, privateEntries]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -134,7 +133,7 @@ export function RecipeRenderInspector({
           temperature_unit: temperatureUnit,
         });
         if (sourceKey !== "canonical") {
-          query.set("variant_id", sourceKey);
+          query.set("cookbook_entry_id", sourceKey);
         }
 
         const response = await fetch(
@@ -237,9 +236,9 @@ export function RecipeRenderInspector({
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="canonical">Canonical</SelectItem>
-                  {variantEntries.map((entry) => (
-                    <SelectItem key={entry.variant_id ?? entry.user_id} value={entry.variant_id ?? entry.user_id}>
-                      {formatVariantOptionLabel(entry)}
+                  {privateEntries.map((entry) => (
+                    <SelectItem key={entry.id} value={entry.id}>
+                      {formatCookbookOptionLabel(entry)}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -338,9 +337,19 @@ export function RecipeRenderInspector({
                 <Badge variant="outline" className="text-xs">
                   {source.label}
                 </Badge>
-                {source.kind === "variant" && source.variant_status && (
-                  <Badge variant="secondary" className="text-xs">
+                {source.kind === "cookbook_entry" && source.canonical_status && (
+                  <Badge variant="outline" className={canonicalStatusBadgeClass(source.canonical_status)}>
+                    canon {source.canonical_status}
+                  </Badge>
+                )}
+                {source.kind === "cookbook_entry" && source.variant_status && (
+                  <Badge variant="outline" className={variantStatusBadgeClass(source.variant_status)}>
                     {source.variant_status}
+                  </Badge>
+                )}
+                {source.kind === "cookbook_entry" && source.source_kind && (
+                  <Badge variant="secondary" className="text-xs">
+                    {formatSourceKindLabel(source.source_kind)}
                   </Badge>
                 )}
                 <Badge variant="outline" className="text-xs">
@@ -356,7 +365,13 @@ export function RecipeRenderInspector({
             </div>
           )}
 
-          {source?.kind === "variant" && source.adaptation_summary && (
+          {source?.kind === "cookbook_entry" && source.canonical_failure_reason && (
+            <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+              Canon failed: {source.canonical_failure_reason}
+            </div>
+          )}
+
+          {source?.kind === "cookbook_entry" && source.adaptation_summary && (
             <div className="rounded border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
               {source.adaptation_summary}
             </div>
@@ -462,7 +477,7 @@ export function RecipeRenderInspector({
                     </CardTitle>
                     <Badge
                       variant={verbosity === "balanced" ? "default" : "outline"}
-                      className={cn("text-[10px]", verbosity === "balanced" && "bg-black text-white")}
+                      className={verbosity === "balanced" ? "bg-black text-[10px] text-white" : "text-[10px]"}
                     >
                       {verbosity}
                     </Badge>

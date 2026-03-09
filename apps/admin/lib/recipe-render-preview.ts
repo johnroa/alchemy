@@ -54,10 +54,16 @@ export type RecipeRenderSource =
     label: string;
   }
   | {
-    kind: "variant";
+    kind: "cookbook_entry";
     label: string;
-    variant_id: string;
+    cookbook_entry_id: string;
+    canonical_recipe_id: string | null;
+    canonical_status: string | null;
+    source_kind: string | null;
+    canonical_failure_reason: string | null;
+    source_chat_id: string | null;
     user_email: string | null;
+    variant_id: string | null;
     variant_status: string | null;
     derivation_kind: string | null;
     adaptation_summary: string;

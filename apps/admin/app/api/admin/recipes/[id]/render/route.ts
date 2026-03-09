@@ -56,13 +56,13 @@ const parseTemperatureUnit = (value: string | null): RecipeRenderTemperatureUnit
     : "fahrenheit";
 
 const buildRenderPath = (params: {
-  recipeId: string;
+  recipeId: string | null;
   verbosity: RecipeRenderVerbosity;
   units: RecipeRenderUnits;
   groupBy: RecipeRenderGroupBy;
   inlineMeasurements: boolean;
   temperatureUnit: RecipeRenderTemperatureUnit;
-  variantId: string | null;
+  cookbookEntryId: string | null;
 }): string => {
   const query = new URLSearchParams();
   query.set("units", params.units);
@@ -71,8 +71,15 @@ const buildRenderPath = (params: {
   query.set("verbosity", params.verbosity);
   query.set("temperature_unit", params.temperatureUnit);
 
-  const suffix = params.variantId ? "/variant" : "";
-  return `/recipes/${encodeURIComponent(params.recipeId)}${suffix}?${query.toString()}`;
+  if (params.cookbookEntryId) {
+    return `/recipes/cookbook/${encodeURIComponent(params.cookbookEntryId)}?${query.toString()}`;
+  }
+
+  if (!params.recipeId) {
+    throw new Error("Canonical render path requires a recipe id");
+  }
+
+  return `/recipes/${encodeURIComponent(params.recipeId)}?${query.toString()}`;
 };
 
 const normalizeIngredient = (value: unknown): RecipeRenderIngredient => {
@@ -177,20 +184,32 @@ const buildCanonicalSource = (): RecipeRenderSource => ({
   label: "Canonical",
 });
 
-const buildVariantSource = (params: {
-  variantId: string;
+const buildCookbookEntrySource = (params: {
+  cookbookEntryId: string;
+  canonicalRecipeId: string | null;
+  canonicalStatus: string | null;
+  sourceKind: string | null;
+  canonicalFailureReason: string | null;
+  sourceChatId: string | null;
   userEmail: string | null;
+  variantId: string | null;
   variantStatus: string | null;
   derivationKind: string | null;
   adaptationSummary: string;
   personalizedAt: string | null;
 }): RecipeRenderSource => ({
-  kind: "variant",
+  kind: "cookbook_entry",
   label: params.userEmail
-    ? `Variant · ${params.userEmail}`
-    : `Variant · ${params.variantId.slice(0, 8)}`,
-  variant_id: params.variantId,
+    ? `Private · ${params.userEmail}`
+    : `Private · ${params.cookbookEntryId.slice(0, 8)}`,
+  cookbook_entry_id: params.cookbookEntryId,
+  canonical_recipe_id: params.canonicalRecipeId,
+  canonical_status: params.canonicalStatus,
+  source_kind: params.sourceKind,
+  canonical_failure_reason: params.canonicalFailureReason,
+  source_chat_id: params.sourceChatId,
   user_email: params.userEmail,
+  variant_id: params.variantId,
   variant_status: params.variantStatus,
   derivation_kind: params.derivationKind,
   adaptation_summary: params.adaptationSummary,
@@ -218,6 +237,7 @@ export async function GET(
   const temperatureUnit = parseTemperatureUnit(
     url.searchParams.get("temperature_unit"),
   );
+  const cookbookEntryId = toNullableString(url.searchParams.get("cookbook_entry_id"));
   const variantId = toNullableString(url.searchParams.get("variant_id"));
 
   const apiBase = normalizeApiBase(process.env["API_BASE_URL"]);
@@ -225,7 +245,7 @@ export async function GET(
   let token: string;
   let source: RecipeRenderSource;
 
-  if (!variantId) {
+  if (!cookbookEntryId && !variantId) {
     try {
       token = await getAdminSimulationBearerToken();
     } catch (error) {
@@ -242,33 +262,116 @@ export async function GET(
     source = buildCanonicalSource();
   } else {
     const client = getAdminClient();
-    const { data: variant, error: variantError } = await client
-      .from("user_recipe_variants")
-      .select("id,user_id,canonical_recipe_id,stale_status,current_version_id")
-      .eq("id", variantId)
-      .eq("canonical_recipe_id", recipeId)
+    let resolvedCookbookEntryId = cookbookEntryId;
+    let resolvedVariantId = variantId;
+    let variantState: {
+      id: string;
+      user_id: string;
+      cookbook_entry_id: string;
+      stale_status: string | null;
+      current_version_id: string | null;
+    } | null = null;
+
+    if (!resolvedCookbookEntryId && resolvedVariantId) {
+      const { data: variant, error: variantError } = await client
+        .from("user_recipe_variants")
+        .select("id,user_id,cookbook_entry_id,stale_status,current_version_id")
+        .eq("id", resolvedVariantId)
+        .maybeSingle();
+
+      if (variantError) {
+        return NextResponse.json(
+          { error: variantError.message },
+          { status: 500 },
+        );
+      }
+      if (!variant?.cookbook_entry_id) {
+        return NextResponse.json(
+          { error: "Variant is not linked to a cookbook entry" },
+          { status: 404 },
+        );
+      }
+
+      resolvedCookbookEntryId = variant.cookbook_entry_id;
+      variantState = {
+        id: variant.id,
+        user_id: variant.user_id,
+        cookbook_entry_id: variant.cookbook_entry_id,
+        stale_status: toNullableString(variant.stale_status),
+        current_version_id: variant.current_version_id,
+      };
+    }
+
+    if (!resolvedCookbookEntryId) {
+      return NextResponse.json(
+        { error: "cookbook_entry_id is required for private preview" },
+        { status: 400 },
+      );
+    }
+
+    const { data: entry, error: entryError } = await client
+      .from("cookbook_entries")
+      .select("id,user_id,canonical_recipe_id,canonical_status,source_kind,source_chat_id,canonical_failure_reason,active_variant_id")
+      .eq("id", resolvedCookbookEntryId)
       .maybeSingle();
 
-    if (variantError) {
+    if (entryError) {
       return NextResponse.json(
-        { error: variantError.message },
+        { error: entryError.message },
         { status: 500 },
       );
     }
-    if (!variant || !variant.current_version_id) {
+    if (!entry) {
       return NextResponse.json(
-        { error: "Variant not found for this recipe" },
+        { error: "Cookbook entry not found" },
         { status: 404 },
       );
     }
 
+    if (entry.canonical_recipe_id && entry.canonical_recipe_id !== recipeId) {
+      return NextResponse.json(
+        { error: "Cookbook entry is linked to a different canonical recipe" },
+        { status: 404 },
+      );
+    }
+
+    if (!variantState && entry.active_variant_id) {
+      const { data: variant, error: variantError } = await client
+        .from("user_recipe_variants")
+        .select("id,user_id,cookbook_entry_id,stale_status,current_version_id")
+        .eq("id", entry.active_variant_id)
+        .eq("cookbook_entry_id", entry.id)
+        .maybeSingle();
+
+      if (variantError) {
+        return NextResponse.json(
+          { error: variantError.message },
+          { status: 500 },
+        );
+      }
+
+      if (variant) {
+        variantState = {
+          id: variant.id,
+          user_id: variant.user_id,
+          cookbook_entry_id: variant.cookbook_entry_id,
+          stale_status: toNullableString(variant.stale_status),
+          current_version_id: variant.current_version_id,
+        };
+        resolvedVariantId = variant.id;
+      }
+    }
+
+    const ownerUserId = variantState?.user_id ?? entry.user_id;
     const [{ data: user }, { data: currentVersion }] = await Promise.all([
-      client.from("users").select("email").eq("id", variant.user_id).maybeSingle(),
-      client
-        .from("user_recipe_variant_versions")
-        .select("id,derivation_kind")
-        .eq("id", variant.current_version_id)
-        .maybeSingle(),
+      client.from("users").select("email").eq("id", ownerUserId).maybeSingle(),
+      variantState?.current_version_id
+        ? client
+            .from("user_recipe_variant_versions")
+            .select("id,derivation_kind")
+            .eq("id", variantState.current_version_id)
+            .maybeSingle()
+        : Promise.resolve({ data: null }),
     ]);
 
     const userEmail = toNullableString(user?.email);
@@ -293,10 +396,16 @@ export async function GET(
       );
     }
 
-    source = buildVariantSource({
-      variantId,
+    source = buildCookbookEntrySource({
+      cookbookEntryId: entry.id,
+      canonicalRecipeId: toNullableString(entry.canonical_recipe_id),
+      canonicalStatus: toNullableString(entry.canonical_status),
+      sourceKind: toNullableString(entry.source_kind),
+      canonicalFailureReason: toNullableString(entry.canonical_failure_reason),
+      sourceChatId: toNullableString(entry.source_chat_id),
       userEmail,
-      variantStatus: toNullableString(variant.stale_status),
+      variantId: resolvedVariantId,
+      variantStatus: variantState?.stale_status ?? null,
       derivationKind: toNullableString(currentVersion?.derivation_kind),
       adaptationSummary: "",
       personalizedAt: null,
@@ -313,24 +422,38 @@ export async function GET(
           groupBy,
           inlineMeasurements,
           temperatureUnit,
-          variantId,
+          cookbookEntryId: source.kind === "cookbook_entry" ? source.cookbook_entry_id : null,
         });
         const payload = await fetchUpstreamJson(apiBase, token, path);
 
-        if (!variantId) {
+        if (source.kind === "canonical") {
           return [verbosity, normalizeRecipePreview(payload)] as const;
         }
 
         const record = isRecord(payload) ? payload : {};
         const recipe = normalizeRecipePreview(record["recipe"]);
         if (verbosity === "balanced") {
-          source = buildVariantSource({
-            variantId,
-            userEmail: source.kind === "variant" ? source.user_email : null,
+          source = buildCookbookEntrySource({
+            cookbookEntryId: source.cookbook_entry_id,
+            canonicalRecipeId:
+              toNullableString(record["canonical_recipe_id"]) ??
+              source.canonical_recipe_id,
+            canonicalStatus:
+              toNullableString(record["canonical_status"]) ??
+              source.canonical_status,
+            sourceKind: source.source_kind,
+            canonicalFailureReason: source.canonical_failure_reason,
+            sourceChatId: source.source_chat_id,
+            userEmail: source.user_email,
+            variantId:
+              toNullableString(record["variant_id"]) ??
+              source.variant_id,
             variantStatus:
-              source.kind === "variant" ? source.variant_status : null,
+              toNullableString(record["variant_status"]) ??
+              source.variant_status,
             derivationKind:
-              source.kind === "variant" ? source.derivation_kind : null,
+              toNullableString(record["derivation_kind"]) ??
+              source.derivation_kind,
             adaptationSummary: toString(record["adaptation_summary"]),
             personalizedAt: toNullableString(record["personalized_at"]),
           });

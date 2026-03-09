@@ -56,6 +56,7 @@ export const ADMIN_ROUTES: Array<{ path: string; method: string }> = [
   { path: "/api/admin/recipes/:id/canonical", method: "GET" },
   { path: "/api/admin/recipes/:id/causality", method: "GET" },
   { path: "/api/admin/recipes/:id/render", method: "GET" },
+  { path: "/api/admin/recipes/cookbook/:entryId/canon/retry", method: "POST" },
   { path: "/api/admin/recipes/revert", method: "POST" },
   { path: "/api/admin/request-trace/:requestId", method: "GET" },
   { path: "/api/admin/simulation-image/compare", method: "POST" },

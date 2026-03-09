@@ -610,29 +610,83 @@ export const getRecipeAuditDetail = async (recipeId: string): Promise<RecipeAudi
 // ── Cookbook + Variant admin data functions ──────────────────────────────────
 
 export type CookbookEntryRow = {
+  id: string;
   user_id: string;
   user_email: string | null;
-  canonical_recipe_id: string;
+  canonical_recipe_id: string | null;
+  canonical_status: string;
+  source_kind: string;
   autopersonalize: boolean;
   saved_at: string;
   updated_at: string;
+  canonical_attempted_at: string | null;
+  canonical_ready_at: string | null;
+  canonical_failed_at: string | null;
+  canonical_failure_reason: string | null;
+  preview_image_url: string | null;
+  preview_image_status: string;
+  source_chat_id: string | null;
   variant_id: string | null;
+  variant_version_id: string | null;
   variant_status: string | null;
   preference_fingerprint: string | null;
   last_materialized_at: string | null;
   derivation_kind: string | null;
+  source_canonical_version_id: string | null;
+  seed_origin: string | null;
+  adaptation_summary: string | null;
+  private_title: string | null;
+  private_summary: string | null;
   variant_semantic_labels: string[];
+};
+
+type CookbookEntryBaseRow = {
+  id: string;
+  user_id: string;
+  canonical_recipe_id: string | null;
+  canonical_status: string;
+  source_kind: string;
+  autopersonalize: boolean;
+  saved_at: string;
+  updated_at: string;
+  canonical_attempted_at: string | null;
+  canonical_ready_at: string | null;
+  canonical_failed_at: string | null;
+  canonical_failure_reason: string | null;
+  preview_image_url: string | null;
+  preview_image_status: string;
+  source_chat_id: string | null;
+  active_variant_id: string | null;
+};
+
+type CookbookVariantRow = {
+  id: string;
+  cookbook_entry_id: string;
+  stale_status: string;
+  preference_fingerprint: string | null;
+  last_materialized_at: string | null;
+  current_version_id: string | null;
+  variant_tags: Record<string, unknown> | null;
+};
+
+type CookbookVariantVersionRow = {
+  id: string;
+  derivation_kind: string | null;
+  payload: Record<string, unknown>;
+  provenance: Record<string, unknown> | null;
+  seed_origin: string | null;
+  source_canonical_version_id: string | null;
 };
 
 type VariantDetailRow = {
   variant_id: string;
   user_id: string;
   user_email: string | null;
-  canonical_recipe_id: string;
+  canonical_recipe_id: string | null;
   canonical_title: string;
   stale_status: string;
   preference_fingerprint: string | null;
-  base_canonical_version_id: string;
+  base_canonical_version_id: string | null;
   last_materialized_at: string | null;
   created_at: string;
   versions: Array<{
@@ -650,6 +704,146 @@ type VariantDetailRow = {
   }>;
 };
 
+const toRecord = (value: unknown): Record<string, unknown> | null => (
+  value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null
+);
+
+const toNullableString = (value: unknown): string | null => (
+  typeof value === "string" && value.trim().length > 0 ? value.trim() : null
+);
+
+const extractPrivateRecipePreview = (
+  payload: Record<string, unknown> | null | undefined,
+): { title: string | null; summary: string | null } => ({
+  title: toNullableString(payload?.["title"]),
+  summary: toNullableString(payload?.["summary"]),
+});
+
+const hydrateCookbookEntries = async (
+  entries: CookbookEntryBaseRow[],
+): Promise<CookbookEntryRow[]> => {
+  if (entries.length === 0) {
+    return [];
+  }
+
+  const client = getAdminClient();
+  const userIds = Array.from(new Set(entries.map((entry) => entry.user_id)));
+  const entryIds = entries.map((entry) => entry.id);
+
+  const [{ data: users }, { data: variants }] = await Promise.all([
+    client.from("users").select("id,email").in("id", userIds),
+    client
+      .from("user_recipe_variants")
+      .select("id,cookbook_entry_id,stale_status,preference_fingerprint,last_materialized_at,current_version_id,variant_tags")
+      .in("cookbook_entry_id", entryIds),
+  ]);
+
+  const emailById = new Map((users ?? []).map((user) => [user.id, user.email]));
+  const variantByEntryId = new Map(
+    ((variants ?? []) as Array<{
+      id: string;
+      cookbook_entry_id: string;
+      stale_status: string;
+      preference_fingerprint: string | null;
+      last_materialized_at: string | null;
+      current_version_id: string | null;
+      variant_tags: unknown;
+    }>).map((variant) => [
+      variant.cookbook_entry_id,
+      {
+        id: variant.id,
+        cookbook_entry_id: variant.cookbook_entry_id,
+        stale_status: variant.stale_status,
+        preference_fingerprint: variant.preference_fingerprint,
+        last_materialized_at: variant.last_materialized_at,
+        current_version_id: variant.current_version_id,
+        variant_tags: toRecord(variant.variant_tags),
+      } satisfies CookbookVariantRow,
+    ]),
+  );
+
+  const versionIds = Array.from(
+    new Set(
+      Array.from(variantByEntryId.values())
+        .map((variant) => variant.current_version_id)
+        .filter((id): id is string => Boolean(id)),
+    ),
+  );
+
+  let versionById = new Map<string, CookbookVariantVersionRow>();
+  if (versionIds.length > 0) {
+    const { data: versionRows } = await client
+      .from("user_recipe_variant_versions")
+      .select("id,derivation_kind,payload,provenance,seed_origin,source_canonical_version_id")
+      .in("id", versionIds);
+
+    versionById = new Map(
+      ((versionRows ?? []) as Array<{
+        id: string;
+        derivation_kind: string | null;
+        payload: unknown;
+        provenance: unknown;
+        seed_origin: string | null;
+        source_canonical_version_id: string | null;
+      }>).map((row) => [
+        row.id,
+        {
+          id: row.id,
+          derivation_kind: row.derivation_kind,
+          payload: toRecord(row.payload) ?? {},
+          provenance: toRecord(row.provenance),
+          seed_origin: row.seed_origin,
+          source_canonical_version_id: row.source_canonical_version_id,
+        },
+      ]),
+    );
+  }
+
+  return entries.map((entry) => {
+    const variant = variantByEntryId.get(entry.id);
+    const version = variant?.current_version_id
+      ? versionById.get(variant.current_version_id)
+      : null;
+    const preview = extractPrivateRecipePreview(version?.payload);
+    const semanticProfile = normalizeRecipeSemanticProfile(
+      variant?.variant_tags?.["semantic_profile"] ?? null,
+    );
+
+    return {
+      id: entry.id,
+      user_id: entry.user_id,
+      user_email: emailById.get(entry.user_id) ?? null,
+      canonical_recipe_id: entry.canonical_recipe_id,
+      canonical_status: entry.canonical_status,
+      source_kind: entry.source_kind,
+      autopersonalize: entry.autopersonalize,
+      saved_at: entry.saved_at,
+      updated_at: entry.updated_at,
+      canonical_attempted_at: entry.canonical_attempted_at,
+      canonical_ready_at: entry.canonical_ready_at,
+      canonical_failed_at: entry.canonical_failed_at,
+      canonical_failure_reason: entry.canonical_failure_reason,
+      preview_image_url: entry.preview_image_url,
+      preview_image_status: entry.preview_image_status,
+      source_chat_id: entry.source_chat_id,
+      variant_id: variant?.id ?? entry.active_variant_id ?? null,
+      variant_version_id: variant?.current_version_id ?? null,
+      variant_status: variant?.stale_status ?? null,
+      preference_fingerprint: variant?.preference_fingerprint ?? null,
+      last_materialized_at: variant?.last_materialized_at ?? null,
+      derivation_kind: version?.derivation_kind ?? null,
+      source_canonical_version_id: version?.source_canonical_version_id ?? null,
+      seed_origin: version?.seed_origin ?? null,
+      adaptation_summary: toNullableString(version?.provenance?.["adaptation_summary"]),
+      private_title: preview.title,
+      private_summary: preview.summary,
+      variant_semantic_labels: semanticProfile?.descriptors.map((descriptor) => descriptor.label) ?? [],
+    };
+  });
+};
+
 /**
  * Fetch all cookbook entries for a canonical recipe. Used in the recipe audit
  * panel's Cookbook tab to show who has saved this recipe and their variant status.
@@ -661,7 +855,9 @@ export const getRecipeCookbookEntries = async (
 
   const { data: entries, error } = await client
     .from("cookbook_entries")
-    .select("user_id, canonical_recipe_id, autopersonalize, saved_at, updated_at")
+    .select(
+      "id,user_id,canonical_recipe_id,canonical_status,source_kind,autopersonalize,saved_at,updated_at,canonical_attempted_at,canonical_ready_at,canonical_failed_at,canonical_failure_reason,preview_image_url,preview_image_status,source_chat_id,active_variant_id",
+    )
     .eq("canonical_recipe_id", recipeId)
     .order("saved_at", { ascending: false });
 
@@ -672,63 +868,30 @@ export const getRecipeCookbookEntries = async (
 
   if (!entries || entries.length === 0) return [];
 
-  const userIds = Array.from(new Set(entries.map((e) => e.user_id)));
+  return await hydrateCookbookEntries(entries as CookbookEntryBaseRow[]);
+};
 
-  const [{ data: users }, { data: variants }] = await Promise.all([
-    client.from("users").select("id,email").in("id", userIds),
-    client
-      .from("user_recipe_variants")
-      .select("id, user_id, stale_status, preference_fingerprint, last_materialized_at, current_version_id, variant_tags")
-      .eq("canonical_recipe_id", recipeId)
-      .in("user_id", userIds),
-  ]);
+export const getPendingCookbookEntries = async (
+  limit = 24,
+): Promise<CookbookEntryRow[]> => {
+  const client = getAdminClient();
+  const { data: entries, error } = await client
+    .from("cookbook_entries")
+    .select(
+      "id,user_id,canonical_recipe_id,canonical_status,source_kind,autopersonalize,saved_at,updated_at,canonical_attempted_at,canonical_ready_at,canonical_failed_at,canonical_failure_reason,preview_image_url,preview_image_status,source_chat_id,active_variant_id",
+    )
+    .neq("canonical_status", "ready")
+    .order("updated_at", { ascending: false })
+    .limit(limit);
 
-  const emailById = new Map((users ?? []).map((u) => [u.id, u.email]));
-  const variantByUser = new Map(
-    (variants ?? []).map((v) => [v.user_id, v])
-  );
-
-  // Fetch derivation_kind for variants that have a current version
-  const versionIds = (variants ?? [])
-    .map((v) => v.current_version_id)
-    .filter((id): id is string => Boolean(id));
-
-  let derivationByVersionId = new Map<string, string>();
-  if (versionIds.length > 0) {
-    const { data: versionData } = await client
-      .from("user_recipe_variant_versions")
-      .select("id, derivation_kind")
-      .in("id", versionIds);
-    derivationByVersionId = new Map(
-      (versionData ?? []).map((v) => [v.id, v.derivation_kind])
-    );
+  if (error) {
+    if (!isSchemaMissingError(error)) {
+      throw new Error(error.message);
+    }
+    return [];
   }
 
-  return entries.map((entry) => {
-    const variant = variantByUser.get(entry.user_id);
-    return {
-      user_id: entry.user_id,
-      user_email: emailById.get(entry.user_id) ?? null,
-      canonical_recipe_id: entry.canonical_recipe_id,
-      autopersonalize: entry.autopersonalize,
-      saved_at: entry.saved_at,
-      updated_at: entry.updated_at,
-      variant_id: variant?.id ?? null,
-      variant_status: variant?.stale_status ?? null,
-      preference_fingerprint: variant?.preference_fingerprint ?? null,
-      last_materialized_at: variant?.last_materialized_at ?? null,
-      derivation_kind: variant?.current_version_id
-        ? derivationByVersionId.get(variant.current_version_id) ?? null
-        : null,
-      variant_semantic_labels: normalizeRecipeSemanticProfile(
-        variant?.variant_tags &&
-          typeof variant.variant_tags === "object" &&
-          !Array.isArray(variant.variant_tags)
-          ? (variant.variant_tags as Record<string, unknown>)["semantic_profile"]
-          : null
-      )?.descriptors.map((descriptor) => descriptor.label) ?? [],
-    };
-  });
+  return await hydrateCookbookEntries((entries ?? []) as CookbookEntryBaseRow[]);
 };
 
 /**
@@ -750,7 +913,9 @@ export const getVariantDetail = async (
 
   const [{ data: user }, { data: recipe }, { data: versions }] = await Promise.all([
     client.from("users").select("email").eq("id", variant.user_id).maybeSingle(),
-    client.from("recipes").select("title").eq("id", variant.canonical_recipe_id).maybeSingle(),
+    variant.canonical_recipe_id
+      ? client.from("recipes").select("title").eq("id", variant.canonical_recipe_id).maybeSingle()
+      : Promise.resolve({ data: null }),
     client
       .from("user_recipe_variant_versions")
       .select("id, parent_variant_version_id, source_canonical_version_id, derivation_kind, provenance, payload, created_at")

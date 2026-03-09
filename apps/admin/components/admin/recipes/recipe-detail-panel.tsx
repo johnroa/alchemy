@@ -1,14 +1,15 @@
 import Link from "next/link";
-import { BookOpen, ImageIcon, Network } from "lucide-react";
+import { AlertTriangle, BookOpen, ImageIcon, Network } from "lucide-react";
 import { EntityTypeIcon } from "@/components/admin/entity-type-icon";
 import { RevertVersionDialog } from "@/components/admin/revert-version-dialog";
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type { CookbookEntryRow, RecipeAuditDetail } from "@/lib/admin-data";
-import { cn } from "@/lib/utils";
 import {
   chatMessagePreview,
   getContextCandidateSummary,
@@ -17,7 +18,9 @@ import {
   shortId,
   truncate,
 } from "./types";
+import { CookbookCanonRetryButton } from "./cookbook-canon-retry-button";
 import { RecipeRenderInspector } from "./recipe-render-inspector";
+import { canonicalStatusBadgeClass, formatSourceKindLabel, variantStatusBadgeClass } from "./status";
 
 type RecipeDetailPanelProps = {
   detail: RecipeAuditDetail | null;
@@ -510,75 +513,188 @@ export function RecipeDetailPanel({ detail, cookbookEntries }: RecipeDetailPanel
           </div>
         </TabsContent>
 
-        {/* Cookbook — who has saved this recipe + variant status */}
+        {/* Cookbook — private-first cookbook lineage */}
         <TabsContent value="cookbook">
           <Card>
-            <CardContent className="p-0">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>User</TableHead>
-                    <TableHead>Variant Status</TableHead>
-                    <TableHead>Derivation</TableHead>
-                    <TableHead>Variant Semantics</TableHead>
-                    <TableHead>Auto</TableHead>
-                    <TableHead>Saved</TableHead>
-                    <TableHead>Materialised</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {cookbookEntries.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={7} className="py-8 text-center text-muted-foreground">
-                        No cookbook entries. This recipe has not been saved by any user.
-                      </TableCell>
-                    </TableRow>
-                  ) : (
-                    cookbookEntries.map((entry) => (
-                      <TableRow key={entry.user_id}>
-                        <TableCell className="text-xs">
-                          {entry.user_email ?? entry.user_id.slice(0, 8)}
-                        </TableCell>
-                        <TableCell>
-                          <Badge
-                            variant="outline"
-                            className={cn(
-                              "text-xs",
-                              entry.variant_status === "current" && "border-emerald-300 bg-emerald-50 text-emerald-700",
-                              entry.variant_status === "stale" && "border-amber-300 bg-amber-50 text-amber-700",
-                              entry.variant_status === "processing" && "border-blue-300 bg-blue-50 text-blue-700",
-                              entry.variant_status === "failed" && "border-red-300 bg-red-50 text-red-700",
-                              entry.variant_status === "needs_review" && "border-purple-300 bg-purple-50 text-purple-700",
-                              !entry.variant_status && "text-muted-foreground"
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base">Cookbook Lineage</CardTitle>
+              <CardDescription>
+                Private cookbook entries linked to this canonical recipe, including canonization state, variant ancestry, and retry controls.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="pt-0">
+              {cookbookEntries.length === 0 ? (
+                <div className="rounded-md border border-dashed px-4 py-8 text-center text-sm text-muted-foreground">
+                  No cookbook entries. This recipe has not been saved by any user.
+                </div>
+              ) : (
+                <Accordion type="single" collapsible className="w-full">
+                  {cookbookEntries.map((entry) => (
+                    <AccordionItem key={entry.id} value={entry.id}>
+                      <AccordionTrigger className="hover:no-underline">
+                        <div className="flex w-full flex-col gap-3 pr-4 text-left md:flex-row md:items-center md:justify-between">
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="truncate text-sm font-semibold">
+                                {entry.private_title ?? detail.recipe.title}
+                              </p>
+                              <Badge variant="outline" className={canonicalStatusBadgeClass(entry.canonical_status)}>
+                                canon {entry.canonical_status}
+                              </Badge>
+                              <Badge variant="outline" className={variantStatusBadgeClass(entry.variant_status)}>
+                                {entry.variant_status ?? "no variant"}
+                              </Badge>
+                              <Badge variant="secondary" className="text-[10px]">
+                                {formatSourceKindLabel(entry.source_kind)}
+                              </Badge>
+                            </div>
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              {entry.user_email ?? entry.user_id.slice(0, 8)}
+                              {entry.private_summary ? ` · ${truncate(entry.private_summary, 120)}` : ""}
+                            </p>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                            <Badge variant="outline" className="font-mono text-[10px]">
+                              entry {shortId(entry.id)}
+                            </Badge>
+                            {entry.variant_id && (
+                              <Badge variant="outline" className="font-mono text-[10px]">
+                                variant {shortId(entry.variant_id)}
+                              </Badge>
                             )}
-                          >
-                            {entry.variant_status ?? "none"}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="text-xs text-muted-foreground">
-                          {entry.derivation_kind ?? "—"}
-                        </TableCell>
-                        <TableCell className="max-w-[260px] text-xs text-muted-foreground">
-                          {entry.variant_semantic_labels.length > 0
-                            ? entry.variant_semantic_labels.slice(0, 4).join(" • ")
-                            : "—"}
-                        </TableCell>
-                        <TableCell className="text-xs">
-                          {entry.autopersonalize ? "Yes" : "No"}
-                        </TableCell>
-                        <TableCell className="text-xs text-muted-foreground">
-                          {new Date(entry.saved_at).toLocaleDateString()}
-                        </TableCell>
-                        <TableCell className="text-xs text-muted-foreground">
-                          {entry.last_materialized_at
-                            ? new Date(entry.last_materialized_at).toLocaleString()
-                            : "—"}
-                        </TableCell>
-                      </TableRow>
-                    ))
-                  )}
-                </TableBody>
-              </Table>
+                            <span>{new Date(entry.updated_at).toLocaleString()}</span>
+                          </div>
+                        </div>
+                      </AccordionTrigger>
+                      <AccordionContent className="space-y-4">
+                        {entry.canonical_failure_reason && (
+                          <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                            <div className="flex items-start gap-2">
+                              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                              <span>{entry.canonical_failure_reason}</span>
+                            </div>
+                          </div>
+                        )}
+
+                        {entry.adaptation_summary && (
+                          <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+                            {entry.adaptation_summary}
+                          </div>
+                        )}
+
+                        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                          <div className="rounded-md border px-3 py-3">
+                            <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                              Cookbook Entry
+                            </p>
+                            <div className="mt-2 space-y-1 text-sm">
+                              <p className="font-mono text-[11px]">{entry.id}</p>
+                              <p>Saved {new Date(entry.saved_at).toLocaleString()}</p>
+                              <p>Updated {new Date(entry.updated_at).toLocaleString()}</p>
+                              <p>Auto-personalize {entry.autopersonalize ? "on" : "off"}</p>
+                            </div>
+                          </div>
+
+                          <div className="rounded-md border px-3 py-3">
+                            <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                              Canon Linkage
+                            </p>
+                            <div className="mt-2 space-y-1 text-sm">
+                              <p>Status: {entry.canonical_status}</p>
+                              <p>Recipe: {entry.canonical_recipe_id ? shortId(entry.canonical_recipe_id) : "pending"}</p>
+                              <p>Attempted: {entry.canonical_attempted_at ? new Date(entry.canonical_attempted_at).toLocaleString() : "—"}</p>
+                              <p>Ready: {entry.canonical_ready_at ? new Date(entry.canonical_ready_at).toLocaleString() : "—"}</p>
+                              <p>Failed: {entry.canonical_failed_at ? new Date(entry.canonical_failed_at).toLocaleString() : "—"}</p>
+                            </div>
+                          </div>
+
+                          <div className="rounded-md border px-3 py-3">
+                            <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                              Private Variant
+                            </p>
+                            <div className="mt-2 space-y-1 text-sm">
+                              <p>ID: {entry.variant_id ? shortId(entry.variant_id) : "—"}</p>
+                              <p>Version: {entry.variant_version_id ? shortId(entry.variant_version_id) : "—"}</p>
+                              <p>Status: {entry.variant_status ?? "none"}</p>
+                              <p>Derivation: {entry.derivation_kind ?? "—"}</p>
+                              <p>Seed: {entry.seed_origin ?? "—"}</p>
+                              <p>Materialized: {entry.last_materialized_at ? new Date(entry.last_materialized_at).toLocaleString() : "—"}</p>
+                            </div>
+                          </div>
+                        </div>
+
+                        <Separator />
+
+                        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                          <div className="space-y-2">
+                            <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                              Traceability
+                            </p>
+                            <div className="space-y-1 text-sm text-muted-foreground">
+                              <p>Chat: {entry.source_chat_id ? shortId(entry.source_chat_id) : "—"}</p>
+                              <p>Source kind: {formatSourceKindLabel(entry.source_kind)}</p>
+                              <p>Source canonical version: {entry.source_canonical_version_id ? shortId(entry.source_canonical_version_id) : "—"}</p>
+                              <p>Preference fingerprint: {entry.preference_fingerprint ? shortId(entry.preference_fingerprint) : "—"}</p>
+                            </div>
+                          </div>
+
+                          <div className="space-y-2">
+                            <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                              Preview Image
+                            </p>
+                            <div className="space-y-1 text-sm text-muted-foreground">
+                              <Badge variant="outline" className={imageStatusBadgeClass(entry.preview_image_status)}>
+                                {entry.preview_image_status}
+                              </Badge>
+                              {entry.preview_image_url ? (
+                                <Link
+                                  href={entry.preview_image_url}
+                                  className="block break-all text-xs underline-offset-2 hover:underline"
+                                >
+                                  {entry.preview_image_url}
+                                </Link>
+                              ) : (
+                                <p>—</p>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="space-y-2">
+                            <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                              Semantics
+                            </p>
+                            <div className="flex flex-wrap gap-1">
+                              {entry.variant_semantic_labels.length > 0 ? (
+                                entry.variant_semantic_labels.slice(0, 8).map((label) => (
+                                  <Badge key={`${entry.id}-${label}`} variant="secondary" className="text-[10px]">
+                                    {label}
+                                  </Badge>
+                                ))
+                              ) : (
+                                <p className="text-sm text-muted-foreground">No variant semantic labels.</p>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2">
+                          <CookbookCanonRetryButton
+                            entryId={entry.id}
+                            disabled={entry.canonical_status === "processing"}
+                          />
+                          {entry.canonical_recipe_id && (
+                            <Link href={`/content/recipes?recipe=${encodeURIComponent(entry.canonical_recipe_id)}`}>
+                              <Button variant="outline" size="sm">
+                                Open canonical
+                              </Button>
+                            </Link>
+                          )}
+                        </div>
+                      </AccordionContent>
+                    </AccordionItem>
+                  ))}
+                </Accordion>
+              )}
             </CardContent>
           </Card>
         </TabsContent>

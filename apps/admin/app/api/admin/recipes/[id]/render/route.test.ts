@@ -64,7 +64,10 @@ const buildCanonicalPayload = (instruction: string) => ({
   image_status: "ready",
 });
 
-const buildVariantEnvelope = (instruction: string) => ({
+const buildCookbookEnvelope = (instruction: string) => ({
+  cookbook_entry_id: "cookbook-entry-1",
+  canonical_recipe_id: "recipe-1",
+  canonical_status: "ready",
   variant_id: "variant-1",
   variant_status: "current",
   derivation_kind: "personalized",
@@ -75,6 +78,28 @@ const buildVariantEnvelope = (instruction: string) => ({
 
 const createAdminClient = () => ({
   from(table: string) {
+    if (table === "cookbook_entries") {
+      return {
+        select: vi.fn(() => ({
+          eq: vi.fn(() => ({
+            maybeSingle: vi.fn(async () => ({
+              data: {
+                id: "cookbook-entry-1",
+                user_id: "user-1",
+                canonical_recipe_id: "recipe-1",
+                canonical_status: "ready",
+                source_kind: "created_private",
+                source_chat_id: "chat-1",
+                canonical_failure_reason: null,
+                active_variant_id: "variant-1",
+              },
+              error: null,
+            })),
+          })),
+        })),
+      };
+    }
+
     if (table === "user_recipe_variants") {
       return {
         select: vi.fn(() => ({
@@ -84,12 +109,22 @@ const createAdminClient = () => ({
                 data: {
                   id: "variant-1",
                   user_id: "user-1",
-                  canonical_recipe_id: "recipe-1",
+                  cookbook_entry_id: "cookbook-entry-1",
                   stale_status: "current",
                   current_version_id: "variant-version-1",
                 },
                 error: null,
               })),
+            })),
+            maybeSingle: vi.fn(async () => ({
+              data: {
+                id: "variant-1",
+                user_id: "user-1",
+                cookbook_entry_id: "cookbook-entry-1",
+                stale_status: "current",
+                current_version_id: "variant-version-1",
+              },
+              error: null,
             })),
           })),
         })),
@@ -180,7 +215,7 @@ describe("admin recipe render route", () => {
     expect(fetchMock.mock.calls[2]?.[0]).toContain("verbosity=detailed");
   });
 
-  it("uses the variant owner's bearer token for variant previews", async () => {
+  it("uses the cookbook entry owner's bearer token for private previews", async () => {
     mocks.getAdminClient.mockReturnValue(createAdminClient());
     mocks.getBearerTokenForEmail.mockResolvedValue("variant-token");
 
@@ -189,25 +224,27 @@ describe("admin recipe render route", () => {
       const url = String(input);
       const verbosity = new URL(url).searchParams.get("verbosity") ?? "balanced";
       return new Response(
-        JSON.stringify(buildVariantEnvelope(`Variant ${verbosity}`)),
+        JSON.stringify(buildCookbookEnvelope(`Variant ${verbosity}`)),
         { status: 200, headers: { "content-type": "application/json" } },
       );
     });
 
     const response = await GET(
-      new Request("https://admin.cookwithalchemy.com/api/admin/recipes/recipe-1/render?variant_id=variant-1"),
+      new Request("https://admin.cookwithalchemy.com/api/admin/recipes/recipe-1/render?cookbook_entry_id=cookbook-entry-1"),
       { params: Promise.resolve({ id: "recipe-1" }) },
     );
 
     expect(response.status).toBe(200);
     const payload = await response.json();
-    expect(payload.source.kind).toBe("variant");
+    expect(payload.source.kind).toBe("cookbook_entry");
+    expect(payload.source.cookbook_entry_id).toBe("cookbook-entry-1");
     expect(payload.source.user_email).toBe("cook@example.com");
     expect(payload.source.adaptation_summary).toBe("Swapped dairy for olive oil.");
+    expect(payload.source.canonical_status).toBe("ready");
     expect(payload.previews.balanced.steps[0].instruction).toBe("Variant balanced");
     expect(mocks.getBearerTokenForEmail).toHaveBeenCalledWith("cook@example.com");
     expect(mocks.getAdminSimulationBearerToken).not.toHaveBeenCalled();
     expect(fetchMock).toHaveBeenCalledTimes(3);
-    expect(fetchMock.mock.calls[0]?.[0]).toContain("/recipes/recipe-1/variant?");
+    expect(fetchMock.mock.calls[0]?.[0]).toContain("/recipes/cookbook/cookbook-entry-1?");
   });
 });

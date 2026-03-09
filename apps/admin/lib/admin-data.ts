@@ -20,6 +20,7 @@ export {
   getRecipeAuditDetail,
   getRecipeAuditIndexData,
   getRecipeCookbookEntries,
+  getPendingCookbookEntries,
   getVariantDetail,
   getVariantStats,
 } from "./admin-data/recipes";
