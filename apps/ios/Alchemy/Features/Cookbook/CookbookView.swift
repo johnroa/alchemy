@@ -590,7 +590,11 @@ struct CookbookView: View {
             if response.staleContext == nil { staleBannerDismissed = false }
             trackCookbookView(itemCount: response.items.count)
         } catch {
-            errorMessage = "Couldn't load your cookbook. Check your connection."
+            if case NetworkError.noAccessToken = error {
+                errorMessage = "Session expired — please sign in again."
+            } else {
+                errorMessage = "Couldn't load cookbook: \(error.localizedDescription)"
+            }
             print("[CookbookView] load failed: \(error)")
         }
 
