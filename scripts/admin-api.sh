@@ -39,19 +39,52 @@ run_sql() {
     -d "$(python3 -c "import sys,json; print(json.dumps({'query': sys.stdin.read()}))" <<< "$sql")"
 }
 
+run_sql_checked() {
+  local result
+  result=$(run_sql "$1")
+  python3 -c "
+import json, sys
+payload = json.load(sys.stdin)
+if isinstance(payload, dict) and any(key in payload for key in ('error', 'message', 'code', 'details')):
+    print(json.dumps(payload, indent=2), file=sys.stderr)
+    raise SystemExit(1)
+print(json.dumps(payload))
+" <<< "$result"
+}
+
 ensure_row_exists() {
   local table scope version
   table="$1"
   scope="$2"
   version="$3"
   local result
-  result=$(run_sql "SELECT id FROM $table WHERE scope = '$scope' AND version = $version LIMIT 1")
+  result=$(run_sql_checked "SELECT id FROM $table WHERE scope = '$scope' AND version = $version LIMIT 1")
   python3 -c "
 import json, sys
 payload = json.load(sys.stdin)
 if not isinstance(payload, list) or len(payload) == 0:
     raise SystemExit(1)
 " <<< "$result"
+}
+
+sql_escape_text_file() {
+  local file_path
+  file_path="$1"
+  python3 - "$file_path" <<'PY'
+import pathlib, sys
+content = pathlib.Path(sys.argv[1]).read_text().strip()
+print(content.replace("'", "''"))
+PY
+}
+
+sql_escape_json_file() {
+  local file_path
+  file_path="$1"
+  python3 - "$file_path" <<'PY'
+import json, pathlib, sys
+payload = json.loads(pathlib.Path(sys.argv[1]).read_text())
+print(json.dumps(payload, separators=(",", ":")).replace("'", "''"))
+PY
 }
 
 # Get the service role API key
@@ -119,15 +152,11 @@ for r in data:
     # prompt-create <scope> <version> <name> <template_file>
     shift
     scope="$1"; version="$2"; name="$3"; template_file="$4"
-    escaped_template=$(python3 -c "
-import sys
-t = open('$template_file').read().strip()
-print(t.replace(\"'\", \"''\"))
-")
-    run_sql "INSERT INTO llm_prompts (scope, version, name, template, is_active) VALUES ('$scope', $version, '$name', '$escaped_template', false)" > /dev/null
+    escaped_template=$(sql_escape_text_file "$template_file")
+    run_sql_checked "INSERT INTO llm_prompts (scope, version, name, template, is_active) VALUES ('$scope', $version, '$name', '$escaped_template', false)" > /dev/null
     ensure_row_exists "llm_prompts" "$scope" "$version"
-    run_sql "UPDATE llm_prompts SET is_active = false WHERE scope = '$scope' AND is_active = true" > /dev/null
-    run_sql "UPDATE llm_prompts SET is_active = true WHERE scope = '$scope' AND version = $version" > /dev/null
+    run_sql_checked "UPDATE llm_prompts SET is_active = false WHERE scope = '$scope' AND is_active = true" > /dev/null
+    run_sql_checked "UPDATE llm_prompts SET is_active = true WHERE scope = '$scope' AND version = $version" > /dev/null
     echo "Created and activated $scope v$version ($name)"
     ;;
 
@@ -135,8 +164,8 @@ print(t.replace(\"'\", \"''\"))
     # prompt-activate <scope> <version>
     shift
     scope="$1"; version="$2"
-    run_sql "UPDATE llm_prompts SET is_active = false WHERE scope = '$scope' AND is_active = true" > /dev/null
-    run_sql "UPDATE llm_prompts SET is_active = true WHERE scope = '$scope' AND version = $version" > /dev/null
+    run_sql_checked "UPDATE llm_prompts SET is_active = false WHERE scope = '$scope' AND is_active = true" > /dev/null
+    run_sql_checked "UPDATE llm_prompts SET is_active = true WHERE scope = '$scope' AND version = $version" > /dev/null
     echo "Activated $scope v$version"
     ;;
 
@@ -160,15 +189,11 @@ for r in data:
     # rule-create <scope> <version> <name> <rule_json_file>
     shift
     scope="$1"; version="$2"; name="$3"; rule_file="$4"
-    escaped_rule=$(python3 -c "
-import json
-r = json.load(open('$rule_file'))
-print(json.dumps(json.dumps(r)).replace(\"'\", \"''\"))
-" | sed "s/^\"//;s/\"$//")
-    run_sql "INSERT INTO llm_rules (scope, version, name, rule, is_active) VALUES ('$scope', $version, '$name', '$escaped_rule'::jsonb, false)" > /dev/null
+    escaped_rule=$(sql_escape_json_file "$rule_file")
+    run_sql_checked "INSERT INTO llm_rules (scope, version, name, rule, is_active) VALUES ('$scope', $version, '$name', '$escaped_rule'::jsonb, false)" > /dev/null
     ensure_row_exists "llm_rules" "$scope" "$version"
-    run_sql "UPDATE llm_rules SET is_active = false WHERE scope = '$scope' AND is_active = true" > /dev/null
-    run_sql "UPDATE llm_rules SET is_active = true WHERE scope = '$scope' AND version = $version" > /dev/null
+    run_sql_checked "UPDATE llm_rules SET is_active = false WHERE scope = '$scope' AND is_active = true" > /dev/null
+    run_sql_checked "UPDATE llm_rules SET is_active = true WHERE scope = '$scope' AND version = $version" > /dev/null
     echo "Created and activated rule $scope v$version ($name)"
     ;;
 
@@ -176,8 +201,8 @@ print(json.dumps(json.dumps(r)).replace(\"'\", \"''\"))
     # rule-activate <scope> <version>
     shift
     scope="$1"; version="$2"
-    run_sql "UPDATE llm_rules SET is_active = false WHERE scope = '$scope' AND is_active = true" > /dev/null
-    run_sql "UPDATE llm_rules SET is_active = true WHERE scope = '$scope' AND version = $version" > /dev/null
+    run_sql_checked "UPDATE llm_rules SET is_active = false WHERE scope = '$scope' AND is_active = true" > /dev/null
+    run_sql_checked "UPDATE llm_rules SET is_active = true WHERE scope = '$scope' AND version = $version" > /dev/null
     echo "Activated rule $scope v$version"
     ;;
 

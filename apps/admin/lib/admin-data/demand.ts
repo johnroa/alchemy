@@ -651,8 +651,7 @@ export const buildDemandAnalyticsSnapshot = (params: {
         lastObservedAt: row.last_observed_at,
         timeWindow: row.time_window,
       };
-    })
-    .slice(0, 20);
+    });
 
   const queuePending = params.jobs.filter((job) => job.status === "pending" || job.status === "processing").length;
   const queueFailures = params.jobs.filter((job) => job.status === "failed" || job.status === "dead_letter").length;

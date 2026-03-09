@@ -39,6 +39,7 @@ import {
   resolveCookbookPreviewCategory,
   resolveRecipePayloadSummary,
 } from "../recipe-preview.ts";
+import { resolvePresentationOptions } from "../recipe-standardization.ts";
 import {
   applyThreadPreferenceOverrides,
   derivePendingPreferenceConflictFromResponse,
@@ -90,6 +91,33 @@ import {
   toJsonValue,
   wrapRecipeInCandidateSet,
 } from "./chat-types.ts";
+import { projectRecipePayloadForCandidateResponse } from "./recipe-persistence.ts";
+
+const projectCandidateRecipeSetForResponse = (
+  candidateSet: CandidateRecipeSet | null,
+  presentationPreferences: Record<string, JsonValue> | undefined,
+): CandidateRecipeSet | null => {
+  if (!candidateSet) {
+    return null;
+  }
+
+  const viewOptions = resolvePresentationOptions({
+    query: new URLSearchParams(),
+    presentationPreferences:
+      (presentationPreferences as Record<string, unknown> | undefined) ?? {},
+  });
+
+  return {
+    ...candidateSet,
+    components: candidateSet.components.map((component) => ({
+      ...component,
+      recipe: projectRecipePayloadForCandidateResponse({
+        payload: component.recipe,
+        options: viewOptions,
+      }),
+    })),
+  };
+};
 
 export const fetchChatMessages = async (
   client: SupabaseClient,
@@ -700,10 +728,14 @@ export const buildChatLoopResponse = (params: {
   updatedAt?: string;
   uiHints?: ChatUiHints;
 }): ChatLoopResponse => {
-  const candidateSet = normalizeCandidateRecipeSet(
+  const storedCandidateSet = normalizeCandidateRecipeSet(
     params.context.candidate_recipe_set ?? null,
   );
-  const loopState = deriveLoopState(params.context, candidateSet);
+  const candidateSet = projectCandidateRecipeSetForResponse(
+    storedCandidateSet,
+    params.context.preferences?.presentation_preferences,
+  );
+  const loopState = deriveLoopState(params.context, storedCandidateSet);
   const reply = params.assistantReply ??
     extractLatestAssistantReply(params.messages);
   const safeMessages = sanitizeMessagesForChatResponse(params.messages, reply);
@@ -923,7 +955,7 @@ const buildCookbookData = async (
   }
 
   if (recipeIds.length === 0) {
-    return { items: [], suggestedChips: [] };
+    return { items: [], suggestedChips: [], staleContext: null };
   }
 
   // Load canonical recipe data.

@@ -17,6 +17,7 @@ import type { JsonValue } from "../../_shared/types.ts";
 import {
   type ImageResolutionReason,
   logImageIdentityResolution,
+  resolveSameCanonImageJudgeEnabled,
 } from "../lib/recipe-identity.ts";
 import { loadRecipeSearchDocumentSource, upsertRecipeSearchDocument } from "../recipe-search.ts";
 import {
@@ -540,3 +541,5 @@ export const ensureRequestEmbedding = async (params: {
 
   return embedded.vector;
 };
+
+export { resolveSameCanonImageJudgeEnabled };

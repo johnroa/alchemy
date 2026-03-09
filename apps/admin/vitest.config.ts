@@ -3,9 +3,20 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   resolve: {
-    alias: {
-      "@": path.resolve(__dirname, "."),
-    },
+    alias: [
+      {
+        find: "@",
+        replacement: path.resolve(__dirname, "."),
+      },
+      {
+        find: /^@alchemy\/shared$/,
+        replacement: path.resolve(__dirname, "../../packages/shared/src/index.ts"),
+      },
+      {
+        find: /^@alchemy\/shared\/(.+)$/,
+        replacement: `${path.resolve(__dirname, "../../packages/shared/src")}/$1`,
+      },
+    ],
   },
   test: {
     environment: "jsdom",

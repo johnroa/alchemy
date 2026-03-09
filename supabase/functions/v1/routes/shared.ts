@@ -13,6 +13,8 @@ import type {
   CanonicalIngredientView,
   GroupByPreference,
   IngredientGroup,
+  InstructionVerbosity,
+  TemperatureUnitPreference,
   UnitPreference,
 } from "../recipe-standardization.ts";
 import type {
@@ -108,6 +110,8 @@ export type RecipeViewOptions = {
   units: UnitPreference;
   groupBy: GroupByPreference;
   inlineMeasurements: boolean;
+  verbosity: InstructionVerbosity;
+  temperatureUnit: TemperatureUnitPreference;
 };
 
 export type { RecipePreview, RecipeQuickStats };

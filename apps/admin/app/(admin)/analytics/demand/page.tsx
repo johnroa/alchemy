@@ -1,12 +1,16 @@
 import { BrainCircuit, GitBranch, Radar, ShieldCheck, TimerReset } from "lucide-react";
+import { LazyGraphVisualizer } from "@/components/admin/lazy-graph-visualizer";
 import { DemandAnalyticsPanels } from "@/components/admin/demand-analytics-panels";
 import { DemandReviewQueue } from "@/components/admin/demand-review-queue";
 import { BoardChartCard, BoardPageHeader, BoardTableCard, HeroStatGrid, type BoardHeroStat } from "@/components/admin/board-kit";
 import { FilterBar } from "@/components/admin/filter-bar";
 import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { DEFAULT_ANALYTICS_QUERY, parseAnalyticsQueryState } from "@/lib/admin-analytics";
 import { getDemandAnalyticsData } from "@/lib/admin-data";
+import { buildDemandGraphVisualizerData } from "@/lib/demand-graph";
 import { formatPercent, timeAgo } from "@/lib/format";
 
 export default async function AnalyticsDemandPage({
@@ -17,6 +21,9 @@ export default async function AnalyticsDemandPage({
   const params = await searchParams;
   const query = parseAnalyticsQueryState(params, DEFAULT_ANALYTICS_QUERY);
   const data = await getDemandAnalyticsData(query);
+  const demandGraph = buildDemandGraphVisualizerData(data.graphRows);
+  const graphHighlightRows = data.graphRows.slice(0, 20);
+  const explorerStatShell = "rounded-md border border-border/70 bg-card/80 p-3 text-card-foreground shadow-sm backdrop-blur";
 
   const heroStats: BoardHeroStat[] = [
     {
@@ -223,49 +230,92 @@ export default async function AnalyticsDemandPage({
         </BoardTableCard>
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-2">
-        <BoardTableCard
-          title="Graph Highlights"
-          description="Highest-scoring demand graph edges for the active analytics window."
-        >
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Edge</TableHead>
-                <TableHead className="text-right">Count</TableHead>
-                <TableHead className="text-right">Acceptance</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {data.graphRows.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={3} className="py-10 text-center text-muted-foreground">
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)]">
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Demand Explorer</CardTitle>
+            <CardDescription>
+              Interactive view of creation-native intent and outcome relationships. This is the enterprise-facing graph surface layered on top of the demand graph rollups.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-3 sm:grid-cols-4">
+              <div className={explorerStatShell}>
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Nodes</p>
+                <p className="mt-1 text-2xl font-bold tabular-nums">{demandGraph.summary.nodes.toLocaleString()}</p>
+              </div>
+              <div className={explorerStatShell}>
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Edges</p>
+                <p className="mt-1 text-2xl font-bold tabular-nums">{demandGraph.summary.edges.toLocaleString()}</p>
+              </div>
+              <div className={explorerStatShell}>
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Facets</p>
+                <p className="mt-1 text-2xl font-bold tabular-nums">{demandGraph.summary.facets.toLocaleString()}</p>
+              </div>
+              <div className={explorerStatShell}>
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Window</p>
+                <p className="mt-1 text-2xl font-bold tabular-nums">{demandGraph.summary.window ?? "n/a"}</p>
+              </div>
+            </div>
+
+            <Tabs defaultValue="visual" className="space-y-4">
+              <TabsList className="grid w-full grid-cols-2">
+                <TabsTrigger value="visual">Visual Explorer</TabsTrigger>
+                <TabsTrigger value="table">Highlights Table</TabsTrigger>
+              </TabsList>
+
+              <TabsContent value="visual" className="space-y-3">
+                {demandGraph.graph.entities.length === 0 ? (
+                  <div className="rounded-md border bg-muted/20 px-4 py-10 text-center text-sm text-muted-foreground">
                     No graph edges materialized yet.
-                  </TableCell>
-                </TableRow>
-              ) : (
-                data.graphRows.map((row) => (
-                  <TableRow key={`${row.fromFacet}-${row.fromValue}-${row.toFacet}-${row.toValue}`}>
-                    <TableCell>
-                      <div className="space-y-1">
-                        <p className="font-medium">
-                          {row.fromValue} → {row.toValue}
-                        </p>
-                        <p className="text-[11px] text-muted-foreground">
-                          {row.fromFacet} to {row.toFacet} · {row.stage ?? "all stages"}
-                        </p>
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">{row.count.toLocaleString()}</TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {row.acceptanceScore == null ? "—" : formatPercent(row.acceptanceScore, 1)}
-                    </TableCell>
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-        </BoardTableCard>
+                  </div>
+                ) : (
+                  <LazyGraphVisualizer graph={demandGraph.graph} />
+                )}
+              </TabsContent>
+
+              <TabsContent value="table">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Edge</TableHead>
+                      <TableHead className="text-right">Count</TableHead>
+                      <TableHead className="text-right">Acceptance</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {graphHighlightRows.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={3} className="py-10 text-center text-muted-foreground">
+                          No graph edges materialized yet.
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      graphHighlightRows.map((row) => (
+                        <TableRow key={`${row.fromFacet}-${row.fromValue}-${row.toFacet}-${row.toValue}`}>
+                          <TableCell>
+                            <div className="space-y-1">
+                              <p className="font-medium">
+                                {row.fromValue} → {row.toValue}
+                              </p>
+                              <p className="text-[11px] text-muted-foreground">
+                                {row.fromFacet} to {row.toFacet} · {row.stage ?? "all stages"}
+                              </p>
+                            </div>
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums">{row.count.toLocaleString()}</TableCell>
+                          <TableCell className="text-right tabular-nums">
+                            {row.acceptanceScore == null ? "—" : formatPercent(row.acceptanceScore, 1)}
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    )}
+                  </TableBody>
+                </Table>
+              </TabsContent>
+            </Tabs>
+          </CardContent>
+        </Card>
 
         <BoardTableCard
           title="Review Queue"

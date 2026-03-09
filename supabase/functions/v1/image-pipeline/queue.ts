@@ -24,11 +24,11 @@ import {
   findCanonicalImageExactReuseCandidate,
   persistImageToStorage,
   refreshPersistedRecipeImagesForRequest,
+  resolveSameCanonImageJudgeEnabled,
   resolveImageRequestToAsset,
   resolveReuseCandidate,
   shortlistCanonicalReuseCandidates,
 } from "./generation.ts";
-import { resolveSameCanonImageJudgeEnabled } from "../lib/recipe-identity.ts";
 
 // ─── Job Enqueue ─────────────────────────────────────────────────────────────
 
@@ -174,9 +174,6 @@ export const processImageJobs = async (params: {
   let ready = 0;
   let failed = 0;
   let pending = 0;
-  const sameCanonImageJudgeEnabled = await resolveSameCanonImageJudgeEnabled({
-    serviceClient: params.serviceClient,
-  });
 
   for (const job of jobs) {
     const imageRequest = await loadImageRequestById(
@@ -268,7 +265,12 @@ export const processImageJobs = async (params: {
           });
           judgeCandidateCount = shortlist.length;
 
-          if (shortlist.length > 0 && sameCanonImageJudgeEnabled) {
+          if (
+            shortlist.length > 0 &&
+            await resolveSameCanonImageJudgeEnabled({
+              serviceClient: params.serviceClient,
+            })
+          ) {
             judgeInvoked = true;
             try {
               const evaluation = await llmGateway.evaluateRecipeImageReuse({

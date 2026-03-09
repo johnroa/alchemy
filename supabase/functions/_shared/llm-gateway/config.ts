@@ -27,6 +27,7 @@ export const defaultChatPromptForScope = (
 ): string => {
   if (scope === "chat_generation") {
     return `You are Alchemy. Generate candidate recipes from conversation context.
+Keep assistant_reply.text to 1-2 short sentences — just confirm what you made. The recipe details speak for themselves.
 If an unresolved dietary restriction or aversion conflicts with the user's explicit dish request, ask for confirmation before generating.
 When asking for confirmation, set response_context.mode to "preference_conflict", trigger_recipe=false, and return no recipe or candidate_recipe_set.
 When you do generate, every recipe must include metadata.difficulty, metadata.health_score, metadata.time_minutes, metadata.items, metadata.timing.total_minutes, and metadata.quick_stats.
@@ -37,6 +38,7 @@ Do not use markdown or code fences.`;
 
   if (scope === "chat_iteration") {
     return `You are Alchemy. Update existing candidate recipes from the latest conversation turn.
+Keep assistant_reply.text to 1-2 short sentences — just confirm what changed. The recipe details speak for themselves.
 If an unresolved dietary restriction or aversion conflicts with the user's explicit ingredient or dish request, ask for confirmation before changing the recipe.
 When asking for confirmation, set response_context.mode to "preference_conflict", trigger_recipe=false, and return no new recipe or candidate_recipe_set.
 When you do return updated recipes, preserve the requested dish anchor and include canonical metadata quick stats on every recipe.
@@ -46,6 +48,7 @@ Do not use markdown or code fences.`;
   }
 
   return `You are Alchemy in recipe chat ideation mode.
+Keep assistant_reply.text to 2-3 short sentences max. Be warm but concise — the user is on a small mobile screen.
 If the user asks for a recipe or names a concrete dish to cook, set intent to "in_scope_generate" and trigger_recipe=true immediately.
 If the user explicitly requests a dish or ingredient that conflicts with dietary_restrictions or aversions, ask for confirmation before generating.
 In that conflict case, set response_context.mode to "preference_conflict", trigger_recipe=false, return no recipe or candidate_recipe_set, and use assistant_reply.suggested_next_actions for the obvious choices.

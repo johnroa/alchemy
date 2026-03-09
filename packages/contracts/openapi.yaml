@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Alchemy API
-  version: 3.8.1
+  version: 3.8.2
   description: |
     API contract for Alchemy — an AI-driven recipe creation and management platform.
     Covers the user-facing v1 API at api.cookwithalchemy.com and the admin API at admin.cookwithalchemy.com.
@@ -104,6 +104,20 @@ paths:
           schema:
             type: boolean
           description: Whether to append inline measurements directly inside step instructions.
+        - in: query
+          name: verbosity
+          required: false
+          schema:
+            type: string
+            enum: [concise, balanced, detailed]
+          description: Selects which server-rendered instruction view to return.
+        - in: query
+          name: temperature_unit
+          required: false
+          schema:
+            type: string
+            enum: [fahrenheit, celsius]
+          description: Overrides the rendered temperature unit in step instructions.
       responses:
         '200':
           description: Recipe
@@ -457,6 +471,21 @@ paths:
           required: false
           schema:
             type: boolean
+          description: Whether to append inline measurements directly inside step instructions.
+        - in: query
+          name: verbosity
+          required: false
+          schema:
+            type: string
+            enum: [concise, balanced, detailed]
+          description: Selects which server-rendered instruction view to return.
+        - in: query
+          name: temperature_unit
+          required: false
+          schema:
+            type: string
+            enum: [fahrenheit, celsius]
+          description: Overrides the rendered temperature unit in step instructions.
       responses:
         '200':
           description: Personalised variant
@@ -1961,6 +1990,7 @@ components:
           type: integer
         instruction:
           type: string
+          description: Server-rendered instruction text for the selected verbosity and temperature-unit view.
         timer_seconds:
           type: integer
         notes:
@@ -2155,6 +2185,11 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Ingredient'
+        ingredient_groups:
+          type: array
+          description: Server-projected ingredient groupings for transient candidate responses.
+          items:
+            $ref: '#/components/schemas/IngredientGroup'
         steps:
           type: array
           items:

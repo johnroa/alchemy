@@ -432,6 +432,7 @@ export const handleGetSession = async (
     hydrateCandidateRecipeSetImages,
     extractLatestAssistantReply,
     buildChatLoopResponse,
+    getPreferences,
   } = deps;
 
   const chatId = parseUuid(segments[1]);
@@ -468,6 +469,7 @@ export const handleGetSession = async (
       typeof item === "string"
     )
     : [];
+  const currentPreferences = await getPreferences(client, context.auth.userId);
 
   return respond(
     200,
@@ -476,6 +478,7 @@ export const handleGetSession = async (
       messages,
       context: {
         ...contextValue,
+        preferences: currentPreferences,
         candidate_recipe_set: hydratedCandidateSet,
         candidate_revision: hydratedCandidateSet?.revision ?? contextValue.candidate_revision,
         active_component_id: hydratedCandidateSet?.active_component_id ?? contextValue.active_component_id ?? null,

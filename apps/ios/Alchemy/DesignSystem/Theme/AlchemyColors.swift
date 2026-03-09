@@ -54,10 +54,10 @@ enum AlchemyColors {
     )
 
     /// Hero image gradient for recipe detail title readability.
-    /// Lighter than before — just enough to ensure white title text
-    /// is readable over bright images without washing out the photo.
+    /// Kept light so photos stay vibrant; the text shadow on the
+    /// title carries most of the contrast work.
     static let heroGradient = LinearGradient(
-        colors: [.clear, .clear, Color.black.opacity(0.55)],
+        colors: [.clear, .clear, Color.black.opacity(0.4)],
         startPoint: .top,
         endPoint: .bottom
     )

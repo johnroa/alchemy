@@ -385,7 +385,6 @@ export const handleSaveRoutes = async (
       serviceClient,
       userId: auth.userId,
       requestId,
-      requestUrl: request.url,
       payload: canonicalPayload,
       diffSummary: `Published from variant of recipe ${sourceRecipeId}`,
       modelOverrides,

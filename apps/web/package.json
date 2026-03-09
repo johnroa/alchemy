@@ -1,0 +1,32 @@
+{
+  "name": "@alchemy/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "cf:build": "rm -rf .open-next && opennextjs-cloudflare build",
+    "cf:preview": "pnpm cf:build && opennextjs-cloudflare preview",
+    "cf:deploy": "pnpm cf:build && opennextjs-cloudflare deploy"
+  },
+  "dependencies": {
+    "next": "^15.0.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@opennextjs/cloudflare": "^1.17.1",
+    "@types/node": "^22.8.1",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.47",
+    "tailwindcss": "^3.4.14",
+    "typescript": "^5.6.3",
+    "vitest": "^4.0.18",
+    "wrangler": "^4.69.0"
+  }
+}

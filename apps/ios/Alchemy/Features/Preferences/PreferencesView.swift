@@ -41,9 +41,6 @@ struct PreferencesView: View {
     /// Key is "\(intent.key):\(value)" to uniquely identify each chip.
     @State private var deletableChips: Set<String> = []
 
-    /// Brief toast text shown when the Sous Chef saves a preference update.
-    /// Auto-dismissed after 2.5 seconds.
-    @State private var savedToastText: String?
 
     private static let skillLevelMap: [(api: String, display: String)] = [
         ("beginner", "Beginner"),
@@ -77,6 +74,24 @@ struct PreferencesView: View {
     private let skillLevels = skillLevelMap.map(\.display)
     private let minimizedChatHeight: CGFloat = 170
 
+    /// Lightweight fingerprint of the profile's card-visible data.
+    /// Used as a `.id()` on the Section so SwiftUI fully re-renders
+    /// preference rows when the underlying profile changes.
+    private var profileFingerprint: Int {
+        var hasher = Hasher()
+        hasher.combine(profile.dietaryRestrictions)
+        hasher.combine(profile.dietaryPreferences)
+        hasher.combine(profile.equipment)
+        hasher.combine(profile.aversions)
+        hasher.combine(profile.cuisines)
+        hasher.combine(profile.freeForm)
+        hasher.combine(profile.extendedPreferences?.keys.sorted())
+        for key in (profile.extendedPreferences?.keys.sorted() ?? []) {
+            hasher.combine(profile.extendedPreferences?[key]?.values)
+        }
+        return hasher.finalize()
+    }
+
     var body: some View {
         NavigationStack {
             GeometryReader { proxy in
@@ -97,27 +112,6 @@ struct PreferencesView: View {
                         preferenceChatDock(in: proxy)
                     }
 
-                    // Toast overlay — appears at the top when preferences are saved
-                    if let toastText = savedToastText {
-                        VStack {
-                            HStack(spacing: 6) {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .font(.system(size: 14, weight: .semibold))
-                                    .foregroundStyle(.green)
-                                Text(toastText)
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(.white)
-                            }
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 10)
-                            .background(.ultraThinMaterial, in: Capsule())
-                            .shadow(color: .black.opacity(0.2), radius: 12, y: 4)
-                            .transition(.move(edge: .top).combined(with: .opacity))
-
-                            Spacer()
-                        }
-                        .padding(.top, 8)
-                    }
                 }
             }
             .navigationTitle("Preferences")
@@ -157,6 +151,10 @@ struct PreferencesView: View {
                     preferenceRow(card)
                 }
             }
+            // Force ForEach to re-render children when profile data changes.
+            // Without this, SwiftUI caches child views by their stable
+            // PreferenceEditingIntent IDs and may skip re-evaluation.
+            .id(profileFingerprint)
 
             if let freeForm = profile.freeForm, !freeForm.isEmpty {
                 Section("Notes from Sous Chef") {
@@ -708,7 +706,6 @@ struct PreferencesView: View {
             .tint(Color(red: 0.2, green: 0.2, blue: 0.25))
             .focused($isChatInputFocused)
             .fixedSize(horizontal: false, vertical: true)
-            .disabled(isChatSending)
             .onSubmit {
                 Task { await sendChatMessage() }
             }
@@ -1018,8 +1015,8 @@ struct PreferencesView: View {
             }
 
             if let updates = response.responseContext?.preferenceUpdates, !updates.isEmpty {
-                let fields = updates.map(\.field).joined(separator: ", ")
-                let label = fields.isEmpty ? "Preferences saved" : "Updated \(fields)"
+                let names = updates.map(\.displayName).joined(separator: ", ")
+                let label = names.isEmpty ? "Preferences saved" : "Updated \(names)"
 
                 chatMessages.append(
                     ChatMessage(
@@ -1030,19 +1027,7 @@ struct PreferencesView: View {
                     )
                 )
 
-                // Show toast and immediately reload so cards update in place
-                withAnimation(.spring(duration: 0.35)) {
-                    savedToastText = label
-                }
                 await loadPreferences()
-
-                // Auto-dismiss the toast after 2.5 seconds
-                Task { @MainActor in
-                    try? await Task.sleep(for: .seconds(2.5))
-                    withAnimation(.easeOut(duration: 0.3)) {
-                        savedToastText = nil
-                    }
-                }
             }
         } catch {
             chatMessages.removeAll { $0.id == loadingId }
@@ -1058,8 +1043,10 @@ struct PreferencesView: View {
         skillLevel = Self.skillLevelMap.first { $0.api == apiSkill }?.display ?? "Home Cook"
         defaultServings = Int(loaded.cookingFor ?? "") ?? 2
 
+        // API uses 1-5 (Easy…Expert), slider uses 0.0-1.0.
+        // Save formula: round(slider * 4) + 1  →  reverse: (api - 1) / 4
         let rawDifficulty = loaded.maxDifficulty ?? 3.0
-        maxDifficulty = rawDifficulty <= 1.0 ? rawDifficulty : min(rawDifficulty / 5.0, 1.0)
+        maxDifficulty = max(0, min(1, (rawDifficulty - 1.0) / 4.0))
 
         measurementSystem = presentationString("recipe_units") ?? "imperial"
         ingredientGrouping = presentationString("recipe_group_by") ?? "component"

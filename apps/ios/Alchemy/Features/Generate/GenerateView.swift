@@ -32,7 +32,6 @@ struct GenerateView: View {
     /// Set by commitToCookbook() to pass recipe info to CookbookView
     /// for skeleton rendering. Cleared when the commit API finishes.
     @Binding var pendingSave: PendingSave?
-    @Environment(PresentationPreferencesStore.self) private var presentationPreferencesStore
 
     // MARK: - UI State
 
@@ -55,6 +54,9 @@ struct GenerateView: View {
     /// Controls the entry animation: chat panel starts off-screen and
     /// slides up on first appear.
     @State private var hasAppeared = false
+    /// Full-screen Lottie splash shown on initial tab entry while the
+    /// greeting loads. Fades out before the chat panel slides up.
+    @State private var isInitialLoading = true
     /// Whether the chat panel is explicitly expanded by the user via the
     /// chevron toggle. Only relevant in presenting/iterating phases.
     @State private var isChatPanelExpanded = false
@@ -80,9 +82,9 @@ struct GenerateView: View {
 
     // MARK: - Layout Constants
 
-    /// Chat panel height when minimized (presenting). Enough for the
-    /// last assistant ChatBubble + the input prompt bar.
-    private let minimizedChatHeight: CGFloat = 220
+    /// Chat panel height when minimized (presenting). Snug fit for the
+    /// last assistant ChatBubble + the input prompt bar with minimal chrome.
+    private let minimizedChatHeight: CGFloat = 160
 
     /// Whether the chat panel should be visible at all.
     private var showChatPanel: Bool {
@@ -90,10 +92,10 @@ struct GenerateView: View {
     }
 
     /// Chat panel height when fully expanded (chatting / iterating).
-    /// Matches the Preferences chat dock: 65% of container, capped at
-    /// 560pt so the panel never swallows the full screen.
+    /// 71.5% of container (up from 65%), capped at 616pt so the panel
+    /// never swallows the full screen.
     private func expandedChatHeight(in containerHeight: CGFloat) -> CGFloat {
-        max(360, min(containerHeight * 0.65, 560))
+        max(396, min(containerHeight * 0.715, 616))
     }
 
     /// Target height for the chat panel based on current phase.
@@ -111,6 +113,11 @@ struct GenerateView: View {
     /// True when the chat is showing just the last message + input bar.
     private var isChatMinimized: Bool {
         phase == .presenting && !isChatPanelExpanded
+    }
+
+    /// True when the candidate set has more than one component (main + side, etc.)
+    private var hasMultipleComponents: Bool {
+        (candidateSet?.components.count ?? 0) > 1
     }
 
     /// The message we want to keep visible in the compact post-generate state.
@@ -221,6 +228,20 @@ struct GenerateView: View {
                     .sheet(isPresented: $showSettings) { SettingsView() }
                 }
 
+                // Initial loading splash — Lottie on top of everything
+                // until greeting loads and minimum display time elapses.
+                if isInitialLoading {
+                    ZStack {
+                        AlchemyColors.background.ignoresSafeArea()
+                        LottieView(animation: .named("alchemy-loading"))
+                            .playing(loopMode: .loop)
+                            .frame(width: 120, height: 120)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .transition(.opacity)
+                    .zIndex(10)
+                }
+
                 // Preference-saved toast — floats above everything
                 if let toastText = savedToastText {
                     VStack {
@@ -246,6 +267,8 @@ struct GenerateView: View {
         }
         .background(AlchemyColors.background)
         .task {
+            let startTime = Date()
+
             // Imported sessions must win over the default greeting flow. If the
             // sheet dismisses and TabShell selects Sous Chef with `importedSession`
             // already populated, plain `.onChange` can miss that initial value.
@@ -255,12 +278,30 @@ struct GenerateView: View {
                 consumeImportedSession(session)
                 importedSession = nil
             } else {
-                await loadGreeting()
+                await loadGreeting(focusAfter: false)
             }
 
-            // Animate the chat panel up from below after the initial state is ready.
+            // Ensure the Lottie splash shows for at least 1.5s so it
+            // feels intentional, not a flash.
+            let elapsed = Date().timeIntervalSince(startTime)
+            let remaining = max(0, 1.5 - elapsed)
+            if remaining > 0 {
+                try? await Task.sleep(for: .seconds(remaining))
+            }
+
+            // Fade out the splash, then slide the chat panel up.
+            withAnimation(.easeOut(duration: 0.35)) {
+                isInitialLoading = false
+            }
+            try? await Task.sleep(for: .milliseconds(250))
+
             withAnimation(.spring(duration: 0.6, bounce: 0.2)) {
                 hasAppeared = true
+            }
+
+            // Focus the input after the chat panel finishes animating in.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                inputFocused = true
             }
         }
         .onDisappear {
@@ -353,8 +394,7 @@ struct GenerateView: View {
                     detail: component.recipe.asDisplayDetail(
                         title: component.title,
                         imageUrl: component.imageUrl,
-                        imageStatus: component.imageStatus,
-                        ingredientGrouping: presentationPreferencesStore.ingredientGrouping
+                        imageStatus: component.imageStatus
                     ),
                     sourceSurface: "chat",
                     sourceSessionId: chatSessionId,
@@ -363,7 +403,7 @@ struct GenerateView: View {
                     isEmbedded: true,
                     trackBehavior: false
                 )
-                .id("\(component.componentId)-\(component.imageStatus)-\(component.imageUrl ?? "")")
+                .id(component.componentId)
             } else {
                 recipeSkeleton
             }
@@ -386,6 +426,8 @@ struct GenerateView: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: AlchemySpacing.sm) {
                 ForEach(Array(components.enumerated()), id: \.element.id) { index, component in
+                    let isMain = component.role.lowercased() == "main"
+
                     Button {
                         withAnimation { activeComponentIndex = index }
                         Task { await setActiveComponent(component.componentId) }
@@ -404,6 +446,15 @@ struct GenerateView: View {
                         index == activeComponentIndex ? .regular : .clear,
                         in: .capsule
                     )
+                    .contextMenu {
+                        if !isMain {
+                            Button(role: .destructive) {
+                                Task { await deleteComponent(component.componentId) }
+                            } label: {
+                                Label("Remove \(component.role.capitalized)", systemImage: "trash")
+                            }
+                        }
+                    }
                 }
             }
             .padding(.horizontal, AlchemySpacing.screenHorizontal)
@@ -438,23 +489,22 @@ struct GenerateView: View {
                     .buttonStyle(.plain)
                 }
                 .padding(.horizontal, 16)
-                .padding(.top, 10)
-                .padding(.bottom, 4)
+                .padding(.top, 6)
+                .padding(.bottom, 2)
             } else {
                 Spacer().frame(height: 12)
             }
 
             if isChatMinimized {
-                // Minimized: last assistant bubble + input bar
-                VStack(alignment: .leading, spacing: AlchemySpacing.sm) {
+                // Minimized: last assistant bubble + input bar, kept snug
+                VStack(alignment: .leading, spacing: 6) {
                     if let lastAssistantMessage {
                         ChatBubble(message: lastAssistantMessage)
                             .padding(.horizontal, AlchemySpacing.screenHorizontal)
                     }
 
                     chatInputBar
-                        .padding(.top, AlchemySpacing.xs)
-                        .padding(.bottom, 40)
+                        .padding(.bottom, 12)
                 }
             } else {
                 ScrollViewReader { proxy in
@@ -693,7 +743,7 @@ struct GenerateView: View {
                         isCommitting = true
                         commitToCookbook()
                     } label: {
-                        Text("Save")
+                        Text(hasMultipleComponents ? "Save All" : "Save")
                             .font(AlchemyTypography.captionBold)
                             .foregroundStyle(AlchemyColors.accent)
                     }
@@ -915,10 +965,9 @@ struct GenerateView: View {
         // Surface preference changes as both an inline system message
         // and a floating toast that's visible even when scrolled away.
         if let updates = response.responseContext?.preferenceUpdates, !updates.isEmpty {
-            let fields = updates.map(\.field)
-            let summary = fields.count == 1
-                ? "Saved: \(fields[0].replacingOccurrences(of: "_", with: " "))"
-                : "\(fields.count) preferences saved"
+            let summary = updates.count == 1
+                ? "Saved: \(updates[0].displayName)"
+                : "\(updates.count) preferences saved"
             let systemMsg = ChatMessage(
                 id: UUID().uuidString,
                 role: .system,
@@ -1130,6 +1179,25 @@ struct GenerateView: View {
         }
     }
 
+    /// Removes a non-main component (side, appetizer, etc.) from the
+    /// candidate set via PATCH /chat/{id}/candidate. The backend refuses
+    /// to delete the last remaining component.
+    private func deleteComponent(_ componentId: String) async {
+        guard let sessionId = chatSessionId else { return }
+        do {
+            let response: ChatSessionResponse = try await APIClient.shared.request(
+                "/chat/\(sessionId)/candidate",
+                method: .patch,
+                body: PatchCandidateRequest(action: "delete_component", componentId: componentId)
+            )
+            withAnimation(.easeInOut(duration: 0.3)) {
+                applyChatSessionState(response)
+            }
+        } catch {
+            print("[GenerateView] deleteComponent error: \(error)")
+        }
+    }
+
     /// Commits all candidate components to the cookbook.
     /// Navigates to Cookbook immediately and shows a skeleton card there
     /// while the commit API runs in the background.
@@ -1205,53 +1273,167 @@ struct GenerateView: View {
 /// a crossfade so the loading screen feels alive and playful.
 struct GenerationPhraseView: View {
     private static let phrases = [
+        // Prep
         "Preheating the oven...",
+        "Sharpening the knife...",
+        "Laying out the mise en place...",
+        "Tying the apron...",
+        "Clearing the counter...",
+        "Pulling out the cutting board...",
+        "Reading the recipe twice...",
+        "Gathering the ingredients...",
+        "Washing the produce...",
+
+        // Measuring & mixing
         "Adding a pinch of salt...",
         "Measuring the flour...",
         "Cracking the eggs...",
-        "Chopping the onions...",
-        "Mincing the garlic...",
-        "Zesting the lemon...",
-        "Simmering the broth...",
-        "Browning the butter...",
-        "Deglazing the pan...",
-        "Folding in gently...",
-        "Letting it rest...",
-        "Tasting for seasoning...",
         "A dash of this...",
         "A splash of that...",
         "Whisking until smooth...",
-        "Rolling out the dough...",
-        "Caramelizing the onions...",
-        "Toasting the spices...",
-        "Reducing the sauce...",
-        "Grating the cheese...",
-        "Squeezing the lime...",
+        "Sifting the dry ingredients...",
+        "Folding in gently...",
+        "Combining wet and dry...",
+        "Eyeballing the measurements...",
+        "One more pinch...",
+        "A generous pour...",
+        "Scraping down the bowl...",
+
+        // Knife work
+        "Chopping the onions...",
+        "Mincing the garlic...",
+        "Dicing the vegetables...",
         "Slicing it thin...",
-        "Drizzling the oil...",
+        "Julienning the carrots...",
+        "Chiffonading the basil...",
+        "Brunoise-ing like a pro...",
+        "Paper-thin slices...",
+        "Rough chopping the herbs...",
+        "Peeling the ginger...",
+
+        // Citrus & zest
+        "Zesting the lemon...",
+        "Squeezing the lime...",
+        "Segmenting the orange...",
+        "A hit of citrus...",
+
+        // Heat & cook
+        "Simmering the broth...",
+        "Browning the butter...",
+        "Deglazing the pan...",
+        "Caramelizing the onions...",
+        "Reducing the sauce...",
         "Bringing to a boil...",
         "Turning down the heat...",
-        "Checking the timer...",
-        "Almost there...",
-        "Plating up...",
-        "Fresh herbs on top...",
-        "One more taste...",
-        "Finishing touch...",
-        "Blooming the saffron...",
+        "Adjusting the heat...",
+        "Searing until golden...",
+        "Getting a good crust...",
+        "Low and slow...",
+        "Cranking up the heat...",
+        "Waiting for the sizzle...",
+        "Rendering the fat...",
+        "Sweating the aromatics...",
+        "Building the fond...",
+        "Listening for the pop...",
+        "Getting the pan screaming hot...",
+
+        // Baking & dough
+        "Rolling out the dough...",
         "Kneading the dough...",
-        "Dicing the vegetables...",
-        "Marinating overnight... jk...",
+        "Scoring the bread...",
+        "Proofing the yeast...",
+        "Dusting with flour...",
+        "Crimping the edges...",
+        "Checking the rise...",
+        "Buttering the pan...",
+        "Lining with parchment...",
+
+        // Spices & seasoning
+        "Toasting the spices...",
+        "Crushing the peppercorns...",
+        "Blooming the saffron...",
+        "Grinding fresh pepper...",
+        "A bay leaf for luck...",
+        "Cracking the cardamom...",
+        "Toasting the cumin seeds...",
+        "Smashing the lemongrass...",
+        "Fresh crack of black pepper...",
+
+        // Techniques
         "Flambéing carefully...",
         "Blanching the greens...",
         "Tempering the chocolate...",
-        "Scoring the bread...",
         "Basting the roast...",
-        "Picking the perfect herb...",
-        "Adjusting the heat...",
-        "Crushing the peppercorns...",
         "Infusing the cream...",
-        "Stirring constantly...",
+        "Emulsifying the dressing...",
+        "Mounting with butter...",
+        "Shocking in ice water...",
+        "Straining through a sieve...",
+        "Skimming the surface...",
+        "Double-boiler situation...",
+        "Braising low and slow...",
+        "Poaching gently...",
+        "Charring the peppers...",
+        "Smoking the paprika...",
+        "Dry-brining overnight...",
+        "Marinating overnight... jk...",
+        "Resting under foil...",
+
+        // Dairy & cheese
+        "Grating the cheese...",
+        "Drizzling the oil...",
+        "Crumbling the feta...",
+        "Shaving the parmesan...",
+        "Whipping the cream...",
+        "Tempering the eggs...",
+
+        // Tasting & adjusting
+        "Tasting for seasoning...",
+        "Needs more salt...",
+        "Actually, perfect...",
+        "One more taste...",
+        "Balancing the acid...",
+        "A touch more butter...",
+        "Adjusting the sweetness...",
+        "Nailing the texture...",
+        "Almost there...",
         "Just a little more...",
+        "Checking the timer...",
+        "Stirring constantly...",
+
+        // Finishing
+        "Picking the perfect herb...",
+        "Fresh herbs on top...",
+        "Plating up...",
+        "Finishing touch...",
+        "A drizzle of good olive oil...",
+        "Flaky salt to finish...",
+        "Microplaning the garlic...",
+        "Edible flowers, why not...",
+        "Wiping the rim clean...",
+        "Garnishing with care...",
+        "A squeeze of lemon...",
+        "Torching the meringue...",
+        "Dusting with powdered sugar...",
+        "Cracking the brûlée...",
+
+        // Vibes
+        "Letting it rest...",
+        "Patience is a virtue...",
+        "Good things take time...",
+        "Trust the process...",
+        "Worth the wait...",
+        "Smells incredible...",
+        "The kitchen smells amazing...",
+        "Neighbors are jealous...",
+        "Chef's kiss...",
+        "Cooking with love...",
+        "Secret ingredient: patience...",
+        "No shortcuts...",
+        "Respecting the craft...",
+        "Channeling my nonna...",
+        "What would Julia do...",
+        "Mise en place is life...",
     ]
 
     @State private var index = Int.random(in: 0..<phrases.count)
@@ -1284,8 +1466,7 @@ extension RecipePayload {
     func asDisplayDetail(
         title: String? = nil,
         imageUrl: String? = nil,
-        imageStatus: String = "pending",
-        ingredientGrouping: String = IngredientGroupingMode.defaultMode.rawValue
+        imageStatus: String = "pending"
     ) -> RecipeDetail {
         RecipeDetail(
             id: "candidate-\(UUID().uuidString.prefix(8))",
@@ -1295,10 +1476,11 @@ extension RecipePayload {
             servings: self.servings ?? 4,
             ingredients: self.ingredients ?? [],
             steps: self.steps ?? [],
-            ingredientGroups: IngredientGrouping.groups(
-                for: self.ingredients ?? [],
-                preference: ingredientGrouping
-            ),
+            ingredientGroups: self.ingredientGroups
+                ?? IngredientGrouping.groups(
+                    for: self.ingredients ?? [],
+                    preference: IngredientGroupingMode.defaultMode.rawValue
+                ),
             notes: self.notes,
             pairings: self.pairings ?? [],
             metadata: self.metadata,

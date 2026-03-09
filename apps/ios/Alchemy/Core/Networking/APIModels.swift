@@ -9,6 +9,38 @@ struct CookbookResponse: Decodable {
     let items: [CookbookEntryItem]
     let suggestedChips: [SuggestedChip]
     let cookbookInsight: String?
+    let staleContext: StaleContext?
+}
+
+/// Context for stale recipe variants — which constraint preferences changed
+/// and which recipes are affected. Drives the preference-change banner in
+/// the Cookbook so the user knows exactly what changed and can act on it.
+struct StaleContext: Decodable {
+    let changedFields: [String]
+    let staleRecipeIds: [String]
+    let count: Int
+
+    /// Human-readable labels for the constraint fields that changed.
+    var changedFieldLabels: [String] {
+        changedFields.compactMap { Self.fieldLabels[$0] }
+    }
+
+    /// Formatted summary like "Dietary Restrictions and Aversions".
+    var changedFieldsSummary: String {
+        let labels = changedFieldLabels
+        if labels.isEmpty { return "Preferences" }
+        if labels.count == 1 { return labels[0] }
+        if labels.count == 2 { return "\(labels[0]) and \(labels[1])" }
+        return labels.dropLast().joined(separator: ", ") + ", and " + (labels.last ?? "")
+    }
+
+    private static let fieldLabels: [String: String] = [
+        "dietary_restrictions": "Dietary Restrictions",
+        "aversions": "Ingredients To Avoid",
+        "equipment": "Equipment",
+        "dietary_preferences": "Dietary Preferences",
+        "cuisines": "Cuisines",
+    ]
 }
 
 struct SuggestedChip: Decodable, Identifiable, Hashable {
@@ -369,6 +401,7 @@ struct VariantDetailResponse: Decodable {
     let variantId: String
     let variantVersionId: String
     let canonicalRecipeId: String
+    let recipe: RecipeDetail?
     let adaptationSummary: String?
     let variantStatus: String
     let derivationKind: String?
@@ -487,6 +520,7 @@ struct RecipePayload: Decodable {
     let description: String?
     let servings: Int?
     let ingredients: [APIIngredient]?
+    let ingredientGroups: [APIIngredientGroup]?
     let steps: [APIStep]?
     let notes: String?
     let pairings: [String]?
@@ -585,6 +619,30 @@ struct PreferenceUpdate: Decodable {
         self.value = value
         self.action = action
     }
+
+    /// Human-readable label for the preference field, matching the
+    /// titles shown on the Preferences screen cards.
+    var displayName: String {
+        Self.fieldDisplayNames[field]
+            ?? field.replacingOccurrences(of: "_", with: " ").capitalized
+    }
+
+    private static let fieldDisplayNames: [String: String] = [
+        "dietary_restrictions": "Dietary Restrictions",
+        "dietary_preferences": "Dietary Preferences",
+        "equipment": "Equipment & Kitchen Setup",
+        "aversions": "Ingredients To Avoid",
+        "cuisines": "Favorite Cuisines",
+        "pantry_staples": "Pantry Staples",
+        "health_goals": "Health Goals",
+        "spice_tolerance": "Spice Tolerance",
+        "cooking_style": "Cooking Habits",
+        "household_detail": "Household & Dining",
+        "skill_level": "Skill Level",
+        "cooking_for": "Cooking For",
+        "max_difficulty": "Max Difficulty",
+        "free_form": "Additional Notes",
+    ]
 }
 
 /// Request body for POST /chat (new session) and POST /chat/{id}/messages

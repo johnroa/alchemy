@@ -18,6 +18,7 @@
 
 import { ApiError, requireJsonBody } from "../../../_shared/errors.ts";
 import { executeScope } from "../../../_shared/llm-executor.ts";
+import { normalizeRecipeShape } from "../../../_shared/llm-gateway/normalizers.ts";
 import {
   scrapeRecipeFromUrl,
   documentFromRawText,
@@ -113,7 +114,11 @@ export const handleImportRoutes = async (
         .order("created_at", { ascending: true })
         .limit(50);
 
-      const ctx = (existingSession.context ?? {}) as ChatSessionContext;
+      const currentPreferences = await deps.getPreferences(client, auth.userId);
+      const ctx = {
+        ...(existingSession.context ?? {}) as ChatSessionContext,
+        preferences: currentPreferences,
+      };
       return respond(
         200,
         deps.buildChatLoopResponse({
@@ -254,10 +259,18 @@ export const handleImportRoutes = async (
 
   const transformLatencyMs = Date.now() - transformStartedAt;
   const transformed = transformResult.result;
-  const recipe: RecipePayload = transformed.recipe;
+  const recipe = normalizeRecipeShape(transformed.recipe);
+  if (!recipe) {
+    throw new ApiError(
+      500,
+      "import_transform_invalid",
+      "Import transform did not return a valid recipe payload",
+    );
+  }
   const assistantReply = transformed.assistant_reply ?? {
     text: "Here's what I found! I've adapted this recipe for you. Feel free to make any changes.",
   };
+  const preferences = await deps.getPreferences(client, auth.userId);
 
   // ------------------------------------------------------------------
   // 5. Seed chat session with CandidateRecipeSet
@@ -282,6 +295,7 @@ export const handleImportRoutes = async (
   };
 
   const sessionContext: ChatSessionContext = {
+    preferences,
     loop_state: "candidate_presented",
     candidate_recipe_set: candidateSet,
     candidate_revision: 1,

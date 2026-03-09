@@ -3,7 +3,8 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { type ReactNode } from "react";
-import { ChevronRight, Sparkles } from "lucide-react";
+import { ChevronRight } from "lucide-react";
+import { AlchemyLogo } from "./alchemy-logo";
 import { AccountMenu } from "@/components/admin/account-menu";
 import { BUILD_INFO } from "@/lib/build-info.generated";
 import {
@@ -56,7 +57,7 @@ export function AdminShell({ email, children }: { email: string; children: React
         <SidebarHeader className="gap-0 border-b border-sidebar-border/80 px-3 py-3">
           <div className="flex items-center gap-3 px-1">
             <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-primary shadow-sm">
-              <Sparkles className="h-4 w-4 text-primary-foreground" />
+              <AlchemyLogo className="h-5 w-5 text-primary-foreground" />
             </div>
             <div className="min-w-0 group-data-[collapsible=icon]:hidden">
               <p className="truncate text-sm font-semibold tracking-tight text-sidebar-foreground">CookWithAlchemy</p>

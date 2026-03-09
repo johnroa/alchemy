@@ -3,7 +3,7 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 77;
+	objectVersion = 63;
 	objects = {
 
 /* Begin PBXBuildFile section */
@@ -89,10 +89,10 @@
 		2EFB886BFCD48E94BCC03D46 /* ImportViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportViewModel.swift; sourceTree = "<group>"; };
 		31A803D819EE21D9B9F1C894 /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Release.xcconfig; sourceTree = "<group>"; };
 		3CBE1C0886A1C2E204748114 /* ProfileMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileMenu.swift; sourceTree = "<group>"; };
-		47F2029BC56872F28BD677E1 /* Alchemy.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Alchemy.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		47F2029BC56872F28BD677E1 /* Alchemy.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Alchemy.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		4A19FF6B7729BFE0C2694901 /* APIError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIError.swift; sourceTree = "<group>"; };
 		4CD75C625E706ECE7EB76187 /* GenerateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerateView.swift; sourceTree = "<group>"; };
-		588AA69EA05DFB3A31694F64 /* AlchemyShareExtension.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = AlchemyShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		588AA69EA05DFB3A31694F64 /* AlchemyShareExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = AlchemyShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		58C789C96CA6EF5F537CC575 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		59C6013CE1030E98DF4E617B /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		5DA9E3E09DF919C668A03C35 /* RecipeURLDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecipeURLDetector.swift; sourceTree = "<group>"; };
@@ -458,11 +458,9 @@
 				LastUpgradeCheck = 2600;
 				TargetAttributes = {
 					29DA350CDD1B219BFC6C59C4 = {
-						DevelopmentTeam = "";
 						ProvisioningStyle = Automatic;
 					};
 					E23B76932BACA64C301BBF11 = {
-						DevelopmentTeam = "";
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -483,7 +481,6 @@
 				5057434D94B3E59B5A973CEA /* XCRemoteSwiftPackageReference "sentry-cocoa" */,
 				6226B36222665EA20B944668 /* XCRemoteSwiftPackageReference "supabase-swift" */,
 			);
-			preferredProjectObjectVersion = 77;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -710,6 +707,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Alchemy/Resources/Alchemy.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				DEVELOPMENT_TEAM = 56XVQ8RLW6;
 				INFOPLIST_FILE = Alchemy/Resources/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -725,6 +723,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = AlchemyShareExtension/AlchemyShareExtension.entitlements;
+				DEVELOPMENT_TEAM = 56XVQ8RLW6;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = AlchemyShareExtension/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -746,6 +745,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Alchemy/Resources/Alchemy.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				DEVELOPMENT_TEAM = 56XVQ8RLW6;
 				INFOPLIST_FILE = Alchemy/Resources/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -761,6 +761,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = AlchemyShareExtension/AlchemyShareExtension.entitlements;
+				DEVELOPMENT_TEAM = 56XVQ8RLW6;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = AlchemyShareExtension/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (

@@ -33,6 +33,19 @@ interface GraphCanvasProps {
   hasUserCameraControlRef: MutableRefObject<boolean>;
 }
 
+const GRAPH_CANVAS_COLORS = {
+  background: "#020817",
+  defaultNodeOutline: "rgba(2, 6, 23, 0.9)",
+  selectedNodeOutline: "#f8fafc",
+  labelBackground: "rgba(15, 23, 42, 0.9)",
+  labelForeground: "#e2e8f0",
+  fadedLink: "rgba(148, 163, 184, 0.18)",
+  tooltipBackground: "rgba(2, 6, 23, 0.96)",
+  tooltipBorder: "rgba(148, 163, 184, 0.35)",
+  tooltipForeground: "#e2e8f0",
+  tooltipMuted: "rgba(226, 232, 240, 0.72)",
+} as const;
+
 export function GraphCanvas({
   filtered,
   relationTypes,
@@ -123,7 +136,9 @@ export function GraphCanvas({
       canvasContext.fill();
 
       canvasContext.lineWidth = isSelected ? 2.8 : 1.1;
-      canvasContext.strokeStyle = isSelected ? "#0f172a" : "#f8fafc";
+      canvasContext.strokeStyle = isSelected
+        ? GRAPH_CANVAS_COLORS.selectedNodeOutline
+        : GRAPH_CANVAS_COLORS.defaultNodeOutline;
       canvasContext.stroke();
 
       const shouldDrawLabel =
@@ -146,10 +161,10 @@ export function GraphCanvas({
       const labelTop = labelY - fontSize / 2 - boxPaddingY;
       const labelHeight = fontSize + boxPaddingY * 2;
 
-      canvasContext.fillStyle = "rgba(255,255,255,0.9)";
+      canvasContext.fillStyle = GRAPH_CANVAS_COLORS.labelBackground;
       canvasContext.fillRect(labelX - boxPaddingX, labelTop, textWidth + boxPaddingX * 2, labelHeight);
 
-      canvasContext.fillStyle = "#0f172a";
+      canvasContext.fillStyle = GRAPH_CANVAS_COLORS.labelForeground;
       canvasContext.textBaseline = "middle";
       canvasContext.fillText(label, labelX, labelY);
     },
@@ -169,7 +184,7 @@ export function GraphCanvas({
       if (sourceId === selectedNodeId || targetId === selectedNodeId) {
         return color;
       }
-      return "rgba(148,163,184,0.20)";
+      return GRAPH_CANVAS_COLORS.fadedLink;
     },
     [selectedNodeId]
   );
@@ -198,11 +213,11 @@ export function GraphCanvas({
     const nodeId = escapeHtml(String(node.id ?? ""));
 
     return `
-      <div style="padding:6px 8px; max-width: 280px;">
+      <div style="padding:8px 10px; max-width: 280px; border-radius: 12px; border: 1px solid ${GRAPH_CANVAS_COLORS.tooltipBorder}; background: ${GRAPH_CANVAS_COLORS.tooltipBackground}; color: ${GRAPH_CANVAS_COLORS.tooltipForeground}; box-shadow: 0 16px 36px rgba(2, 6, 23, 0.35);">
         <div style="font-weight:600; margin-bottom:2px;">${label}</div>
-        <div style="font-size:11px; opacity:0.8; margin-bottom:2px;">${type}</div>
-        <div style="font-size:11px; opacity:0.75;">degree: ${degree}</div>
-        <div style="font-size:10px; opacity:0.6; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;">${nodeId}</div>
+        <div style="font-size:11px; color: ${GRAPH_CANVAS_COLORS.tooltipMuted}; margin-bottom:2px;">${type}</div>
+        <div style="font-size:11px; color: ${GRAPH_CANVAS_COLORS.tooltipMuted};">degree: ${degree}</div>
+        <div style="font-size:10px; color: ${GRAPH_CANVAS_COLORS.tooltipMuted}; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;">${nodeId}</div>
       </div>
     `;
   }, []);
@@ -218,10 +233,10 @@ export function GraphCanvas({
     const confidence = Number(link.confidence ?? 0).toFixed(2);
 
     return `
-      <div style="padding:6px 8px; max-width: 320px;">
+      <div style="padding:8px 10px; max-width: 320px; border-radius: 12px; border: 1px solid ${GRAPH_CANVAS_COLORS.tooltipBorder}; background: ${GRAPH_CANVAS_COLORS.tooltipBackground}; color: ${GRAPH_CANVAS_COLORS.tooltipForeground}; box-shadow: 0 16px 36px rgba(2, 6, 23, 0.35);">
         <div style="font-weight:600; margin-bottom:2px;">${relation}</div>
-        <div style="font-size:11px; opacity:0.8;">${source} → ${target}</div>
-        <div style="font-size:11px; opacity:0.75;">confidence: ${confidence}</div>
+        <div style="font-size:11px; color: ${GRAPH_CANVAS_COLORS.tooltipMuted};">${source} → ${target}</div>
+        <div style="font-size:11px; color: ${GRAPH_CANVAS_COLORS.tooltipMuted};">confidence: ${confidence}</div>
       </div>
     `;
   }, []);
@@ -260,7 +275,7 @@ export function GraphCanvas({
       <div
         ref={surfaceRef}
         className={cn(
-          "h-[420px] overflow-hidden rounded-lg border bg-white sm:h-[560px] xl:h-[680px] fullscreen:h-screen fullscreen:w-screen",
+          "h-[420px] overflow-hidden rounded-lg border bg-card sm:h-[560px] xl:h-[680px] fullscreen:h-screen fullscreen:w-screen",
           isFullscreen && "fullscreen:rounded-none fullscreen:border-0"
         )}
       >
@@ -278,6 +293,7 @@ export function GraphCanvas({
           cooldownTime={4500}
           d3AlphaDecay={0.05}
           d3VelocityDecay={0.35}
+          backgroundColor={GRAPH_CANVAS_COLORS.background}
           minZoom={0.22}
           maxZoom={10}
           linkColor={linkColor}
@@ -309,7 +325,7 @@ export function GraphCanvas({
       </div>
 
       {/* Relation-type color legend */}
-      <div className="flex items-center gap-3 overflow-x-auto rounded-md border bg-white p-3">
+      <div className="flex items-center gap-3 overflow-x-auto rounded-md border bg-card p-3 text-card-foreground">
         {relationTypes.map((relationType) => (
           <span
             key={relationType}

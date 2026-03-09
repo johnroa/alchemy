@@ -1,9 +1,21 @@
 import {
+  ArrowRightLeft,
   Carrot,
   ChefHat,
+  CheckCircle2,
   Circle,
+  Clock3,
+  Globe2,
+  HeartPulse,
+  Microwave,
+  PartyPopper,
   Snowflake,
+  Target,
   UtensilsCrossed,
+  Wallet,
+  WandSparkles,
+  XCircle,
+  Users,
   type LucideIcon
 } from "lucide-react";
 import {
@@ -19,7 +31,23 @@ import { resolveIngredientSemanticIconId } from "@alchemy/shared/ingredient-sema
 import { cn } from "@/lib/utils";
 
 const entityTypeIconMap: Record<string, { icon: LucideIcon; toneClass: string }> = {
-  recipe: { icon: ChefHat, toneClass: "text-blue-600" }
+  recipe: { icon: ChefHat, toneClass: "text-blue-600" },
+  goal: { icon: Target, toneClass: "text-teal-700" },
+  dish: { icon: UtensilsCrossed, toneClass: "text-blue-700" },
+  cuisine: { icon: Globe2, toneClass: "text-violet-700" },
+  ingredient_want: { icon: Carrot, toneClass: "text-emerald-700" },
+  ingredient_avoid: { icon: XCircle, toneClass: "text-rose-700" },
+  pantry_item: { icon: Carrot, toneClass: "text-green-700" },
+  diet_constraint: { icon: XCircle, toneClass: "text-red-700" },
+  health_goal: { icon: HeartPulse, toneClass: "text-orange-700" },
+  time_budget: { icon: Clock3, toneClass: "text-amber-700" },
+  budget_tier: { icon: Wallet, toneClass: "text-stone-700" },
+  occasion: { icon: PartyPopper, toneClass: "text-fuchsia-700" },
+  appliance: { icon: Microwave, toneClass: "text-cyan-700" },
+  household_context: { icon: Users, toneClass: "text-indigo-700" },
+  novelty_preference: { icon: WandSparkles, toneClass: "text-yellow-700" },
+  requested_substitution: { icon: ArrowRightLeft, toneClass: "text-orange-700" },
+  outcome: { icon: CheckCircle2, toneClass: "text-slate-700" }
 };
 
 type IngredientIcon = {

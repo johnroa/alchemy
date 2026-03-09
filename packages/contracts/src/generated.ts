@@ -110,6 +110,10 @@ export interface paths {
                     group_by?: "flat" | "category" | "component";
                     /** @description Whether to append inline measurements directly inside step instructions. */
                     inline_measurements?: boolean;
+                    /** @description Selects which server-rendered instruction view to return. */
+                    verbosity?: "concise" | "balanced" | "detailed";
+                    /** @description Overrides the rendered temperature unit in step instructions. */
+                    temperature_unit?: "fahrenheit" | "celsius";
                 };
                 header?: never;
                 path: {
@@ -623,7 +627,12 @@ export interface paths {
                     units?: "source" | "metric" | "imperial";
                     /** @description Optional ingredient grouping strategy for response rendering. Defaults to component when omitted. */
                     group_by?: "flat" | "category" | "component";
+                    /** @description Whether to append inline measurements directly inside step instructions. */
                     inline_measurements?: boolean;
+                    /** @description Selects which server-rendered instruction view to return. */
+                    verbosity?: "concise" | "balanced" | "detailed";
+                    /** @description Overrides the rendered temperature unit in step instructions. */
+                    temperature_unit?: "fahrenheit" | "celsius";
                 };
                 header?: never;
                 path: {
@@ -2465,6 +2474,7 @@ export interface components {
         };
         Step: {
             index: number;
+            /** @description Server-rendered instruction text for the selected verbosity and temperature-unit view. */
             instruction: string;
             timer_seconds?: number;
             notes?: string;
@@ -2551,6 +2561,8 @@ export interface components {
             description?: string;
             servings: number;
             ingredients: components["schemas"]["Ingredient"][];
+            /** @description Server-projected ingredient groupings for transient candidate responses. */
+            ingredient_groups?: components["schemas"]["IngredientGroup"][];
             steps: components["schemas"]["Step"][];
             notes?: string;
             pairings?: string[];

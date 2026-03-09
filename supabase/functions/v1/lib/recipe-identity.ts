@@ -121,6 +121,58 @@ export const normalizeStringList = (value: unknown): string[] => {
   return result;
 };
 
+const normalizeInstructionPartForFingerprint = (
+  value: unknown,
+): JsonValue | null => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  const part = value as Record<string, unknown>;
+  const type = normalizeText(part.type)?.toLowerCase();
+  if (type === "temperature") {
+    return {
+      type: "temperature",
+      value: normalizeNumber(part.value),
+      unit: normalizeText(part.unit)?.toLowerCase() ?? null,
+    };
+  }
+
+  const text = normalizeText(part.value) ?? normalizeText(part.text);
+  if (!text) {
+    return null;
+  }
+
+  return {
+    type: "text",
+    value: text.toLowerCase(),
+  };
+};
+
+const buildStepInstructionFingerprint = (
+  step: RecipePayload["steps"][number],
+): JsonValue => {
+  const views = step.instruction_views;
+  const parts = views?.balanced ?? views?.detailed ?? views?.concise;
+  if (Array.isArray(parts) && parts.length > 0) {
+    const normalizedParts = parts
+      .map((part) => normalizeInstructionPartForFingerprint(part as unknown))
+      .filter((part): part is JsonValue => part !== null);
+
+    if (normalizedParts.length > 0) {
+      return {
+        mode: "balanced_view",
+        parts: normalizedParts,
+      };
+    }
+  }
+
+  return {
+    mode: "legacy_instruction",
+    instruction: normalizeText(step.instruction)?.toLowerCase() ?? "",
+  };
+};
+
 export const stableStringify = (value: JsonValue): string => {
   if (value === null) {
     return "null";
@@ -162,7 +214,7 @@ export const buildRecipeContentFingerprintPayload = (
   })),
   steps: (recipe.steps ?? []).map((step) => ({
     index: normalizeInteger(step.index),
-    instruction: normalizeText(step.instruction)?.toLowerCase() ?? "",
+    instruction: buildStepInstructionFingerprint(step),
     timer_seconds: normalizeInteger(step.timer_seconds),
     notes: normalizeText(step.notes)?.toLowerCase() ?? null,
     inline_measurements: Array.isArray(step.inline_measurements)
@@ -190,7 +242,7 @@ export const buildRecipeImageFingerprintPayload = (
   })),
   steps: (recipe.steps ?? []).map((step) => ({
     index: normalizeInteger(step.index),
-    instruction: normalizeText(step.instruction)?.toLowerCase() ?? "",
+    instruction: buildStepInstructionFingerprint(step),
     timer_seconds: normalizeInteger(step.timer_seconds),
     inline_measurements: Array.isArray(step.inline_measurements)
       ? step.inline_measurements.map((measurement) => ({
@@ -366,6 +418,8 @@ export const resolveSameCanonImageJudgeEnabled = async (params: {
   });
   return resolved.enabled;
 };
+
+export const isSameCanonImageJudgeEnabled = resolveSameCanonImageJudgeEnabled;
 
 export const serializeVector = (vector: number[]): string => {
   return `[${vector.map((value) => Number(value).toFixed(12)).join(",")}]`;

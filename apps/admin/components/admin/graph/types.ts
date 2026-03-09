@@ -79,6 +79,22 @@ export const nodeColors: Record<string, string> = {
   ingredient: "#047857",
   category: "#b45309",
   keyword: "#be123c",
+  goal: "#0f766e",
+  dish: "#2563eb",
+  cuisine: "#7c3aed",
+  ingredient_want: "#047857",
+  ingredient_avoid: "#be123c",
+  pantry_item: "#16a34a",
+  diet_constraint: "#dc2626",
+  health_goal: "#ea580c",
+  time_budget: "#ca8a04",
+  budget_tier: "#57534e",
+  occasion: "#c026d3",
+  appliance: "#0891b2",
+  household_context: "#4f46e5",
+  novelty_preference: "#d97706",
+  requested_substitution: "#ea580c",
+  outcome: "#334155",
 };
 
 const relationColors = ["#0ea5e9", "#f97316", "#10b981", "#a855f7", "#ef4444", "#14b8a6", "#64748b"];

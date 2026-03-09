@@ -10,10 +10,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { getGraphData } from "@/lib/admin-data";
 
 const entityTypeColors: Record<string, string> = {
-  recipe: "border-blue-300 bg-blue-50 text-blue-700",
-  ingredient: "border-emerald-300 bg-emerald-50 text-emerald-700",
-  category: "border-amber-300 bg-amber-50 text-amber-700",
-  keyword: "border-rose-300 bg-rose-50 text-rose-700"
+  recipe: "border-blue-300 bg-blue-50 text-blue-700 dark:border-blue-400/40 dark:bg-blue-500/10 dark:text-blue-200",
+  ingredient:
+    "border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-400/40 dark:bg-emerald-500/10 dark:text-emerald-200",
+  category: "border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-400/40 dark:bg-amber-500/10 dark:text-amber-200",
+  keyword: "border-rose-300 bg-rose-50 text-rose-700 dark:border-rose-400/40 dark:bg-rose-500/10 dark:text-rose-200"
 };
 
 export default async function GraphPage({
@@ -71,7 +72,7 @@ export default async function GraphPage({
           </CardHeader>
           <CardContent className="pb-4">
             <p className="text-2xl font-bold tabular-nums">{avgConfidence.toFixed(2)}</p>
-            <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-zinc-100">
+            <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-muted">
               <div className="h-full rounded-full bg-primary" style={{ width: `${avgConfidence * 100}%` }} />
             </div>
           </CardContent>

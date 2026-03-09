@@ -123,7 +123,7 @@ export const handleCookbookRoutes = async (
     segments[1] === "cookbook" &&
     method === "GET"
   ) {
-    const { items, suggestedChips } = await buildCookbookFeed(
+    const { items, suggestedChips, staleContext } = await buildCookbookFeed(
       client,
       auth.userId,
     );
@@ -132,6 +132,7 @@ export const handleCookbookRoutes = async (
       items,
       suggested_chips: suggestedChips,
       cookbook_insight: cookbookInsight,
+      stale_context: staleContext,
     });
   }
 

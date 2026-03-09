@@ -36,7 +36,7 @@ export function GraphControls({
   isFullscreen,
 }: GraphControlsProps): React.JSX.Element {
   return (
-    <div className="flex min-w-0 flex-wrap items-end gap-3 rounded-md border bg-white p-3">
+    <div className="flex min-w-0 flex-wrap items-end gap-3 rounded-md border bg-card p-3 text-card-foreground">
       <label className="w-full text-xs font-medium text-muted-foreground sm:w-32">
         Max Nodes
         <Input
@@ -57,7 +57,7 @@ export function GraphControls({
       <label className="w-full text-xs font-medium text-muted-foreground sm:w-44">
         Relation Filter
         <select
-          className="mt-1 h-8 w-full rounded-md border border-input bg-background px-2 text-sm"
+          className="mt-1 h-8 w-full rounded-md border border-input bg-background px-2 text-sm text-foreground"
           value={relationFilter}
           onChange={(event) => onRelationFilterChange(event.target.value)}
         >

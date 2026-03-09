@@ -55,6 +55,11 @@ struct RecipeDetailView: View {
 
     @State private var heroHeight: CGFloat = 0
     @State private var scrollOffset: CGFloat = 0
+
+    // Description typewriter state
+    @State private var descriptionCharCount: Int = 0
+    @State private var isDescriptionExpanded = false
+    @State private var typingTask: Task<Void, Never>?
     @State private var detailSessionId = UUID().uuidString
     @State private var lastActiveAt: Date?
     @State private var cumulativeActiveDwellSeconds = 0
@@ -146,6 +151,19 @@ struct RecipeDetailView: View {
         .toolbarVisibility(.hidden, for: .tabBar)
         .animation(.easeInOut(duration: 0.2), value: titleIsPinned)
         .task { await loadRecipe() }
+        // When the parent re-renders with updated preloadedDetail (e.g. image
+        // status changes from polling), sync those changes into the @State detail
+        // so the hero image updates without destroying/recreating the view.
+        .onChange(of: preloadedDetail?.imageUrl) { _, _ in
+            if let preloadedDetail {
+                detail = preloadedDetail
+            }
+        }
+        .onChange(of: preloadedDetail?.imageStatus) { _, _ in
+            if let preloadedDetail {
+                detail = preloadedDetail
+            }
+        }
         .onChange(of: scenePhase) { _, _ in
             handleBehaviorLifecycle()
         }
@@ -190,6 +208,10 @@ struct RecipeDetailView: View {
                     heroSection(recipe)
 
                     VStack(alignment: .leading, spacing: AlchemySpacing.xl) {
+                        if let description = recipe.description, !description.isEmpty {
+                            descriptionSection(description)
+                        }
+
                         if !substitutionDiffs.isEmpty {
                             sousChefChangesSection
                             Divider().overlay(AlchemyColors.separator)
@@ -297,7 +319,7 @@ struct RecipeDetailView: View {
                     .frame(width: geo.size.width, height: height)
                     .clipped()
 
-                Color.black.opacity(0.2)
+                Color.black.opacity(0.1)
                 AlchemyColors.heroGradient
 
                 Text(recipe.title)
@@ -340,6 +362,77 @@ struct RecipeDetailView: View {
             }
         } else {
             Rectangle().fill(AlchemyColors.surfaceSecondary)
+        }
+    }
+
+    // MARK: - Description Typewriter
+
+    /// Typed-out description below the hero image. Reserves 2-line height
+    /// so content below doesn't jump during the typing animation. Long
+    /// descriptions fade out at the bottom with a "Read more" affordance.
+    private func descriptionSection(_ text: String) -> some View {
+        let displayText = String(text.prefix(descriptionCharCount))
+        let isLongDescription = text.count > 90
+
+        return VStack(alignment: .leading, spacing: 6) {
+            Text(displayText)
+                .font(.system(.subheadline, design: .serif))
+                .italic()
+                .foregroundStyle(AlchemyColors.textSecondary)
+                .lineSpacing(3)
+                .lineLimit(isDescriptionExpanded ? nil : 2)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .frame(minHeight: 40)
+                .mask {
+                    if !isDescriptionExpanded && isLongDescription {
+                        VStack(spacing: 0) {
+                            Rectangle()
+                            LinearGradient(
+                                colors: [.black, .clear],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                            .frame(height: 12)
+                        }
+                    } else {
+                        Rectangle()
+                    }
+                }
+
+            if isLongDescription {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        isDescriptionExpanded.toggle()
+                    }
+                } label: {
+                    Text(isDescriptionExpanded ? "Show less" : "Read more")
+                        .font(AlchemyTypography.caption)
+                        .foregroundStyle(AlchemyColors.accentMuted)
+                }
+            }
+        }
+        .animation(.easeInOut(duration: 0.3), value: isDescriptionExpanded)
+        .onAppear { startTypingDescription(text) }
+        .onDisappear { typingTask?.cancel() }
+        .onChange(of: text) { _, newText in
+            startTypingDescription(newText)
+        }
+    }
+
+    /// Animates the description text character-by-character at ~18ms per
+    /// character for a natural typing rhythm (~4s for a typical description).
+    private func startTypingDescription(_ text: String) {
+        typingTask?.cancel()
+        descriptionCharCount = 0
+        isDescriptionExpanded = false
+
+        typingTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(400))
+            for i in 1...text.count {
+                guard !Task.isCancelled else { return }
+                try? await Task.sleep(for: .milliseconds(18))
+                descriptionCharCount = i
+            }
         }
     }
 
@@ -555,15 +648,26 @@ struct RecipeDetailView: View {
         errorMessage = nil
 
         do {
-            let fetched: RecipeDetail = try await APIClient.shared.request("/recipes/\(recipeId)")
-            detail = fetched
+            if let variant = try? await fetchVariantDetail(recipeId) {
+                if let recipe = variant.recipe {
+                    applyVariantDetail(variant)
+                    detail = recipe
+                } else {
+                    let fetched: RecipeDetail = try await APIClient.shared.request("/recipes/\(recipeId)")
+                    detail = fetched
+                    await loadVariantDiffs()
+                }
+            } else {
+                let fetched: RecipeDetail = try await APIClient.shared.request("/recipes/\(recipeId)")
+                detail = fetched
+                await loadVariantDiffs()
+            }
         } catch {
             errorMessage = "Couldn't load this recipe."
             print("[RecipeDetailView] load failed: \(error)")
         }
 
         isLoading = false
-        await loadVariantDiffs()
     }
 
     private func saveRecipe(_ id: String) async {
@@ -678,15 +782,23 @@ struct RecipeDetailView: View {
     private func loadVariantDiffs() async {
         guard let id = detail?.id ?? recipeId else { return }
         do {
-            let response: VariantDetailResponse = try await APIClient.shared.request(
-                "/recipes/\(id)/variant"
-            )
-            withAnimation {
-                substitutionDiffs = response.substitutionDiffs ?? []
-                adaptationSummary = response.adaptationSummary
-            }
+            applyVariantDetail(try await fetchVariantDetail(id))
         } catch {
             // No variant or fetch failed — that's fine, section stays hidden.
+        }
+    }
+
+    private func fetchVariantDetail(_ id: String) async throws -> VariantDetailResponse {
+        try await APIClient.shared.request("/recipes/\(id)/variant")
+    }
+
+    private func applyVariantDetail(_ response: VariantDetailResponse) {
+        withAnimation {
+            if let recipe = response.recipe {
+                detail = recipe
+            }
+            substitutionDiffs = response.substitutionDiffs ?? []
+            adaptationSummary = response.adaptationSummary
         }
     }
 
@@ -870,8 +982,8 @@ private struct ScrollOffsetKey: PreferenceKey {
 // MARK: - Image Loading Placeholder
 
 /// Placeholder shown while the recipe image is being generated.
-/// - **Embedded mode** (inside Generate): centered Lottie animation +
-///   "Loading recipe image..." text on a dark surface. Calm and stable.
+/// - **Embedded mode** (inside Generate): centered Lottie animation on
+///   a dark surface. Just the animation, no text — keeps it clean.
 /// - **Standalone mode** (recipe detail): subtle shimmer gradient pulse.
 struct ImageLoadingPlaceholder: View {
     var isEmbedded: Bool = false
@@ -881,14 +993,9 @@ struct ImageLoadingPlaceholder: View {
         if isEmbedded {
             ZStack {
                 Rectangle().fill(AlchemyColors.surface)
-                VStack(spacing: AlchemySpacing.md) {
-                    LottieView(animation: .named("alchemy-loading"))
-                        .playing(loopMode: .loop)
-                        .frame(width: 80, height: 80)
-                    Text("Loading recipe image...")
-                        .font(AlchemyTypography.caption)
-                        .foregroundStyle(AlchemyColors.textSecondary)
-                }
+                LottieView(animation: .named("alchemy-loading"))
+                    .playing(loopMode: .loop)
+                    .frame(width: 80, height: 80)
             }
         } else {
             Rectangle()

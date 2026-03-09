@@ -579,6 +579,7 @@ Deno.serve(async (request) => {
       resolveAssistantMessageContent,
       logChangelog,
       buildChatLoopResponse,
+      getPreferences,
       enrollCandidateImageRequests: async (input) => {
         return await enrollCandidateImageRequests({
           serviceClient: input.serviceClient,

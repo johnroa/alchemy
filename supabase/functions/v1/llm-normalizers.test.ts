@@ -57,3 +57,55 @@ Deno.test("normalizeRecipeShape preserves ingredient category and component meta
     throw new Error("expected second ingredient component to be preserved");
   }
 });
+
+Deno.test("normalizeRecipeShape preserves structured instruction views", () => {
+  const normalized = normalizeRecipeShape({
+    title: "Roasted Carrots",
+    servings: 2,
+    ingredients: [
+      { name: "Carrots", amount: 1, unit: "lb" },
+    ],
+    steps: [
+      {
+        index: 1,
+        instruction: "Roast the carrots.",
+        instruction_views: {
+          concise: [
+            { type: "text", value: "Roast at " },
+            { type: "temperature", value: 425, unit: "fahrenheit" },
+            { type: "text", value: "." },
+          ],
+          balanced: [
+            { type: "text", value: "Roast at " },
+            { type: "temperature", value: 425, unit: "fahrenheit" },
+            { type: "text", value: " until tender." },
+          ],
+        },
+      },
+    ],
+    metadata: {
+      difficulty: "easy",
+      health_score: 80,
+      time_minutes: 30,
+      items: 1,
+      timing: {
+        total_minutes: 30,
+      },
+      quick_stats: {
+        total_time_minutes: 30,
+        difficulty: "easy",
+        health_score: 80,
+        ingredient_count: 1,
+      },
+    },
+  });
+
+  if (!normalized) {
+    throw new Error("expected recipe payload to normalize");
+  }
+
+  const concise = normalized.steps[0]?.instruction_views?.concise;
+  if (!Array.isArray(concise) || concise[1]?.type !== "temperature") {
+    throw new Error("expected structured instruction views to survive normalization");
+  }
+});

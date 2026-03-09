@@ -1,12 +1,13 @@
 # Alchemy — Agent Instructions
 
 ## Project
-Alchemy is an iOS-first, API-driven recipe app. Admin UI at `admin.cookwithalchemy.com`, API at `api.cookwithalchemy.com/v1`.
+Alchemy is an iOS-first, API-driven recipe app. Consumer web at `cookwithalchemy.com`, admin UI at `admin.cookwithalchemy.com`, API at `api.cookwithalchemy.com/v1`.
 
 ## Monorepo Structure
 ```
 apps/ios/             Native SwiftUI iOS app
 apps/admin/           Next.js 15 admin dashboard (Cloudflare Workers via OpenNext)
+apps/web/             Next.js 15 consumer website (Cloudflare Workers via OpenNext)
 infra/cloudflare/     Cloudflare Worker API gateway (TypeScript)
 supabase/             Auth, Postgres, Edge Functions (LLM gateway)
 packages/contracts/   OpenAPI schema + generated TypeScript types
@@ -26,7 +27,7 @@ packages/shared/      Shared utilities (ingredient icon resolution, food icon ca
 - If the documented command fails, debug the documented path first and fix the repo so the documented path works again.
 - Alternate commands, alternate working directories, direct worker URLs, or ad hoc recovery steps are for diagnosis only unless `README.md` explicitly blesses them.
 - Final deploys must use the documented commands from repo root. Do not treat a one-off workaround as the real workflow.
-- Verification should prefer the documented public surfaces first (`api.cookwithalchemy.com`, `admin.cookwithalchemy.com`) and only use lower-level URLs as supporting diagnostics.
+- Verification should prefer the documented public surfaces first (`cookwithalchemy.com`, `api.cookwithalchemy.com`, `admin.cookwithalchemy.com`) and only use lower-level URLs as supporting diagnostics.
 - If a documented workflow is wrong or incomplete, update `README.md` and `AGENTS.md` in the same change instead of relying on memory next time.
 
 ## Deployment
@@ -50,6 +51,14 @@ All commands run from repo root (`/Users/john/Projects/alchemy`). **Always deplo
 npx wrangler deploy --config infra/cloudflare/api-gateway/wrangler.jsonc
 ```
 
+### Push Cloudflare consumer website (`cookwithalchemy.com`)
+```bash
+pnpm --filter @alchemy/web cf:build
+pnpm --filter @alchemy/web exec opennextjs-cloudflare deploy
+```
+
+The apex custom domain is declared in `apps/web/wrangler.jsonc`, so the deploy path should reconcile `cookwithalchemy.com` during worker publish.
+
 ### Push Cloudflare admin worker (`admin.cookwithalchemy.com`)
 ```bash
 pnpm --filter @alchemy/admin cf:build
@@ -58,6 +67,7 @@ pnpm --filter @alchemy/admin exec opennextjs-cloudflare deploy
 
 ### Quick verify
 ```bash
+curl -I https://cookwithalchemy.com
 curl https://api.cookwithalchemy.com/v1/healthz
 ```
 

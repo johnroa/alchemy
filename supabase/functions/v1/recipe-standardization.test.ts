@@ -6,6 +6,7 @@ import {
   parseAmountValue,
   projectIngredientsForOutput,
   projectInlineMeasurements,
+  projectStepsForOutput,
   resolvePresentationOptions
 } from "./recipe-standardization.ts";
 import type { RecipePayload } from "../_shared/types.ts";
@@ -125,13 +126,13 @@ Deno.test("buildIngredientGroups uses fallback labels for missing category and c
   const categoryGroups = buildIngredientGroups({
     groupBy: "category",
     ingredients: [
-      { name: "Salt", amount: 1, unit: "tsp", category: null },
+      { name: "Salt", amount: 1, unit: "tsp" },
     ],
   });
   const componentGroups = buildIngredientGroups({
     groupBy: "component",
     ingredients: [
-      { name: "Salt", amount: 1, unit: "tsp", component: null },
+      { name: "Salt", amount: 1, unit: "tsp" },
     ],
   });
 
@@ -175,11 +176,15 @@ Deno.test("projectInlineMeasurements appends inline measurement text", () => {
 
 Deno.test("resolvePresentationOptions merges query and preferences", () => {
   const options = resolvePresentationOptions({
-    query: new URLSearchParams("units=imperial&inline_measurements=true"),
+    query: new URLSearchParams(
+      "units=imperial&inline_measurements=true&verbosity=concise&temperature_unit=celsius",
+    ),
     presentationPreferences: {
       recipe_units: "metric",
       recipe_group_by: "category",
-      recipe_inline_measurements: false
+      recipe_inline_measurements: false,
+      recipe_instruction_verbosity: "detailed",
+      recipe_temperature_unit: "fahrenheit",
     }
   });
 
@@ -194,6 +199,14 @@ Deno.test("resolvePresentationOptions merges query and preferences", () => {
   if (!options.inlineMeasurements) {
     throw new Error("expected inline measurements to be enabled");
   }
+
+  if (options.verbosity !== "concise") {
+    throw new Error("expected query verbosity override");
+  }
+
+  if (options.temperatureUnit !== "celsius") {
+    throw new Error("expected query temperature override");
+  }
 });
 
 Deno.test("resolvePresentationOptions defaults group_by to component", () => {
@@ -204,5 +217,50 @@ Deno.test("resolvePresentationOptions defaults group_by to component", () => {
 
   if (options.groupBy !== "component") {
     throw new Error("expected default group_by to be component");
+  }
+});
+
+Deno.test("projectStepsForOutput renders verbosity, temperature, and inline measurements together", () => {
+  const steps: RecipePayload["steps"] = [
+    {
+      index: 1,
+      instruction: "Bake until done.",
+      instruction_views: {
+        concise: [
+          { type: "text", value: "Bake at " },
+          { type: "temperature", value: 425, unit: "fahrenheit" },
+          { type: "text", value: "." },
+        ],
+        balanced: [
+          { type: "text", value: "Bake at " },
+          { type: "temperature", value: 425, unit: "fahrenheit" },
+          { type: "text", value: " until the top is browned." },
+        ],
+      },
+      inline_measurements: [
+        { ingredient: "Olive Oil", amount: 2, unit: "tbsp" },
+      ],
+    },
+  ];
+
+  const projected = projectStepsForOutput({
+    steps,
+    units: "metric",
+    includeInlineMeasurements: true,
+    verbosity: "concise",
+    temperatureUnit: "celsius",
+  });
+
+  const first = projected[0];
+  if (!first) {
+    throw new Error("expected projected step");
+  }
+
+  if (!first.instruction.includes("°C")) {
+    throw new Error("expected live temperature conversion");
+  }
+
+  if (!first.instruction.includes("Olive Oil")) {
+    throw new Error("expected inline measurements to remain render-driven");
   }
 });

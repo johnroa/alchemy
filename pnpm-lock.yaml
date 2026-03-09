@@ -130,7 +130,50 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^4.0.18
-        version: 4.0.18(@types/node@22.19.13)(jiti@1.21.7)(jsdom@28.1.0(@noble/hashes@1.8.0))(terser@5.16.9)(yaml@2.8.2)
+        version: 4.0.18(@types/node@22.19.13)(jiti@1.21.7)(jsdom@28.1.0)(terser@5.16.9)(yaml@2.8.2)
+      wrangler:
+        specifier: ^4.69.0
+        version: 4.69.0
+
+  apps/web:
+    dependencies:
+      next:
+        specifier: ^15.0.1
+        version: 15.5.12(@playwright/test@1.58.2)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      react:
+        specifier: ^18.3.1
+        version: 18.3.1
+      react-dom:
+        specifier: ^18.3.1
+        version: 18.3.1(react@18.3.1)
+    devDependencies:
+      '@opennextjs/cloudflare':
+        specifier: ^1.17.1
+        version: 1.17.1(next@15.5.12(@playwright/test@1.58.2)(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(wrangler@4.69.0)
+      '@types/node':
+        specifier: ^22.8.1
+        version: 22.19.13
+      '@types/react':
+        specifier: ^18.3.12
+        version: 18.3.28
+      '@types/react-dom':
+        specifier: ^18.3.1
+        version: 18.3.7(@types/react@18.3.28)
+      autoprefixer:
+        specifier: ^10.4.20
+        version: 10.4.27(postcss@8.5.6)
+      postcss:
+        specifier: ^8.4.47
+        version: 8.5.6
+      tailwindcss:
+        specifier: ^3.4.14
+        version: 3.4.19(yaml@2.8.2)
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.0.18
+        version: 4.0.18(@types/node@22.19.13)(jiti@1.21.7)(jsdom@28.1.0)(terser@5.16.9)(yaml@2.8.2)
       wrangler:
         specifier: ^4.69.0
         version: 4.69.0
@@ -10103,7 +10146,7 @@ snapshots:
       terser: 5.16.9
       yaml: 2.8.2
 
-  vitest@4.0.18(@types/node@22.19.13)(jiti@1.21.7)(jsdom@28.1.0(@noble/hashes@1.8.0))(terser@5.16.9)(yaml@2.8.2):
+  vitest@4.0.18(@types/node@22.19.13)(jiti@1.21.7)(jsdom@28.1.0)(terser@5.16.9)(yaml@2.8.2):
     dependencies:
       '@vitest/expect': 4.0.18
       '@vitest/mocker': 4.0.18(vite@7.3.1(@types/node@22.19.13)(jiti@1.21.7)(terser@5.16.9)(yaml@2.8.2))

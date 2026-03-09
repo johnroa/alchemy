@@ -42,6 +42,14 @@ type SearchFeedRow = {
   explore_eligible: boolean;
 };
 
+type ResolvedViewOptions = {
+  units: string;
+  groupBy: string;
+  inlineMeasurements: boolean;
+  verbosity: string;
+  temperatureUnit: string;
+};
+
 const unused = () => {
   throw new Error("unexpected dependency call");
 };
@@ -215,7 +223,7 @@ const createRouteContext = (input: {
   return {
     request,
     url,
-    segments: input.path.split("/").filter(Boolean),
+    segments: url.pathname.split("/").filter(Boolean).slice(1),
     method: input.method,
     requestId: "request-1",
     auth: {
@@ -585,6 +593,8 @@ Deno.test("GET /recipes/{id} preserves distinct summary and long description fie
         units: "source",
         groupBy: "component",
         inlineMeasurements: false,
+        verbosity: "balanced",
+        temperatureUnit: "fahrenheit",
       }),
       fetchRecipeView: async () => createRecipeDetailFetchView(),
     }) as never,
@@ -607,7 +617,7 @@ Deno.test("GET /recipes/{id} preserves distinct summary and long description fie
 });
 
 Deno.test("GET /recipes/{id} uses component grouping when no query or saved preference exists", async () => {
-  let receivedOptions: Record<string, unknown> | null = null;
+  let receivedOptions: ResolvedViewOptions | null = null;
 
   const response = await handleRecipeRoutes(
     createRouteContext({
@@ -630,7 +640,7 @@ Deno.test("GET /recipes/{id} uses component grouping when no query or saved pref
     createDeps({
       resolvePresentationOptions: resolveRecipePresentationOptions,
       fetchRecipeView: async (_client: unknown, _recipeId: string, _enforceVisibility: boolean, viewOptions: unknown) => {
-        receivedOptions = viewOptions as Record<string, unknown>;
+        receivedOptions = viewOptions as ResolvedViewOptions;
         return createRecipeDetailFetchView();
       },
     }) as never,
@@ -640,8 +650,67 @@ Deno.test("GET /recipes/{id} uses component grouping when no query or saved pref
     throw new Error("expected recipe detail response");
   }
 
-  if (receivedOptions?.groupBy !== "component") {
+  const receivedGroupBy = (
+    receivedOptions as unknown as { groupBy?: string } | null
+  )?.groupBy;
+  if (receivedGroupBy !== "component") {
     throw new Error("expected default recipe detail grouping to be component");
+  }
+});
+
+Deno.test("GET /recipes/{id} forwards live render overrides for detail reads", async () => {
+  let receivedOptions: ResolvedViewOptions | null = null;
+
+  const response = await handleRecipeRoutes(
+    createRouteContext({
+      path:
+        "/recipes/recipe-123?units=metric&group_by=category&inline_measurements=true&verbosity=detailed&temperature_unit=celsius",
+      method: "GET",
+      serviceClient: {
+        from(table: string) {
+          if (table === "recipe_view_events") {
+            return {
+              async insert(_payload: unknown) {
+                return { error: null };
+              },
+            };
+          }
+
+          throw new Error(`unexpected table: ${table}`);
+        },
+      },
+    }) as never,
+    createDeps({
+      resolvePresentationOptions: resolveRecipePresentationOptions,
+      fetchRecipeView: async (
+        _client: unknown,
+        _recipeId: string,
+        _enforceVisibility: boolean,
+        viewOptions: unknown,
+      ) => {
+        receivedOptions = viewOptions as ResolvedViewOptions;
+        return createRecipeDetailFetchView();
+      },
+    }) as never,
+  );
+
+  if (!response || response.status !== 200) {
+    throw new Error("expected recipe detail response");
+  }
+
+  if (!receivedOptions) {
+    throw new Error("expected resolved view options");
+  }
+
+  const detailOptions = receivedOptions as unknown as ResolvedViewOptions;
+  if (
+    detailOptions.units !== "metric" ||
+    detailOptions.groupBy !== "category" ||
+    detailOptions.inlineMeasurements !== true ||
+    detailOptions.verbosity !== "detailed" ||
+    detailOptions.temperatureUnit !== "celsius"
+  ) {
+    throw new Error("expected detail route to honor query render overrides");
   }
 });
 
@@ -657,6 +726,8 @@ Deno.test("GET /recipes/{id}/variant overlays personalized summary, description,
         units: "source",
         groupBy: "component",
         inlineMeasurements: false,
+        verbosity: "balanced",
+        temperatureUnit: "fahrenheit",
       }),
       fetchRecipeView: async () => createRecipeDetailFetchView(),
     }) as never,
@@ -689,6 +760,50 @@ Deno.test("GET /recipes/{id}/variant overlays personalized summary, description,
   const ingredients = recipe.ingredients as Array<Record<string, unknown>> | undefined;
   if (!Array.isArray(ingredients) || ingredients[2]?.component !== "Sauce") {
     throw new Error("expected personalized ingredient components");
+  }
+});
+
+Deno.test("GET /recipes/{id}/variant forwards live render overrides for variant reads", async () => {
+  let receivedOptions: ResolvedViewOptions | null = null;
+
+  const response = await handleRecipeRoutes(
+    createRouteContext({
+      path:
+        "/recipes/recipe-123/variant?units=metric&group_by=category&inline_measurements=true&verbosity=concise&temperature_unit=celsius",
+      method: "GET",
+      client: createVariantRouteClient(),
+    }) as never,
+    createDeps({
+      resolvePresentationOptions: resolveRecipePresentationOptions,
+      fetchRecipeView: async (
+        _client: unknown,
+        _recipeId: string,
+        _enforceVisibility: boolean,
+        viewOptions: unknown,
+      ) => {
+        receivedOptions = viewOptions as ResolvedViewOptions;
+        return createRecipeDetailFetchView();
+      },
+    }) as never,
+  );
+
+  if (!response || response.status !== 200) {
+    throw new Error("expected variant response");
+  }
+
+  if (!receivedOptions) {
+    throw new Error("expected variant view options");
+  }
+
+  const variantOptions = receivedOptions as unknown as ResolvedViewOptions;
+  if (
+    variantOptions.units !== "metric" ||
+    variantOptions.groupBy !== "category" ||
+    variantOptions.inlineMeasurements !== true ||
+    variantOptions.verbosity !== "concise" ||
+    variantOptions.temperatureUnit !== "celsius"
+  ) {
+    throw new Error("expected variant route to honor query render overrides");
   }
 });
 

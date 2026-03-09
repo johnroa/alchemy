@@ -24,8 +24,32 @@ struct CookbookView: View {
     @State private var cookbookSessionId = UUID().uuidString
     @State private var lastCookbookViewTrackedAt: Date?
     @State private var suggestedChips: [SuggestedChip] = []
+    @State private var staleContext: StaleContext?
+    @State private var showStaleReview = false
+    @State private var staleBannerDismissed = false
+
+    /// Holds the pending-save info locally after the binding clears, so the
+    /// skeleton card stays visible until loadCookbook() actually returns
+    /// fresh data (eliminates the disappear-then-reappear flash).
+    @State private var holdoverSave: PendingSave?
+
+    /// Monotonic counter incremented before each loadCookbook() call.
+    /// Only the latest load applies its results — prevents a slow stale
+    /// response (e.g. from onAppear before commit finishes) from
+    /// overwriting fresh data fetched after the commit completes.
+    @State private var loadGeneration = 0
+
+    /// The skeleton card to display: the real binding while the commit is
+    /// in flight, then the local holdover copy until fresh data arrives.
+    private var effectivePendingSave: PendingSave? {
+        pendingSave ?? holdoverSave
+    }
 
     // MARK: - Smart Filter State
+
+    private static let newChipId = "__new__"
+    /// Recipes saved within this window qualify as "new".
+    private static let newRecencyWindow: TimeInterval = 7 * 24 * 60 * 60
 
     /// Currently selected filter chip. nil = "All".
     @State private var activeFilter: SuggestedChip?
@@ -37,7 +61,18 @@ struct CookbookView: View {
                 || entry.title.localizedCaseInsensitiveContains(searchText)
                 || entry.summary.localizedCaseInsensitiveContains(searchText)
 
-            let matchesChip = activeFilter.map { entry.matchedChipIds.contains($0.id) } ?? true
+            let matchesChip: Bool
+            if let filter = activeFilter {
+                if filter.id == Self.newChipId {
+                    let cutoff = Date().addingTimeInterval(-Self.newRecencyWindow)
+                    let savedDate = ISO8601DateFormatter().date(from: entry.savedAt) ?? .distantPast
+                    matchesChip = savedDate >= cutoff
+                } else {
+                    matchesChip = entry.matchedChipIds.contains(filter.id)
+                }
+            } else {
+                matchesChip = true
+            }
 
             return matchesSearch && matchesChip
         }
@@ -48,15 +83,15 @@ struct CookbookView: View {
             VStack(spacing: 0) {
                 headerBar
 
-                if isLoading && previews.isEmpty && pendingSave == nil {
+                if isLoading && previews.isEmpty && effectivePendingSave == nil {
                     AlchemyLoadingIndicator()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .offset(y: -30)
-                } else if let errorMessage, previews.isEmpty, pendingSave == nil {
+                } else if let errorMessage, previews.isEmpty, effectivePendingSave == nil {
                     Spacer()
                     errorView(errorMessage)
                     Spacer()
-                } else if previews.isEmpty && pendingSave == nil {
+                } else if previews.isEmpty && effectivePendingSave == nil {
                     Spacer()
                     emptyView
                     Spacer()
@@ -66,6 +101,9 @@ struct CookbookView: View {
                             cookbookSearchBar
                             if !suggestedChips.isEmpty {
                                 smartFilterChips
+                            }
+                            if let ctx = staleContext, !staleBannerDismissed {
+                                staleVariantBanner(ctx)
                             }
                             masonryGrid
                         }
@@ -116,19 +154,40 @@ struct CookbookView: View {
             .sheet(isPresented: $showSettings) {
                 SettingsView()
             }
+            .sheet(isPresented: $showStaleReview) {
+                if let ctx = staleContext {
+                    StaleVariantReviewSheet(
+                        context: ctx,
+                        recipes: previews.filter { ctx.staleRecipeIds.contains($0.id) },
+                        onComplete: {
+                            showStaleReview = false
+                            Task { await loadCookbook() }
+                        }
+                    )
+                }
+            }
             .toolbarVisibility(showFullScreenPreview ? .hidden : .automatic, for: .tabBar)
-            .task { await loadCookbook() }
             .onAppear {
-                // Refresh when returning from another tab (e.g. after
-                // saving from Sous Chef) so new recipes appear immediately.
+                // Skip the refresh if a save is in flight — the onChange
+                // handler will load fresh data once the commit finishes.
+                // Without this guard, the onAppear load (which started
+                // before the commit) can return stale data and overwrite
+                // the fresh data, making the new recipe "disappear".
+                guard pendingSave == nil else { return }
                 Task { await loadCookbook() }
             }
             .onChange(of: pendingSave) { old, new in
                 // When the background commit finishes, pendingSave goes
-                // from non-nil to nil. Refresh the cookbook to show the
-                // newly saved recipe in place of the skeleton.
+                // from non-nil to nil. Keep the skeleton visible via
+                // holdoverSave while we refresh, so there's no flash.
                 if old != nil && new == nil {
-                    Task { await loadCookbook() }
+                    holdoverSave = old
+                    Task {
+                        await loadCookbook()
+                        withAnimation(.easeInOut(duration: 0.3)) {
+                            holdoverSave = nil
+                        }
+                    }
                 }
             }
         }
@@ -202,8 +261,12 @@ struct CookbookView: View {
     /// Horizontal scroll strip of intelligently derived filter chips.
     /// Matches the Explore page style: clean white text labels, bold when
     /// selected, dimmed when inactive. No backgrounds or icons.
+    private static let newChip = SuggestedChip(id: newChipId, label: "New", matchedCount: 0)
+
     private var smartFilterChips: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
+        let allChips = [Self.newChip] + suggestedChips
+
+        return ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: AlchemySpacing.lg) {
                 Button {
                     withAnimation(.easeInOut(duration: 0.2)) { activeFilter = nil }
@@ -218,13 +281,14 @@ struct CookbookView: View {
                     )
                 } label: {
                     Text("ALL")
-                        .font(.system(size: 18, weight: activeFilter == nil ? .bold : .regular))
+                        .font(.system(size: 14, weight: activeFilter == nil ? .bold : .regular))
+                        .tracking(0.15)
                         .foregroundStyle(AlchemyColors.textPrimary.opacity(activeFilter == nil ? 1.0 : 0.4))
                 }
                 .buttonStyle(.plain)
 
-                ForEach(suggestedChips) { chip in
-                    let isSelected = activeFilter == chip
+                ForEach(allChips) { chip in
+                    let isSelected = activeFilter?.id == chip.id
                     Button {
                         withAnimation(.easeInOut(duration: 0.2)) {
                             activeFilter = isSelected ? nil : chip
@@ -241,7 +305,8 @@ struct CookbookView: View {
                         )
                     } label: {
                         Text(chip.label.uppercased())
-                            .font(.system(size: 18, weight: isSelected ? .bold : .regular))
+                            .font(.system(size: 14, weight: isSelected ? .bold : .regular))
+                            .tracking(0.15)
                             .foregroundStyle(AlchemyColors.textPrimary.opacity(isSelected ? 1.0 : 0.4))
                     }
                     .buttonStyle(.plain)
@@ -261,7 +326,7 @@ struct CookbookView: View {
 
         return HStack(alignment: .top, spacing: AlchemySpacing.gridSpacing) {
             LazyVStack(spacing: AlchemySpacing.gridSpacing) {
-                if let pending = pendingSave {
+                if let pending = effectivePendingSave {
                     savingSkeletonCard(pending)
                 }
                 ForEach(leftCards) { preview in
@@ -322,8 +387,9 @@ struct CookbookView: View {
     }
 
     /// Small badge overlay indicating variant personalisation state.
-    /// Only shows when a variant is active. Uses sparkles for current,
-    /// exclamation for stale/needs_review, xmark for failed.
+    /// Sparkles for current (positive reinforcement), spinner for
+    /// processing, X for failed. Stale/needs_review are handled by the
+    /// cookbook-level banner instead of per-card badges.
     @ViewBuilder
     private func variantBadge(for entry: CookbookEntryItem) -> some View {
         switch entry.variantStatus {
@@ -342,14 +408,6 @@ struct CookbookView: View {
                 .background(.ultraThinMaterial)
                 .clipShape(Circle())
                 .padding(6)
-        case "stale", "needs_review":
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 10, weight: .bold))
-                .foregroundStyle(.white)
-                .padding(5)
-                .background(.orange)
-                .clipShape(Circle())
-                .padding(6)
         case "failed":
             Image(systemName: "xmark.circle.fill")
                 .font(.system(size: 10, weight: .bold))
@@ -361,6 +419,56 @@ struct CookbookView: View {
         default:
             EmptyView()
         }
+    }
+
+    // MARK: - Stale Variant Banner
+
+    /// Actionable banner shown below filter chips when constraint preferences
+    /// changed and saved recipes may need updating. Names the specific fields
+    /// that changed so the user understands why, and offers a Review button.
+    private func staleVariantBanner(_ ctx: StaleContext) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(AlchemyColors.accent)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("\(ctx.changedFieldsSummary) updated")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(AlchemyColors.textPrimary)
+                Text("\(ctx.count) \(ctx.count == 1 ? "recipe" : "recipes") may need changes")
+                    .font(.system(size: 12))
+                    .foregroundStyle(AlchemyColors.textSecondary)
+            }
+
+            Spacer(minLength: 4)
+
+            Button {
+                showStaleReview = true
+            } label: {
+                Text("Review")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 7)
+                    .background(AlchemyColors.accent, in: Capsule())
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                withAnimation(.easeOut(duration: 0.25)) { staleBannerDismissed = true }
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(AlchemyColors.textTertiary)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(AlchemyColors.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .padding(.horizontal, AlchemySpacing.screenHorizontal)
+        .transition(.move(edge: .top).combined(with: .opacity))
     }
 
     // MARK: - Empty / Error States
@@ -448,7 +556,7 @@ struct CookbookView: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: AlchemySpacing.cardRadius))
         .transition(.opacity.combined(with: .scale(scale: 0.95)))
-        .animation(.easeInOut(duration: 0.3), value: pendingSave)
+        .animation(.easeInOut(duration: 0.3), value: effectivePendingSave != nil)
     }
 
     /// Animated shimmer placeholder for the skeleton card image area.
@@ -483,12 +591,24 @@ struct CookbookView: View {
         if previews.isEmpty { isLoading = true }
         errorMessage = nil
 
+        loadGeneration += 1
+        let thisGeneration = loadGeneration
+
         do {
             let response: CookbookResponse = try await APIClient.shared.request("/recipes/cookbook")
+
+            // Only apply if this is still the most recent load. A newer
+            // load may have been kicked off while this one was in flight
+            // (e.g. onChange after commit vs stale onAppear).
+            guard thisGeneration == loadGeneration else { return }
+
             previews = response.items
             suggestedChips = response.suggestedChips
+            staleContext = response.staleContext
+            if response.staleContext == nil { staleBannerDismissed = false }
             trackCookbookView(itemCount: response.items.count)
         } catch {
+            guard thisGeneration == loadGeneration else { return }
             errorMessage = "Couldn't load your cookbook. Check your connection."
             print("[CookbookView] load failed: \(error)")
         }
@@ -698,5 +818,284 @@ extension RecipePreview {
             healthScore: quickStats?.healthNormalized ?? 0.5,
             ingredientCount: quickStats?.items ?? 8
         )
+    }
+}
+
+// MARK: - Stale Variant Review Sheet
+
+/// Half-sheet presenting stale recipes with bulk and per-recipe actions.
+/// "Update All" at the top adapts every recipe in one tap. Below, each
+/// recipe has Adapt / Keep Original / Remove for granular control.
+struct StaleVariantReviewSheet: View {
+    let context: StaleContext
+    let recipes: [CookbookEntryItem]
+    let onComplete: () -> Void
+
+    /// Per-recipe resolved status: nil = pending, "adapted", "kept", "removed", "failed".
+    @State private var recipeStatus: [String: String] = [:]
+    @State private var isBulkUpdating = false
+    @Environment(\.dismiss) private var dismiss
+
+    /// True once every recipe has been resolved (adapted, kept, or removed).
+    private var allResolved: Bool {
+        recipes.allSatisfy { recipeStatus[$0.id] != nil }
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: AlchemySpacing.lg) {
+                    headerSection
+                    bulkUpdateButton
+                    Divider()
+                        .overlay(AlchemyColors.surfaceSecondary)
+                    recipeList
+                }
+                .padding(.vertical, AlchemySpacing.lg)
+            }
+            .background(AlchemyColors.background)
+            .navigationTitle("Review Recipes")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") {
+                        onComplete()
+                    }
+                }
+            }
+        }
+        .presentationDetents([.large])
+        .presentationDragIndicator(.visible)
+        .onChange(of: allResolved) { _, resolved in
+            if resolved {
+                // Brief delay so the user sees the last row resolve,
+                // then auto-dismiss. Feels responsive, not abrupt.
+                Task {
+                    try? await Task.sleep(for: .milliseconds(800))
+                    onComplete()
+                }
+            }
+        }
+    }
+
+    // MARK: - Header
+
+    private var headerSection: some View {
+        VStack(spacing: AlchemySpacing.sm) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 28))
+                .foregroundStyle(AlchemyColors.accent)
+
+            Text("\(context.changedFieldsSummary) Updated")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(AlchemyColors.textPrimary)
+                .multilineTextAlignment(.center)
+
+            Text("\(context.count) \(context.count == 1 ? "recipe" : "recipes") in your cookbook may need updating to match your new preferences.")
+                .font(.system(size: 14))
+                .foregroundStyle(AlchemyColors.textSecondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, AlchemySpacing.xl)
+    }
+
+    // MARK: - Bulk Update
+
+    private var bulkUpdateButton: some View {
+        Button {
+            Task { await updateAll() }
+        } label: {
+            HStack(spacing: 8) {
+                if isBulkUpdating {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(.black)
+                } else {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                        .font(.system(size: 14, weight: .semibold))
+                }
+                Text(isBulkUpdating ? "Updating…" : "Update All (\(pendingCount))")
+                    .font(.system(size: 15, weight: .semibold))
+            }
+            .foregroundStyle(.black)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 14)
+            .background(.white, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .disabled(isBulkUpdating || pendingCount == 0)
+        .opacity(pendingCount == 0 ? 0.4 : 1)
+        .padding(.horizontal, AlchemySpacing.screenHorizontal)
+    }
+
+    private var pendingCount: Int {
+        recipes.filter { recipeStatus[$0.id] == nil }.count
+    }
+
+    // MARK: - Per-Recipe List
+
+    private var recipeList: some View {
+        LazyVStack(spacing: 0) {
+            ForEach(recipes) { recipe in
+                recipeRow(recipe)
+                if recipe.id != recipes.last?.id {
+                    Divider()
+                        .overlay(AlchemyColors.surfaceSecondary)
+                        .padding(.leading, 72)
+                }
+            }
+        }
+    }
+
+    private func recipeRow(_ recipe: CookbookEntryItem) -> some View {
+        let status = recipeStatus[recipe.id]
+
+        return HStack(spacing: 12) {
+            // Thumbnail
+            LazyImage(url: recipe.resolvedImageURL) { state in
+                if let image = state.image {
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                } else {
+                    Rectangle().fill(AlchemyColors.surfaceSecondary)
+                }
+            }
+            .frame(width: 52, height: 52)
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+            // Title + status
+            VStack(alignment: .leading, spacing: 2) {
+                Text(recipe.title)
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(AlchemyColors.textPrimary)
+                    .lineLimit(2)
+
+                if let status {
+                    Text(statusLabel(status))
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(statusColor(status))
+                }
+            }
+
+            Spacer(minLength: 4)
+
+            // Action buttons — hidden once resolved
+            if status == nil {
+                HStack(spacing: 6) {
+                    actionButton("Adapt", icon: "arrow.triangle.2.circlepath") {
+                        await adaptRecipe(recipe.id)
+                    }
+                    actionButton("Keep", icon: "checkmark") {
+                        await keepRecipe(recipe.id)
+                    }
+                    actionButton("Remove", icon: "trash", destructive: true) {
+                        await removeRecipe(recipe.id)
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, AlchemySpacing.screenHorizontal)
+        .padding(.vertical, 10)
+        .opacity(status == "removed" ? 0.4 : 1)
+        .animation(.easeInOut(duration: 0.25), value: status)
+    }
+
+    private func actionButton(
+        _ label: String,
+        icon: String,
+        destructive: Bool = false,
+        action: @escaping () async -> Void
+    ) -> some View {
+        Button {
+            Task { await action() }
+        } label: {
+            VStack(spacing: 3) {
+                Image(systemName: icon)
+                    .font(.system(size: 12, weight: .medium))
+                Text(label)
+                    .font(.system(size: 10, weight: .medium))
+            }
+            .foregroundStyle(destructive ? .red.opacity(0.8) : AlchemyColors.textSecondary)
+            .frame(width: 52, height: 40)
+            .background(AlchemyColors.surfaceSecondary, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: - Actions
+
+    private func updateAll() async {
+        isBulkUpdating = true
+        let pending = recipes.filter { recipeStatus[$0.id] == nil }
+
+        await withTaskGroup(of: Void.self) { group in
+            for recipe in pending {
+                group.addTask { await adaptRecipe(recipe.id) }
+            }
+        }
+
+        isBulkUpdating = false
+    }
+
+    private func adaptRecipe(_ id: String) async {
+        do {
+            try await APIClient.shared.requestVoid(
+                "/recipes/\(id)/variant/refresh",
+                method: .post
+            )
+            await MainActor.run { recipeStatus[id] = "adapted" }
+        } catch {
+            print("[StaleReview] adapt failed for \(id): \(error)")
+            await MainActor.run { recipeStatus[id] = "failed" }
+        }
+    }
+
+    private func keepRecipe(_ id: String) async {
+        do {
+            try await APIClient.shared.requestVoid(
+                "/recipes/\(id)/variant/dismiss",
+                method: .post
+            )
+            await MainActor.run { recipeStatus[id] = "kept" }
+        } catch {
+            print("[StaleReview] keep failed for \(id): \(error)")
+            await MainActor.run { recipeStatus[id] = "failed" }
+        }
+    }
+
+    private func removeRecipe(_ id: String) async {
+        do {
+            try await APIClient.shared.requestVoid(
+                "/recipes/\(id)/save",
+                method: .delete
+            )
+            await MainActor.run { recipeStatus[id] = "removed" }
+        } catch {
+            print("[StaleReview] remove failed for \(id): \(error)")
+            await MainActor.run { recipeStatus[id] = "failed" }
+        }
+    }
+
+    // MARK: - Helpers
+
+    private func statusLabel(_ status: String) -> String {
+        switch status {
+        case "adapted": return "Updated"
+        case "kept": return "Kept as-is"
+        case "removed": return "Removed"
+        case "failed": return "Failed — try again"
+        default: return ""
+        }
+    }
+
+    private func statusColor(_ status: String) -> Color {
+        switch status {
+        case "adapted", "kept": return .green
+        case "removed": return AlchemyColors.textTertiary
+        case "failed": return .red
+        default: return AlchemyColors.textSecondary
+        }
     }
 }

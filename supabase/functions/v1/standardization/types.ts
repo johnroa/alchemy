@@ -1,4 +1,9 @@
-import type { RecipePayload } from "../../_shared/types.ts";
+import type {
+  InstructionPart,
+  InstructionVerbosity,
+  RecipePayload,
+  TemperatureUnitPreference,
+} from "../../_shared/types.ts";
 
 // ── Type aliases ──────────────────────────────────────────────────────
 
@@ -6,6 +11,7 @@ export type UnitPreference = "source" | "metric" | "imperial";
 export type GroupByPreference = "flat" | "category" | "component";
 export type NormalizedStatus = "normalized" | "needs_retry";
 export type UnitKind = "mass" | "volume" | "count" | "unknown";
+export type { InstructionPart, InstructionVerbosity, TemperatureUnitPreference };
 
 export type CanonicalIngredientRecord = {
   position: number;

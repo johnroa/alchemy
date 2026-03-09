@@ -11,6 +11,7 @@
     "admin:routes:generate": "node ./scripts/generate-admin-routes.mjs",
     "check:repo-guardrails": "node ./scripts/check-repo-guardrails.mjs",
     "dev:admin": "pnpm --filter @alchemy/admin dev",
+    "dev:web": "pnpm --filter @alchemy/web dev",
     "contracts:generate": "pnpm --filter @alchemy/contracts generate",
     "simulate:api": "node ./scripts/simulate-api-ux.mjs"
   }

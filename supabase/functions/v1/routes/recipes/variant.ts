@@ -333,5 +333,51 @@ export const handleVariantRoutes = async (
     });
   }
 
+  // ── POST /recipes/{id}/variant/dismiss ──
+  // Resets a stale/needs_review variant back to "current" without
+  // re-personalizing. Used when the user reviews a stale recipe and
+  // decides to keep the existing variant as-is (e.g., a beef burger
+  // after switching to vegan — they want to keep the original).
+  if (
+    segments.length === 4 &&
+    segments[0] === "recipes" &&
+    segments[2] === "variant" &&
+    segments[3] === "dismiss" &&
+    method === "POST"
+  ) {
+    const recipeId = parseUuid(segments[1]);
+
+    const { data: variant, error: variantError } = await client
+      .from("user_recipe_variants")
+      .update({ stale_status: "current" })
+      .eq("user_id", auth.userId)
+      .eq("canonical_recipe_id", recipeId)
+      .in("stale_status", ["stale", "needs_review"])
+      .select("id, stale_status")
+      .maybeSingle();
+
+    if (variantError) {
+      throw new ApiError(
+        500,
+        "variant_dismiss_failed",
+        "Could not dismiss variant staleness",
+        variantError.message,
+      );
+    }
+
+    if (!variant) {
+      throw new ApiError(
+        404,
+        "variant_not_found",
+        "No stale variant found for this recipe",
+      );
+    }
+
+    return respond(200, {
+      variant_id: variant.id,
+      variant_status: "current",
+    });
+  }
+
   return null;
 };

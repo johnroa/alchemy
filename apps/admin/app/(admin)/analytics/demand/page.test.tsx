@@ -56,7 +56,7 @@ describe("AnalyticsDemandPage", () => {
         stage: "intent",
         sourceKind: "chat_message",
         lastObservedAt: new Date().toISOString(),
-        window: "30d",
+        timeWindow: "30d",
       }],
       scopeQualityRows: [{
         scope: "demand_extract_observation",
@@ -79,14 +79,16 @@ describe("AnalyticsDemandPage", () => {
   });
 
   it("renders demand graph analytics surfaces and review copy", async () => {
-    render(await AnalyticsDemandPage({ searchParams: Promise.resolve({}) }));
+    const { container } = render(await AnalyticsDemandPage({ searchParams: Promise.resolve({}) }));
 
     expect(screen.getByText("Demand Graph")).toBeInTheDocument();
     expect(screen.getByText("Demand Observations")).toBeInTheDocument();
     expect(screen.getByText("Review Backlog")).toBeInTheDocument();
     expect(screen.getByText("Demand Activity Trend")).toBeInTheDocument();
-    expect(screen.getByText("Graph Highlights")).toBeInTheDocument();
+    expect(screen.getByText("Demand Explorer")).toBeInTheDocument();
+    expect(screen.getByText("Visual Explorer")).toBeInTheDocument();
     expect(screen.getByText("Extraction Quality")).toBeInTheDocument();
     expect(screen.getByText("Recent Traces")).toBeInTheDocument();
+    expect(container.querySelector(".bg-white")).toBeNull();
   });
 });

@@ -3,11 +3,12 @@ import { ApiError } from "../../_shared/errors.ts";
 import type { JsonValue, RecipePayload } from "../../_shared/types.ts";
 import {
   buildIngredientGroups,
+  canonicalizeIngredients,
   type CanonicalIngredientView,
   type GroupByPreference,
   type IngredientGroup,
   projectIngredientsForOutput,
-  projectInlineMeasurements,
+  projectStepsForOutput,
   type UnitPreference,
 } from "../recipe-standardization.ts";
 import {
@@ -32,9 +33,76 @@ import { logChangelog, resolveRelationTypeId } from "./user-profile.ts";
 import { toJsonValue } from "./chat-types.ts";
 import type { RecipeView, RecipeAttachmentView, ContextPack } from "./chat-types.ts";
 
+const synthesizeCanonicalIngredientRows = (
+  payload: RecipePayload,
+): CanonicalRecipeIngredientRow[] =>
+  canonicalizeIngredients(payload.ingredients).map((row) => ({
+    id: `synthetic-${row.position}`,
+    position: row.position,
+    ingredient_id: null,
+    source_name: row.source_name,
+    source_amount: row.source_amount,
+    source_unit: row.source_unit,
+    normalized_amount_si: row.normalized_amount_si,
+    normalized_unit: row.normalized_unit,
+    unit_kind: row.unit_kind,
+    normalized_status: row.normalized_status,
+    category: row.category,
+    component: row.component,
+    metadata: {},
+  }));
+
+const resolveProjectionRows = (
+  payload: RecipePayload,
+  canonicalRows?: CanonicalRecipeIngredientRow[],
+): CanonicalRecipeIngredientRow[] =>
+  Array.isArray(canonicalRows) && canonicalRows.length > 0
+    ? canonicalRows
+    : synthesizeCanonicalIngredientRows(payload);
+
+const buildProjectedRecipeFields = (params: {
+  payload: RecipePayload;
+  canonicalRows?: CanonicalRecipeIngredientRow[];
+  options: RecipeViewOptions;
+}) => {
+  const projectionRows = resolveProjectionRows(
+    params.payload,
+    params.canonicalRows,
+  );
+  const projectedIngredients = projectIngredientsForOutput({
+    sourceIngredients: params.payload.ingredients,
+    canonicalRows: projectionRows,
+    units: params.options.units,
+  });
+  const ingredientGroups = buildIngredientGroups({
+    ingredients: projectedIngredients,
+    groupBy: params.options.groupBy,
+  });
+  const projectedSteps = projectStepsForOutput({
+    steps: params.payload.steps,
+    units: params.options.units,
+    includeInlineMeasurements: params.options.inlineMeasurements,
+    verbosity: params.options.verbosity,
+    temperatureUnit: params.options.temperatureUnit,
+  });
+  const canonicalMetadata = canonicalizeRecipePayloadMetadata(params.payload);
+
+  return {
+    description: resolveRecipePayloadDescription(params.payload),
+    summary: resolveRecipePayloadSummary(params.payload),
+    ingredients: projectedIngredients,
+    ingredientGroups,
+    steps: projectedSteps,
+    notes: params.payload.notes,
+    pairings: params.payload.pairings ?? [],
+    metadata: canonicalMetadata,
+    emoji: params.payload.emoji ?? [],
+  };
+};
+
 export const projectRecipePayloadForView = (params: {
   payload: RecipePayload;
-  canonicalRows: CanonicalRecipeIngredientRow[];
+  canonicalRows?: CanonicalRecipeIngredientRow[];
   options: RecipeViewOptions;
 }): Pick<
   RecipeView,
@@ -48,32 +116,39 @@ export const projectRecipePayloadForView = (params: {
   | "metadata"
   | "emoji"
 > => {
-  const projectedIngredients = projectIngredientsForOutput({
-    sourceIngredients: params.payload.ingredients,
-    canonicalRows: params.canonicalRows,
-    units: params.options.units,
-  });
-  const ingredientGroups = buildIngredientGroups({
-    ingredients: projectedIngredients,
-    groupBy: params.options.groupBy,
-  });
-  const projectedSteps = projectInlineMeasurements({
-    steps: params.payload.steps,
-    units: params.options.units,
-    includeInlineMeasurements: params.options.inlineMeasurements,
-  });
-  const canonicalMetadata = canonicalizeRecipePayloadMetadata(params.payload);
+  const projected = buildProjectedRecipeFields(params);
 
   return {
-    description: resolveRecipePayloadDescription(params.payload),
-    summary: resolveRecipePayloadSummary(params.payload),
-    ingredients: projectedIngredients,
-    ingredient_groups: ingredientGroups,
-    steps: projectedSteps,
-    notes: params.payload.notes,
-    pairings: params.payload.pairings ?? [],
-    metadata: canonicalMetadata ? toJsonValue(canonicalMetadata) : undefined,
-    emoji: params.payload.emoji ?? [],
+    description: projected.description,
+    summary: projected.summary,
+    ingredients: projected.ingredients,
+    ingredient_groups: projected.ingredientGroups,
+    steps: projected.steps,
+    notes: projected.notes,
+    pairings: projected.pairings,
+    metadata: projected.metadata ? toJsonValue(projected.metadata) : undefined,
+    emoji: projected.emoji,
+  };
+};
+
+export const projectRecipePayloadForCandidateResponse = (params: {
+  payload: RecipePayload;
+  canonicalRows?: CanonicalRecipeIngredientRow[];
+  options: RecipeViewOptions;
+}): RecipePayload => {
+  const projected = buildProjectedRecipeFields(params);
+
+  return {
+    ...params.payload,
+    description: projected.description,
+    summary: projected.summary,
+    ingredients: projected.ingredients,
+    ingredient_groups: projected.ingredientGroups,
+    steps: projected.steps,
+    notes: projected.notes,
+    pairings: projected.pairings,
+    metadata: projected.metadata,
+    emoji: projected.emoji,
   };
 };
 

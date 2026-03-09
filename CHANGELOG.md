@@ -2,6 +2,15 @@
 
 ## [Unreleased] — 2026-03-08
 
+### Render-Driven Recipe Formatting + Candidate Projection (v3.8.2)
+
+- Made recipe formatting fully render-driven across saved detail, variants, and fresh chat/import candidates for units, grouping, inline measurements, verbosity, and temperature units.
+- Added structured per-step instruction views plus typed temperature parts in the backend normalization and projection pipeline so verbosity selection no longer pollutes canonical identity.
+- Updated candidate-session responses to use the same server-side recipe projection path as persisted recipes, including projected ingredient groups in transient `RecipePayload` responses.
+- Updated canonical identity hashing to stabilize across active verbosity selection by fingerprinting the structured balanced instruction view when present.
+- Updated cookbook/private recipe detail to prefer variant recipe payloads when available, so personalized cookbook opens render the variant body instead of canonical-first content.
+- Documented the new detail/variant query overrides in OpenAPI, bumped the contract to `3.8.2`, and added backend coverage for chat candidate projection plus detail/variant render overrides.
+
 ### Runtime Flags v1 + Admin Flags Control Plane (v3.8.1)
 
 - Added a DB-backed runtime flags system with `feature_flag_environments`, `feature_flags`, `feature_flag_environment_configs`, and `feature_flag_state_revisions`.

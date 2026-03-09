@@ -52,6 +52,7 @@ export const generateChatConversationPayload = async (
 - Output one strict JSON object only.
 - Do not emit markdown or code fences.
 - Match the provided contract keys and schema exactly.
+- Keep assistant_reply.text concise: 2-3 short sentences max during ideation, 1-2 sentences when presenting a generated or updated recipe. Never ramble — the user reads on a small mobile screen.
 - If you return a recipe or candidate_recipe_set, every recipe must include metadata.difficulty, metadata.health_score, metadata.time_minutes, metadata.items, metadata.timing.total_minutes, and metadata.quick_stats.
 - If there is an unresolved conflict between an explicit dish request and dietary_restrictions or aversions, ask for confirmation instead of generating, set response_context.mode to "preference_conflict", and return no recipe or candidate_recipe_set.`;
 

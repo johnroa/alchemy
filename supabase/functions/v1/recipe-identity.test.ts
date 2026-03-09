@@ -98,3 +98,55 @@ Deno.test("recipe identity changes when ingredients or steps materially change",
     throw new Error("expected image fingerprint to change when the visible dish changes");
   }
 });
+
+Deno.test("recipe identity is stable across rendered verbosity when balanced instruction parts match", async () => {
+  const original = await buildRecipeIdentityDescriptor({
+    recipe: {
+      ...baseRecipe(),
+      steps: [
+        {
+          index: 1,
+          instruction: "Boil the pasta until al dente.",
+          instruction_views: {
+            concise: [{ type: "text", value: "Boil pasta." }],
+            balanced: [
+              { type: "text", value: "Boil the pasta at " },
+              { type: "temperature", value: 212, unit: "fahrenheit" },
+              { type: "text", value: " until al dente." },
+            ],
+            detailed: [{ type: "text", value: "Bring a large pot of salted water to a boil and cook the pasta until al dente." }],
+          },
+        },
+        baseRecipe().steps[1],
+      ],
+    },
+  });
+  const variant = await buildRecipeIdentityDescriptor({
+    recipe: {
+      ...baseRecipe(),
+      steps: [
+        {
+          index: 1,
+          instruction: "Bring pasta water to a boil and cook until al dente.",
+          instruction_views: {
+            concise: [{ type: "text", value: "Cook pasta." }],
+            balanced: [
+              { type: "text", value: "Boil the pasta at " },
+              { type: "temperature", value: 212, unit: "fahrenheit" },
+              { type: "text", value: " until al dente." },
+            ],
+            detailed: [{ type: "text", value: "Bring a large Dutch oven of generously salted water to a full boil and cook until al dente." }],
+          },
+        },
+        baseRecipe().steps[1],
+      ],
+    },
+  });
+
+  if (original.contentFingerprint !== variant.contentFingerprint) {
+    throw new Error("expected content fingerprint to ignore active verbosity wording when structured balanced view matches");
+  }
+  if (original.imageFingerprint !== variant.imageFingerprint) {
+    throw new Error("expected image fingerprint to ignore active verbosity wording when structured balanced view matches");
+  }
+});

@@ -6,6 +6,24 @@
 - Admin UI: `admin.cookwithalchemy.com`
 - API domain: `api.cookwithalchemy.com`
 
+## Consumer website deployment (Cloudflare Workers Builds)
+
+1. Create/connect a Cloudflare Worker build to this repo for `apps/web`.
+2. Set root directory to repository root (or keep as-is).
+3. Build command:
+   - `corepack enable && pnpm install --frozen-lockfile && pnpm --filter @alchemy/web cf:build`
+4. Deploy command:
+   - `pnpm --filter @alchemy/web exec opennextjs-cloudflare deploy`
+5. Version command:
+   - `pnpm --filter @alchemy/web exec opennextjs-cloudflare upload`
+6. `apps/web/wrangler.jsonc` declares `cookwithalchemy.com` as a Worker custom domain, so deploys reconcile the apex host automatically.
+7. Optionally add `www.cookwithalchemy.com` as an additional custom domain and redirect it to the apex domain.
+
+### Required consumer web runtime variables
+
+- `NEXT_PUBLIC_SITE_URL` = `https://cookwithalchemy.com`
+- `API_BASE_URL` = `https://api.cookwithalchemy.com/v1`
+
 ## Admin UI deployment (Cloudflare Workers Builds)
 
 1. Create/connect a Cloudflare Worker build to this repo.

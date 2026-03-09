@@ -4,6 +4,7 @@ import type {
   ChatLoopResponse,
   ChatMessageView,
   ChatSessionContext,
+  PreferenceContext,
   RouteContext,
 } from "../shared.ts";
 
@@ -45,6 +46,10 @@ export type ImportDeps = {
       generation_pending?: boolean;
     };
   }) => ChatLoopResponse;
+  getPreferences: (
+    client: RouteContext["client"],
+    userId: string,
+  ) => Promise<PreferenceContext>;
   enrollCandidateImageRequests: (input: {
     serviceClient: RouteContext["serviceClient"];
     userId: string;

@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Alchemy API",
-    "version": "3.8.1",
+    "version": "3.8.2",
     "description": "API contract for Alchemy — an AI-driven recipe creation and management platform.\nCovers the user-facing v1 API at api.cookwithalchemy.com and the admin API at admin.cookwithalchemy.com.\n"
   },
   "servers": [
@@ -169,6 +169,33 @@
               "type": "boolean"
             },
             "description": "Whether to append inline measurements directly inside step instructions."
+          },
+          {
+            "in": "query",
+            "name": "verbosity",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "concise",
+                "balanced",
+                "detailed"
+              ]
+            },
+            "description": "Selects which server-rendered instruction view to return."
+          },
+          {
+            "in": "query",
+            "name": "temperature_unit",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "fahrenheit",
+                "celsius"
+              ]
+            },
+            "description": "Overrides the rendered temperature unit in step instructions."
           }
         ],
         "responses": {
@@ -723,7 +750,35 @@
             "required": false,
             "schema": {
               "type": "boolean"
-            }
+            },
+            "description": "Whether to append inline measurements directly inside step instructions."
+          },
+          {
+            "in": "query",
+            "name": "verbosity",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "concise",
+                "balanced",
+                "detailed"
+              ]
+            },
+            "description": "Selects which server-rendered instruction view to return."
+          },
+          {
+            "in": "query",
+            "name": "temperature_unit",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "fahrenheit",
+                "celsius"
+              ]
+            },
+            "description": "Overrides the rendered temperature unit in step instructions."
           }
         ],
         "responses": {
@@ -3093,7 +3148,8 @@
             "type": "integer"
           },
           "instruction": {
-            "type": "string"
+            "type": "string",
+            "description": "Server-rendered instruction text for the selected verbosity and temperature-unit view."
           },
           "timer_seconds": {
             "type": "integer"
@@ -3396,6 +3452,13 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/Ingredient"
+            }
+          },
+          "ingredient_groups": {
+            "type": "array",
+            "description": "Server-projected ingredient groupings for transient candidate responses.",
+            "items": {
+              "$ref": "#/components/schemas/IngredientGroup"
             }
           },
           "steps": {

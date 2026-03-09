@@ -389,7 +389,8 @@ export const buildNaturalLanguagePreferenceContext = (
       MAX_PROMPT_FIELD_CHARS,
     )
     : compactPreferenceListForPrompt(preferences.aversions),
-  display_preferences: buildPresentationPreferenceSummary(preferences),
+  // Recipe formatting is now resolved at render time, not generation time.
+  display_preferences: "",
 });
 
 export const getPreferences = async (

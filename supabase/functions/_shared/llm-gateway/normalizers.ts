@@ -14,6 +14,8 @@
 import type {
   AssistantReply,
   ChatAssistantEnvelope,
+  InstructionPart,
+  InstructionViews,
   JsonValue,
   OnboardingAssistantEnvelope,
   OnboardingState,
@@ -67,6 +69,87 @@ export const normalizeOptionalText = (value: unknown): string | null => {
   }
   const normalized = value.trim();
   return normalized.length > 0 ? normalized : null;
+};
+
+const normalizeTemperatureUnit = (
+  value: unknown,
+): "fahrenheit" | "celsius" | null => {
+  const normalized = normalizeOptionalText(value)?.toLowerCase();
+  if (normalized === "fahrenheit" || normalized === "f") {
+    return "fahrenheit";
+  }
+  if (normalized === "celsius" || normalized === "c") {
+    return "celsius";
+  }
+  return null;
+};
+
+const normalizeInstructionPart = (value: unknown): InstructionPart | null => {
+  if (typeof value === "string") {
+    const text = value.trim();
+    return text ? { type: "text", value: text } : null;
+  }
+
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  const part = value as Record<string, unknown>;
+  const type = normalizeOptionalText(part.type)?.toLowerCase();
+  if (type === "temperature") {
+    const numericValue = Number(part.value);
+    const unit = normalizeTemperatureUnit(part.unit);
+    if (!Number.isFinite(numericValue) || !unit) {
+      return null;
+    }
+    return {
+      type: "temperature",
+      value: numericValue,
+      unit,
+    };
+  }
+
+  const textValue = typeof part.value === "string"
+    ? part.value.trim()
+    : typeof part.text === "string"
+    ? part.text.trim()
+    : "";
+  return textValue ? { type: "text", value: textValue } : null;
+};
+
+const normalizeInstructionParts = (
+  value: unknown,
+): InstructionPart[] | undefined => {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const parts = value
+    .map((part) => normalizeInstructionPart(part))
+    .filter((part): part is InstructionPart => part !== null);
+
+  return parts.length > 0 ? parts : undefined;
+};
+
+const normalizeInstructionViews = (value: unknown): InstructionViews | undefined => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+
+  const raw = value as Record<string, unknown>;
+  const concise = normalizeInstructionParts(raw.concise);
+  const balanced = normalizeInstructionParts(raw.balanced);
+  const detailed = normalizeInstructionParts(raw.detailed);
+
+  if (!concise && !balanced && !detailed) {
+    return undefined;
+  }
+
+  return {
+    concise,
+    balanced,
+    detailed,
+  };
 };
 
 export const normalizeCandidateImageStatus = (
@@ -557,10 +640,14 @@ export const normalizeRecipeShape = (candidate: unknown): RecipePayload | null =
         : Array.isArray(step.inlineMeasurements)
         ? step.inlineMeasurements
         : null;
+      const instructionViews = normalizeInstructionViews(
+        step.instruction_views ?? step.instructionViews,
+      );
 
       return {
         index,
         instruction,
+        instruction_views: instructionViews,
         timer_seconds: Number.isFinite(Number(step.timer_seconds ?? step.timer))
           ? Number(step.timer_seconds ?? step.timer)
           : undefined,

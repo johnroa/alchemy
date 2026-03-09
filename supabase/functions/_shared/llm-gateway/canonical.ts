@@ -2,6 +2,7 @@ import type { SupabaseClient } from "npm:@supabase/supabase-js@2";
 import { ApiError } from "../errors.ts";
 import { executeScope } from "../llm-executor.ts";
 import type { JsonValue, RecipePayload } from "../types.ts";
+import { normalizeRecipeShape } from "./normalizers.ts";
 import type {
   CanonicalizeRecipeResult,
   ModelOverrideMap,
@@ -9,9 +10,6 @@ import type {
   TokenAccum,
 } from "./types.ts";
 import { addTokens, logLlmEvent } from "./config.ts";
-
-const isRecipePayload = (value: unknown): value is RecipePayload =>
-  Boolean(value) && typeof value === "object" && !Array.isArray(value);
 
 export async function canonicalizeRecipe(params: {
   client: SupabaseClient;
@@ -40,7 +38,8 @@ export async function canonicalizeRecipe(params: {
     });
     addTokens(accum, inputTokens, outputTokens, config);
 
-    if (!isRecipePayload(result.recipe)) {
+    const recipe = normalizeRecipeShape(result.recipe);
+    if (!recipe) {
       throw new ApiError(
         500,
         "recipe_canonicalize_invalid",
@@ -62,7 +61,7 @@ export async function canonicalizeRecipe(params: {
     );
 
     return {
-      recipe: result.recipe,
+      recipe,
       rationale: typeof result.rationale === "string" ? result.rationale : null,
     };
   } catch (error) {

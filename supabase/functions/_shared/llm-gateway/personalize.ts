@@ -10,6 +10,7 @@
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2";
 import { ApiError } from "../errors.ts";
 import type { GatewayScope, JsonValue, RecipePayload } from "../types.ts";
+import { normalizeRecipeShape } from "./normalizers.ts";
 import type {
   ModelOverrideMap,
   PersonalizeRecipeResult,
@@ -115,8 +116,8 @@ export async function personalizeRecipe(params: {
       accum.costUsd += inputCost + outputCost;
     }
 
-    const recipe = result.recipe as RecipePayload | undefined;
-    if (!recipe || typeof recipe !== "object") {
+    const recipe = normalizeRecipeShape(result.recipe);
+    if (!recipe) {
       throw new ApiError(
         500,
         "personalize_invalid_output",

@@ -27,8 +27,10 @@ import {
   canonicalizeIngredients,
   deriveCanonicalIngredientIdentity,
   type GroupByPreference,
+  type InstructionVerbosity,
   type NormalizedStatus,
   normalizeIngredientKey,
+  type TemperatureUnitPreference,
   type UnitKind,
   type UnitPreference,
 } from "../recipe-standardization.ts";
@@ -47,6 +49,8 @@ export type RecipeViewOptions = {
   units: UnitPreference;
   groupBy: GroupByPreference;
   inlineMeasurements: boolean;
+  verbosity: InstructionVerbosity;
+  temperatureUnit: TemperatureUnitPreference;
 };
 
 export type CanonicalRecipeIngredientRow = {
@@ -84,6 +88,8 @@ export const defaultRecipeViewOptions: RecipeViewOptions = {
   units: "source",
   groupBy: "component",
   inlineMeasurements: false,
+  verbosity: "balanced",
+  temperatureUnit: "fahrenheit",
 };
 
 export const toFiniteNumberOrNull = (value: unknown): number | null => {

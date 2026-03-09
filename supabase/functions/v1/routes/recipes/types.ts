@@ -85,7 +85,6 @@ export type RecipesDeps = {
     serviceClient: RouteContext["serviceClient"];
     userId: string;
     requestId: string;
-    requestUrl?: string;
     payload: RecipePayload;
     sourceChatId?: string;
     diffSummary?: string;
@@ -123,7 +122,7 @@ export type RecipesDeps = {
   buildCookbookFeed: (
     client: RouteContext["client"],
     userId: string,
-  ) => Promise<{ items: CookbookEntry[]; suggestedChips: SuggestedChip[] }>;
+  ) => Promise<{ items: CookbookEntry[]; suggestedChips: SuggestedChip[]; staleContext: { changed_fields: string[]; stale_recipe_ids: string[]; count: number } | null }>;
   buildCookbookInsightDeterministic: (items: CookbookEntry[]) => string | null;
   ensurePersistedRecipeImageRequest: (input: {
     serviceClient: RouteContext["serviceClient"];

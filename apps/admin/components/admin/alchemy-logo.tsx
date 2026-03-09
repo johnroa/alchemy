@@ -1,0 +1,37 @@
+import type { SVGProps } from "react";
+
+/**
+ * Alchemy brand logo — flask silhouette with a sparkle accent.
+ * Accepts standard SVG props for sizing and styling. The fill
+ * defaults to "currentColor" so it inherits text color from its parent.
+ */
+export function AlchemyLogo(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg
+      viewBox="0 0 1039 863"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      {...props}
+    >
+      <path
+        d="M348.667 185C256.619 185 182 259.619 182 351.667C182 420.01 223.137 478.747 282 504.467V593.333H748.667V504.467C807.53 478.747 848.667 420.01 848.667 351.667C848.667 259.619 774.047 185 682 185C673.65 185 665.443 185.614 657.42 186.8C637.347 127.602 581.313 85 515.333 85C449.353 85 393.32 127.602 373.245 186.8C365.224 185.614 357.017 185 348.667 185Z"
+        fill="currentColor"
+        stroke="currentColor"
+        strokeWidth="33.3333"
+      />
+      <path
+        d="M748.61 673.333H282.056C282.396 719.897 284.781 745.397 301.526 762.14C321.052 781.667 352.479 781.667 415.333 781.667H615.333C678.187 781.667 709.613 781.667 729.14 762.14C745.887 745.397 748.27 719.897 748.61 673.333Z"
+        fill="currentColor"
+        stroke="currentColor"
+        strokeWidth="33.3333"
+      />
+      <path
+        d="M896.512 48.9492C907.057 72.9077 923.235 92.7427 940.984 108.599C958.926 124.626 978.749 136.855 996.726 145.486C978.788 154.164 959.048 166.465 941.198 182.56C923.542 198.479 907.472 218.371 897 242.354C886.528 218.371 870.458 198.479 852.802 182.56C834.937 166.452 815.179 154.143 797.229 145.465C815.117 136.826 834.779 124.59 852.548 108.559C870.126 92.6994 886.105 72.8764 896.512 48.9492Z"
+        fill="currentColor"
+        stroke="currentColor"
+        strokeWidth="24"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
