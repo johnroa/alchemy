@@ -234,7 +234,7 @@ export const extractBrowseFacetProfileFromMetadata = (
   metadata: Record<string, JsonValue> | undefined,
 ): RecipeSemanticProfile | undefined => {
   return normalizeRecipeSemanticProfile(
-    metadata?.browse_facet_profile ?? metadata?.ux_filter_profile,
+    metadata?.browse_facet_profile,
   );
 };
 

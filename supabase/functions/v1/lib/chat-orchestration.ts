@@ -1129,10 +1129,7 @@ const buildCookbookData = async (
     ) ?? normalizeRecipeSemanticProfile(
       (
         variant?.variant_tags as Record<string, JsonValue> | undefined
-      )?.browse_facet_profile ??
-        (
-          variant?.variant_tags as Record<string, JsonValue> | undefined
-        )?.ux_filter_profile,
+      )?.browse_facet_profile,
     );
     const effectiveSemanticProfile = mergeSemanticProfiles(
       canonicalSemanticProfile,

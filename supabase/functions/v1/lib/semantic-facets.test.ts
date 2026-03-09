@@ -169,39 +169,6 @@ Deno.test("extractBrowseFacetProfileFromPayload uses browse_facet_profile when p
   ]);
 });
 
-Deno.test("extractBrowseFacetProfileFromPayload falls back to legacy ux_filter_profile", () => {
-  const profile = extractBrowseFacetProfileFromPayload({
-    title: "Test Recipe",
-    servings: 2,
-    ingredients: [],
-    steps: [],
-    metadata: {
-      ux_filter_profile: {
-        descriptors: [
-          {
-            id: "occasion:date_night",
-            axis: "occasion",
-            key: "date_night",
-            label: "Date Night",
-            confidence: 0.96,
-          },
-        ],
-      },
-    },
-  });
-
-  assert(profile);
-  assertEquals(profile.descriptors, [
-    {
-      id: "occasion:date_night",
-      axis: "occasion",
-      key: "date_night",
-      label: "Date Night",
-      confidence: 0.96,
-    },
-  ]);
-});
-
 Deno.test("extractBrowseFacetProfileFromPayload does not fall back to semantic_profile", () => {
   const profile = extractBrowseFacetProfileFromPayload({
     title: "Test Recipe",

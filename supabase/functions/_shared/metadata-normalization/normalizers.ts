@@ -560,7 +560,7 @@ export const normalizeRecipeMetadata = (params: {
   }
 
   const browseFacetProfile = normalizeRecipeSemanticProfile(
-    metadata.browse_facet_profile ?? metadata.ux_filter_profile,
+    metadata.browse_facet_profile,
   );
   if (browseFacetProfile) {
     normalized.browse_facet_profile =

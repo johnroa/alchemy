@@ -128,7 +128,6 @@ export type RecipeMetadataV2 = {
   };
   semantic_profile?: RecipeSemanticProfile;
   browse_facet_profile?: RecipeSemanticProfile;
-  ux_filter_profile?: RecipeSemanticProfile;
   [key: string]: JsonValue | undefined;
 };
 
