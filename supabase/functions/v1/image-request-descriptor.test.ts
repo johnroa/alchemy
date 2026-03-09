@@ -3,9 +3,17 @@ import {
   buildImageReuseSearchText,
   shouldResetReusedReadyImageRequest,
 } from "./image-pipeline/types.ts";
+import type { RecipePayload } from "../_shared/types.ts";
+
+const buildRecipePayload = (
+  overrides: Omit<Partial<RecipePayload>, "title" | "ingredients" | "steps"> & Pick<RecipePayload, "title" | "ingredients" | "steps">,
+): RecipePayload => ({
+  servings: 2,
+  ...overrides,
+});
 
 Deno.test("buildImageReuseSearchText excludes pairings and optional notes from reuse identity", () => {
-  const searchText = buildImageReuseSearchText({
+  const searchText = buildImageReuseSearchText(buildRecipePayload({
     title: "Classic Buttered Toast",
     summary: "Golden toast with soft butter.",
     description:
@@ -25,7 +33,7 @@ Deno.test("buildImageReuseSearchText excludes pairings and optional notes from r
       techniques: ["toasting", "spreading"],
       serving_notes: ["Serve warm on a small plate."],
     },
-  });
+  }));
 
   if (searchText.includes("Scrambled eggs")) {
     throw new Error("expected pairings to be excluded from image reuse search text");
@@ -54,7 +62,7 @@ Deno.test("buildImageReuseSearchText excludes pairings and optional notes from r
 });
 
 Deno.test("buildImageRequestDescriptor uses image reuse search text instead of discovery search text", async () => {
-  const descriptor = await buildImageRequestDescriptor({
+  const descriptor = await buildImageRequestDescriptor(buildRecipePayload({
     title: "Elevated Scrambled Eggs",
     summary: "Silky eggs with creme fraiche and chives.",
     description:
@@ -72,7 +80,7 @@ Deno.test("buildImageRequestDescriptor uses image reuse search text instead of d
       cuisine_tags: ["French"],
       techniques: ["slow cooking"],
     },
-  });
+  }));
 
   if (descriptor.normalizedSearchText.includes("Buttered toast")) {
     throw new Error("expected descriptor search text to exclude pairings");
@@ -97,7 +105,7 @@ Deno.test("buildImageRequestDescriptor uses image reuse search text instead of d
 });
 
 Deno.test("buildImageRequestDescriptor reuses content/image fingerprints across title-only edits", async () => {
-  const original = await buildImageRequestDescriptor({
+  const original = await buildImageRequestDescriptor(buildRecipePayload({
     title: "Elevated Scrambled Eggs",
     summary: "Silky eggs with creme fraiche and chives.",
     ingredients: [
@@ -108,9 +116,9 @@ Deno.test("buildImageRequestDescriptor reuses content/image fingerprints across 
     steps: [
       { index: 1, instruction: "Whisk and slowly cook the eggs until glossy." },
     ],
-  });
+  }));
 
-  const renamed = await buildImageRequestDescriptor({
+  const renamed = await buildImageRequestDescriptor(buildRecipePayload({
     title: "Sunday Scrambled Eggs",
     summary: "A different summary that should not affect exact identity.",
     description: "Copy drift should not force a new image request for the same recipe.",
@@ -122,7 +130,7 @@ Deno.test("buildImageRequestDescriptor reuses content/image fingerprints across 
     steps: [
       { index: 1, instruction: "Whisk and slowly cook the eggs until glossy." },
     ],
-  });
+  }));
 
   if (original.fingerprint !== renamed.fingerprint) {
     throw new Error("expected content fingerprint to stay stable across title-only edits");
@@ -133,7 +141,7 @@ Deno.test("buildImageRequestDescriptor reuses content/image fingerprints across 
 });
 
 Deno.test("shouldResetReusedReadyImageRequest only resets stale reused requests", async () => {
-  const descriptor = await buildImageRequestDescriptor({
+  const descriptor = await buildImageRequestDescriptor(buildRecipePayload({
     title: "Elevated Scrambled Eggs",
     summary: "Silky eggs with creme fraiche and chives.",
     description:
@@ -146,7 +154,7 @@ Deno.test("shouldResetReusedReadyImageRequest only resets stale reused requests"
     steps: [
       { index: 1, instruction: "Whisk and slowly cook the eggs until glossy." },
     ],
-  });
+  }));
 
   const staleReusedRequest = {
     id: "request-1",
